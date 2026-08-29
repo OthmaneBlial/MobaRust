@@ -7,6 +7,7 @@ import {
   Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   CircleHelp,
@@ -183,6 +184,15 @@ type SessionImportReport = {
   skipped: string[];
 };
 
+type SnippetRecord = {
+  id: string;
+  title: string;
+  description: string;
+  command: string;
+  tags: string[];
+  variables: string[];
+};
+
 type SshAuthRequest =
   | { method: "agent" }
   | { method: "privateKey"; path: string; passphraseCredentialId?: string }
@@ -314,6 +324,7 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "New local terminal", hint: "⌘ N", icon: TerminalIcon },
   { label: "Quick connect", hint: "⌘ K", icon: Network },
   { label: "Settings", hint: "", icon: Settings2 },
+  { label: "Snippets", hint: "", icon: BookOpen },
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
@@ -512,6 +523,7 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -520,6 +532,7 @@ function App() {
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
   const [remoteProtocol, setRemoteProtocol] = useState<"ssh" | "telnet" | "serial" | null>(null);
@@ -577,6 +590,47 @@ function App() {
     void invoke<AppSettings>("settings_get")
       .then(setSettings)
       .catch((error) => setConnectionError(`Settings could not be loaded: ${String(error)}`));
+  }, []);
+
+  const refreshSnippets = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<SnippetRecord[]>("snippet_list")
+      .then(setSnippets)
+      .catch((error) => setConnectionError(`Snippets could not be loaded: ${String(error)}`));
+  }, []);
+
+  const saveSnippet = useCallback(async (snippet: SnippetRecord) => {
+    try {
+      const saved = IS_TAURI ? await invoke<SnippetRecord>("snippet_save", { snippet }) : snippet;
+      setSnippets((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved]);
+      setSessionNotice(`Saved snippet “${saved.title}”. It is never executed automatically.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Snippet could not be saved: ${String(error)}`);
+    }
+  }, []);
+
+  const deleteSnippet = useCallback(async (snippet: SnippetRecord) => {
+    if (!window.confirm(`Delete snippet “${snippet.title}”?`)) return;
+    try {
+      if (IS_TAURI) await invoke<boolean>("snippet_delete", { snippetId: snippet.id });
+      setSnippets((current) => current.filter((item) => item.id !== snippet.id));
+      setSessionNotice(`Deleted snippet “${snippet.title}”.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Snippet could not be deleted: ${String(error)}`);
+    }
+  }, []);
+
+  const copySnippet = useCallback(async (command: string) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
+      else window.prompt("Copy this rendered snippet and paste it manually", command);
+      setSessionNotice("Rendered snippet copied. Review it, then paste manually; MobaRust does not auto-send it.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Snippet could not be copied: ${String(error)}`);
+    }
   }, []);
 
   const saveSettings = useCallback(async (next: AppSettings) => {
@@ -1198,6 +1252,10 @@ function App() {
   }, [refreshSettings]);
 
   useEffect(() => {
+    refreshSnippets();
+  }, [refreshSnippets]);
+
+  useEffect(() => {
     if (activeView === "files" && remoteSessionId && remoteProtocol === "ssh") void loadRemoteDirectory(".");
   }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
@@ -1276,6 +1334,9 @@ function App() {
           </button>
           <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={17} strokeWidth={1.7} />
+          </button>
+          <button className="icon-button" aria-label="Snippets" title="Snippets" onClick={() => setSnippetsOpen(true)}>
+            <BookOpen size={17} strokeWidth={1.7} />
           </button>
           <div className="avatar">OB</div>
         </div>
@@ -1414,10 +1475,11 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
+      {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
     </main>
   );
 }
@@ -1675,10 +1737,82 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onOpenSnippets, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onOpenSnippets: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Snippets" ? onOpenSnippets : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+}
+
+function newSnippetRecord(): SnippetRecord {
+  return { id: crypto.randomUUID(), title: "", description: "", command: "", tags: [], variables: [] };
+}
+
+function snippetVariables(command: string): string[] {
+  return [...new Set([...command.matchAll(/\$\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map((match) => match[1]))];
+}
+
+function renderSnippetCommand(command: string, values: Record<string, string>): string {
+  return command.replace(/\$\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, name: string) => values[name] === undefined ? match : values[name]);
+}
+
+function SnippetsModal({ snippets, onClose, onSave, onDelete, onCopy }: { snippets: SnippetRecord[]; onClose: () => void; onSave: (snippet: SnippetRecord) => Promise<void>; onDelete: (snippet: SnippetRecord) => Promise<void>; onCopy: (command: string) => Promise<void> }) {
+  const [selectedId, setSelectedId] = useState<string | null>(snippets[0]?.id ?? null);
+  const [draft, setDraft] = useState<SnippetRecord>(() => newSnippetRecord());
+  const selected = snippets.find((snippet) => snippet.id === selectedId);
+  const active = selected ?? draft;
+
+  const save = async (snippet: SnippetRecord) => {
+    await onSave(snippet);
+    setSelectedId(snippet.id);
+    setDraft(snippet);
+  };
+
+  const remove = async () => {
+    if (!selected) return;
+    await onDelete(selected);
+    setSelectedId(null);
+    setDraft(newSnippetRecord());
+  };
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="snippets-modal" role="dialog" aria-modal="true" aria-label="Command snippets" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="session-editor-heading"><div><span className="eyebrow">COMMAND LIBRARY</span><h2>Snippets</h2><p>Preview, edit, then copy for a deliberate manual paste. Nothing runs automatically.</p></div><button type="button" className="icon-button" aria-label="Close snippets" onClick={onClose}><X size={17} /></button></div>
+    <div className="snippet-layout">
+      <aside className="snippet-list" aria-label="Saved snippets"><div className="snippet-list-heading"><span>{snippets.length} saved</span><button type="button" className="outline-button" onClick={() => { setSelectedId(null); setDraft(newSnippetRecord()); }}><Plus size={13} /> New</button></div>{snippets.length === 0 ? <p className="snippet-empty">No snippets yet. Start with a safe, reviewable command.</p> : snippets.map((snippet) => <button type="button" key={snippet.id} className={`snippet-list-item ${snippet.id === selectedId ? "selected" : ""}`} onClick={() => setSelectedId(snippet.id)}><strong>{snippet.title || "Untitled snippet"}</strong><small>{snippet.tags.join(" · ") || "No tags"}</small></button>)}</aside>
+      <SnippetForm key={active.id} snippet={active} isNew={!selected} onSave={save} onDelete={remove} onCopy={onCopy} />
+    </div>
+  </section></div>;
+}
+
+function SnippetForm({ snippet, isNew, onSave, onDelete, onCopy }: { snippet: SnippetRecord; isNew: boolean; onSave: (snippet: SnippetRecord) => Promise<void>; onDelete: () => Promise<void>; onCopy: (command: string) => Promise<void> }) {
+  const [title, setTitle] = useState(snippet.title);
+  const [description, setDescription] = useState(snippet.description);
+  const [command, setCommand] = useState(snippet.command);
+  const [tags, setTags] = useState(snippet.tags.join(", "));
+  const [variables, setVariables] = useState(snippet.variables.join(", "));
+  const [values, setValues] = useState<Record<string, string>>({});
+  const detectedVariables = [...new Set([...variables.split(",").map((value) => value.trim()).filter(Boolean), ...snippetVariables(command)])];
+  const rendered = renderSnippetCommand(command, values);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void onSave({
+      id: snippet.id,
+      title: title.trim(),
+      description: description.trim(),
+      command,
+      tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))],
+      variables: [...new Set(detectedVariables)],
+    });
+  };
+
+  return <form className="snippet-form" onSubmit={submit}><div className="snippet-form-heading"><div><span className="settings-section-label">{isNew ? "New snippet" : "Edit snippet"}</span><strong>{title.trim() || "Untitled snippet"}</strong></div>{!isNew && <button type="button" className="session-action danger" onClick={() => void onDelete()} aria-label="Delete snippet" title="Delete snippet"><Trash2 size={14} /></button>}</div>
+    <label>Title<input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Restart service" /></label>
+    <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this command is for" rows={2} /></label>
+    <label>Command<textarea required value={command} onChange={(event) => setCommand(event.target.value)} placeholder="docker restart ${service}" rows={5} /></label>
+    <div className="snippet-form-row"><label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="docker, ops" /></label><label>Variables<input value={variables} onChange={(event) => setVariables(event.target.value)} placeholder="service, host" /><small>Detected placeholders are included automatically.</small></label></div>
+    <div className="snippet-preview"><div className="snippet-preview-heading"><span>Preview</span><small>{detectedVariables.length} variable{detectedVariables.length === 1 ? "" : "s"}</small></div>{detectedVariables.length > 0 && <div className="snippet-variable-grid">{detectedVariables.map((variable) => <label key={variable}>{variable}<input value={values[variable] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [variable]: event.target.value }))} placeholder={`Value for ${variable}`} /></label>)}</div>}<pre>{rendered || "Your command preview will appear here."}</pre></div>
+    <div className="snippet-form-footer"><span><ShieldCheck size={13} /> Manual review required</span><div><button type="button" className="outline-button" onClick={() => void onCopy(rendered)} disabled={!rendered.trim()}>Copy rendered</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save snippet</button></div></div>
+  </form>;
 }
 
 function SessionEditor({ session, onClose, onSave }: { session: SavedSession; onClose: () => void; onSave: (session: SavedSession) => void }) {

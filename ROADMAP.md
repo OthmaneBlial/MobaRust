@@ -43,6 +43,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
 - [x] Typed non-secret settings with validation, atomic persistence, reset, and terminal application
+- [x] Secret-free snippets with tags, validated variables, rendered preview, and explicit manual copy
 - [ ] Portable encrypted vault research and implementation
 
 ## Later protocol adapters
@@ -61,6 +62,12 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Bounded port-scan UI with progress and cancellation
 - [ ] Ping, traceroute, and fingerprint inspection
 - [ ] X11 forwarding, monitoring, and portable packaging
+
+## Operator workflows
+
+- [ ] Terminal macros with visible, cancellable execution and permission boundaries
+- [ ] Explicit multi-exec/broadcast mode with selected targets, strong indicator, and emergency disable
+- [ ] Remote text editing with conflict detection and atomic upload
 
 Each adapter must have a real lifecycle, failure tests, and an honest platform
 support statement before it is presented as complete.

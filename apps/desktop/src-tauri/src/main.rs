@@ -10,7 +10,9 @@ use mobarust_core::{
     AppSettings, AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
-use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore};
+use mobarust_store::{
+    OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
+};
 use mobarust_vault::PlatformVault;
 use network::{NetworkManager, NetworkScanRequest};
 use serde::Serialize;
@@ -202,6 +204,40 @@ fn settings_reset(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings,
         .lock()
         .map_err(|_| "settings store lock poisoned".to_owned())?
         .reset()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn snippet_list(
+    store: State<'_, Mutex<SnippetStore>>,
+) -> Result<Vec<mobarust_core::SnippetRecord>, String> {
+    store
+        .lock()
+        .map_err(|_| "snippet store lock poisoned".to_owned())
+        .map(|store| store.list().to_vec())
+}
+
+#[tauri::command]
+fn snippet_save(
+    store: State<'_, Mutex<SnippetStore>>,
+    snippet: mobarust_core::SnippetRecord,
+) -> Result<mobarust_core::SnippetRecord, String> {
+    store
+        .lock()
+        .map_err(|_| "snippet store lock poisoned".to_owned())?
+        .save(snippet)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn snippet_delete(
+    store: State<'_, Mutex<SnippetStore>>,
+    snippet_id: uuid::Uuid,
+) -> Result<bool, String> {
+    store
+        .lock()
+        .map_err(|_| "snippet store lock poisoned".to_owned())?
+        .delete(snippet_id)
         .map_err(|error| error.to_string())
 }
 
@@ -763,6 +799,8 @@ fn main() {
                 .map_err(|error| error.to_string())?;
             let settings = SettingsStore::open(data_dir.join("settings.json"))
                 .map_err(|error| error.to_string())?;
+            let snippets = SnippetStore::open(data_dir.join("snippets.json"))
+                .map_err(|error| error.to_string())?;
             if store.list().is_empty() {
                 store
                     .save(SessionRecord::local_terminal("Local workstation"))
@@ -770,6 +808,7 @@ fn main() {
             }
             app.manage(Mutex::new(store));
             app.manage(Mutex::new(settings));
+            app.manage(Mutex::new(snippets));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -783,6 +822,9 @@ fn main() {
             settings_get,
             settings_save,
             settings_reset,
+            snippet_list,
+            snippet_save,
+            snippet_delete,
             session_save_ssh,
             session_save_serial,
             session_delete,

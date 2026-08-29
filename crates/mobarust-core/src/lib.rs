@@ -4,6 +4,7 @@
 pub mod lifecycle;
 pub mod session;
 pub mod settings;
+pub mod snippet;
 pub mod terminal;
 pub mod transfer;
 
@@ -16,5 +17,6 @@ pub use settings::{
     AppSettings, AppearanceSettings, GeneralSettings, NetworkSettings, SettingsValidationError,
     SshSettings, TerminalSettings, ThemePreference,
 };
+pub use snippet::{SnippetRecord, SnippetValidationError};
 pub use terminal::{OutputBatcher, OutputChunk};
 pub use transfer::{TransferEvent, TransferLifecycle, TransferState};

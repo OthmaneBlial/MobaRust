@@ -9,7 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord, SnippetRecord};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -48,6 +48,19 @@ pub enum StoreError {
     SettingsEncode(serde_json::Error),
     #[error("could not write settings file {path}: {source}")]
     SettingsWrite { path: PathBuf, source: io::Error },
+    #[error("snippet is invalid: {0}")]
+    InvalidSnippet(#[from] mobarust_core::SnippetValidationError),
+    #[error("snippet file {path} contains invalid data: {source}")]
+    SnippetDecode {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("snippet file {path} uses unsupported schema version {version}")]
+    SnippetUnsupportedSchema { path: PathBuf, version: u32 },
+    #[error("could not serialize snippets: {0}")]
+    SnippetEncode(serde_json::Error),
+    #[error("could not write snippet file {path}: {source}")]
+    SnippetWrite { path: PathBuf, source: io::Error },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,6 +78,15 @@ struct SettingsFile {
     schema_version: u32,
     #[serde(default)]
     settings: AppSettings,
+}
+
+const CURRENT_SNIPPET_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnippetFile {
+    schema_version: u32,
+    snippets: Vec<SnippetRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +127,119 @@ pub struct SessionStore {
 pub struct SettingsStore {
     path: PathBuf,
     settings: AppSettings,
+}
+
+/// A versioned, secret-free command snippet catalog. Snippets are data only;
+/// the desktop never executes a saved command without an explicit operator
+/// action in the terminal.
+#[derive(Debug)]
+pub struct SnippetStore {
+    path: PathBuf,
+    snippets: Vec<SnippetRecord>,
+}
+
+impl SnippetStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        let snippets = if path.exists() {
+            let bytes = fs::read(&path).map_err(|source| StoreError::SnippetWrite {
+                path: path.clone(),
+                source,
+            })?;
+            let file: SnippetFile =
+                serde_json::from_slice(&bytes).map_err(|source| StoreError::SnippetDecode {
+                    path: path.clone(),
+                    source,
+                })?;
+            if file.schema_version != CURRENT_SNIPPET_SCHEMA_VERSION {
+                return Err(StoreError::SnippetUnsupportedSchema {
+                    path,
+                    version: file.schema_version,
+                });
+            }
+            for snippet in &file.snippets {
+                snippet.validate()?;
+            }
+            file.snippets
+        } else {
+            Vec::new()
+        };
+        Ok(Self { path, snippets })
+    }
+
+    pub fn list(&self) -> &[SnippetRecord] {
+        &self.snippets
+    }
+
+    pub fn save(&mut self, snippet: SnippetRecord) -> Result<SnippetRecord, StoreError> {
+        snippet.validate()?;
+        let previous = self.snippets.clone();
+        if let Some(existing) = self.snippets.iter_mut().find(|item| item.id == snippet.id) {
+            *existing = snippet.clone();
+        } else {
+            self.snippets.push(snippet.clone());
+        }
+        if let Err(error) = self.persist() {
+            self.snippets = previous;
+            return Err(error);
+        }
+        Ok(snippet)
+    }
+
+    pub fn delete(&mut self, id: Uuid) -> Result<bool, StoreError> {
+        let previous = self.snippets.clone();
+        let original_len = self.snippets.len();
+        self.snippets.retain(|snippet| snippet.id != id);
+        if self.snippets.len() == original_len {
+            return Ok(false);
+        }
+        if let Err(error) = self.persist() {
+            self.snippets = previous;
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    fn persist(&self) -> Result<(), StoreError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|source| StoreError::SnippetWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let bytes = serde_json::to_vec_pretty(&SnippetFile {
+            schema_version: CURRENT_SNIPPET_SCHEMA_VERSION,
+            snippets: self.snippets.clone(),
+        })
+        .map_err(StoreError::SnippetEncode)?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("snippets.json");
+        let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+        let mut temporary = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|source| StoreError::SnippetWrite {
+                path: temporary_path.clone(),
+                source,
+            })?;
+        let write_result = (|| -> io::Result<()> {
+            temporary.write_all(&bytes)?;
+            temporary.sync_all()?;
+            drop(temporary);
+            replace_file(&temporary_path, &self.path)
+        })();
+        if let Err(source) = write_result {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(StoreError::SnippetWrite {
+                path: self.path.clone(),
+                source,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl SettingsStore {
@@ -569,7 +704,7 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mobarust_core::{AuthMethod, JumpHostRecord, Protocol, SessionRecord};
+    use mobarust_core::{AuthMethod, JumpHostRecord, Protocol, SessionRecord, SnippetRecord};
     use tempfile::tempdir;
 
     fn remote_session() -> SessionRecord {
@@ -850,5 +985,39 @@ mod tests {
         assert!(report.imported.is_empty());
         assert_eq!(report.skipped_hosts, vec!["broken (invalid Port)"]);
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn snippets_round_trip_and_delete_durably() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("snippets.json");
+        let mut store = SnippetStore::open(&path).unwrap();
+        let mut snippet = SnippetRecord::new("Docker logs", "docker logs ${container}");
+        snippet.tags = vec!["docker".into(), "debug".into()];
+        snippet.variables = vec!["container".into()];
+        store.save(snippet.clone()).unwrap();
+        assert_eq!(
+            SnippetStore::open(&path).unwrap().list(),
+            &[snippet.clone()]
+        );
+        assert!(store.delete(snippet.id).unwrap());
+        assert!(SnippetStore::open(&path).unwrap().list().is_empty());
+    }
+
+    #[test]
+    fn corrupt_snippets_are_not_silently_replaced() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("snippets.json");
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"snippets":[],"unknown":true}"#,
+        )
+        .unwrap();
+        let error = SnippetStore::open(&path).unwrap_err();
+        assert!(matches!(error, StoreError::SnippetDecode { .. }));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"schema_version":1,"snippets":[],"unknown":true}"#
+        );
     }
 }
