@@ -9,7 +9,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 use thiserror::Error;
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::time::timeout;
 
 pub const WIRE_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
@@ -526,6 +530,75 @@ pub fn decode_event_frame(frame: &[u8]) -> Result<HelperEvent, HelperProtocolErr
     }
     envelope.payload.validate()?;
     Ok(envelope.payload)
+}
+
+#[derive(Debug, Error)]
+pub enum HelperProcessError {
+    #[error(transparent)]
+    Protocol(#[from] HelperProtocolError),
+    #[error("could not start remote desktop helper: {0}")]
+    Spawn(#[source] std::io::Error),
+    #[error("remote desktop helper did not stop within the grace period")]
+    GracePeriodExpired,
+    #[error("could not stop remote desktop helper: {0}")]
+    Terminate(#[source] std::io::Error),
+    #[error("could not wait for remote desktop helper: {0}")]
+    Wait(#[source] std::io::Error),
+}
+
+/// Owns one isolated helper process. The supervisor intentionally exposes only
+/// native pipes; callers are responsible for framing and for keeping secrets
+/// on a separate, explicitly controlled credential channel.
+pub struct HelperSupervisor {
+    child: Child,
+}
+
+impl HelperSupervisor {
+    pub fn spawn(config: &HelperLaunchConfig) -> Result<Self, HelperProcessError> {
+        config.validate()?;
+        let mut command = helper_command(config);
+        let child = command.spawn().map_err(HelperProcessError::Spawn)?;
+        Ok(Self { child })
+    }
+
+    pub fn stdin(&mut self) -> Option<&mut ChildStdin> {
+        self.child.stdin.as_mut()
+    }
+
+    pub fn stdout(&mut self) -> Option<&mut ChildStdout> {
+        self.child.stdout.as_mut()
+    }
+
+    pub fn try_exit_status(&mut self) -> Result<Option<ExitStatus>, HelperProcessError> {
+        self.child.try_wait().map_err(HelperProcessError::Wait)
+    }
+
+    /// Gives the helper a bounded chance to exit cleanly, then kills it and
+    /// waits for reaping. No process is left running after this returns Ok.
+    pub async fn stop(&mut self, grace_period: Duration) -> Result<ExitStatus, HelperProcessError> {
+        if let Some(status) = self.child.try_wait().map_err(HelperProcessError::Wait)? {
+            return Ok(status);
+        }
+        if let Ok(result) = timeout(grace_period, self.child.wait()).await {
+            return result.map_err(HelperProcessError::Wait);
+        }
+        self.child
+            .start_kill()
+            .map_err(HelperProcessError::Terminate)?;
+        self.child.wait().await.map_err(HelperProcessError::Wait)
+    }
+}
+
+fn helper_command(config: &HelperLaunchConfig) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(&config.program);
+    command
+        .args(config.process_arguments())
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
 }
 
 #[cfg(test)]

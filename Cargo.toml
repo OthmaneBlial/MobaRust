@@ -25,5 +25,5 @@ uuid = { version = "1.18", features = ["serde", "v4"] }
 anyhow = "1.0"
 russh = { version = "0.63.1", default-features = true }
 russh-sftp = "2.4.0"
-tokio = { version = "1.47", features = ["fs", "io-util", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.47", features = ["fs", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
 zeroize = "1.8"
