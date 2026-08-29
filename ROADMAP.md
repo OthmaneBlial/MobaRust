@@ -32,7 +32,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Local SSH forwarding through native direct-tcpip channels with bounded clients and cancellation
 - [ ] Remote and dynamic SSH forwarding
 - [ ] Jump hosts and multi-hop chains
-- [ ] Session folders, tags, search, favorites, editing, and import/export
+- [ ] Session folders, tags, search, favorites, editing, and full import/export
+- [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
 - [ ] Portable encrypted vault research and implementation
 

@@ -4,12 +4,13 @@ mod ssh;
 mod terminal;
 
 use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
-use mobarust_store::SessionStore;
+use mobarust_store::{OpenSshImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
 use ssh::{
     SshAuthRequest, SshConnectRequest, SshLocalForwardRequest, SshManager, SshTransferRequest,
 };
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
@@ -29,6 +30,12 @@ struct AppSnapshot {
 struct SaveSshSessionRequest {
     name: String,
     request: SshConnectRequest,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportOpenSshRequest {
+    path: Option<String>,
 }
 
 #[tauri::command]
@@ -70,6 +77,23 @@ fn session_delete(
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?
         .delete(session_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_import_openssh(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: ImportOpenSshRequest,
+) -> Result<OpenSshImportReport, String> {
+    let path = payload
+        .path
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| expand_user_path(path.trim()))
+        .unwrap_or_else(default_openssh_config_path);
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .import_openssh_config(path)
         .map_err(|error| error.to_string())
 }
 
@@ -128,6 +152,24 @@ fn session_save_ssh(
         .map_err(|_| "session store lock poisoned".to_owned())?
         .save(session)
         .map_err(|error| error.to_string())
+}
+
+fn default_openssh_config_path() -> PathBuf {
+    std::env::home_dir()
+        .map(|home| home.join(".ssh").join("config"))
+        .unwrap_or_else(|| PathBuf::from(".ssh/config"))
+}
+
+fn expand_user_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return std::env::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(relative) = path.strip_prefix("~/")
+        && let Some(home) = std::env::home_dir()
+    {
+        return home.join(relative);
+    }
+    PathBuf::from(path)
 }
 
 #[tauri::command]
@@ -354,6 +396,7 @@ fn main() {
             app_snapshot,
             session_list,
             session_save,
+            session_import_openssh,
             session_save_ssh,
             session_delete,
             ssh_connect,

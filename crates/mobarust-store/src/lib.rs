@@ -4,11 +4,12 @@
 //! Credential references are safe identifiers; credential material belongs to
 //! `mobarust-vault` and never enters this file.
 
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use mobarust_core::{SessionId, SessionRecord};
+use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -32,6 +33,8 @@ pub enum StoreError {
     Encode(serde_json::Error),
     #[error("could not write session store {path}: {source}")]
     Write { path: PathBuf, source: io::Error },
+    #[error("could not read OpenSSH config {path}: {source}")]
+    ImportRead { path: PathBuf, source: io::Error },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,6 +42,21 @@ pub enum StoreError {
 struct StoreFile {
     schema_version: u32,
     sessions: Vec<SessionRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenSshImportReport {
+    pub source: String,
+    pub imported: Vec<SessionRecord>,
+    pub skipped_hosts: Vec<String>,
+    pub unsupported_directives: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct OpenSshHostBlock {
+    patterns: Vec<String>,
+    options: Vec<(String, String)>,
 }
 
 /// A serialized session catalog protected by an in-process mutex in the
@@ -109,6 +127,119 @@ impl SessionStore {
         Ok(deleted)
     }
 
+    /// Imports the commonly used, secret-free connection fields from an
+    /// OpenSSH config. Unsupported directives are returned in the report so a
+    /// user can see the boundary instead of receiving a misleadingly partial
+    /// profile.
+    pub fn import_openssh_config(
+        &mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<OpenSshImportReport, StoreError> {
+        let path = path.into();
+        let contents = fs::read_to_string(&path).map_err(|source| StoreError::ImportRead {
+            path: path.clone(),
+            source,
+        })?;
+        let (blocks, unsupported_directives) = parse_openssh_config(&contents);
+        let mut imported = Vec::new();
+        let mut skipped_hosts = Vec::new();
+        let mut seen = HashSet::new();
+
+        for alias in blocks
+            .iter()
+            .flat_map(|block| block.patterns.iter())
+            .filter(|pattern| is_exact_host_pattern(pattern))
+        {
+            if !seen.insert(alias.clone()) {
+                continue;
+            }
+            let options = effective_options(&blocks, alias);
+            let hostname = options
+                .get("hostname")
+                .cloned()
+                .filter(|value| !value.trim().is_empty() && value != "%h")
+                .unwrap_or_else(|| alias.clone());
+            let port = match options.get("port") {
+                None => 22,
+                Some(value) => match value.parse::<u16>() {
+                    Ok(port) if port > 0 => port,
+                    _ => {
+                        skipped_hosts.push(format!("{alias} (invalid Port)"));
+                        continue;
+                    }
+                },
+            };
+            let identity = options
+                .get("identityfile")
+                .map(|value| strip_quotes(value.trim()).to_owned())
+                .filter(|value| !value.is_empty());
+            let username = options
+                .get("user")
+                .map(|value| strip_quotes(value.trim()).to_owned())
+                .filter(|value| !value.is_empty());
+            let jump_hosts = options
+                .get("proxyjump")
+                .into_iter()
+                .flat_map(|value| value.split(','))
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "none")
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let notes = options.get("serveraliveinterval").map(|interval| {
+                format!(
+                    "Imported from OpenSSH; ServerAliveInterval={}",
+                    strip_quotes(interval.trim())
+                )
+            });
+            imported.push(SessionRecord {
+                id: SessionId::new(),
+                name: alias.clone(),
+                protocol: Protocol::Ssh,
+                hostname,
+                port,
+                username,
+                auth: identity.map_or(AuthMethod::Agent, |key_ref| AuthMethod::PrivateKey {
+                    key_ref,
+                    credential_ref: None,
+                }),
+                known_hosts_path: None,
+                pinned_fingerprint: None,
+                folder: Some("Imported / OpenSSH".into()),
+                tags: vec!["imported".into(), "openssh".into()],
+                favorite: false,
+                startup_directory: None,
+                startup_command: None,
+                environment: Vec::new(),
+                jump_hosts,
+                notes,
+            });
+        }
+
+        for session in &imported {
+            session.validate()?;
+        }
+        if !imported.is_empty() {
+            for imported_session in &mut imported {
+                if let Some(existing) = self.sessions.iter_mut().find(|existing| {
+                    existing.protocol == imported_session.protocol
+                        && existing.name == imported_session.name
+                }) {
+                    imported_session.id = existing.id;
+                    *existing = imported_session.clone();
+                } else {
+                    self.sessions.push(imported_session.clone());
+                }
+            }
+            self.persist()?;
+        }
+        Ok(OpenSshImportReport {
+            source: path.to_string_lossy().into_owned(),
+            imported,
+            skipped_hosts,
+            unsupported_directives,
+        })
+    }
+
     fn persist(&self) -> Result<(), StoreError> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|source| StoreError::Write {
@@ -154,6 +285,85 @@ impl SessionStore {
 
         Ok(())
     }
+}
+
+fn parse_openssh_config(contents: &str) -> (Vec<OpenSshHostBlock>, Vec<String>) {
+    let mut blocks = Vec::new();
+    let mut current = OpenSshHostBlock {
+        patterns: vec!["*".into()],
+        options: Vec::new(),
+    };
+    let mut unsupported = Vec::new();
+    let mut seen_unsupported = HashSet::new();
+
+    for raw_line in contents.lines() {
+        let line = raw_line
+            .split_once('#')
+            .map_or(raw_line, |(line, _)| line)
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((directive, value)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let directive = directive.to_ascii_lowercase();
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if directive == "host" {
+            blocks.push(current);
+            current = OpenSshHostBlock {
+                patterns: value.split_whitespace().map(str::to_owned).collect(),
+                options: Vec::new(),
+            };
+        } else if matches!(
+            directive.as_str(),
+            "hostname" | "user" | "port" | "identityfile" | "proxyjump" | "serveraliveinterval"
+        ) {
+            current.options.push((directive, value.to_owned()));
+        } else if seen_unsupported.insert(directive.clone()) {
+            unsupported.push(directive);
+        }
+    }
+    blocks.push(current);
+    (blocks, unsupported)
+}
+
+fn effective_options(blocks: &[OpenSshHostBlock], alias: &str) -> BTreeMap<String, String> {
+    let mut options = BTreeMap::new();
+    for block in blocks {
+        if block
+            .patterns
+            .iter()
+            .any(|pattern| pattern == "*" || pattern == alias)
+        {
+            for (key, value) in &block.options {
+                options.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    options
+}
+
+fn is_exact_host_pattern(pattern: &str) -> bool {
+    !pattern.is_empty()
+        && pattern != "*"
+        && !pattern.starts_with('!')
+        && !pattern.contains(['*', '?'])
+}
+
+fn strip_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value)
 }
 
 fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
@@ -272,5 +482,76 @@ mod tests {
         assert_eq!(value["kind"], "password");
         assert_eq!(value["credentialRef"], "prod-password");
         assert!(value.get("credential_ref").is_none());
+    }
+
+    #[test]
+    fn imports_supported_openssh_fields_without_private_material() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        fs::write(
+            &path,
+            r#"
+                Host *
+                    ServerAliveInterval 30
+                Host prod bastion-alias
+                    HostName prod.internal.example
+                    User deploy
+                    Port 2201
+                    IdentityFile "~/.ssh/id_ed25519"
+                    ProxyJump jump.example
+                    Include ~/.ssh/conf.d/*
+                Host staging
+                    HostName staging.example
+                    User ops
+            "#,
+        )
+        .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let report = store.import_openssh_config(&path).unwrap();
+
+        assert_eq!(report.imported.len(), 3);
+        assert_eq!(report.imported[0].name, "prod");
+        assert_eq!(report.imported[1].name, "bastion-alias");
+        assert_eq!(report.imported[0].hostname, "prod.internal.example");
+        assert_eq!(report.imported[0].port, 2201);
+        assert_eq!(report.imported[0].username.as_deref(), Some("deploy"));
+        assert_eq!(
+            report.imported[0].auth,
+            AuthMethod::PrivateKey {
+                key_ref: "~/.ssh/id_ed25519".into(),
+                credential_ref: None,
+            }
+        );
+        assert_eq!(report.imported[0].jump_hosts, vec!["jump.example"]);
+        assert_eq!(
+            report.imported[0].notes.as_deref(),
+            Some("Imported from OpenSSH; ServerAliveInterval=30")
+        );
+        assert!(report.unsupported_directives.contains(&"include".into()));
+        assert!(!serde_json::to_string(&report).unwrap().contains("password"));
+        assert_eq!(store.list().len(), 3);
+
+        let second_report = store.import_openssh_config(&path).unwrap();
+        assert_eq!(second_report.imported.len(), 3);
+        assert_eq!(store.list().len(), 3);
+    }
+
+    #[test]
+    fn does_not_create_profiles_for_wildcard_or_invalid_hosts() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        fs::write(
+            &path,
+            "Host *\n  User ops\nHost prod-*\n  HostName prod.example\nHost broken\n  Port nope\n",
+        )
+        .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let report = store.import_openssh_config(&path).unwrap();
+
+        assert!(report.imported.is_empty());
+        assert_eq!(report.skipped_hosts, vec!["broken (invalid Port)"]);
+        assert!(store.list().is_empty());
     }
 }

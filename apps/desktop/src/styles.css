@@ -101,5 +101,6 @@ button:not(:disabled) { cursor: pointer; }
 .tunnel-row-copy small { display: block; margin-top: 5px; color: var(--faint); font-family: var(--mono); font-size: 8px; }
 .tunnel-row-copy .tunnel-error { color: var(--coral); white-space: normal; overflow-wrap: anywhere; }
 .tunnel-view-note { padding: 11px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 9px; line-height: 1.45; }
+.workspace-notice { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding: 9px 12px; border: 1px solid rgba(155, 196, 138, .25); background: rgba(155, 196, 138, .06); color: var(--mint); font-family: var(--mono); font-size: 9px; }
 
 @media (max-width: 1200px) { .workspace { padding-left: 25px; padding-right: 25px; }.workspace-grid { grid-template-columns: minmax(0, 1fr) 215px; gap: 16px; }.context-metrics { gap: 8px; }.terminal-chip { display: none; } }

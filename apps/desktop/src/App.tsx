@@ -74,11 +74,19 @@ type SavedSession = {
   username?: string | null;
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
+  jump_hosts: string[];
   auth:
     | { kind: "none" }
     | { kind: "agent" }
     | { kind: "password"; credentialRef: string }
     | { kind: "privateKey"; keyRef: string; credentialRef?: string | null };
+};
+
+type OpenSshImportReport = {
+  source: string;
+  imported: SavedSession[];
+  skippedHosts: string[];
+  unsupportedDirectives: string[];
 };
 
 type SshConnectRequest = {
@@ -293,6 +301,7 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
@@ -309,6 +318,7 @@ function App() {
     setRemoteSessionId(null);
     setRemoteHost(null);
     setConnectionError(null);
+    setSessionNotice(null);
     setTerminalStatus("starting");
     setTerminalOpen(true);
     setTerminalKey((key) => key + 1);
@@ -331,6 +341,7 @@ function App() {
 
   const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true) => {
     setConnectionError(null);
+    setSessionNotice(null);
     if (!IS_TAURI) {
       setConnectionError("SSH connections require the desktop runtime.");
       return;
@@ -361,7 +372,31 @@ function App() {
     }
   }, [refreshSavedSessions]);
 
+  const importOpenSshConfig = useCallback(async () => {
+    if (!IS_TAURI) return;
+    const requestedPath = window.prompt("OpenSSH config path", "~/.ssh/config");
+    if (requestedPath === null) return;
+    try {
+      const report = await invoke<OpenSshImportReport>("session_import_openssh", {
+        payload: { path: requestedPath.trim() || "~/.ssh/config" },
+      });
+      refreshSavedSessions();
+      const warnings = [
+        report.skippedHosts.length > 0 ? `${report.skippedHosts.length} skipped` : "",
+        report.unsupportedDirectives.length > 0 ? `${report.unsupportedDirectives.length} unsupported directive${report.unsupportedDirectives.length === 1 ? "" : "s"}` : "",
+      ].filter(Boolean);
+      setSessionNotice(`Imported ${report.imported.length} OpenSSH profile${report.imported.length === 1 ? "" : "s"}${warnings.length > 0 ? ` · ${warnings.join(" · ")}` : ""}.`);
+    } catch (error) {
+      setSessionNotice(null);
+      setConnectionError(String(error));
+    }
+  }, [refreshSavedSessions]);
+
   const connectSavedSession = useCallback((session: SavedSession) => {
+    if (session.jump_hosts.length > 0) {
+      setConnectionError("This profile uses ProxyJump. Jump-host connections are imported but not implemented yet.");
+      return;
+    }
     const request = requestFromSavedSession(session);
     if (!request) {
       setConnectionError("This saved session uses an authentication method that is not available yet.");
@@ -652,7 +687,7 @@ function App() {
           </nav>
 
           <div className="session-list">
-            <div className="list-heading"><span>Sessions</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
+            <div className="list-heading"><span>Sessions</span><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button></div>
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
               <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} />
@@ -688,6 +723,7 @@ function App() {
               <button className="primary-button" onClick={startNewTerminal}><Plus size={15} /> New terminal</button>
             </div>
           </div>
+          {sessionNotice && <div className="workspace-notice" role="status"><CheckCircle2 size={14} /><span>{sessionNotice}</span></div>}
 
           <div className="workspace-grid">
             <div className="main-column">
