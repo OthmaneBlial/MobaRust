@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted and implemented for the native transport/configuration primitive.
-Device enumeration, desktop manager, and terminal UI wiring remain pending.
+Accepted and implemented for the native transport/configuration primitive and
+an explicit Quick Connect/session-manager path. Device enumeration and saved
+serial profiles remain pending.
 
 ## Decision
 
@@ -37,7 +38,10 @@ device, or unexpected EOF is surfaced as a distinct recoverable device-loss
 error and moves a connected session into `Reconnecting`. Explicit close and
 cancel drop the native port handle and use the shared lifecycle state machine.
 Reconnect is explicit and bounded; there is no aggressive background probing
-of hardware.
+of hardware. The Tauri manager owns one typed session command channel per
+connection, batches output, retains a small bounded pre-attach buffer, and
+emits `serial://state`, `serial://output`, and `serial://closed` events. The
+React shell only sends typed connection parameters and terminal input.
 
 ## Security and safety
 
@@ -59,7 +63,6 @@ devices.
 ## Follow-ups
 
 - add an explicit, read-only device refresh command;
-- add a manager with terminal output batching and clean cancellation;
 - add platform fixtures for a disposable pseudo-terminal/loopback device;
 - verify USB adapter disappearance on Windows, Linux, and macOS in controlled
   environments;

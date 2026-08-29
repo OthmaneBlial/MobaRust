@@ -163,6 +163,17 @@ impl SerialOptions {
         bytes.extend_from_slice(self.line_ending.suffix());
         bytes
     }
+
+    /// Applies the configured line ending only to an isolated terminal Enter.
+    /// Other input remains byte-for-byte unchanged so pasted text and control
+    /// sequences are not unexpectedly rewritten.
+    pub fn frame_terminal_input(&self, input: &[u8]) -> Vec<u8> {
+        if matches!(input, b"\r" | b"\n") {
+            self.line_ending.suffix().to_vec()
+        } else {
+            input.to_vec()
+        }
+    }
 }
 
 impl Default for SerialOptions {
@@ -501,6 +512,8 @@ mod tests {
         options.line_ending = LineEnding::Lf;
         assert!(options.validate().is_ok());
         assert_eq!(options.frame_text("status"), b"status\n");
+        assert_eq!(options.frame_terminal_input(b"\r"), b"\n");
+        assert_eq!(options.frame_terminal_input(b"status"), b"status");
     }
 
     #[test]

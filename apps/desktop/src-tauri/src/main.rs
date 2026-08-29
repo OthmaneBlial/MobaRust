@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod serial;
 mod ssh;
 mod telnet;
 mod terminal;
@@ -8,6 +9,7 @@ use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
 use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
+use serial::{SerialConnectRequest, SerialManager};
 use ssh::{
     SshAuthRequest, SshConnectRequest, SshDynamicForwardRequest, SshLocalForwardRequest,
     SshManager, SshTransferRequest,
@@ -446,6 +448,51 @@ async fn telnet_close(
 }
 
 #[tauri::command]
+async fn serial_connect(
+    app: tauri::AppHandle,
+    manager: State<'_, SerialManager>,
+    request: SerialConnectRequest,
+) -> Result<serial::SerialConnectResponse, String> {
+    manager
+        .connect(app, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn serial_write(
+    manager: State<'_, SerialManager>,
+    terminal_id: String,
+    data: String,
+) -> Result<(), String> {
+    manager
+        .write(&terminal_id, data)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn serial_attach(
+    manager: State<'_, SerialManager>,
+    terminal_id: String,
+) -> Result<Vec<String>, String> {
+    manager
+        .attach(&terminal_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn serial_close(
+    manager: State<'_, SerialManager>,
+    terminal_id: String,
+) -> Result<(), String> {
+    manager
+        .close(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -491,6 +538,7 @@ fn main() {
     tauri::Builder::default()
         .manage(TerminalManager::default())
         .manage(SshManager::default())
+        .manage(SerialManager::default())
         .manage(TelnetManager::default())
         .manage(PlatformVault::default())
         .setup(|app| {
@@ -538,6 +586,10 @@ fn main() {
             telnet_resize,
             telnet_attach,
             telnet_close,
+            serial_connect,
+            serial_write,
+            serial_attach,
+            serial_close,
             terminal_spawn,
             terminal_write,
             terminal_resize,

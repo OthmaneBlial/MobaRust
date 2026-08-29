@@ -51,7 +51,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Native Telnet transport with bounded negotiation and a local TCP fixture
 - [x] Telnet Quick Connect, native session manager, terminal output, input, and resize wiring
 - [x] Native serial transport configuration and recoverable device lifecycle
-- [ ] Serial device refresh and session-manager/UI wiring
+- [x] Serial Quick Connect, native session manager, terminal output, and input wiring
+- [ ] Serial device refresh, saved profiles, and hardware interoperability matrix
 - [x] Bounded native TCP check and port-range diagnostic primitive
 - [ ] DNS, ping, traceroute, fingerprint inspection, and diagnostics UI
 - [ ] X11 forwarding, monitoring, and portable packaging
