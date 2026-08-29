@@ -252,36 +252,42 @@ impl SshConnection {
             }
         };
 
-        let authentication = match options.credentials {
-            SshCredentials::Password { username, password } => handle
-                .authenticate_password(username, password.as_str())
-                .await
-                .map_err(SshError::Transport)?,
-            SshCredentials::PrivateKey {
-                username,
-                path,
-                passphrase,
-            } => {
-                let key =
-                    russh::keys::load_secret_key(&path, passphrase.as_ref().map(Secret::as_str))
-                        .map_err(SshError::PrivateKey)?;
-                let hash = handle
-                    .best_supported_rsa_hash()
+        let authentication = tokio::time::timeout(options.timeout, async {
+            match options.credentials {
+                SshCredentials::Password { username, password } => handle
+                    .authenticate_password(username, password.as_str())
                     .await
-                    .map_err(SshError::Transport)?
-                    .flatten();
-                handle
-                    .authenticate_publickey(
-                        username,
-                        PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                    .map_err(SshError::Transport),
+                SshCredentials::PrivateKey {
+                    username,
+                    path,
+                    passphrase,
+                } => {
+                    let key = russh::keys::load_secret_key(
+                        &path,
+                        passphrase.as_ref().map(Secret::as_str),
                     )
-                    .await
-                    .map_err(SshError::Transport)?
+                    .map_err(SshError::PrivateKey)?;
+                    let hash = handle
+                        .best_supported_rsa_hash()
+                        .await
+                        .map_err(SshError::Transport)?
+                        .flatten();
+                    handle
+                        .authenticate_publickey(
+                            username,
+                            PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                        )
+                        .await
+                        .map_err(SshError::Transport)
+                }
+                SshCredentials::Agent { username } => {
+                    authenticate_with_agent(&mut handle, username).await
+                }
             }
-            SshCredentials::Agent { username } => {
-                authenticate_with_agent(&mut handle, username).await?
-            }
-        };
+        })
+        .await
+        .map_err(|_| SshError::Timeout)??;
 
         if !authentication.success() {
             return Err(SshError::AuthenticationRejected);
@@ -306,20 +312,24 @@ impl SshConnection {
     }
 
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshShell, SshError> {
-        let channel = self
-            .handle
-            .channel_open_session()
-            .await
-            .map_err(SshError::Channel)?;
-        channel
-            .request_pty(false, "xterm-256color", cols.max(1), rows.max(1), 0, 0, &[])
-            .await
-            .map_err(SshError::Channel)?;
-        channel
-            .request_shell(true)
-            .await
-            .map_err(SshError::Channel)?;
-        Ok(SshShell { channel })
+        tokio::time::timeout(Duration::from_secs(12), async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(SshError::Channel)?;
+            channel
+                .request_pty(false, "xterm-256color", cols.max(1), rows.max(1), 0, 0, &[])
+                .await
+                .map_err(SshError::Channel)?;
+            channel
+                .request_shell(true)
+                .await
+                .map_err(SshError::Channel)?;
+            Ok(SshShell { channel })
+        })
+        .await
+        .map_err(|_| SshError::Timeout)?
     }
 
     pub async fn disconnect(mut self) -> Result<(), SshError> {
@@ -340,18 +350,23 @@ impl SshConnection {
     }
 
     pub async fn open_sftp(&self) -> Result<SftpConnection, SshError> {
-        let channel = self
-            .handle
-            .channel_open_session()
-            .await
-            .map_err(SshError::Channel)?;
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(SshError::Channel)?;
-        let session = russh_sftp::client::SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let session = tokio::time::timeout(Duration::from_secs(12), async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(SshError::Channel)?;
+            channel
+                .request_subsystem(true, "sftp")
+                .await
+                .map_err(SshError::Channel)?;
+            russh_sftp::client::SftpSession::new(channel.into_stream())
+                .await
+                .map_err(|error| SshError::Sftp(error.to_string()))
+        })
+        .await
+        .map_err(|_| SshError::Timeout)??;
+        session.set_timeout(12);
         Ok(SftpConnection { session })
     }
 }
