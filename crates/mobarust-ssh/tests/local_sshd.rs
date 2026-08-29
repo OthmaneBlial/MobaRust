@@ -208,6 +208,35 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .close()
             .await
             .expect("close SCP verification SFTP");
+        let scp_cancelled = fixture.directory.path().join("scp-cancelled.bin");
+        let mut scp_cancelled_file = tokio::fs::File::create(&scp_cancelled)
+            .await
+            .expect("create cancelled SCP destination");
+        let (scp_cancel_sender, mut scp_cancel_receiver) = oneshot::channel();
+        let mut scp_cancel_sender = Some(scp_cancel_sender);
+        let mut scp_progress = 0_u64;
+        let scp_cancellation = connection
+            .scp_download_with_cancel(
+                &scp_remote_path,
+                &mut scp_cancelled_file,
+                &mut scp_cancel_receiver,
+                |bytes, _total| {
+                    scp_progress = bytes;
+                    if let Some(sender) = scp_cancel_sender.take() {
+                        let _ = sender.send(());
+                    }
+                },
+            )
+            .await;
+        assert!(matches!(scp_cancellation, Err(SshError::Cancelled)));
+        assert!(scp_progress > 0 && scp_progress < 128 * 1024);
+        drop(scp_cancelled_file);
+        assert!(
+            fs::metadata(&scp_cancelled)
+                .expect("inspect cancelled SCP destination")
+                .len()
+                < 128 * 1024
+        );
         let scp_downloaded = fixture.directory.path().join("scp-downloaded.bin");
         let scp_downloaded_bytes = connection
             .scp_download(

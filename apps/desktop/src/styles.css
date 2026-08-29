@@ -56,6 +56,9 @@ button:not(:disabled) { cursor: pointer; }
 .quick-connect-hint { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid rgba(155, 196, 138, .18); background: var(--mint-soft); color: var(--mint); font-family: "Avenir Next", "Helvetica Neue", sans-serif; font-size: 10px; letter-spacing: 0; line-height: 1.45; text-transform: none; }
 
 .remote-files-toolbar-actions { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
+.transfer-protocol-select { display: flex; flex-direction: column; gap: 4px; color: var(--faint); font-family: var(--mono); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+.transfer-protocol-select select { height: 29px; padding: 0 7px; border: 1px solid var(--line); outline: 0; background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 9px; letter-spacing: 0; text-transform: none; }
+.transfer-protocol-select select:focus { border-color: rgba(232, 180, 92, .6); }
 .remote-files-error { display: flex; align-items: flex-start; gap: 8px; padding: 10px 16px; border-bottom: 1px solid rgba(238, 141, 120, .22); background: rgba(238, 141, 120, .07); color: var(--coral); font-family: var(--mono); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
 .remote-file-row { display: flex; align-items: stretch; gap: 0; padding: 0; }
 .remote-file-main { display: grid; grid-template-columns: 25px minmax(0, 1fr) 100px; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 42px; padding: 0 8px; border: 0; border-bottom: 0; background: transparent; color: inherit; font: inherit; text-align: left; }

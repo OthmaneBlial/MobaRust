@@ -24,7 +24,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 - [x] SFTP browser with listing, create-folder, rename, delete, and single-file streaming/cancellation/progress
 - [x] Native SCP compatibility primitive for streaming single-file upload/download
-- [ ] SCP transfer-manager wiring
+- [x] SCP transfer-manager wiring for bounded single-file jobs with progress, cancellation, and atomic commits
 - [x] Bounded recursive SFTP upload/download with streaming files, progress, cancellation, and atomic file commits
 - [x] Bounded native transfer manager (three concurrent single-file jobs)
 - [ ] Remote terminal and file browser composition

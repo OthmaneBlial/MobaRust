@@ -599,40 +599,63 @@ impl SshConnection {
         &self,
         remote_path: impl Into<String>,
         size: u64,
-        mut source: R,
+        source: R,
     ) -> Result<u64, SshError>
     where
         R: AsyncRead + Unpin,
     {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
+        self.scp_upload_with_cancel(remote_path, size, source, &mut cancel, |_| {})
+            .await
+    }
+
+    pub async fn scp_upload_with_cancel<R, F>(
+        &self,
+        remote_path: impl Into<String>,
+        size: u64,
+        mut source: R,
+        cancel: &mut oneshot::Receiver<()>,
+        mut on_progress: F,
+    ) -> Result<u64, SshError>
+    where
+        R: AsyncRead + Unpin,
+        F: FnMut(u64),
+    {
         let remote_path = remote_path.into();
         let file_name = scp_file_name(&remote_path)?;
         let command = format!("scp -O -t {}", shell_quote(&remote_path)?);
-        let mut channel = self.open_scp_channel(command.into_bytes()).await?;
-        channel.read_ack().await?;
+        let mut channel = tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = self.open_scp_channel(command.into_bytes()) => result?,
+        };
+        channel.read_ack_with_cancel(cancel).await?;
         channel
-            .write_bytes(format!("C0644 {size} {file_name}\n").into_bytes())
+            .write_bytes_with_cancel(format!("C0644 {size} {file_name}\n").into_bytes(), cancel)
             .await?;
-        channel.read_ack().await?;
+        channel.read_ack_with_cancel(cancel).await?;
 
         let mut buffer = vec![0_u8; 64 * 1024];
         let mut copied = 0_u64;
         while copied < size {
             let remaining = size - copied;
             let read_limit = remaining.min(buffer.len() as u64) as usize;
-            let read = source
-                .read(&mut buffer[..read_limit])
-                .await
-                .map_err(SshError::LocalIo)?;
+            let read = tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = source.read(&mut buffer[..read_limit]) => result.map_err(SshError::LocalIo)?,
+            };
             if read == 0 {
                 return Err(SshError::Scp(format!(
                     "source ended before declared size ({copied}/{size} bytes)"
                 )));
             }
-            channel.write_bytes(buffer[..read].to_vec()).await?;
+            channel
+                .write_bytes_with_cancel(buffer[..read].to_vec(), cancel)
+                .await?;
             copied += read as u64;
+            on_progress(copied);
         }
-        channel.write_bytes(vec![0]).await?;
-        channel.read_ack().await?;
+        channel.write_bytes_with_cancel(vec![0], cancel).await?;
+        channel.read_ack_with_cancel(cancel).await?;
         channel.close().await?;
         Ok(copied)
     }
@@ -640,36 +663,62 @@ impl SshConnection {
     pub async fn scp_download<W>(
         &self,
         remote_path: impl Into<String>,
-        mut destination: W,
+        destination: W,
     ) -> Result<u64, SshError>
     where
         W: AsyncWrite + Unpin,
     {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
+        self.scp_download_with_cancel(remote_path, destination, &mut cancel, |_, _| {})
+            .await
+    }
+
+    pub async fn scp_download_with_cancel<W, F>(
+        &self,
+        remote_path: impl Into<String>,
+        mut destination: W,
+        cancel: &mut oneshot::Receiver<()>,
+        mut on_progress: F,
+    ) -> Result<u64, SshError>
+    where
+        W: AsyncWrite + Unpin,
+        F: FnMut(u64, u64),
+    {
         let remote_path = remote_path.into();
         let command = format!("scp -O -f {}", shell_quote(&remote_path)?);
-        let mut channel = self.open_scp_channel(command.into_bytes()).await?;
-        channel.write_bytes(vec![0]).await?;
-        let metadata = channel.read_line().await?;
+        let mut channel = tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = self.open_scp_channel(command.into_bytes()) => result?,
+        };
+        channel.write_bytes_with_cancel(vec![0], cancel).await?;
+        let metadata = channel.read_line_with_cancel(cancel).await?;
         let size = parse_scp_metadata(&metadata)?;
-        channel.write_bytes(vec![0]).await?;
+        channel.write_bytes_with_cancel(vec![0], cancel).await?;
         let mut remaining = size;
         let mut copied = 0_u64;
         let mut buffer = vec![0_u8; 64 * 1024];
         while remaining > 0 {
-            let read = channel.read_bytes(&mut buffer, remaining).await?;
+            let read = tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = channel.read_bytes(&mut buffer, remaining) => result?,
+            };
             if read == 0 {
                 return Err(SshError::Scp("source ended before declared size".into()));
             }
-            destination
-                .write_all(&buffer[..read])
-                .await
-                .map_err(SshError::LocalIo)?;
+            tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = destination.write_all(&buffer[..read]) => result.map_err(SshError::LocalIo)?,
+            }
             copied += read as u64;
             remaining -= read as u64;
+            on_progress(copied, size);
         }
-        destination.flush().await.map_err(SshError::LocalIo)?;
-        channel.read_ack().await?;
-        channel.write_bytes(vec![0]).await?;
+        tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = destination.flush() => result.map_err(SshError::LocalIo)?,
+        }
+        channel.read_ack_with_cancel(cancel).await?;
+        channel.write_bytes_with_cancel(vec![0], cancel).await?;
         channel.close().await?;
         Ok(copied)
     }
@@ -807,11 +856,17 @@ impl ScpChannel {
         }
     }
 
-    async fn read_line(&mut self) -> Result<Vec<u8>, SshError> {
+    async fn read_line_with_cancel(
+        &mut self,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<Vec<u8>, SshError> {
         const MAX_LINE_BYTES: usize = 4096;
         let mut line = Vec::new();
         loop {
-            let byte = self.read_byte().await?;
+            let byte = tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = self.read_byte() => result?,
+            };
             if byte == b'\n' {
                 return Ok(line);
             }
@@ -822,15 +877,23 @@ impl ScpChannel {
         }
     }
 
-    async fn read_ack(&mut self) -> Result<(), SshError> {
+    async fn read_ack_with_cancel(
+        &mut self,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<(), SshError> {
         loop {
-            match self.read_byte().await? {
+            let byte = tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = self.read_byte() => result?,
+            };
+            match byte {
                 0 => return Ok(()),
                 1 => {
-                    let _warning = self.read_line().await?;
+                    let _warning = self.read_line_with_cancel(cancel).await?;
                 }
                 2 => {
-                    let error = String::from_utf8_lossy(&self.read_line().await?).into_owned();
+                    let error = String::from_utf8_lossy(&self.read_line_with_cancel(cancel).await?)
+                        .into_owned();
                     return Err(SshError::Scp(error));
                 }
                 code => return Err(SshError::Scp(format!("invalid scp acknowledgement {code}"))),
@@ -862,11 +925,15 @@ impl ScpChannel {
         Ok(count)
     }
 
-    async fn write_bytes(&self, bytes: Vec<u8>) -> Result<(), SshError> {
-        self.channel
-            .data_bytes(bytes)
-            .await
-            .map_err(SshError::Channel)
+    async fn write_bytes_with_cancel(
+        &self,
+        bytes: Vec<u8>,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<(), SshError> {
+        tokio::select! {
+            _ = &mut *cancel => Err(SshError::Cancelled),
+            result = self.channel.data_bytes(bytes) => result.map_err(SshError::Channel),
+        }
     }
 
     async fn close(&self) -> Result<(), SshError> {

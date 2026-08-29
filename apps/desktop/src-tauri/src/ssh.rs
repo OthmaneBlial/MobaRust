@@ -104,9 +104,19 @@ pub struct SshTransferRequest {
     pub remote_path: String,
     pub local_path: String,
     #[serde(default)]
+    pub protocol: TransferProtocol,
+    #[serde(default)]
     pub overwrite: bool,
     #[serde(default)]
     pub recursive: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferProtocol {
+    #[default]
+    Sftp,
+    Scp,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,6 +208,7 @@ struct SshTransferEvent {
     transfer_id: String,
     terminal_id: String,
     direction: TransferDirection,
+    protocol: TransferProtocol,
     source: String,
     destination: String,
     bytes_transferred: u64,
@@ -421,6 +432,7 @@ struct TransferJob {
     transfer_id: String,
     terminal_id: String,
     direction: TransferDirection,
+    protocol: TransferProtocol,
     remote_path: String,
     local_path: PathBuf,
     overwrite: bool,
@@ -442,6 +454,7 @@ impl TransferJob {
             transfer_id: self.transfer_id.clone(),
             terminal_id: self.terminal_id.clone(),
             direction: self.direction.clone(),
+            protocol: self.protocol,
             source: self.source.clone(),
             destination: self.destination.clone(),
             bytes_transferred,
@@ -865,12 +878,18 @@ impl SshManager {
         let sender = self.sender(&terminal_id)?;
         let remote_path = validate_remote_file_path(&request.remote_path)?;
         let local_path = validate_local_file_path(&request.local_path)?;
+        if request.protocol == TransferProtocol::Scp && request.recursive {
+            return Err(SshManagerError::InvalidRequest(
+                "SCP transfer manager supports single files only; use SFTP for directories".into(),
+            ));
+        }
         let transfer_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = oneshot::channel();
         let job = TransferJob {
             transfer_id: transfer_id.clone(),
             terminal_id: terminal_id.clone(),
             direction: direction.clone(),
+            protocol: request.protocol,
             remote_path: remote_path.clone(),
             local_path: local_path.clone(),
             overwrite: request.overwrite,
@@ -1819,8 +1838,8 @@ async fn run_transfer(
     let _ = lifecycle.apply(TransferEvent::Start);
     manager.emit_transfer(&app, job.event(0, None, lifecycle.state(), None));
 
-    let result = match &job.direction {
-        TransferDirection::Download => {
+    let result = match (&job.protocol, &job.direction) {
+        (TransferProtocol::Sftp, TransferDirection::Download) => {
             run_download(
                 &connection,
                 &job.remote_path,
@@ -1837,8 +1856,42 @@ async fn run_transfer(
             )
             .await
         }
-        TransferDirection::Upload => {
+        (TransferProtocol::Sftp, TransferDirection::Upload) => {
             run_upload(
+                &connection,
+                &job.remote_path,
+                &job.local_path,
+                job.overwrite,
+                job.recursive,
+                &mut cancel,
+                |bytes, total| {
+                    transferred = bytes;
+                    total_bytes = total;
+                    manager
+                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
+                },
+            )
+            .await
+        }
+        (TransferProtocol::Scp, TransferDirection::Download) => {
+            run_scp_download(
+                &connection,
+                &job.remote_path,
+                &job.local_path,
+                job.overwrite,
+                job.recursive,
+                &mut cancel,
+                |bytes, total| {
+                    transferred = bytes;
+                    total_bytes = total;
+                    manager
+                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
+                },
+            )
+            .await
+        }
+        (TransferProtocol::Scp, TransferDirection::Upload) => {
+            run_scp_upload(
                 &connection,
                 &job.remote_path,
                 &job.local_path,
@@ -1890,6 +1943,151 @@ async fn run_transfer(
         }
     }
     manager.finish_transfer(&job.transfer_id);
+}
+
+async fn run_scp_download<F>(
+    connection: &SshConnection,
+    remote_path: &str,
+    destination: &Path,
+    overwrite: bool,
+    recursive: bool,
+    cancel: &mut oneshot::Receiver<()>,
+    mut on_progress: F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    if recursive {
+        return Err(SshError::Scp(
+            "recursive SCP transfers are not supported; use SFTP".into(),
+        ));
+    }
+    let destination_metadata = fs::metadata(destination).await;
+    match destination_metadata {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(SshError::Scp("download destination is a directory".into()));
+        }
+        Ok(_) if !overwrite => {
+            return Err(SshError::Scp(
+                "download destination already exists; enable overwrite explicitly".into(),
+            ));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(SshError::LocalIo(error));
+        }
+        _ => {}
+    }
+
+    let temporary = local_part_path(destination)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .await
+        .map_err(SshError::LocalIo)?;
+    let copied = match connection
+        .scp_download_with_cancel(remote_path, &mut file, cancel, |bytes, total| {
+            on_progress(bytes, Some(total));
+        })
+        .await
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = file.sync_all().await {
+        let _ = fs::remove_file(&temporary).await;
+        return Err(SshError::LocalIo(error));
+    }
+    drop(file);
+    if !overwrite
+        && fs::try_exists(destination)
+            .await
+            .map_err(SshError::LocalIo)?
+    {
+        let _ = fs::remove_file(&temporary).await;
+        return Err(SshError::Scp(
+            "download destination appeared during transfer".into(),
+        ));
+    }
+    if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
+        let _ = fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    Ok(copied)
+}
+
+async fn run_scp_upload<F>(
+    connection: &SshConnection,
+    remote_path: &str,
+    source: &Path,
+    overwrite: bool,
+    recursive: bool,
+    cancel: &mut oneshot::Receiver<()>,
+    mut on_progress: F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    if recursive {
+        return Err(SshError::Scp(
+            "recursive SCP transfers are not supported; use SFTP".into(),
+        ));
+    }
+    let metadata = fs::metadata(source).await.map_err(SshError::LocalIo)?;
+    if !metadata.is_file() {
+        return Err(SshError::LocalIo(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "SCP upload source is not a regular file",
+        )));
+    }
+
+    let sftp = open_sftp_with_timeout(connection).await?;
+    if sftp.try_exists(remote_path).await? {
+        let (_, is_directory) = sftp.file_info(remote_path).await?;
+        if is_directory {
+            let _ = sftp.close().await;
+            return Err(SshError::Scp("upload destination is a directory".into()));
+        }
+        if !overwrite {
+            let _ = sftp.close().await;
+            return Err(SshError::Scp(
+                "upload destination already exists; enable overwrite explicitly".into(),
+            ));
+        }
+    }
+
+    let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
+    let mut file = fs::File::open(source).await.map_err(SshError::LocalIo)?;
+    let copied = match connection
+        .scp_upload_with_cancel(&temporary, metadata.len(), &mut file, cancel, |bytes| {
+            on_progress(bytes, Some(metadata.len()))
+        })
+        .await
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = sftp.remove_file(&temporary).await;
+            let _ = sftp.close().await;
+            return Err(error);
+        }
+    };
+    if !overwrite && sftp.try_exists(remote_path).await? {
+        let _ = sftp.remove_file(&temporary).await;
+        let _ = sftp.close().await;
+        return Err(SshError::Scp(
+            "upload destination appeared during transfer".into(),
+        ));
+    }
+    if let Err(error) = sftp.rename(&temporary, remote_path).await {
+        let _ = sftp.remove_file(&temporary).await;
+        let _ = sftp.close().await;
+        return Err(error);
+    }
+    sftp.close().await?;
+    Ok(copied)
 }
 
 async fn run_download<F>(
@@ -2621,7 +2819,9 @@ fn default_terminal_rows() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{remote_child_path, validate_transfer_component};
+    use super::{
+        SshTransferRequest, TransferProtocol, remote_child_path, validate_transfer_component,
+    };
 
     #[test]
     fn recursive_remote_paths_keep_root_boundaries() {
@@ -2639,5 +2839,23 @@ mod tests {
             );
         }
         assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
+
+    #[test]
+    fn transfer_requests_default_to_sftp_and_accept_explicit_scp() {
+        let default_request: SshTransferRequest = serde_json::from_value(serde_json::json!({
+            "remotePath": "/tmp/file",
+            "localPath": "/tmp/file"
+        }))
+        .expect("deserialize default transfer request");
+        assert_eq!(default_request.protocol, TransferProtocol::Sftp);
+
+        let scp_request: SshTransferRequest = serde_json::from_value(serde_json::json!({
+            "remotePath": "/tmp/file",
+            "localPath": "/tmp/file",
+            "protocol": "scp"
+        }))
+        .expect("deserialize SCP transfer request");
+        assert_eq!(scp_request.protocol, TransferProtocol::Scp);
     }
 }

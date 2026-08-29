@@ -2,15 +2,18 @@
 
 ## Status
 
-Accepted and implemented for single-file streaming in the native SSH crate.
+Accepted and implemented for bounded single-file jobs in the native SSH crate
+and desktop transfer manager.
 
 ## Decision
 
 MobaRust supports legacy SCP protocol framing through the existing `russh`
 session boundary for single-file upload and download. Rust owns the remote
-command, control acknowledgements, bounded byte buffers, local I/O, and
-cleanup. The React renderer does not receive SCP bytes or an arbitrary shell
-command capability.
+command, control acknowledgements, bounded byte buffers, local I/O, progress,
+cancellation, and cleanup. The React renderer does not receive SCP bytes or an
+arbitrary shell command capability. The transfer manager exposes an explicit
+SFTP/SCP choice and defaults to SFTP; recursive transfers are rejected for SCP
+and remain on the bounded SFTP walker.
 
 The remote command is a fixed `scp -O -t/-f` operation with a shell-quoted
 remote path. `-O` explicitly selects the legacy SCP protocol on OpenSSH
@@ -18,9 +21,12 @@ versions whose default `scp` mode is SFTP. The path validator rejects control
 characters and empty paths; it does not turn this API into general remote
 command execution.
 
-This milestone deliberately stops at a transport primitive. The desktop
-transfer manager still uses the SFTP pipeline, and recursive SCP, retry,
-resume, and richer conflict UX remain separate work.
+SCP downloads commit through a local temporary file and rename. SCP uploads
+stream to a uniquely named remote temporary file and commit through the
+existing native SFTP rename operation, preserving the destination on failed or
+cancelled jobs. This requires the remote SFTP subsystem for the SCP manager
+path; hosts that expose only legacy SCP must use a future compatibility mode
+with a clearly weaker atomicity guarantee.
 
 ## Security and reliability boundaries
 
@@ -44,8 +50,7 @@ SFTP, forwarding, and jump-host behavior.
 
 ## Follow-ups
 
-- expose SCP through the bounded native transfer manager;
-- add cancellation and failure-injection coverage for SCP jobs;
 - decide whether SFTP should remain the default for all normal file movement;
+- add failure-injection coverage for SCP manager commit failures;
 - add platform interoperability checks where a real OpenSSH server is
   available in a controlled test environment.

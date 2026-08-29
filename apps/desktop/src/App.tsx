@@ -225,12 +225,15 @@ type RemoteEntry = {
   modifiedUnixSeconds?: number | null;
 };
 
+type TransferProtocol = "sftp" | "scp";
+
 type TransferState = "queued" | "preparing" | "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
 
 type SshTransferEvent = {
   transferId: string;
   terminalId: string;
   direction: "download" | "upload";
+  protocol: TransferProtocol;
   source: string;
   destination: string;
   bytesTransferred: number;
@@ -767,7 +770,7 @@ function App() {
     void loadRemoteDirectory(path);
   }, [loadRemoteDirectory]);
 
-  const startDownload = useCallback(async (entry: RemoteEntry) => {
+  const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
     const localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
     if (!localPath?.trim()) return;
@@ -775,7 +778,7 @@ function App() {
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
-        request: { remotePath: entry.path, localPath: localPath.trim(), overwrite, recursive: entry.isDirectory },
+        request: { remotePath: entry.path, localPath: localPath.trim(), protocol, overwrite, recursive: entry.isDirectory },
       });
       setConnectionError(null);
     } catch (error) {
@@ -783,7 +786,7 @@ function App() {
     }
   }, [remoteSessionId]);
 
-  const startUpload = useCallback(async () => {
+  const startUpload = useCallback(async (protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
     const localPath = window.prompt("Local file or directory to upload", "");
     if (!localPath?.trim()) return;
@@ -795,7 +798,7 @@ function App() {
     try {
       await invoke("ssh_upload", {
         terminalId: remoteSessionId,
-        request: { remotePath: destination.trim(), localPath: localPath.trim(), overwrite, recursive: true },
+        request: { remotePath: destination.trim(), localPath: localPath.trim(), protocol, overwrite, recursive: protocol === "sftp" },
       });
       setConnectionError(null);
     } catch (error) {
@@ -1415,20 +1418,22 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
   error: string | null;
   transfers: SshTransferEvent[];
   onNavigate: (path: string) => void;
-  onDownload: (entry: RemoteEntry) => void;
-  onUpload: () => void;
+  onDownload: (entry: RemoteEntry, protocol: TransferProtocol) => void;
+  onUpload: (protocol: TransferProtocol) => void;
   onCreateDirectory: () => void;
   onRename: (entry: RemoteEntry) => void;
   onDelete: (entry: RemoteEntry) => void;
   onCancelTransfer: (transferId: string) => void;
 }) {
+  const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
   const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
   return <section className="remote-files" aria-label="Remote files">
       <div className="remote-files-toolbar">
       <div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div>
       <div className="remote-files-toolbar-actions">
+        <label className="transfer-protocol-select">Transport<select aria-label="Transfer transport" value={transferProtocol} onChange={(event) => setTransferProtocol(event.target.value as TransferProtocol)}><option value="sftp">SFTP · recommended</option><option value="scp">SCP · legacy files</option></select></label>
         <button className="outline-button" onClick={onCreateDirectory}><FolderPlus size={14} /> New folder</button>
-        <button className="outline-button" onClick={onUpload}><Upload size={14} /> Upload</button>
+        <button className="outline-button" onClick={() => onUpload(transferProtocol)}><Upload size={14} /> Upload</button>
         <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
       </div>
     </div>
@@ -1440,14 +1445,14 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
         <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
         </button>
-        <button className="remote-file-action" onClick={() => onDownload(entry)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
+        <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
         <button className="remote-file-action danger" onClick={() => onDelete(entry)} title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}><Trash2 size={14} /></button>
       </div>)}
       {status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}
     </div>
     {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />}
-    <div className="remote-files-note">Files and bounded recursive transfers run through native Rust SFTP. Individual files commit from temporary local or remote paths; cancellation never presents a partial file as complete. Directory transfers refuse symlink traversal and cap the walk at 100,000 entries.</div>
+    <div className="remote-files-note">SFTP is the default and supports bounded recursive transfers. SCP is available for single-file compatibility transfers; directories always use SFTP. Individual files commit from temporary local or remote paths, and cancellation never presents a partial local file as complete.</div>
   </section>;
 }
 
@@ -1455,7 +1460,7 @@ function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransfer
   return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER MANAGER</span><span>{transfers.length} recent</span></div>{transfers.slice().reverse().map((transfer) => {
     const percent = transfer.totalBytes && transfer.totalBytes > 0 ? Math.min(100, Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)) : null;
     const active = !["completed", "cancelled", "failed"].includes(transfer.state);
-    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
+    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
   })}</section>;
 }
 
