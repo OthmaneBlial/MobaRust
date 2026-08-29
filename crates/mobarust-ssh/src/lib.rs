@@ -10,6 +10,7 @@ use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
+use serde::Serialize;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroize;
@@ -359,7 +360,8 @@ pub struct SftpConnection {
     session: russh_sftp::client::SftpSession,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteEntry {
     pub name: String,
     pub path: String,

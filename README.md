@@ -11,6 +11,7 @@ The first working slice provides:
 - a real local PTY owned by Rust and rendered through xterm.js;
 - a real `russh` transport crate with restrictive host-key policy, interactive SSH PTY, and streaming SFTP primitives;
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
+- a read-only SFTP directory browser over the live SSH connection with typed remote entries;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;

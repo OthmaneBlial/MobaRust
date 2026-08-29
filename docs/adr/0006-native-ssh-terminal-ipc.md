@@ -33,6 +33,7 @@ making shell-state loss visible.
 
 The first adapter supports password credentials referenced from the native
 vault and private-key files with optional vault-backed passphrases. It does not
-yet expose agent or keyboard-interactive authentication, SFTP browser actions,
-or a durable remote output replay buffer for a just-opened shell; those remain
-release gates before claiming complete SSH UX.
+yet expose agent or keyboard-interactive authentication, file transfers, or a
+durable remote output replay buffer for a just-opened shell; those remain
+release gates before claiming complete SSH UX. A read-only SFTP directory
+listing is available as a first subordinate channel operation.

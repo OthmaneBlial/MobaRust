@@ -111,6 +111,18 @@ async fn ssh_close(manager: State<'_, SshManager>, terminal_id: String) -> Resul
 }
 
 #[tauri::command]
+async fn ssh_list_directory(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+) -> Result<Vec<mobarust_ssh::RemoteEntry>, String> {
+    manager
+        .list_directory(&terminal_id, path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -181,6 +193,7 @@ fn main() {
             ssh_write,
             ssh_resize,
             ssh_close,
+            ssh_list_directory,
             terminal_spawn,
             terminal_write,
             terminal_resize,

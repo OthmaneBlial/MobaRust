@@ -79,6 +79,14 @@ type SshConnectResponse = {
   host: string;
 };
 
+type RemoteEntry = {
+  name: string;
+  path: string;
+  size: number;
+  isDirectory: boolean;
+  modifiedUnixSeconds?: number | null;
+};
+
 const previewSessions: SessionListItem[] = [
   { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true },
   { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false },
@@ -237,6 +245,9 @@ function App() {
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
   const [remoteHost, setRemoteHost] = useState<string | null>(null);
+  const [remotePath, setRemotePath] = useState(".");
+  const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
+  const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
@@ -272,6 +283,28 @@ function App() {
     }
   }, []);
 
+  const loadRemoteDirectory = useCallback(async (path: string) => {
+    if (!remoteSessionId) return;
+    setSftpStatus("loading");
+    try {
+      const entries = await invoke<RemoteEntry[]>("ssh_list_directory", {
+        terminalId: remoteSessionId,
+        path,
+      });
+      setRemoteEntries(entries);
+      setRemotePath(path);
+      setSftpStatus("ready");
+    } catch (error) {
+      setSftpStatus("error");
+      setConnectionError(String(error));
+    }
+  }, [remoteSessionId]);
+
+  const navigateRemote = useCallback((path: string) => {
+    setRemotePath(path);
+    void loadRemoteDirectory(path);
+  }, [loadRemoteDirectory]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -283,6 +316,10 @@ function App() {
       .then((savedSessions) => setSessionRows(savedSessions.map(toSessionListItem)))
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (activeView === "files" && remoteSessionId) void loadRemoteDirectory(".");
+  }, [activeView, loadRemoteDirectory, remoteSessionId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -425,6 +462,8 @@ function App() {
                   <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or SSH shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>local process</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
+              ) : activeView === "files" && remoteSessionId ? (
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} onNavigate={navigateRemote} />
               ) : (
                 <EmptyProtocolView view={activeView} />
               )}
@@ -469,6 +508,17 @@ function toSessionListItem(session: SavedSession): SessionListItem {
 
 function SessionRow({ name, detail, type, active }: SessionListItem) {
   return <button className={`session-row ${active ? "active" : ""}`}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
+}
+
+function RemoteFilesView({ entries, path, status, onNavigate }: { entries: RemoteEntry[]; path: string; status: "idle" | "loading" | "ready" | "error"; onNavigate: (path: string) => void }) {
+  const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
+  return <section className="remote-files" aria-label="Remote files"><div className="remote-files-toolbar"><div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div><button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><Radio size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button></div><div className="remote-files-meta"><span>{status === "ready" ? `${entries.length} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · no whole-file buffering</span></div><div className="remote-files-list"><button className="remote-file-row parent" onClick={() => onNavigate(parentPath)}><Folder size={15} /><span>..</span><small>parent directory</small></button>{entries.map((entry) => <button className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path} onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined}><span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small></button>)}{status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}</div><div className="remote-files-note">Remote editing, atomic upload, conflict detection, and transfer progress are deliberately separate follow-up surfaces.</div></section>;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function EmptyProtocolView({ view }: { view: Exclude<View, "terminal"> }) {

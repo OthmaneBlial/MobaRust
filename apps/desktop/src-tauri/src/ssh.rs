@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
@@ -68,7 +69,14 @@ struct SshClosedEvent {
 
 enum SshCommand {
     Write(Vec<u8>),
-    Resize { cols: u32, rows: u32 },
+    Resize {
+        cols: u32,
+        rows: u32,
+    },
+    ListDirectory {
+        path: String,
+        reply: oneshot::Sender<Result<Vec<mobarust_ssh::RemoteEntry>, String>>,
+    },
     Close,
 }
 
@@ -160,6 +168,27 @@ impl SshManager {
             .send(SshCommand::Close)
             .await
             .map_err(|_| SshManagerError::Closed)
+    }
+
+    pub async fn list_directory(
+        &self,
+        terminal_id: &str,
+        path: String,
+    ) -> Result<Vec<mobarust_ssh::RemoteEntry>, SshManagerError> {
+        if path.trim().is_empty() {
+            return Err(SshManagerError::InvalidRequest(
+                "remote directory path cannot be empty".into(),
+            ));
+        }
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::ListDirectory { path, reply })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
     }
 
     fn sender(&self, terminal_id: &str) -> Result<mpsc::Sender<SshCommand>, SshManagerError> {
@@ -263,6 +292,22 @@ async fn run_remote_session(
                             should_report_error = Some(error.to_string());
                             break 'session;
                         }
+                    }
+                    Some(SshCommand::ListDirectory { path, reply }) => {
+                        let result = async {
+                            let sftp = connection
+                                .open_sftp()
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let entries = sftp
+                                .read_dir(path)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let _ = sftp.close().await;
+                            Ok(entries)
+                        }
+                        .await;
+                        let _ = reply.send(result);
                     }
                     Some(SshCommand::Close) | None => {
                         let _ = writer.close().await;
