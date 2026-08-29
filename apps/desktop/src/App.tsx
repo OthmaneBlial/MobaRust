@@ -193,6 +193,12 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
         });
         if (remoteSessionId) {
           terminalIdRef.current = remoteSessionId;
+          const pendingOutput = await invoke<string[]>("ssh_attach", { terminalId: remoteSessionId });
+          if (disposed) {
+            void invoke("ssh_close", { terminalId: remoteSessionId });
+            return;
+          }
+          pendingOutput.forEach((data) => terminal.write(data));
           onStatusChange("connected");
           fit();
           return;

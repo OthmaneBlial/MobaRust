@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
 const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
+const PENDING_OUTPUT_CHUNKS: usize = 32;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +98,13 @@ pub enum SshManagerError {
 
 #[derive(Clone, Default)]
 pub struct SshManager {
-    sessions: Arc<Mutex<HashMap<String, mpsc::Sender<SshCommand>>>>,
+    sessions: Arc<Mutex<HashMap<String, SessionState>>>,
+}
+
+struct SessionState {
+    sender: mpsc::Sender<SshCommand>,
+    attached: bool,
+    pending_output: Vec<String>,
 }
 
 impl SshManager {
@@ -125,7 +132,14 @@ impl SshManager {
         self.sessions
             .lock()
             .map_err(|_| SshManagerError::Closed)?
-            .insert(terminal_id.clone(), sender);
+            .insert(
+                terminal_id.clone(),
+                SessionState {
+                    sender,
+                    attached: false,
+                    pending_output: Vec::new(),
+                },
+            );
 
         let manager = self.clone();
         let id_for_task = terminal_id.clone();
@@ -171,6 +185,15 @@ impl SshManager {
             .map_err(|_| SshManagerError::Closed)
     }
 
+    pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SshManagerError> {
+        let mut sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+        let state = sessions
+            .get_mut(terminal_id)
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        state.attached = true;
+        Ok(std::mem::take(&mut state.pending_output))
+    }
+
     pub async fn list_directory(
         &self,
         terminal_id: &str,
@@ -197,8 +220,40 @@ impl SshManager {
             .lock()
             .map_err(|_| SshManagerError::Closed)?
             .get(terminal_id)
-            .cloned()
+            .map(|state| state.sender.clone())
             .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))
+    }
+
+    fn emit_output(&self, app: &AppHandle, terminal_id: &str, bytes: &[u8]) {
+        for chunk in bytes.chunks(OUTPUT_BUFFER_BYTES) {
+            let data = String::from_utf8_lossy(chunk).into_owned();
+            let should_emit = if let Ok(mut sessions) = self.sessions.lock() {
+                if let Some(state) = sessions.get_mut(terminal_id) {
+                    if state.attached {
+                        true
+                    } else {
+                        if state.pending_output.len() == PENDING_OUTPUT_CHUNKS {
+                            state.pending_output.remove(0);
+                        }
+                        state.pending_output.push(data.clone());
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if should_emit {
+                let _ = app.emit(
+                    "ssh://output",
+                    SshOutputEvent {
+                        terminal_id: terminal_id.to_owned(),
+                        data,
+                    },
+                );
+            }
+        }
     }
 
     fn remove(&self, terminal_id: &str) {
@@ -284,7 +339,7 @@ async fn run_remote_session(
                 match output {
                     None => break 'session,
                     Some(Ok(SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes))) => {
-                        emit_output(&app, &terminal_id, &bytes);
+                        manager.emit_output(&app, &terminal_id, &bytes);
                     }
                     Some(Ok(SshOutput::ExitStatus(_))) | Some(Ok(SshOutput::Control)) => {}
                     Some(Err(error)) => {
@@ -341,18 +396,6 @@ async fn run_remote_session(
             reason: should_report_error.unwrap_or_else(|| "closed".into()),
         },
     );
-}
-
-fn emit_output(app: &AppHandle, terminal_id: &str, bytes: &[u8]) {
-    for chunk in bytes.chunks(OUTPUT_BUFFER_BYTES) {
-        let _ = app.emit(
-            "ssh://output",
-            SshOutputEvent {
-                terminal_id: terminal_id.to_owned(),
-                data: String::from_utf8_lossy(chunk).into_owned(),
-            },
-        );
-    }
 }
 
 fn default_terminal_cols() -> u32 {

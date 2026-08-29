@@ -111,6 +111,13 @@ async fn ssh_close(manager: State<'_, SshManager>, terminal_id: String) -> Resul
 }
 
 #[tauri::command]
+fn ssh_attach(manager: State<'_, SshManager>, terminal_id: String) -> Result<Vec<String>, String> {
+    manager
+        .attach(&terminal_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_list_directory(
     manager: State<'_, SshManager>,
     terminal_id: String,
@@ -193,6 +200,7 @@ fn main() {
             ssh_write,
             ssh_resize,
             ssh_close,
+            ssh_attach,
             ssh_list_directory,
             terminal_spawn,
             terminal_write,
