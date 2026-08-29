@@ -28,6 +28,7 @@ The first working slice provides:
 - native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
 - bounded recursive SFTP upload/download with streaming file bodies, progress, cancellation, symlink refusal, and atomic per-file commits;
 - terminal multiline paste is intercepted and confirmed visibly before it is sent to a remote or local shell;
+- typed non-secret settings are persisted separately with validation, atomic writes, reset, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
 - an explicit SSH tunnel manager for bounded local forwarding, remote `-R` forwarding, and local SOCKS5 `-D`, with direction-aware lifecycle events and stop controls;

@@ -40,6 +40,37 @@ import {
 
 type View = "terminal" | "files" | "tunnels" | "diagnostics";
 
+type AppSettings = {
+  general: {
+    theme: "dark" | "light" | "system";
+    confirmMultilinePaste: boolean;
+  };
+  appearance: {
+    fontSize: number;
+  };
+  terminal: {
+    scrollbackLines: number;
+    cursorBlink: boolean;
+  };
+  ssh: {
+    reconnectEnabled: boolean;
+    reconnectAttempts: number;
+    connectTimeoutMs: number;
+  };
+  network: {
+    diagnosticTimeoutMs: number;
+    scanConcurrency: number;
+  };
+};
+
+const defaultSettings: AppSettings = {
+  general: { theme: "dark", confirmMultilinePaste: true },
+  appearance: { fontSize: 13 },
+  terminal: { scrollbackLines: 5000, cursorBlink: true },
+  ssh: { reconnectEnabled: true, reconnectAttempts: 3, connectTimeoutMs: 12000 },
+  network: { diagnosticTimeoutMs: 1500, scanConcurrency: 32 },
+};
+
 type TerminalOutputEvent = {
   terminalId: string;
   data: string;
@@ -75,6 +106,10 @@ type TerminalViewportProps = {
   instanceKey: number;
   remoteSessionId: string | null;
   remoteProtocol: "ssh" | "telnet" | "serial" | null;
+  fontSize: number;
+  scrollbackLines: number;
+  cursorBlink: boolean;
+  confirmMultilinePaste: boolean;
   onStatusChange: (status: TerminalStatus) => void;
 };
 
@@ -244,10 +279,11 @@ const previewSessions: SessionListItem[] = [
 const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "New local terminal", hint: "⌘ N", icon: TerminalIcon },
   { label: "Quick connect", hint: "⌘ K", icon: Network },
+  { label: "Settings", hint: "", icon: Settings2 },
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStatusChange }: TerminalViewportProps) {
+function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
 
@@ -262,12 +298,12 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
-      cursorBlink: true,
+      cursorBlink,
       cursorStyle: "bar",
       fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, monospace',
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.35,
-      scrollback: 5000,
+      scrollback: scrollbackLines,
       theme: {
         background: "#101514",
         foreground: "#dce8dc",
@@ -329,7 +365,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
 
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData?.getData("text/plain") ?? "";
-      if (!data.includes("\n") && !data.includes("\r")) return;
+      if (!confirmMultilinePaste || (!data.includes("\n") && !data.includes("\r"))) return;
       event.preventDefault();
       event.stopPropagation();
       const accepted = window.confirm("This paste contains multiple lines. Send it to the terminal? Nothing will be executed automatically by MobaRust.");
@@ -428,7 +464,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
       terminalIdRef.current = null;
       terminal.dispose();
     };
-  }, [instanceKey, onStatusChange, remoteProtocol, remoteSessionId]);
+  }, [confirmMultilinePaste, cursorBlink, fontSize, instanceKey, onStatusChange, remoteProtocol, remoteSessionId, scrollbackLines]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -441,6 +477,8 @@ function App() {
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -498,6 +536,38 @@ function App() {
         setSessionRows(sessions.map(toSessionListItem));
       })
       .catch(() => undefined);
+  }, []);
+
+  const refreshSettings = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<AppSettings>("settings_get")
+      .then(setSettings)
+      .catch((error) => setConnectionError(`Settings could not be loaded: ${String(error)}`));
+  }, []);
+
+  const saveSettings = useCallback(async (next: AppSettings) => {
+    try {
+      const saved = IS_TAURI ? await invoke<AppSettings>("settings_save", { settings: next }) : next;
+      setSettings(saved);
+      setSettingsOpen(false);
+      setSessionNotice("Settings saved. New terminal instances use the updated terminal profile.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Settings could not be saved: ${String(error)}`);
+    }
+  }, []);
+
+  const resetSettings = useCallback(async () => {
+    if (!window.confirm("Reset MobaRust settings to their safe defaults?")) return;
+    try {
+      const reset = IS_TAURI ? await invoke<AppSettings>("settings_reset") : defaultSettings;
+      setSettings(reset);
+      setSettingsOpen(false);
+      setSessionNotice("Settings reset to defaults.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Settings could not be reset: ${String(error)}`);
+    }
   }, []);
 
   const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true) => {
@@ -1065,6 +1135,10 @@ function App() {
   }, [refreshSavedSessions]);
 
   useEffect(() => {
+    refreshSettings();
+  }, [refreshSettings]);
+
+  useEffect(() => {
     if (activeView === "files" && remoteSessionId && remoteProtocol === "ssh") void loadRemoteDirectory(".");
   }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
@@ -1118,7 +1192,7 @@ function App() {
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
 
   return (
-    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
@@ -1141,7 +1215,7 @@ function App() {
           <button className="icon-button" aria-label="Help" title="Help">
             <CircleHelp size={17} strokeWidth={1.7} />
           </button>
-          <button className="icon-button" aria-label="Settings" title="Settings">
+          <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={17} strokeWidth={1.7} />
           </button>
           <div className="avatar">OB</div>
@@ -1245,7 +1319,7 @@ function App() {
                     <div className="terminal-tab"><span className="terminal-tab-dot" /><span>{remoteHost ? "remote shell" : "local shell"}</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? (remoteHost ? remoteProtocol : "zsh") : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); setRemoteSessionId(null); setRemoteProtocol(null); setRemoteHost(null); }}><X size={14} /></button></div>
                     <div className="terminal-toolbar-actions"><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button aria-label="Copy terminal output"><Copy size={14} /></button><button aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} remoteProtocol={remoteProtocol} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or SSH shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
+                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} remoteProtocol={remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or remote shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -1281,9 +1355,10 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
+      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
     </main>
   );
 }
@@ -1480,10 +1555,10 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
 }
 
 function SessionEditor({ session, onClose, onSave }: { session: SavedSession; onClose: () => void; onSave: (session: SavedSession) => void }) {
@@ -1563,6 +1638,78 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         <div className="session-editor-footer">
           <button type="button" className={`favorite-toggle ${favorite ? "selected" : ""}`} onClick={() => setFavorite((value) => !value)}><Star size={14} fill={favorite ? "currentColor" : "none"} /> {favorite ? "Favorite" : "Add to favorites"}</button>
           <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save changes</button></div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SettingsModal({ settings, onClose, onSave, onReset }: { settings: AppSettings; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void }) {
+  const [theme, setTheme] = useState(settings.general.theme);
+  const [confirmMultilinePaste, setConfirmMultilinePaste] = useState(settings.general.confirmMultilinePaste);
+  const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
+  const [scrollbackLines, setScrollbackLines] = useState(String(settings.terminal.scrollbackLines));
+  const [cursorBlink, setCursorBlink] = useState(settings.terminal.cursorBlink);
+  const [reconnectEnabled, setReconnectEnabled] = useState(settings.ssh.reconnectEnabled);
+  const [reconnectAttempts, setReconnectAttempts] = useState(String(settings.ssh.reconnectAttempts));
+  const [connectTimeoutMs, setConnectTimeoutMs] = useState(String(settings.ssh.connectTimeoutMs));
+  const [diagnosticTimeoutMs, setDiagnosticTimeoutMs] = useState(String(settings.network.diagnosticTimeoutMs));
+  const [scanConcurrency, setScanConcurrency] = useState(String(settings.network.scanConcurrency));
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSave({
+      general: { theme, confirmMultilinePaste },
+      appearance: { fontSize: Number(fontSize) },
+      terminal: { scrollbackLines: Number(scrollbackLines), cursorBlink },
+      ssh: { reconnectEnabled, reconnectAttempts: Number(reconnectAttempts), connectTimeoutMs: Number(connectTimeoutMs) },
+      network: { diagnosticTimeoutMs: Number(diagnosticTimeoutMs), scanConcurrency: Number(scanConcurrency) },
+    });
+  };
+
+  return (
+    <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+      <form className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}>
+        <div className="session-editor-heading">
+          <div>
+            <span className="eyebrow">MOBA / SETTINGS</span>
+            <h2>Workspace settings</h2>
+            <p>Typed, validated preferences. Secrets and credential material are not stored here.</p>
+          </div>
+          <button type="button" className="icon-button" aria-label="Close settings" onClick={onClose}><X size={17} /></button>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">General & appearance</span>
+          <div className="settings-grid">
+            <label>Theme<select value={theme} onChange={(event) => setTheme(event.target.value as AppSettings["general"]["theme"])}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label>
+            <label>Font size<input type="number" min="8" max="32" value={fontSize} onChange={(event) => setFontSize(event.target.value)} /><small>8–32 px; new terminal instances.</small></label>
+            <label>Scrollback lines<input type="number" min="100" max="100000" value={scrollbackLines} onChange={(event) => setScrollbackLines(event.target.value)} /><small>100–100,000 lines.</small></label>
+            <label className="settings-check"><input type="checkbox" checked={cursorBlink} onChange={(event) => setCursorBlink(event.target.checked)} /> Cursor blink</label>
+            <label className="settings-check"><input type="checkbox" checked={confirmMultilinePaste} onChange={(event) => setConfirmMultilinePaste(event.target.checked)} /> Confirm multiline paste</label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">SSH resilience</span>
+          <div className="settings-grid">
+            <label className="settings-check"><input type="checkbox" checked={reconnectEnabled} onChange={(event) => setReconnectEnabled(event.target.checked)} /> Enable bounded reconnect</label>
+            <label>Reconnect attempts<input type="number" min="0" max="10" value={reconnectAttempts} onChange={(event) => setReconnectAttempts(event.target.value)} /><small>0–10 attempts.</small></label>
+            <label>Connect timeout ms<input type="number" min="100" max="60000" value={connectTimeoutMs} onChange={(event) => setConnectTimeoutMs(event.target.value)} /></label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">Network diagnostics</span>
+          <div className="settings-grid">
+            <label>Default timeout ms<input type="number" min="50" max="60000" value={diagnosticTimeoutMs} onChange={(event) => setDiagnosticTimeoutMs(event.target.value)} /></label>
+            <label>Default scan concurrency<input type="number" min="1" max="128" value={scanConcurrency} onChange={(event) => setScanConcurrency(event.target.value)} /><small>1–128 bounded checks.</small></label>
+          </div>
+        </div>
+
+        <div className="session-editor-footer">
+          <button type="button" className="outline-button" onClick={onReset}>Reset defaults</button>
+          <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save settings</button></div>
         </div>
       </form>
     </div>

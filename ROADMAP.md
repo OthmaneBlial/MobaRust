@@ -42,6 +42,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Session folders and metadata-only profile editing/deletion
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
+- [x] Typed non-secret settings with validation, atomic persistence, reset, and terminal application
 - [ ] Portable encrypted vault research and implementation
 
 ## Later protocol adapters

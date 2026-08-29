@@ -3,10 +3,15 @@
 
 pub mod lifecycle;
 pub mod session;
+pub mod settings;
 pub mod terminal;
 pub mod transfer;
 
 pub use lifecycle::{ConnectionEvent, ConnectionLifecycle, ConnectionState, TransitionError};
 pub use session::{AuthMethod, Protocol, SessionId, SessionRecord, SessionValidationError};
+pub use settings::{
+    AppSettings, AppearanceSettings, GeneralSettings, NetworkSettings, SettingsValidationError,
+    SshSettings, TerminalSettings, ThemePreference,
+};
 pub use terminal::{OutputBatcher, OutputChunk};
 pub use transfer::{TransferEvent, TransferLifecycle, TransferState};

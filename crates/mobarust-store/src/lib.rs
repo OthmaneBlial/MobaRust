@@ -9,7 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -35,6 +35,19 @@ pub enum StoreError {
     Write { path: PathBuf, source: io::Error },
     #[error("could not read OpenSSH config {path}: {source}")]
     ImportRead { path: PathBuf, source: io::Error },
+    #[error("settings file {path} contains invalid data: {source}")]
+    SettingsDecode {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("settings file {path} uses unsupported schema version {version}")]
+    SettingsUnsupportedSchema { path: PathBuf, version: u32 },
+    #[error("settings are invalid: {0}")]
+    InvalidSettings(#[from] mobarust_core::SettingsValidationError),
+    #[error("could not serialize settings: {0}")]
+    SettingsEncode(serde_json::Error),
+    #[error("could not write settings file {path}: {source}")]
+    SettingsWrite { path: PathBuf, source: io::Error },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +55,16 @@ pub enum StoreError {
 struct StoreFile {
     schema_version: u32,
     sessions: Vec<SessionRecord>,
+}
+
+const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsFile {
+    schema_version: u32,
+    #[serde(default)]
+    settings: AppSettings,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +96,100 @@ struct OpenSshHostBlock {
 pub struct SessionStore {
     path: PathBuf,
     sessions: Vec<SessionRecord>,
+}
+
+/// Versioned, non-secret application preferences stored separately from the
+/// session catalog. This separation makes it impossible for a settings export
+/// to accidentally become a credential export.
+#[derive(Debug)]
+pub struct SettingsStore {
+    path: PathBuf,
+    settings: AppSettings,
+}
+
+impl SettingsStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        let settings = if path.exists() {
+            let bytes = fs::read(&path).map_err(|source| StoreError::SettingsWrite {
+                path: path.clone(),
+                source,
+            })?;
+            let file: SettingsFile =
+                serde_json::from_slice(&bytes).map_err(|source| StoreError::SettingsDecode {
+                    path: path.clone(),
+                    source,
+                })?;
+            if file.schema_version != CURRENT_SETTINGS_SCHEMA_VERSION {
+                return Err(StoreError::SettingsUnsupportedSchema {
+                    path,
+                    version: file.schema_version,
+                });
+            }
+            file.settings.validate()?;
+            file.settings
+        } else {
+            AppSettings::default()
+        };
+
+        Ok(Self { path, settings })
+    }
+
+    pub fn get(&self) -> &AppSettings {
+        &self.settings
+    }
+
+    pub fn save(&mut self, settings: AppSettings) -> Result<AppSettings, StoreError> {
+        settings.validate()?;
+        self.settings = settings.clone();
+        self.persist()?;
+        Ok(settings)
+    }
+
+    pub fn reset(&mut self) -> Result<AppSettings, StoreError> {
+        self.save(AppSettings::default())
+    }
+
+    fn persist(&self) -> Result<(), StoreError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|source| StoreError::SettingsWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let bytes = serde_json::to_vec_pretty(&SettingsFile {
+            schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
+            settings: self.settings.clone(),
+        })
+        .map_err(StoreError::SettingsEncode)?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("settings.json");
+        let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+        let mut temporary = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|source| StoreError::SettingsWrite {
+                path: temporary_path.clone(),
+                source,
+            })?;
+        let write_result = (|| -> io::Result<()> {
+            temporary.write_all(&bytes)?;
+            temporary.sync_all()?;
+            drop(temporary);
+            replace_file(&temporary_path, &self.path)
+        })();
+        if let Err(source) = write_result {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(StoreError::SettingsWrite {
+                path: self.path.clone(),
+                source,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl SessionStore {
@@ -597,6 +714,41 @@ mod tests {
         let error = store.import_json(r#"{"schema_version":1,"sessions":[],"extra":true}"#);
         assert!(matches!(error, Err(StoreError::Decode { .. })));
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn settings_round_trip_and_reset_are_durable() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let mut store = SettingsStore::open(&path).unwrap();
+        let mut settings = AppSettings::default();
+        settings.appearance.font_size = 18;
+        settings.general.confirm_multiline_paste = false;
+        store.save(settings.clone()).unwrap();
+        assert_eq!(SettingsStore::open(&path).unwrap().get(), &settings);
+
+        store.reset().unwrap();
+        assert_eq!(
+            SettingsStore::open(&path).unwrap().get(),
+            &AppSettings::default()
+        );
+    }
+
+    #[test]
+    fn corrupt_settings_are_not_silently_replaced() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"settings":{},"unknown":true}"#,
+        )
+        .unwrap();
+        let error = SettingsStore::open(&path).unwrap_err();
+        assert!(matches!(error, StoreError::SettingsDecode { .. }));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"schema_version":1,"settings":{},"unknown":true}"#
+        );
     }
 
     #[test]

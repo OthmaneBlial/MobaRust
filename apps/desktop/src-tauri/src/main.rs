@@ -6,9 +6,9 @@ mod ssh;
 mod telnet;
 mod terminal;
 
-use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord};
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
-use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
+use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore};
 use mobarust_vault::PlatformVault;
 use network::{NetworkManager, NetworkScanRequest};
 use serde::Serialize;
@@ -164,6 +164,35 @@ fn session_set_favorite(
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?
         .set_favorite(session_id, favorite)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings, String> {
+    store
+        .lock()
+        .map_err(|_| "settings store lock poisoned".to_owned())
+        .map(|store| store.get().clone())
+}
+
+#[tauri::command]
+fn settings_save(
+    store: State<'_, Mutex<SettingsStore>>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    store
+        .lock()
+        .map_err(|_| "settings store lock poisoned".to_owned())?
+        .save(settings)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_reset(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings, String> {
+    store
+        .lock()
+        .map_err(|_| "settings store lock poisoned".to_owned())?
+        .reset()
         .map_err(|error| error.to_string())
 }
 
@@ -636,12 +665,15 @@ fn main() {
                 .map_err(|error| error.to_string())?;
             let mut store = SessionStore::open(data_dir.join("sessions.json"))
                 .map_err(|error| error.to_string())?;
+            let settings = SettingsStore::open(data_dir.join("settings.json"))
+                .map_err(|error| error.to_string())?;
             if store.list().is_empty() {
                 store
                     .save(SessionRecord::local_terminal("Local workstation"))
                     .map_err(|error| error.to_string())?;
             }
             app.manage(Mutex::new(store));
+            app.manage(Mutex::new(settings));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -652,6 +684,9 @@ fn main() {
             session_export,
             session_import,
             session_set_favorite,
+            settings_get,
+            settings_save,
+            settings_reset,
             session_save_ssh,
             session_delete,
             network_resolve_host,
