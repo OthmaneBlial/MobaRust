@@ -13,6 +13,7 @@ The first working slice provides:
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
+- a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
 - a transfer state model ready for bounded SFTP work;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.

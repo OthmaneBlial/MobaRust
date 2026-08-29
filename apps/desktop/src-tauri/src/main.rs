@@ -2,7 +2,11 @@
 
 mod terminal;
 
+use mobarust_core::{SessionId, SessionRecord};
+use mobarust_store::SessionStore;
 use serde::Serialize;
+use std::sync::Mutex;
+use tauri::Manager;
 use tauri::State;
 use terminal::TerminalManager;
 
@@ -23,6 +27,38 @@ fn app_snapshot() -> AppSnapshot {
         platform: std::env::consts::OS,
         local_terminal_available: true,
     }
+}
+
+#[tauri::command]
+fn session_list(store: State<'_, Mutex<SessionStore>>) -> Result<Vec<SessionRecord>, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())
+        .map(|store| store.list().to_vec())
+}
+
+#[tauri::command]
+fn session_save(
+    store: State<'_, Mutex<SessionStore>>,
+    session: SessionRecord,
+) -> Result<SessionRecord, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .save(session)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_delete(
+    store: State<'_, Mutex<SessionStore>>,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .delete(session_id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -70,8 +106,26 @@ fn terminal_close(manager: State<'_, TerminalManager>, terminal_id: String) -> R
 fn main() {
     tauri::Builder::default()
         .manage(TerminalManager::default())
+        .setup(|app| {
+            let data_dir = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|error| error.to_string())?;
+            let mut store = SessionStore::open(data_dir.join("sessions.json"))
+                .map_err(|error| error.to_string())?;
+            if store.list().is_empty() {
+                store
+                    .save(SessionRecord::local_terminal("Local workstation"))
+                    .map_err(|error| error.to_string())?;
+            }
+            app.manage(Mutex::new(store));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
+            session_list,
+            session_save,
+            session_delete,
             terminal_spawn,
             terminal_write,
             terminal_resize,

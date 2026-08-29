@@ -47,7 +47,23 @@ type TerminalViewportProps = {
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const sessions = [
+type SessionListItem = {
+  name: string;
+  detail: string;
+  type: string;
+  active: boolean;
+};
+
+type SavedSession = {
+  id: string;
+  name: string;
+  protocol: string;
+  hostname: string;
+  port: number;
+  username?: string | null;
+};
+
+const previewSessions: SessionListItem[] = [
   { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true },
   { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false },
   { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", active: false },
@@ -192,6 +208,7 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [now, setNow] = useState(() => new Date());
+  const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
 
   const startNewTerminal = useCallback(() => {
     setTerminalStatus("starting");
@@ -207,6 +224,13 @@ function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    void invoke<SavedSession[]>("session_list")
+      .then((savedSessions) => setSessionRows(savedSessions.map(toSessionListItem)))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -226,9 +250,11 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [startNewTerminal]);
 
-  const filteredSessions = sessions.filter((session) =>
+  const filteredSessions = sessionRows.filter((session) =>
     `${session.name} ${session.detail} ${session.type}`.toLowerCase().includes(search.toLowerCase()),
   );
+  const localSessionCount = sessionRows.filter((session) => session.type === "LOCAL").length;
+  const remoteSessionCount = sessionRows.filter((session) => session.type !== "LOCAL").length;
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
@@ -289,11 +315,11 @@ function App() {
 
           <div className="session-list">
             <div className="list-heading"><span>Sessions</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
-            <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>1</span></div>
+            <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
               <SessionRow key={session.name} {...session} />
             ))}
-            <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>2</span></div>
+            <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "SSH").map((session) => (
               <SessionRow key={session.name} {...session} />
             ))}
@@ -375,7 +401,16 @@ function App() {
   );
 }
 
-function SessionRow({ name, detail, type, active }: (typeof sessions)[number]) {
+function toSessionListItem(session: SavedSession): SessionListItem {
+  if (session.protocol === "LOCAL") {
+    return { name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true };
+  }
+  const user = session.username ? `${session.username}@` : "";
+  const port = session.port && session.port !== 22 ? `:${session.port}` : "";
+  return { name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false };
+}
+
+function SessionRow({ name, detail, type, active }: SessionListItem) {
   return <button className={`session-row ${active ? "active" : ""}`}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
 }
 

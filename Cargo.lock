@@ -2824,6 +2824,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "mobarust-core",
+ "mobarust-store",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2854,6 +2855,18 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "mobarust-store"
+version = "0.1.0"
+dependencies = [
+ "mobarust-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@
 members = [
   "crates/mobarust-core",
   "crates/mobarust-ssh",
+  "crates/mobarust-store",
   "crates/mobarust-vault",
   "apps/desktop/src-tauri",
   "xtask",

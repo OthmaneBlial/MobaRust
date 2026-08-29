@@ -12,6 +12,7 @@ tauri-build = { version = "2.4", features = [] }
 [dependencies]
 anyhow.workspace = true
 mobarust-core = { path = "../../../crates/mobarust-core" }
+mobarust-store = { path = "../../../crates/mobarust-store" }
 portable-pty = "0.9"
 serde.workspace = true
 serde_json.workspace = true

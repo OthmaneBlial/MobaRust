@@ -1,0 +1,18 @@
+[package]
+name = "mobarust-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Versioned local session persistence for MobaRust"
+
+[dependencies]
+mobarust-core = { path = "../mobarust-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23"
