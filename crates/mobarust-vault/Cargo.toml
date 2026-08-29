@@ -1,0 +1,13 @@
+[package]
+name = "mobarust-vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native credential-store boundary for MobaRust"
+
+[dependencies]
+keyring = "4.1.6"
+thiserror.workspace = true
+zeroize.workspace = true

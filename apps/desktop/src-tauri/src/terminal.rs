@@ -1,0 +1,291 @@
+use mobarust_core::OutputBatcher;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
+use thiserror::Error;
+use uuid::Uuid;
+
+const OUTPUT_BATCH_BYTES: usize = 32 * 1024;
+const OUTPUT_CHANNEL_CAPACITY: usize = 64;
+
+#[derive(Debug, Error)]
+pub enum TerminalError {
+    #[error("failed to create pseudo-terminal: {0}")]
+    Open(#[source] anyhow::Error),
+    #[error("terminal session not found: {0}")]
+    Missing(String),
+    #[error("terminal I/O failed: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("terminal resize failed: {0}")]
+    Resize(#[source] anyhow::Error),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalOutput {
+    terminal_id: String,
+    data: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalClosed {
+    terminal_id: String,
+}
+
+struct TerminalSession {
+    master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+}
+
+#[derive(Clone, Default)]
+pub struct TerminalManager {
+    sessions: Arc<Mutex<HashMap<String, Arc<TerminalSession>>>>,
+}
+
+impl TerminalManager {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16) -> Result<String, TerminalError> {
+        let pty_system = portable_pty::native_pty_system();
+        let pair = pty_system
+            .openpty(portable_pty::PtySize {
+                rows: rows.max(1),
+                cols: cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+
+        let shell = default_shell();
+        let mut command = portable_pty::CommandBuilder::new(&shell);
+        command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
+
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+        let id = Uuid::new_v4().to_string();
+        let session = Arc::new(TerminalSession {
+            master: Mutex::new(pair.master),
+            writer: Mutex::new(writer),
+            child: Mutex::new(child),
+        });
+
+        self.sessions
+            .lock()
+            .expect("terminal session map poisoned")
+            .insert(id.clone(), Arc::clone(&session));
+
+        let manager = self.clone();
+        let terminal_id = id.clone();
+        thread::Builder::new()
+            .name(format!("mobarust-pty-{id}"))
+            .spawn(move || stream_output(app, manager, terminal_id, reader))
+            .map_err(TerminalError::Io)?;
+
+        Ok(id)
+    }
+
+    pub fn write(&self, id: &str, data: &[u8]) -> Result<(), TerminalError> {
+        let session = self.session(id)?;
+        let mut writer = session.writer.lock().expect("terminal writer poisoned");
+        writer.write_all(data).map_err(TerminalError::Io)?;
+        writer.flush().map_err(TerminalError::Io)
+    }
+
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), TerminalError> {
+        let session = self.session(id)?;
+        session
+            .master
+            .lock()
+            .expect("terminal master poisoned")
+            .resize(portable_pty::PtySize {
+                rows: rows.max(1),
+                cols: cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|error| TerminalError::Resize(anyhow::anyhow!(error)))
+    }
+
+    pub fn close(&self, id: &str) -> Result<(), TerminalError> {
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal session map poisoned")
+            .remove(id)
+            .ok_or_else(|| TerminalError::Missing(id.to_owned()))?;
+        session
+            .child
+            .lock()
+            .expect("terminal child poisoned")
+            .kill()
+            .map_err(TerminalError::Io)
+    }
+
+    fn session(&self, id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
+        self.sessions
+            .lock()
+            .expect("terminal session map poisoned")
+            .get(id)
+            .cloned()
+            .ok_or_else(|| TerminalError::Missing(id.to_owned()))
+    }
+}
+
+fn stream_output<R: Read + Send + 'static>(
+    app: AppHandle,
+    manager: TerminalManager,
+    terminal_id: String,
+    mut reader: R,
+) {
+    let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(OUTPUT_CHANNEL_CAPACITY);
+    let reader_thread = thread::Builder::new()
+        .name(format!("mobarust-pty-reader-{terminal_id}"))
+        .spawn(move || {
+            let mut buffer = vec![0_u8; OUTPUT_BATCH_BYTES];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        if sender.send(buffer[..size].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+    if reader_thread.is_err() {
+        let _ = app.emit(
+            "terminal://closed",
+            TerminalClosed {
+                terminal_id: terminal_id.clone(),
+            },
+        );
+        manager.remove(&terminal_id);
+        return;
+    }
+
+    let mut batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(8)) {
+            Ok(bytes) => {
+                for chunk in batcher.push(&bytes) {
+                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(chunk) = batcher.flush() {
+                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(chunk) = batcher.flush() {
+                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                }
+                break;
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "terminal://closed",
+        TerminalClosed {
+            terminal_id: terminal_id.clone(),
+        },
+    );
+    manager.remove(&terminal_id);
+}
+
+fn emit_chunk(app: &AppHandle, terminal_id: &str, bytes: Vec<u8>) {
+    let _ = app.emit(
+        "terminal://output",
+        TerminalOutput {
+            terminal_id: terminal_id.to_owned(),
+            data: String::from_utf8_lossy(&bytes).into_owned(),
+        },
+    );
+}
+
+impl TerminalManager {
+    fn remove(&self, id: &str) {
+        self.sessions
+            .lock()
+            .expect("terminal session map poisoned")
+            .remove(id);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn default_shell() -> String {
+    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_owned())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portable_pty::{CommandBuilder, PtySize};
+
+    #[test]
+    fn native_pty_supports_resize_input_output_and_exit() {
+        let system = portable_pty::native_pty_system();
+        let pair = system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test pty");
+
+        pair.master
+            .resize(PtySize {
+                rows: 40,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("resize test pty");
+
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'MOBARUST_PTY_OK\\n'; read line; printf 'INPUT:%s\\n' \"$line\"",
+        ]);
+        let mut child = pair.slave.spawn_command(command).expect("spawn test shell");
+        let mut reader = pair.master.try_clone_reader().expect("clone test reader");
+        let mut writer = pair.master.take_writer().expect("take test writer");
+        writer.write_all(b"hello\n").expect("write test input");
+        writer.flush().expect("flush test input");
+
+        let mut output = String::new();
+        reader
+            .read_to_string(&mut output)
+            .expect("read test pty output");
+        child.wait().expect("wait for test shell");
+
+        assert!(output.contains("MOBARUST_PTY_OK"));
+        assert!(output.contains("INPUT:hello"));
+    }
+}

@@ -1,0 +1,42 @@
+# Research corpus: never commit cloned reference projects.
+base/
+
+# Rust
+target/
+# Frontend
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Desktop artifacts
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/icons/*.icns
+apps/desktop/src-tauri/icons/*.ico
+apps/desktop/src-tauri/icons/*.png
+!apps/desktop/src-tauri/icons/icon.png
+
+# Local state and secrets
+.env
+.env.*
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.session
+*.pem
+*.key
+*.p12
+*.pfx
+*.vault
+credentials/
+secrets/
+
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp

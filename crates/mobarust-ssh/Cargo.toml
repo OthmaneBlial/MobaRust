@@ -1,0 +1,20 @@
+[package]
+name = "mobarust-ssh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native SSH transport and interactive PTY primitives for MobaRust"
+
+[dependencies]
+anyhow.workspace = true
+mobarust-core = { path = "../mobarust-core" }
+russh.workspace = true
+russh-sftp.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23"
