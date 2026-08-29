@@ -1,0 +1,659 @@
+//! Safe, versioned contracts for isolated RDP/VNC helper processes.
+//!
+//! This crate deliberately does not implement either remote-desktop protocol.
+//! It constrains the boundary that a future FreeRDP/libvncclient helper must
+//! satisfy: bounded frames, typed input, explicit lifecycle, and no secret
+//! material in process arguments or diagnostic formatting.
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::path::PathBuf;
+use thiserror::Error;
+
+pub const WIRE_VERSION: u16 = 1;
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+pub const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireEnvelope<T> {
+    pub version: u16,
+    pub payload: T,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopProtocol {
+    Rdp,
+    Vnc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplaySize {
+    pub width: u16,
+    pub height: u16,
+}
+
+impl DisplaySize {
+    pub fn validate(self) -> Result<(), HelperProtocolError> {
+        if !(320..=16_384).contains(&self.width) || !(200..=16_384).contains(&self.height) {
+            return Err(HelperProtocolError::InvalidDisplaySize {
+                width: self.width,
+                height: self.height,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelperLaunchConfig {
+    pub program: PathBuf,
+    pub protocol: DesktopProtocol,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub domain: Option<String>,
+    pub display: DisplaySize,
+    pub color_depth: u16,
+    pub audio_enabled: bool,
+    /// Opaque vault identifier. The secret value is never part of this type.
+    pub credential_ref: String,
+}
+
+impl fmt::Debug for HelperLaunchConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HelperLaunchConfig")
+            .field("program", &self.program)
+            .field("protocol", &self.protocol)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("domain", &self.domain)
+            .field("display", &self.display)
+            .field("color_depth", &self.color_depth)
+            .field("audio_enabled", &self.audio_enabled)
+            .field("credential_ref", &"<opaque-reference>")
+            .finish()
+    }
+}
+
+impl HelperLaunchConfig {
+    pub fn validate(&self) -> Result<(), HelperProtocolError> {
+        if self.program.as_os_str().is_empty() {
+            return Err(HelperProtocolError::EmptyProgram);
+        }
+        if self.host.trim().is_empty() {
+            return Err(HelperProtocolError::EmptyHost);
+        }
+        if self.port == 0 {
+            return Err(HelperProtocolError::InvalidPort);
+        }
+        if self.username.trim().is_empty() {
+            return Err(HelperProtocolError::EmptyUsername);
+        }
+        if self.credential_ref.trim().is_empty() {
+            return Err(HelperProtocolError::EmptyCredentialReference);
+        }
+        if self.color_depth == 0 {
+            return Err(HelperProtocolError::InvalidColorDepth);
+        }
+        self.display.validate()
+    }
+
+    /// Returns only non-secret process arguments. Credentials are handed over
+    /// through a separate native channel after the helper has started.
+    pub fn process_arguments(&self) -> Vec<String> {
+        let mut arguments = vec![
+            "--mobarust-protocol".into(),
+            format!("{:?}", self.protocol).to_lowercase(),
+            "--host".into(),
+            self.host.clone(),
+            "--port".into(),
+            self.port.to_string(),
+            "--username".into(),
+            self.username.clone(),
+            "--width".into(),
+            self.display.width.to_string(),
+            "--height".into(),
+            self.display.height.to_string(),
+            "--color-depth".into(),
+            self.color_depth.to_string(),
+        ];
+        if let Some(domain) = self.domain.as_deref().filter(|value| !value.is_empty()) {
+            arguments.extend(["--domain".into(), domain.into()]);
+        }
+        if self.audio_enabled {
+            arguments.push("--audio".into());
+        }
+        arguments
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "command", content = "payload", rename_all = "camelCase")]
+pub enum HelperCommand {
+    Start {
+        protocol: DesktopProtocol,
+        display: DisplaySize,
+    },
+    Stop,
+    Resize {
+        display: DisplaySize,
+    },
+    Key {
+        scancode: u32,
+        pressed: bool,
+    },
+    Pointer {
+        x: u16,
+        y: u16,
+        buttons: u8,
+    },
+    Clipboard {
+        text: String,
+    },
+}
+
+impl fmt::Debug for HelperCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start { protocol, display } => formatter
+                .debug_struct("Start")
+                .field("protocol", protocol)
+                .field("display", display)
+                .finish(),
+            Self::Stop => formatter.write_str("Stop"),
+            Self::Resize { display } => formatter
+                .debug_struct("Resize")
+                .field("display", display)
+                .finish(),
+            Self::Key { scancode, pressed } => formatter
+                .debug_struct("Key")
+                .field("scancode", scancode)
+                .field("pressed", pressed)
+                .finish(),
+            Self::Pointer { x, y, buttons } => formatter
+                .debug_struct("Pointer")
+                .field("x", x)
+                .field("y", y)
+                .field("buttons", buttons)
+                .finish(),
+            Self::Clipboard { text } => formatter
+                .debug_struct("Clipboard")
+                .field("bytes", &text.len())
+                .finish(),
+        }
+    }
+}
+
+impl HelperCommand {
+    pub fn validate(&self) -> Result<(), HelperProtocolError> {
+        match self {
+            Self::Start { display, .. } | Self::Resize { display } => display.validate(),
+            Self::Clipboard { text } if text.len() > MAX_CLIPBOARD_BYTES => {
+                Err(HelperProtocolError::ClipboardTooLarge { bytes: text.len() })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", content = "payload", rename_all = "camelCase")]
+pub enum HelperEvent {
+    Hello {
+        version: u16,
+    },
+    State {
+        state: HelperState,
+    },
+    Framebuffer {
+        width: u16,
+        height: u16,
+        pixels: Vec<u8>,
+    },
+    Clipboard {
+        text: String,
+    },
+    Diagnostic {
+        level: DiagnosticLevel,
+        message: String,
+    },
+}
+
+impl fmt::Debug for HelperEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Hello { version } => formatter
+                .debug_struct("Hello")
+                .field("version", version)
+                .finish(),
+            Self::State { state } => formatter
+                .debug_struct("State")
+                .field("state", state)
+                .finish(),
+            Self::Framebuffer {
+                width,
+                height,
+                pixels,
+            } => formatter
+                .debug_struct("Framebuffer")
+                .field("width", width)
+                .field("height", height)
+                .field("bytes", &pixels.len())
+                .finish(),
+            Self::Clipboard { text } => formatter
+                .debug_struct("Clipboard")
+                .field("bytes", &text.len())
+                .finish(),
+            Self::Diagnostic { level, message } => formatter
+                .debug_struct("Diagnostic")
+                .field("level", level)
+                .field("message_bytes", &message.len())
+                .finish(),
+        }
+    }
+}
+
+impl HelperEvent {
+    pub fn validate(&self) -> Result<(), HelperProtocolError> {
+        match self {
+            Self::Hello { version } if *version != WIRE_VERSION => {
+                Err(HelperProtocolError::UnsupportedVersion(*version))
+            }
+            Self::Framebuffer {
+                width,
+                height,
+                pixels,
+            } => {
+                DisplaySize {
+                    width: *width,
+                    height: *height,
+                }
+                .validate()?;
+                let expected = usize::from(*width)
+                    .saturating_mul(usize::from(*height))
+                    .saturating_mul(4);
+                if pixels.len() != expected {
+                    return Err(HelperProtocolError::InvalidFramebuffer {
+                        expected,
+                        actual: pixels.len(),
+                    });
+                }
+                if pixels.len() > MAX_FRAME_BYTES {
+                    return Err(HelperProtocolError::FrameTooLarge {
+                        bytes: pixels.len(),
+                    });
+                }
+                Ok(())
+            }
+            Self::Clipboard { text } if text.len() > MAX_CLIPBOARD_BYTES => {
+                Err(HelperProtocolError::ClipboardTooLarge { bytes: text.len() })
+            }
+            Self::Diagnostic { message, .. } if message.len() > MAX_DIAGNOSTIC_BYTES => {
+                Err(HelperProtocolError::DiagnosticTooLarge {
+                    bytes: message.len(),
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HelperState {
+    Created,
+    Starting,
+    Ready,
+    Active,
+    Reconnecting,
+    Stopping,
+    Stopped,
+    Crashed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperLifecycleEvent {
+    StartRequested,
+    Ready,
+    Activate,
+    ConnectionLost,
+    BeginReconnect,
+    StopRequested,
+    Stopped,
+    Crashed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperLifecycle {
+    state: HelperState,
+    revision: u64,
+}
+
+impl Default for HelperLifecycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HelperLifecycle {
+    pub const fn new() -> Self {
+        Self {
+            state: HelperState::Created,
+            revision: 0,
+        }
+    }
+
+    pub const fn state(&self) -> HelperState {
+        self.state
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn apply(
+        &mut self,
+        event: HelperLifecycleEvent,
+    ) -> Result<HelperState, HelperProtocolError> {
+        let next = match (self.state, event) {
+            (HelperState::Created, HelperLifecycleEvent::StartRequested) => HelperState::Starting,
+            (HelperState::Starting, HelperLifecycleEvent::Ready) => HelperState::Ready,
+            (HelperState::Ready, HelperLifecycleEvent::Activate) => HelperState::Active,
+            (HelperState::Active, HelperLifecycleEvent::ConnectionLost) => {
+                HelperState::Reconnecting
+            }
+            (HelperState::Reconnecting, HelperLifecycleEvent::BeginReconnect) => {
+                HelperState::Starting
+            }
+            (
+                HelperState::Starting
+                | HelperState::Ready
+                | HelperState::Active
+                | HelperState::Reconnecting,
+                HelperLifecycleEvent::StopRequested,
+            ) => HelperState::Stopping,
+            (HelperState::Stopping, HelperLifecycleEvent::Stopped) => HelperState::Stopped,
+            (
+                HelperState::Starting
+                | HelperState::Ready
+                | HelperState::Active
+                | HelperState::Reconnecting,
+                HelperLifecycleEvent::Crashed,
+            ) => HelperState::Crashed,
+            (
+                HelperState::Starting
+                | HelperState::Ready
+                | HelperState::Active
+                | HelperState::Reconnecting,
+                HelperLifecycleEvent::Failed,
+            ) => HelperState::Failed,
+            _ => {
+                return Err(HelperProtocolError::InvalidTransition {
+                    state: self.state,
+                    event,
+                });
+            }
+        };
+        self.state = next;
+        self.revision = self.revision.saturating_add(1);
+        Ok(next)
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum HelperProtocolError {
+    #[error("helper program path is empty")]
+    EmptyProgram,
+    #[error("helper host is empty")]
+    EmptyHost,
+    #[error("helper port must be non-zero")]
+    InvalidPort,
+    #[error("helper username is empty")]
+    EmptyUsername,
+    #[error("helper credential reference is empty")]
+    EmptyCredentialReference,
+    #[error("helper color depth must be non-zero")]
+    InvalidColorDepth,
+    #[error("invalid display size {width}x{height}")]
+    InvalidDisplaySize { width: u16, height: u16 },
+    #[error("clipboard payload is too large: {bytes} bytes")]
+    ClipboardTooLarge { bytes: usize },
+    #[error("diagnostic payload is too large: {bytes} bytes")]
+    DiagnosticTooLarge { bytes: usize },
+    #[error("invalid framebuffer payload: expected {expected} bytes, received {actual}")]
+    InvalidFramebuffer { expected: usize, actual: usize },
+    #[error("frame is too large: {bytes} bytes")]
+    FrameTooLarge { bytes: usize },
+    #[error("frame is truncated: expected {expected} bytes, received {actual}")]
+    TruncatedFrame { expected: usize, actual: usize },
+    #[error("frame contains invalid JSON: {0}")]
+    InvalidJson(String),
+    #[error("unsupported helper wire version {0}")]
+    UnsupportedVersion(u16),
+    #[error("invalid lifecycle transition from {state:?} with {event:?}")]
+    InvalidTransition {
+        state: HelperState,
+        event: HelperLifecycleEvent,
+    },
+}
+
+/// Encodes one length-prefixed JSON frame for a helper's native pipe.
+pub fn encode_frame<T: Serialize>(message: &T) -> Result<Vec<u8>, HelperProtocolError> {
+    let body = serde_json::to_vec(message)
+        .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))?;
+    if body.len() > MAX_FRAME_BYTES {
+        return Err(HelperProtocolError::FrameTooLarge { bytes: body.len() });
+    }
+    let length = u32::try_from(body.len())
+        .map_err(|_| HelperProtocolError::FrameTooLarge { bytes: body.len() })?;
+    let mut frame = Vec::with_capacity(4 + body.len());
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+/// Decodes exactly one length-prefixed JSON frame. Stream buffering and child
+/// process I/O remain outside this crate so the boundary can be tested without
+/// spawning a process or touching the host system.
+pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, HelperProtocolError> {
+    if frame.len() < 4 {
+        return Err(HelperProtocolError::TruncatedFrame {
+            expected: 4,
+            actual: frame.len(),
+        });
+    }
+    let length = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]) as usize;
+    if length > MAX_FRAME_BYTES {
+        return Err(HelperProtocolError::FrameTooLarge { bytes: length });
+    }
+    let expected = 4 + length;
+    if frame.len() != expected {
+        return Err(HelperProtocolError::TruncatedFrame {
+            expected,
+            actual: frame.len(),
+        });
+    }
+    serde_json::from_slice(&frame[4..])
+        .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))
+}
+
+pub fn encode_command_frame(command: &HelperCommand) -> Result<Vec<u8>, HelperProtocolError> {
+    command.validate()?;
+    encode_frame(&WireEnvelope {
+        version: WIRE_VERSION,
+        payload: command,
+    })
+}
+
+pub fn decode_command_frame(frame: &[u8]) -> Result<HelperCommand, HelperProtocolError> {
+    let envelope: WireEnvelope<HelperCommand> = decode_frame(frame)?;
+    if envelope.version != WIRE_VERSION {
+        return Err(HelperProtocolError::UnsupportedVersion(envelope.version));
+    }
+    envelope.payload.validate()?;
+    Ok(envelope.payload)
+}
+
+pub fn encode_event_frame(event: &HelperEvent) -> Result<Vec<u8>, HelperProtocolError> {
+    event.validate()?;
+    encode_frame(&WireEnvelope {
+        version: WIRE_VERSION,
+        payload: event,
+    })
+}
+
+pub fn decode_event_frame(frame: &[u8]) -> Result<HelperEvent, HelperProtocolError> {
+    let envelope: WireEnvelope<HelperEvent> = decode_frame(frame)?;
+    if envelope.version != WIRE_VERSION {
+        return Err(HelperProtocolError::UnsupportedVersion(envelope.version));
+    }
+    envelope.payload.validate()?;
+    Ok(envelope.payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn launch_config() -> HelperLaunchConfig {
+        HelperLaunchConfig {
+            program: PathBuf::from("/opt/mobarust/bin/mobarust-rdp-helper"),
+            protocol: DesktopProtocol::Rdp,
+            host: "fixture.example".into(),
+            port: 3389,
+            username: "operator".into(),
+            domain: Some("LAB".into()),
+            display: DisplaySize {
+                width: 1280,
+                height: 800,
+            },
+            color_depth: 32,
+            audio_enabled: false,
+            credential_ref: "credential:test-only".into(),
+        }
+    }
+
+    #[test]
+    fn launch_arguments_never_contain_credential_material_or_reference() {
+        let config = launch_config();
+        let arguments = config.process_arguments();
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("credential:test-only"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("password"))
+        );
+        assert!(arguments.contains(&"--host".into()));
+        assert!(arguments.contains(&"--domain".into()));
+    }
+
+    #[test]
+    fn debug_output_redacts_credential_reference_and_clipboard_content() {
+        let config = launch_config();
+        let command = HelperCommand::Clipboard {
+            text: "clipboard-secret".into(),
+        };
+        let event = HelperEvent::Clipboard {
+            text: "clipboard-secret".into(),
+        };
+        assert!(!format!("{config:?}").contains("credential:test-only"));
+        assert!(!format!("{command:?}").contains("clipboard-secret"));
+        assert!(!format!("{event:?}").contains("clipboard-secret"));
+        assert!(format!("{command:?}").contains("bytes"));
+    }
+
+    #[test]
+    fn frames_round_trip_and_reject_truncation() {
+        let command = HelperCommand::Resize {
+            display: DisplaySize {
+                width: 1440,
+                height: 900,
+            },
+        };
+        let frame = encode_command_frame(&command).unwrap();
+        let decoded = decode_command_frame(&frame).unwrap();
+        assert_eq!(decoded, command);
+        assert!(matches!(
+            decode_command_frame(&frame[..frame.len() - 1]),
+            Err(HelperProtocolError::TruncatedFrame { .. })
+        ));
+    }
+
+    #[test]
+    fn frames_reject_unknown_wire_versions() {
+        let frame = encode_frame(&WireEnvelope {
+            version: WIRE_VERSION + 1,
+            payload: HelperCommand::Stop,
+        })
+        .unwrap();
+        assert!(matches!(
+            decode_command_frame(&frame),
+            Err(HelperProtocolError::UnsupportedVersion(version)) if version == WIRE_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn validation_bounds_clipboard_and_display_payloads() {
+        let oversized = HelperCommand::Clipboard {
+            text: "x".repeat(MAX_CLIPBOARD_BYTES + 1),
+        };
+        assert!(matches!(
+            oversized.validate(),
+            Err(HelperProtocolError::ClipboardTooLarge { .. })
+        ));
+        let invalid = DisplaySize {
+            width: 10,
+            height: 10,
+        };
+        assert!(matches!(
+            invalid.validate(),
+            Err(HelperProtocolError::InvalidDisplaySize { .. })
+        ));
+        let invalid_frame = HelperEvent::Framebuffer {
+            width: 320,
+            height: 200,
+            pixels: vec![0; 4],
+        };
+        assert!(matches!(
+            invalid_frame.validate(),
+            Err(HelperProtocolError::InvalidFramebuffer { .. })
+        ));
+    }
+
+    #[test]
+    fn lifecycle_requires_ready_before_active_and_distinguishes_crash() {
+        let mut lifecycle = HelperLifecycle::new();
+        lifecycle
+            .apply(HelperLifecycleEvent::StartRequested)
+            .unwrap();
+        lifecycle.apply(HelperLifecycleEvent::Ready).unwrap();
+        lifecycle.apply(HelperLifecycleEvent::Activate).unwrap();
+        lifecycle.apply(HelperLifecycleEvent::Crashed).unwrap();
+        assert_eq!(lifecycle.state(), HelperState::Crashed);
+        assert!(matches!(
+            lifecycle.apply(HelperLifecycleEvent::Ready),
+            Err(HelperProtocolError::InvalidTransition { .. })
+        ));
+    }
+}

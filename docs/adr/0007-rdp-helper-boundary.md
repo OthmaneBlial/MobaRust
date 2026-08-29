@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted as the RDP integration direction; implementation is not started.
+Accepted as the RDP integration direction; the Rust-side helper contract is
+implemented, while the FreeRDP engine integration is not started.
 
 ## Decision
 

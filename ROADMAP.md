@@ -42,4 +42,10 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## Later protocol adapters
 
-RDP, VNC, Telnet, Serial, X11 forwarding, monitoring, and portable packaging follow after the SSH and transfer foundations have production evidence. Each adapter must have a real lifecycle, failure tests, and an honest platform support statement before it is presented as complete.
+- [x] RDP/VNC helper-boundary research and versioned Rust-side contract
+- [ ] Real FreeRDP integration with a controlled helper and Windows evidence
+- [ ] Real VNC integration with a mature engine and local/manual fixtures
+- [ ] Telnet, Serial, X11 forwarding, monitoring, and portable packaging
+
+Each adapter must have a real lifecycle, failure tests, and an honest platform
+support statement before it is presented as complete.

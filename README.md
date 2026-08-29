@@ -24,6 +24,8 @@ The first working slice provides:
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.
+- a versioned, bounded RDP/VNC helper-process contract with lifecycle and
+  redaction tests; this is not yet a real RDP/VNC client.
 
 The native SSH/SFTP transport, local forwarding channel, jump-host handshake, cancellation path, and Quick Connect path are tested against a local `sshd` fixture. The bounded reconnect worker uses the same native transport but still needs dedicated failure-injection coverage before release. Saved-session editing, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, remote/dynamic forwarding, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 

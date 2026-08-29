@@ -4,6 +4,7 @@ members = [
   "crates/mobarust-ssh",
   "crates/mobarust-store",
   "crates/mobarust-vault",
+  "crates/mobarust-remote-desktop",
   "apps/desktop/src-tauri",
   "xtask",
 ]

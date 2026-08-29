@@ -1,6 +1,7 @@
 # RDP integration research
 
-This is a local study of the pinned `base/FreeRDP` and `base/remmina` clones.
+This is a local study of the pinned `base/FreeRDP` and `base/remmina` clones
+(`b2a1214` and `bb33690`, respectively).
 It is not a claim that MobaRust currently supports RDP.
 
 ## Observations
@@ -17,6 +18,10 @@ It is not a claim that MobaRust currently supports RDP.
 - Remmina also demonstrates that protocol plugins need explicit optional
   dependency behavior. Its GPL-2.0-or-later application is a reference for
   integration shape, not code or asset source for MobaRust's Apache-2.0 tree.
+- The current macOS host has no `xfreerdp`/`xfreerdp3` executable and no
+  discoverable FreeRDP `pkg-config` package. No global dependency installation
+  was attempted; the first experiment therefore remains process-contract and
+  lifecycle work inside the repository.
 
 ## Architecture options
 
@@ -33,7 +38,8 @@ It is not a claim that MobaRust currently supports RDP.
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a
-small versioned IPC protocol:
+small versioned IPC protocol. The Rust-side contract is now captured in
+`mobarust-remote-desktop` and `docs/adr/0013-remote-desktop-helper-wire-contract.md`:
 
 ```text
 MobaRust Rust core
