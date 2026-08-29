@@ -96,8 +96,18 @@ type SshConnectRequest = {
   auth: { method: "agent" } | { method: "privateKey"; path: string; passphraseCredentialId?: string } | { method: "password"; credentialId: string };
   knownHostsPath?: string;
   pinnedFingerprint?: string;
+  jumpHosts?: SshJumpHostRequest[];
   cols: number;
   rows: number;
+};
+
+type SshJumpHostRequest = {
+  host: string;
+  port: number;
+  username: string;
+  auth: { method: "agent" };
+  knownHostsPath?: string;
+  pinnedFingerprint?: string;
 };
 
 type SshConnectResponse = {
@@ -925,6 +935,9 @@ function QuickConnectDialog({ error, onClose, onConnect }: { error: string | nul
   const [credentialId, setCredentialId] = useState("");
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
+  const [jumpHost, setJumpHost] = useState("");
+  const [jumpPort, setJumpPort] = useState("22");
+  const [jumpUsername, setJumpUsername] = useState("");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -933,6 +946,10 @@ function QuickConnectDialog({ error, onClose, onConnect }: { error: string | nul
       : method === "privateKey"
         ? { method: "privateKey" as const, path: keyPath }
         : { method: "password" as const, credentialId };
+    const parsedJumpPort = Number(jumpPort);
+    const jumpHosts = jumpHost.trim() && Number.isInteger(parsedJumpPort) && parsedJumpPort > 0 && parsedJumpPort <= 65535
+      ? [{ host: jumpHost.trim(), port: parsedJumpPort, username: jumpUsername.trim() || username.trim(), auth: { method: "agent" as const } }]
+      : undefined;
     onConnect({
       host: host.trim(),
       port: Number(port),
@@ -940,12 +957,13 @@ function QuickConnectDialog({ error, onClose, onConnect }: { error: string | nul
       auth,
       knownHostsPath: knownHostsPath.trim() || undefined,
       pinnedFingerprint: pinnedFingerprint.trim() || undefined,
+      jumpHosts,
       cols: 120,
       rows: 32,
     });
   };
 
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="quick-connect" role="dialog" aria-modal="true" aria-label="Quick connect" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}><div className="quick-connect-heading"><div><span className="eyebrow">NEW SSH SESSION</span><h2>Quick connect</h2><p>Open a real native SSH shell in seconds.</p></div><button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}><X size={17} /></button></div><div className="quick-connect-grid"><label>Host<input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" /></label><label>Port<input required inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => setPort(event.target.value)} /></label><label className="quick-connect-wide">Username<input required value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ops" /></label><label className="quick-connect-wide">Authentication<select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password")}><option value="agent">Local SSH agent</option><option value="privateKey">Private key path</option><option value="password">Existing vault credential reference</option></select></label>{method === "privateKey" ? <label className="quick-connect-wide">Private key path<input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /><small>The key stays on disk; its passphrase is never entered here.</small></label> : method === "password" ? <label className="quick-connect-wide">Credential reference<input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" /><small>Only an opaque vault reference crosses IPC, never the password.</small></label> : <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>The native SSH agent signs authentication; private key material stays with the agent.</span></div>}<label className="quick-connect-wide">Known hosts path <span className="optional">optional</span><input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" /></label><label className="quick-connect-wide">Pinned SHA-256 fingerprint <span className="optional">optional</span><input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" /></label></div>{error && <div className="connect-error" role="alert"><strong>Connection failed</strong><span>{error}</span></div>}<div className="quick-connect-footer"><span><ShieldCheck size={14} /> Unknown host keys are rejected.</span><div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Network size={14} /> Connect SSH</button></div></div></form></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="quick-connect" role="dialog" aria-modal="true" aria-label="Quick connect" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}><div className="quick-connect-heading"><div><span className="eyebrow">NEW SSH SESSION</span><h2>Quick connect</h2><p>Open a real native SSH shell in seconds.</p></div><button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}><X size={17} /></button></div><div className="quick-connect-grid"><label>Host<input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" /></label><label>Port<input required inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => setPort(event.target.value)} /></label><label className="quick-connect-wide">Username<input required value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ops" /></label><label className="quick-connect-wide">Authentication<select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password")}><option value="agent">Local SSH agent</option><option value="privateKey">Private key path</option><option value="password">Existing vault credential reference</option></select></label>{method === "privateKey" ? <label className="quick-connect-wide">Private key path<input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /><small>The key stays on disk; its passphrase is never entered here.</small></label> : method === "password" ? <label className="quick-connect-wide">Credential reference<input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" /><small>Only an opaque vault reference crosses IPC, never the password.</small></label> : <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>The native SSH agent signs authentication; private key material stays with the agent.</span></div>}<label className="quick-connect-wide">Jump host <span className="optional">optional · SSH agent</span><input value={jumpHost} onChange={(event) => setJumpHost(event.target.value)} placeholder="bastion.internal.example" /></label>{jumpHost.trim() && <><label>Jump port<input required inputMode="numeric" pattern="[0-9]+" value={jumpPort} onChange={(event) => setJumpPort(event.target.value)} /></label><label>Jump username<input required value={jumpUsername} onChange={(event) => setJumpUsername(event.target.value)} placeholder={username || "ops"} /></label></>}<label className="quick-connect-wide">Known hosts path <span className="optional">optional</span><input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" /></label><label className="quick-connect-wide">Pinned SHA-256 fingerprint <span className="optional">optional</span><input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" /></label></div>{error && <div className="connect-error" role="alert"><strong>Connection failed</strong><span>{error}</span></div>}<div className="quick-connect-footer"><span><ShieldCheck size={14} /> Unknown host keys are rejected.</span><div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Network size={14} /> Connect SSH</button></div></div></form></div>;
 }
 
 export default App;

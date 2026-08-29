@@ -35,10 +35,25 @@ pub struct SshConnectRequest {
     pub known_hosts_path: Option<String>,
     #[serde(default)]
     pub pinned_fingerprint: Option<String>,
+    #[serde(default)]
+    pub jump_hosts: Vec<SshJumpHostRequest>,
     #[serde(default = "default_terminal_cols")]
     pub cols: u32,
     #[serde(default = "default_terminal_rows")]
     pub rows: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshJumpHostRequest {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: SshAuthRequest,
+    #[serde(default)]
+    pub known_hosts_path: Option<String>,
+    #[serde(default)]
+    pub pinned_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,14 +328,31 @@ impl SshManager {
         let credentials = credentials_from_request(vault, &request)?;
         let host_key_policy = host_key_policy(&request)?;
         let host = request.host.clone();
-        let connection = SshConnection::connect(SshConnectOptions {
+        let options = SshConnectOptions {
             host: request.host,
             port: request.port,
             host_key_policy,
             timeout: Duration::from_secs(12),
             credentials,
-        })
-        .await?;
+        };
+        let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
+        for jump in request.jump_hosts {
+            let credentials = credentials_from_jump_request(vault, &jump)?;
+            let host_key_policy =
+                host_key_policy_for(jump.known_hosts_path, jump.pinned_fingerprint)?;
+            jump_options.push(SshConnectOptions {
+                host: jump.host,
+                port: jump.port,
+                host_key_policy,
+                timeout: Duration::from_secs(12),
+                credentials,
+            });
+        }
+        let connection = if jump_options.is_empty() {
+            SshConnection::connect(options).await?
+        } else {
+            SshConnection::connect_with_jump_chain(options, jump_options).await?
+        };
         let connection = Arc::new(connection);
         let shell = connection.open_shell(request.cols, request.rows).await?;
         let (mut reader, writer) = shell.split();
@@ -740,12 +772,27 @@ fn credentials_from_request(
     vault: &PlatformVault,
     request: &SshConnectRequest,
 ) -> Result<SshCredentials, SshManagerError> {
-    match &request.auth {
-        SshAuthRequest::Agent => Ok(SshCredentials::agent(&request.username)),
+    credentials_from_auth(vault, &request.username, &request.auth)
+}
+
+fn credentials_from_jump_request(
+    vault: &PlatformVault,
+    request: &SshJumpHostRequest,
+) -> Result<SshCredentials, SshManagerError> {
+    credentials_from_auth(vault, &request.username, &request.auth)
+}
+
+fn credentials_from_auth(
+    vault: &PlatformVault,
+    username: &str,
+    auth: &SshAuthRequest,
+) -> Result<SshCredentials, SshManagerError> {
+    match auth {
+        SshAuthRequest::Agent => Ok(SshCredentials::agent(username)),
         SshAuthRequest::Password { credential_id } => {
             let id = CredentialId::new(credential_id.clone())?;
             let secret = vault.get(&id)?;
-            Ok(SshCredentials::password(&request.username, secret.as_str()))
+            Ok(SshCredentials::password(username, secret.as_str()))
         }
         SshAuthRequest::PrivateKey {
             path,
@@ -760,7 +807,7 @@ fn credentials_from_request(
                 })
                 .transpose()?;
             Ok(SshCredentials::private_key(
-                &request.username,
+                username,
                 expand_user_path(path),
                 passphrase,
             ))
@@ -769,11 +816,21 @@ fn credentials_from_request(
 }
 
 fn host_key_policy(request: &SshConnectRequest) -> Result<HostKeyPolicy, SshManagerError> {
-    match (&request.known_hosts_path, &request.pinned_fingerprint) {
+    host_key_policy_for(
+        request.known_hosts_path.clone(),
+        request.pinned_fingerprint.clone(),
+    )
+}
+
+fn host_key_policy_for(
+    known_hosts_path: Option<String>,
+    pinned_fingerprint: Option<String>,
+) -> Result<HostKeyPolicy, SshManagerError> {
+    match (known_hosts_path, pinned_fingerprint) {
         (Some(_), Some(_)) => Err(SshManagerError::InvalidRequest(
             "choose known_hosts or a pinned fingerprint, not both".into(),
         )),
-        (Some(path), None) => Ok(HostKeyPolicy::KnownHosts(expand_user_path(path))),
+        (Some(path), None) => Ok(HostKeyPolicy::KnownHosts(expand_user_path(&path))),
         (None, Some(fingerprint)) if fingerprint.trim().is_empty() => Err(
             SshManagerError::InvalidRequest("pinned fingerprint cannot be empty".into()),
         ),

@@ -31,7 +31,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 - [x] Local SSH forwarding through native direct-tcpip channels with bounded clients and cancellation
 - [ ] Remote and dynamic SSH forwarding
-- [ ] Jump hosts and multi-hop chains
+- [x] Native jump-host chain transport with host-key policy per hop
+- [ ] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles
 - [ ] Session folders, tags, search, favorites, editing, and full import/export
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction

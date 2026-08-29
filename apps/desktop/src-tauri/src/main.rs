@@ -110,6 +110,7 @@ fn session_save_ssh(
         auth: request_auth,
         known_hosts_path,
         pinned_fingerprint,
+        jump_hosts,
         ..
     } = request;
     let auth = match request_auth {
@@ -144,7 +145,7 @@ fn session_save_ssh(
         startup_directory: None,
         startup_command: None,
         environment: Vec::new(),
-        jump_hosts: Vec::new(),
+        jump_hosts: jump_hosts.into_iter().map(|jump| jump.host).collect(),
         notes: None,
     };
     store

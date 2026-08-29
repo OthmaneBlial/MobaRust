@@ -215,6 +215,63 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         drop(forwarded);
         echo_task.await.expect("join echo fixture");
 
+        let jumped = SshConnection::connect_with_jump_chain(
+            SshConnectOptions {
+                host: "127.0.0.1".into(),
+                port: fixture.port,
+                host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
+                timeout: Duration::from_secs(5),
+                credentials: SshCredentials::private_key(
+                    fixture.username.clone(),
+                    fixture.client_key.clone(),
+                    None::<String>,
+                ),
+            },
+            vec![SshConnectOptions {
+                host: "127.0.0.1".into(),
+                port: fixture.port,
+                host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
+                timeout: Duration::from_secs(5),
+                credentials: SshCredentials::private_key(
+                    fixture.username.clone(),
+                    fixture.client_key.clone(),
+                    None::<String>,
+                ),
+            }],
+        )
+        .await
+        .expect("connect through a real SSH jump host");
+        let jumped_shell = jumped.open_shell(100, 30).await.expect("open jumped PTY");
+        let (mut jumped_reader, jumped_writer) = jumped_shell.split();
+        jumped_writer
+            .write(b"printf 'MOBARUST_JUMP_OK\\n'\\n")
+            .await
+            .expect("write through jumped shell");
+        let mut jumped_output = Vec::new();
+        while let Some(message) =
+            tokio::time::timeout(Duration::from_secs(5), jumped_reader.next_output())
+                .await
+                .expect("jumped shell output timeout")
+        {
+            match message.expect("jumped shell output error") {
+                SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => {
+                    jumped_output.extend(bytes);
+                    if String::from_utf8_lossy(&jumped_output).contains("MOBARUST_JUMP_OK") {
+                        break;
+                    }
+                }
+                SshOutput::ExitStatus(_) => break,
+                SshOutput::Control => {}
+            }
+        }
+        assert!(String::from_utf8_lossy(&jumped_output).contains("MOBARUST_JUMP_OK"));
+        drop(jumped_reader);
+        drop(jumped_writer);
+        jumped
+            .disconnect()
+            .await
+            .expect("disconnect jumped SSH fixture");
+
         connection
             .disconnect()
             .await

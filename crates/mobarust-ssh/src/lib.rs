@@ -167,6 +167,10 @@ pub struct SshConnectOptions {
     pub credentials: SshCredentials,
 }
 
+/// A complete SSH connection description for one hop in a jump chain. The
+/// credentials remain native and are consumed during authentication.
+pub type SshJumpOptions = SshConnectOptions;
+
 impl fmt::Debug for SshConnectOptions {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -214,86 +218,71 @@ impl client::Handler for ClientHandler {
 pub struct SshConnection {
     handle: Arc<client::Handle<ClientHandler>>,
     lifecycle: Mutex<ConnectionLifecycle>,
+    parent: Option<Arc<SshConnection>>,
 }
 
 impl SshConnection {
     pub async fn connect(options: SshConnectOptions) -> Result<Self, SshError> {
-        if options.host.trim().is_empty()
-            || options.port == 0
-            || options.credentials.username().trim().is_empty()
-        {
-            return Err(SshError::InvalidOptions);
-        }
-
-        let observed_fingerprint = Arc::new(Mutex::new(None));
-        let handler = ClientHandler {
-            host: options.host.clone(),
-            port: options.port,
-            policy: options.host_key_policy,
-            observed_fingerprint: Arc::clone(&observed_fingerprint),
-        };
-        let config = Arc::new(client::Config {
-            inactivity_timeout: Some(options.timeout),
-            ..Default::default()
-        });
-
+        validate_options(&options)?;
+        let (observed_fingerprint, handler, config) = connection_parts(&options);
         let connect = tokio::time::timeout(
             options.timeout,
             client::connect(config, (options.host.as_str(), options.port), handler),
         )
         .await;
-        let mut handle = match connect {
-            Err(_) => return Err(SshError::Timeout),
-            Ok(Ok(handle)) => handle,
-            Ok(Err(error)) => {
-                if let Some(fingerprint) = observed_fingerprint
-                    .lock()
-                    .expect("SSH fingerprint observation poisoned")
-                    .clone()
-                {
-                    return Err(SshError::HostKeyRejected { fingerprint });
-                }
-                return Err(SshError::Handshake(error.to_string()));
-            }
-        };
+        let handle = map_connect_result(connect, observed_fingerprint)?;
+        Self::finish_authenticated(options, handle, None).await
+    }
 
-        let authentication = tokio::time::timeout(options.timeout, async {
-            match options.credentials {
-                SshCredentials::Password { username, password } => handle
-                    .authenticate_password(username, password.as_str())
-                    .await
-                    .map_err(SshError::Transport),
-                SshCredentials::PrivateKey {
-                    username,
-                    path,
-                    passphrase,
-                } => {
-                    let key = russh::keys::load_secret_key(
-                        &path,
-                        passphrase.as_ref().map(Secret::as_str),
-                    )
-                    .map_err(SshError::PrivateKey)?;
-                    let hash = handle
-                        .best_supported_rsa_hash()
-                        .await
-                        .map_err(SshError::Transport)?
-                        .flatten();
-                    handle
-                        .authenticate_publickey(
-                            username,
-                            PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-                        )
-                        .await
-                        .map_err(SshError::Transport)
-                }
-                SshCredentials::Agent { username } => {
-                    authenticate_with_agent(&mut handle, username).await
-                }
-            }
-        })
+    /// Connects through one or more already described jump hosts. Every hop
+    /// is a real SSH connection; the target handshake travels through the
+    /// previous hop's `direct-tcpip` channel.
+    pub async fn connect_with_jump_chain(
+        options: SshConnectOptions,
+        mut jumps: Vec<SshJumpOptions>,
+    ) -> Result<Self, SshError> {
+        validate_options(&options)?;
+        let Some(first) = jumps.first() else {
+            return Self::connect(options).await;
+        };
+        validate_options(first)?;
+        let first = jumps.remove(0);
+        let mut upstream = Arc::new(Self::connect(first).await?);
+        for jump in jumps {
+            upstream = Arc::new(Self::connect_via_upstream(jump, upstream).await?);
+        }
+        Self::connect_via_upstream(options, upstream).await
+    }
+
+    async fn connect_via_upstream(
+        options: SshConnectOptions,
+        upstream: Arc<SshConnection>,
+    ) -> Result<Self, SshError> {
+        validate_options(&options)?;
+        let stream = upstream
+            .open_direct_tcpip(options.host.clone(), u32::from(options.port))
+            .await?;
+        let (observed_fingerprint, handler, config) = connection_parts(&options);
+        let connect = tokio::time::timeout(
+            options.timeout,
+            client::connect_stream(config, stream, handler),
+        )
+        .await;
+        let handle = map_connect_result(connect, observed_fingerprint)?;
+        Self::finish_authenticated(options, handle, Some(upstream)).await
+    }
+
+    async fn finish_authenticated(
+        options: SshConnectOptions,
+        mut handle: client::Handle<ClientHandler>,
+        parent: Option<Arc<SshConnection>>,
+    ) -> Result<Self, SshError> {
+        let authentication = tokio::time::timeout(
+            options.timeout,
+            authenticate(&mut handle, options.credentials),
+        )
         .await
         .map_err(|_| SshError::Timeout)??;
-
         if !authentication.success() {
             return Err(SshError::AuthenticationRejected);
         }
@@ -312,6 +301,7 @@ impl SshConnection {
         Ok(Self {
             handle: Arc::new(handle),
             lifecycle: Mutex::new(lifecycle),
+            parent,
         })
     }
 
@@ -344,6 +334,18 @@ impl SshConnection {
     }
 
     pub async fn disconnect(&self) -> Result<(), SshError> {
+        let result = self.disconnect_one().await;
+        if result.is_ok() {
+            let mut parent = self.parent.clone();
+            while let Some(connection) = parent {
+                parent = connection.parent.clone();
+                let _ = connection.disconnect_one().await;
+            }
+        }
+        result
+    }
+
+    async fn disconnect_one(&self) -> Result<(), SshError> {
         self.lifecycle
             .lock()
             .expect("SSH lifecycle lock poisoned")
@@ -409,6 +411,91 @@ impl SshConnection {
         .map_err(|_| SshError::Timeout)?
         .map_err(SshError::Channel)?;
         Ok(channel.into_stream())
+    }
+}
+
+fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
+    if options.host.trim().is_empty()
+        || options.host.contains('\0')
+        || options.port == 0
+        || options.credentials.username().trim().is_empty()
+    {
+        return Err(SshError::InvalidOptions);
+    }
+    Ok(())
+}
+
+fn connection_parts(
+    options: &SshConnectOptions,
+) -> (
+    Arc<Mutex<Option<String>>>,
+    ClientHandler,
+    Arc<client::Config>,
+) {
+    let observed_fingerprint = Arc::new(Mutex::new(None));
+    let handler = ClientHandler {
+        host: options.host.clone(),
+        port: options.port,
+        policy: options.host_key_policy.clone(),
+        observed_fingerprint: Arc::clone(&observed_fingerprint),
+    };
+    let config = Arc::new(client::Config {
+        inactivity_timeout: Some(options.timeout),
+        ..Default::default()
+    });
+    (observed_fingerprint, handler, config)
+}
+
+fn map_connect_result(
+    connect: Result<
+        Result<client::Handle<ClientHandler>, anyhow::Error>,
+        tokio::time::error::Elapsed,
+    >,
+    observed_fingerprint: Arc<Mutex<Option<String>>>,
+) -> Result<client::Handle<ClientHandler>, SshError> {
+    match connect {
+        Err(_) => Err(SshError::Timeout),
+        Ok(Ok(handle)) => Ok(handle),
+        Ok(Err(error)) => {
+            if let Some(fingerprint) = observed_fingerprint
+                .lock()
+                .expect("SSH fingerprint observation poisoned")
+                .clone()
+            {
+                return Err(SshError::HostKeyRejected { fingerprint });
+            }
+            Err(SshError::Handshake(error.to_string()))
+        }
+    }
+}
+
+async fn authenticate(
+    handle: &mut client::Handle<ClientHandler>,
+    credentials: SshCredentials,
+) -> Result<client::AuthResult, SshError> {
+    match credentials {
+        SshCredentials::Password { username, password } => handle
+            .authenticate_password(username, password.as_str())
+            .await
+            .map_err(SshError::Transport),
+        SshCredentials::PrivateKey {
+            username,
+            path,
+            passphrase,
+        } => {
+            let key = russh::keys::load_secret_key(&path, passphrase.as_ref().map(Secret::as_str))
+                .map_err(SshError::PrivateKey)?;
+            let hash = handle
+                .best_supported_rsa_hash()
+                .await
+                .map_err(SshError::Transport)?
+                .flatten();
+            handle
+                .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                .await
+                .map_err(SshError::Transport)
+        }
+        SshCredentials::Agent { username } => authenticate_with_agent(handle, username).await,
     }
 }
 
