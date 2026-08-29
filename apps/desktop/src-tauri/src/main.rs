@@ -11,7 +11,7 @@ use mobarust_core::{
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{
-    OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
+    MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
 };
 use mobarust_vault::{CredentialId, PlatformVault, SecretMaterial};
 use network::{NetworkManager, NetworkScanRequest};
@@ -284,6 +284,37 @@ fn snippet_delete(
         .lock()
         .map_err(|_| "snippet store lock poisoned".to_owned())?
         .delete(snippet_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn macro_list(
+    store: State<'_, Mutex<MacroStore>>,
+) -> Result<Vec<mobarust_core::MacroRecord>, String> {
+    store
+        .lock()
+        .map_err(|_| "macro store lock poisoned".to_owned())
+        .map(|store| store.list().to_vec())
+}
+
+#[tauri::command]
+fn macro_save(
+    store: State<'_, Mutex<MacroStore>>,
+    record: mobarust_core::MacroRecord,
+) -> Result<mobarust_core::MacroRecord, String> {
+    store
+        .lock()
+        .map_err(|_| "macro store lock poisoned".to_owned())?
+        .save(record)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn macro_delete(store: State<'_, Mutex<MacroStore>>, macro_id: uuid::Uuid) -> Result<bool, String> {
+    store
+        .lock()
+        .map_err(|_| "macro store lock poisoned".to_owned())?
+        .delete(macro_id)
         .map_err(|error| error.to_string())
 }
 
@@ -873,6 +904,8 @@ fn main() {
                 .map_err(|error| error.to_string())?;
             let snippets = SnippetStore::open(data_dir.join("snippets.json"))
                 .map_err(|error| error.to_string())?;
+            let macros = MacroStore::open(data_dir.join("macros.json"))
+                .map_err(|error| error.to_string())?;
             if store.list().is_empty() {
                 store
                     .save(SessionRecord::local_terminal("Local workstation"))
@@ -881,6 +914,7 @@ fn main() {
             app.manage(Mutex::new(store));
             app.manage(Mutex::new(settings));
             app.manage(Mutex::new(snippets));
+            app.manage(Mutex::new(macros));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -899,6 +933,9 @@ fn main() {
             snippet_list,
             snippet_save,
             snippet_delete,
+            macro_list,
+            macro_save,
+            macro_delete,
             session_save_ssh,
             session_save_serial,
             session_delete,

@@ -28,13 +28,16 @@ import {
   PanelRight,
   Pencil,
   Plus,
+  Play,
   Radio,
   RefreshCw,
   Search,
   Server,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
   Star,
+  Square,
   Terminal as TerminalIcon,
   Trash2,
   Upload,
@@ -116,6 +119,8 @@ type TerminalViewportProps = {
   cursorBlink: boolean;
   confirmMultilinePaste: boolean;
   onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
+  onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
+  onInput: (workspaceId: string, terminalId: string, data: string) => void;
 };
 
 type WorkspaceTerminal = {
@@ -223,6 +228,24 @@ type SnippetRecord = {
   command: string;
   tags: string[];
   variables: string[];
+};
+
+type MacroKey = "enter" | "escape" | "tab" | "backspace" | "ctrlC" | "ctrlD" | "arrowUp" | "arrowDown" | "arrowLeft" | "arrowRight";
+
+type MacroAction =
+  | { kind: "sendText"; text: string }
+  | { kind: "wait"; milliseconds: number }
+  | { kind: "sendKey"; key: MacroKey }
+  | { kind: "executeCommand"; command: string }
+  | { kind: "openSession"; sessionId: string }
+  | { kind: "switchWorkspace"; workspaceId: string };
+
+type MacroRecord = {
+  id: string;
+  title: string;
+  description: string;
+  tags: string[];
+  actions: MacroAction[];
 };
 
 type SshAuthRequest =
@@ -367,10 +390,11 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Settings", hint: "", icon: Settings2 },
   { label: "Credential vault", hint: "", icon: KeyRound },
   { label: "Snippets", hint: "", icon: BookOpen },
+  { label: "Macros", hint: "", icon: Play },
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange }: TerminalViewportProps) {
+function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -458,8 +482,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
         terminal.write(data.replace(/\r/g, "\r\n"));
         return;
       }
-      const command = remoteProtocol === "ssh" ? "ssh_write" : remoteProtocol === "telnet" ? "telnet_write" : remoteProtocol === "serial" ? "serial_write" : "terminal_write";
-      void invoke(command, { terminalId, data }).catch(() => onStatusChange(workspaceId, "error"));
+      onInput(workspaceId, terminalId, data);
     };
 
     const input = terminal.onData((data) => {
@@ -521,6 +544,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
         }
         if (remoteSessionId) {
           terminalIdRef.current = remoteSessionId;
+          onNativeTerminalId(workspaceId, remoteSessionId);
           const attachCommand = remoteProtocol === "ssh" ? "ssh_attach" : remoteProtocol === "telnet" ? "telnet_attach" : "serial_attach";
           const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : "serial_close";
           const pendingOutput = await invoke<string[]>(attachCommand, { terminalId: remoteSessionId });
@@ -542,6 +566,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
           return;
         }
         terminalIdRef.current = terminalId;
+        onNativeTerminalId(workspaceId, terminalId);
         onStatusChange(workspaceId, "connected");
         fit();
       } catch {
@@ -560,6 +585,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       unlistenClosed?.();
       unlistenState?.();
       const terminalId = terminalIdRef.current;
+      onNativeTerminalId(workspaceId, null);
       if (IS_TAURI && terminalId) {
         const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : remoteProtocol === "serial" ? "serial_close" : "terminal_close";
         void invoke(closeCommand, { terminalId });
@@ -568,7 +594,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       terminalRef.current = null;
       terminal.dispose();
     };
-  }, [instanceKey, onStatusChange, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, onInput, onNativeTerminalId, onStatusChange, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -585,6 +611,11 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [macrosOpen, setMacrosOpen] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [broadcastEnabled, setBroadcastEnabled] = useState(false);
+  const [broadcastTargetIds, setBroadcastTargetIds] = useState<string[]>([]);
+  const [macroRun, setMacroRun] = useState<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -594,6 +625,7 @@ function App() {
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
+  const [macros, setMacros] = useState<MacroRecord[]>([]);
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
@@ -617,6 +649,16 @@ function App() {
   const [networkScanTotal, setNetworkScanTotal] = useState(0);
   const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
   const networkScanIdRef = useRef<string | null>(null);
+  const nativeTerminalIdsRef = useRef(new Map<string, string>());
+  const terminalTabsRef = useRef(terminalTabs);
+  const broadcastEnabledRef = useRef(broadcastEnabled);
+  const broadcastTargetIdsRef = useRef(broadcastTargetIds);
+  const macroCancelRef = useRef(false);
+  const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
+  terminalTabsRef.current = terminalTabs;
+  broadcastEnabledRef.current = broadcastEnabled;
+  broadcastTargetIdsRef.current = broadcastTargetIds;
+  macroRunRef.current = macroRun;
 
   const activeTerminal = terminalTabs.find((terminal) => terminal.id === activeTerminalId) ?? terminalTabs[0];
   const selectedTerminalId = activeTerminal?.id ?? "";
@@ -644,7 +686,42 @@ function App() {
     setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, status } : terminal));
   }, []);
 
+  const handleNativeTerminalId = useCallback((workspaceId: string, terminalId: string | null) => {
+    if (terminalId) nativeTerminalIdsRef.current.set(workspaceId, terminalId);
+    else nativeTerminalIdsRef.current.delete(workspaceId);
+  }, []);
+
+  const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
+    const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
+    if (!terminal) return Promise.reject(new Error("terminal target no longer exists"));
+    const command = terminal.remoteProtocol === "ssh" ? "ssh_write" : terminal.remoteProtocol === "telnet" ? "telnet_write" : terminal.remoteProtocol === "serial" ? "serial_write" : "terminal_write";
+    return invoke(command, { terminalId, data });
+  }, []);
+
+  const handleTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
+    const selectedTargets = broadcastEnabledRef.current ? broadcastTargetIdsRef.current : [workspaceId];
+    const targetIds = [...new Set(selectedTargets)];
+    if (targetIds.length === 0) {
+      setConnectionError("Broadcast is active but no target terminal is selected. Input was not sent.");
+      return;
+    }
+    const targets = targetIds.map((targetId) => ({
+      workspaceId: targetId,
+      nativeId: targetId === workspaceId ? terminalId : nativeTerminalIdsRef.current.get(targetId),
+    }));
+    const unavailable = targets.filter((target) => !target.nativeId);
+    if (unavailable.length > 0) {
+      setConnectionError(`Input was not sent: ${unavailable.length} selected terminal${unavailable.length === 1 ? " is" : "s are"} not ready.`);
+      return;
+    }
+    void Promise.all(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)))
+      .then(() => setConnectionError(null))
+      .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}`));
+  }, [writeTerminalInput]);
+
   const closeTerminal = useCallback((workspaceId: string) => {
+    nativeTerminalIdsRef.current.delete(workspaceId);
+    setBroadcastTargetIds((current) => current.filter((id) => id !== workspaceId));
     if (terminalTabs.length === 1) {
       const replacement = createWorkspaceTerminal();
       setTerminalTabs([replacement]);
@@ -710,6 +787,13 @@ function App() {
       .catch((error) => setConnectionError(`Snippets could not be loaded: ${String(error)}`));
   }, []);
 
+  const refreshMacros = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<MacroRecord[]>("macro_list")
+      .then(setMacros)
+      .catch((error) => setConnectionError(`Macros could not be loaded: ${String(error)}`));
+  }, []);
+
   const saveSnippet = useCallback(async (snippet: SnippetRecord) => {
     try {
       const saved = IS_TAURI ? await invoke<SnippetRecord>("snippet_save", { snippet }) : snippet;
@@ -741,6 +825,29 @@ function App() {
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Snippet could not be copied: ${String(error)}`);
+    }
+  }, []);
+
+  const saveMacro = useCallback(async (record: MacroRecord) => {
+    try {
+      const saved = IS_TAURI ? await invoke<MacroRecord>("macro_save", { record }) : record;
+      setMacros((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved]);
+      setSessionNotice(`Saved macro “${saved.title}”. It requires an explicit run confirmation.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Macro could not be saved: ${String(error)}`);
+    }
+  }, []);
+
+  const deleteMacro = useCallback(async (record: MacroRecord) => {
+    if (!window.confirm(`Delete macro “${record.title}”?`)) return;
+    try {
+      if (IS_TAURI) await invoke<boolean>("macro_delete", { macroId: record.id });
+      setMacros((current) => current.filter((item) => item.id !== record.id));
+      setSessionNotice(`Deleted macro “${record.title}”.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Macro could not be deleted: ${String(error)}`);
     }
   }, []);
 
@@ -1014,6 +1121,110 @@ function App() {
     }
     void connectSsh(request, false);
   }, [connectSerial, connectSsh, savedSessions]);
+
+  const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
+    const targets = [...new Set(targetIds)].map((workspaceId) => ({
+      workspaceId,
+      nativeId: nativeTerminalIdsRef.current.get(workspaceId),
+    }));
+    const unavailable = targets.filter((target) => !target.nativeId);
+    if (targets.length === 0 || unavailable.length > 0) {
+      throw new Error("one or more selected terminals are not ready");
+    }
+    await Promise.all(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)));
+  }, [writeTerminalInput]);
+
+  const runMacro = useCallback(async (record: MacroRecord, targetIds: string[]) => {
+    if (macroRunRef.current) {
+      setConnectionError("A macro is already running. Cancel it before starting another one.");
+      return;
+    }
+    const targets = [...new Set(targetIds)];
+    const targetLabels = targets.map((id) => terminalTabsRef.current.find((terminal) => terminal.id === id)?.label ?? id);
+    if (targets.length === 0) {
+      setConnectionError("Select at least one ready terminal before running a macro.");
+      return;
+    }
+    if (targets.some((id) => !nativeTerminalIdsRef.current.has(id))) {
+      setConnectionError("The macro was not started because every selected terminal must be ready.");
+      return;
+    }
+    const warning = record.actions.some((action) => action.kind === "executeCommand" || action.kind === "openSession" || action.kind === "switchWorkspace")
+      ? `Macro “${record.title}” includes command or session-control actions. Run it on ${targetLabels.join(", ")}?`
+      : `Run macro “${record.title}” on ${targetLabels.join(", ")}?`;
+    if (!window.confirm(`${warning}\n\nExecution is visible and can be cancelled. Do not include passwords or tokens in macro text.`)) return;
+
+    const keyData: Record<MacroKey, string> = {
+      enter: "\r",
+      escape: "\x1b",
+      tab: "\t",
+      backspace: "\x7f",
+      ctrlC: "\x03",
+      ctrlD: "\x04",
+      arrowUp: "\x1b[A",
+      arrowDown: "\x1b[B",
+      arrowLeft: "\x1b[D",
+      arrowRight: "\x1b[C",
+    };
+    const wait = async (milliseconds: number) => {
+      let remaining = milliseconds;
+      while (remaining > 0) {
+        if (macroCancelRef.current) throw new Error("cancelled");
+        const slice = Math.min(remaining, 50);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, slice));
+        remaining -= slice;
+      }
+    };
+
+    macroCancelRef.current = false;
+    setMacrosOpen(false);
+    setActiveView("terminal");
+    const runState = { title: record.title, step: 0, total: record.actions.length, targets: targetLabels };
+    macroRunRef.current = runState;
+    setMacroRun(runState);
+    try {
+      for (const [index, action] of record.actions.entries()) {
+        if (macroCancelRef.current) throw new Error("cancelled");
+        const nextRunState = { title: record.title, step: index + 1, total: record.actions.length, targets: targetLabels };
+        macroRunRef.current = nextRunState;
+        setMacroRun(nextRunState);
+        if (action.kind === "sendText") await writeToExplicitTargets(targets, action.text);
+        if (action.kind === "executeCommand") await writeToExplicitTargets(targets, `${action.command}\r`);
+        if (action.kind === "sendKey") await writeToExplicitTargets(targets, keyData[action.key]);
+        if (action.kind === "wait") await wait(action.milliseconds);
+        if (action.kind === "switchWorkspace") {
+          if (!terminalTabsRef.current.some((terminal) => terminal.id === action.workspaceId)) throw new Error("workspace target no longer exists");
+          setActiveTerminalId(action.workspaceId);
+          setActiveView("terminal");
+        }
+        if (action.kind === "openSession") {
+          const session = savedSessions.find((item) => item.id === action.sessionId);
+          if (!session) throw new Error("saved session target no longer exists");
+          connectSavedSession(session);
+          await wait(100);
+        }
+      }
+      macroRunRef.current = null;
+      setMacroRun(null);
+      setSessionNotice(`Macro “${record.title}” completed on ${targetLabels.length} terminal${targetLabels.length === 1 ? "" : "s"}.`);
+      setConnectionError(null);
+    } catch (error) {
+      macroRunRef.current = null;
+      setMacroRun(null);
+      if (macroCancelRef.current || String(error).includes("cancelled")) {
+        setSessionNotice(`Macro “${record.title}” cancelled before completion.`);
+        setConnectionError(null);
+      } else {
+        setConnectionError(`Macro “${record.title}” stopped: ${String(error)}`);
+      }
+    }
+  }, [connectSavedSession, savedSessions, writeToExplicitTargets]);
+
+  const cancelMacro = useCallback(() => {
+    if (!macroRun) return;
+    macroCancelRef.current = true;
+    setSessionNotice(`Cancellation requested for macro “${macroRun.title}”.`);
+  }, [macroRun]);
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
     if (!remoteSessionId) return;
@@ -1441,6 +1652,10 @@ function App() {
   }, [refreshSnippets]);
 
   useEffect(() => {
+    refreshMacros();
+  }, [refreshMacros]);
+
+  useEffect(() => {
     if (activeView === "files" && remoteSessionId && remoteProtocol === "ssh") void loadRemoteDirectory(".");
   }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
@@ -1486,11 +1701,23 @@ function App() {
         event.preventDefault();
         setPaletteOpen((open) => !open);
       }
-      if (event.key === "Escape") setPaletteOpen(false);
+      if (command && event.shiftKey && event.key.toLowerCase() === "m") {
+        event.preventDefault();
+        setMacrosOpen(true);
+      }
+      if (event.key === "Escape") {
+        setPaletteOpen(false);
+        if (macroRun) cancelMacro();
+        if (broadcastEnabled) {
+          setBroadcastEnabled(false);
+          setBroadcastOpen(false);
+          setSessionNotice("Broadcast mode disabled. No further input will fan out.");
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeTerminal, cycleTerminal, selectedTerminalId, startNewTerminal]);
+  }, [broadcastEnabled, cancelMacro, closeTerminal, cycleTerminal, macroRun, selectedTerminalId, startNewTerminal]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -1609,6 +1836,7 @@ function App() {
             </div>
             <div className="heading-actions">
               <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
+              <button className="outline-button" onClick={() => setMacrosOpen(true)}><Play size={15} /> Macros <span>⌘ ⇧ M</span></button>
               <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>⌘ K</span></button>
               <button className="primary-button" onClick={startNewTerminal}><Plus size={15} /> New terminal</button>
             </div>
@@ -1633,9 +1861,11 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setSplitDirection("none"); setSplitTerminalIds([]); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                    <div className="terminal-toolbar-actions"><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                    <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /></div>; })}</div>
+                  {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
+                  {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
+                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} /></div>; })}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -1671,13 +1901,15 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
       {credentialsOpen && <CredentialVaultModal onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
+      {macrosOpen && <MacrosModal macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => setMacrosOpen(false)} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
+      {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
     </main>
   );
 }
@@ -1971,10 +2203,10 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onOpenCredentials, onOpenSnippets, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Credential vault" ? onOpenCredentials : action.label === "Snippets" ? onOpenSnippets : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Credential vault" ? onOpenCredentials : action.label === "Snippets" ? onOpenSnippets : action.label === "Macros" ? onOpenMacros : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
 }
 
 function CredentialVaultModal({ onClose, onSave, onDelete }: { onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void> }) {
@@ -2054,6 +2286,98 @@ function SnippetsModal({ snippets, onClose, onSave, onDelete, onCopy }: { snippe
       <SnippetForm key={active.id} snippet={active} isNew={!selected} onSave={save} onDelete={remove} onCopy={onCopy} />
     </div>
   </section></div>;
+}
+
+function newMacroRecord(): MacroRecord {
+  return { id: crypto.randomUUID(), title: "", description: "", tags: [], actions: [] };
+}
+
+function newMacroAction(kind: MacroAction["kind"]): MacroAction {
+  if (kind === "sendText") return { kind, text: "" };
+  if (kind === "wait") return { kind, milliseconds: 250 };
+  if (kind === "sendKey") return { kind, key: "enter" };
+  if (kind === "executeCommand") return { kind, command: "" };
+  if (kind === "openSession") return { kind, sessionId: "" };
+  return { kind, workspaceId: "" };
+}
+
+function macroActionSummary(action: MacroAction): string {
+  if (action.kind === "sendText") return `Send text · ${action.text.trim() || "empty"}`;
+  if (action.kind === "executeCommand") return `Execute command · ${action.command.trim() || "empty"}`;
+  if (action.kind === "wait") return `Wait · ${action.milliseconds} ms`;
+  if (action.kind === "sendKey") return `Send key · ${action.key}`;
+  if (action.kind === "openSession") return "Open saved session";
+  return "Switch workspace";
+}
+
+function MacrosModal({ macros, terminals, savedSessions, onClose, onSave, onDelete, onRun }: { macros: MacroRecord[]; terminals: WorkspaceTerminal[]; savedSessions: SavedSession[]; onClose: () => void; onSave: (record: MacroRecord) => Promise<void>; onDelete: (record: MacroRecord) => Promise<void>; onRun: (record: MacroRecord, targetIds: string[]) => Promise<void> }) {
+  const [selectedId, setSelectedId] = useState<string | null>(macros[0]?.id ?? null);
+  const [draft, setDraft] = useState<MacroRecord>(() => newMacroRecord());
+  const [targetIds, setTargetIds] = useState<string[]>(() => terminals.filter((terminal) => terminal.status === "connected").map((terminal) => terminal.id));
+  const selected = macros.find((record) => record.id === selectedId);
+  const active = selected ?? draft;
+
+  const save = async (record: MacroRecord) => {
+    await onSave(record);
+    setSelectedId(record.id);
+    setDraft(record);
+  };
+
+  const remove = async () => {
+    if (!selected) return;
+    await onDelete(selected);
+    setSelectedId(null);
+    setDraft(newMacroRecord());
+  };
+
+  const readyTerminals = terminals.filter((terminal) => terminal.status === "connected");
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="macros-modal" role="dialog" aria-modal="true" aria-label="Terminal macros" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="session-editor-heading"><div><span className="eyebrow">OPERATOR AUTOMATION</span><h2>Macros</h2><p>Run only after review and confirmation. Actions are bounded, visible, and cancellable.</p></div><button type="button" className="icon-button" aria-label="Close macros" onClick={onClose}><X size={17} /></button></div>
+    <div className="macro-layout">
+      <aside className="macro-list" aria-label="Saved macros"><div className="snippet-list-heading"><span>{macros.length} saved</span><button type="button" className="outline-button" onClick={() => { setSelectedId(null); setDraft(newMacroRecord()); }}><Plus size={13} /> New</button></div>{macros.length === 0 ? <p className="snippet-empty">No macros yet. Save a small, reviewable sequence.</p> : macros.map((record) => <button type="button" key={record.id} className={`snippet-list-item ${record.id === selectedId ? "selected" : ""}`} onClick={() => setSelectedId(record.id)}><strong>{record.title || "Untitled macro"}</strong><small>{record.actions.length} action{record.actions.length === 1 ? "" : "s"} · {record.tags.join(" · ") || "No tags"}</small></button>)}</aside>
+      <MacroEditor key={active.id} record={active} isNew={!selected} savedSessions={savedSessions} terminals={terminals} targets={targetIds} readyTerminals={readyTerminals} onTargetsChange={setTargetIds} onSave={save} onDelete={remove} onRun={(record) => void onRun(record, targetIds)} />
+    </div>
+  </section></div>;
+}
+
+function MacroEditor({ record, isNew, savedSessions, terminals, targets, readyTerminals, onTargetsChange, onSave, onDelete, onRun }: { record: MacroRecord; isNew: boolean; savedSessions: SavedSession[]; terminals: WorkspaceTerminal[]; targets: string[]; readyTerminals: WorkspaceTerminal[]; onTargetsChange: (ids: string[]) => void; onSave: (record: MacroRecord) => Promise<void>; onDelete: () => Promise<void>; onRun: (record: MacroRecord) => void }) {
+  const [title, setTitle] = useState(record.title);
+  const [description, setDescription] = useState(record.description);
+  const [tags, setTags] = useState(record.tags.join(", "));
+  const [actions, setActions] = useState<MacroAction[]>(record.actions);
+
+  const updateAction = (index: number, action: MacroAction) => setActions((current) => current.map((item, itemIndex) => itemIndex === index ? action : item));
+  const addAction = (kind: MacroAction["kind"]) => setActions((current) => [...current, newMacroAction(kind)]);
+  const removeAction = (index: number) => setActions((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  const buildRecord = (): MacroRecord => ({ id: record.id, title: title.trim(), description: description.trim(), tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))], actions });
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void onSave(buildRecord());
+  };
+  const current = buildRecord();
+  const hasSessionActions = actions.some((action) => action.kind === "openSession" || action.kind === "switchWorkspace");
+
+  return <form className="macro-form" onSubmit={submit}><div className="snippet-form-heading"><div><span className="settings-section-label">{isNew ? "New macro" : "Edit macro"}</span><strong>{title.trim() || "Untitled macro"}</strong></div>{!isNew && <button type="button" className="session-action danger" onClick={() => void onDelete()} aria-label="Delete macro" title="Delete macro"><Trash2 size={14} /></button>}</div>
+    <label>Title<input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Restart service safely" /></label>
+    <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this sequence does" rows={2} /></label>
+    <label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="ops, maintenance" /></label>
+    <div className="macro-actions-heading"><span>Actions · {actions.length}/64</span><small>Each step runs in order and can be cancelled.</small></div>
+    <div className="macro-actions-list">{actions.length === 0 && <div className="macro-empty">Add a typed action below. Saving or running an empty macro is blocked.</div>}{actions.map((action, index) => <MacroActionRow key={`${index}-${action.kind}`} index={index} action={action} savedSessions={savedSessions} terminals={terminals} onChange={updateAction} onRemove={removeAction} />)}</div>
+    <div className="macro-add-actions"><button type="button" className="outline-button" onClick={() => addAction("sendText")}><Plus size={13} /> Text</button><button type="button" className="outline-button" onClick={() => addAction("executeCommand")}><Plus size={13} /> Command</button><button type="button" className="outline-button" onClick={() => addAction("sendKey")}><Plus size={13} /> Key</button><button type="button" className="outline-button" onClick={() => addAction("wait")}><Plus size={13} /> Wait</button><button type="button" className="outline-button" onClick={() => addAction("openSession")}><Plus size={13} /> Open</button><button type="button" className="outline-button" onClick={() => addAction("switchWorkspace")}><Plus size={13} /> Switch</button></div>
+    <div className="macro-targets"><div className="macro-targets-heading"><span>Explicit targets</span><small>{readyTerminals.length} ready · {targets.length} selected</small></div>{readyTerminals.length === 0 ? <p>No connected terminal is ready for a macro run.</p> : readyTerminals.map((terminal) => <label key={terminal.id} className="macro-target"><input type="checkbox" checked={targets.includes(terminal.id)} onChange={() => onTargetsChange(targets.includes(terminal.id) ? targets.filter((id) => id !== terminal.id) : [...targets, terminal.id])} /><span>{terminal.label}</span><small>{terminal.remoteHost ?? "local"}</small></label>)}</div>
+    <div className="macro-safety"><ShieldAlert size={14} /><span>{hasSessionActions ? "This macro can change session focus or open a saved session; confirmation is required at run time." : "Do not put passwords, tokens, or private keys in macro text. MobaRust never logs macro contents."}</span></div>
+    <div className="snippet-form-footer"><span><ShieldCheck size={13} /> Review + confirm before run</span><div><button type="button" className="outline-button" onClick={() => onRun(current)} disabled={actions.length === 0 || targets.length === 0}><Play size={13} /> Run on selected</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save macro</button></div></div>
+  </form>;
+}
+
+function MacroActionRow({ index, action, savedSessions, terminals, onChange, onRemove }: { index: number; action: MacroAction; savedSessions: SavedSession[]; terminals: WorkspaceTerminal[]; onChange: (index: number, action: MacroAction) => void; onRemove: (index: number) => void }) {
+  return <div className="macro-action-row"><div className="macro-action-row-heading"><span>{String(index + 1).padStart(2, "0")} · {macroActionSummary(action)}</span><button type="button" className="session-action danger" onClick={() => onRemove(index)} aria-label={`Remove action ${index + 1}`} title="Remove action"><Trash2 size={13} /></button></div><label>Type<select value={action.kind} onChange={(event) => onChange(index, newMacroAction(event.target.value as MacroAction["kind"]))}><option value="sendText">Send text</option><option value="executeCommand">Execute command</option><option value="sendKey">Send key</option><option value="wait">Wait</option><option value="openSession">Open saved session</option><option value="switchWorkspace">Switch workspace</option></select></label>{action.kind === "sendText" && <label>Text<textarea value={action.text} onChange={(event) => onChange(index, { kind: "sendText", text: event.target.value })} rows={2} placeholder="Text sent exactly as entered" /></label>}{action.kind === "executeCommand" && <label>Command<textarea value={action.command} onChange={(event) => onChange(index, { kind: "executeCommand", command: event.target.value })} rows={2} placeholder="systemctl status app" /></label>}{action.kind === "sendKey" && <label>Key<select value={action.key} onChange={(event) => onChange(index, { kind: "sendKey", key: event.target.value as MacroKey })}><option value="enter">Enter</option><option value="escape">Escape</option><option value="tab">Tab</option><option value="backspace">Backspace</option><option value="ctrlC">Ctrl+C</option><option value="ctrlD">Ctrl+D</option><option value="arrowUp">Arrow up</option><option value="arrowDown">Arrow down</option><option value="arrowLeft">Arrow left</option><option value="arrowRight">Arrow right</option></select></label>}{action.kind === "wait" && <label>Milliseconds<input type="number" min="1" max="300000" value={action.milliseconds} onChange={(event) => onChange(index, { kind: "wait", milliseconds: Number(event.target.value) })} /></label>}{action.kind === "openSession" && <label>Saved session<select value={action.sessionId} onChange={(event) => onChange(index, { kind: "openSession", sessionId: event.target.value })}><option value="">Select a saved session</option>{savedSessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.protocol}</option>)}</select></label>}{action.kind === "switchWorkspace" && <label>Workspace<select value={action.workspaceId} onChange={(event) => onChange(index, { kind: "switchWorkspace", workspaceId: event.target.value })}><option value="">Select a workspace</option>{terminals.map((terminal) => <option key={terminal.id} value={terminal.id}>{terminal.label}</option>)}</select></label>}</div>;
+}
+
+function BroadcastModal({ terminals, selectedIds, enabled, onClose, onToggle, onEnable, onDisable }: { terminals: WorkspaceTerminal[]; selectedIds: string[]; enabled: boolean; onClose: () => void; onToggle: (id: string) => void; onEnable: () => void; onDisable: () => void }) {
+  const ready = terminals.filter((terminal) => terminal.status === "connected");
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="broadcast-modal" role="dialog" aria-modal="true" aria-label="Broadcast input" onMouseDown={(event) => event.stopPropagation()}><div className="session-editor-heading"><div><span className="eyebrow">TERMINAL / BROADCAST</span><h2>Broadcast input</h2><p>Select exact targets before enabling. Every keystroke is sent to all selected terminals.</p></div><button type="button" className="icon-button" aria-label="Close broadcast settings" onClick={onClose}><X size={17} /></button></div><div className="broadcast-warning"><ShieldAlert size={17} /><div><strong>{enabled ? "Broadcast is active" : "Broadcast is off"}</strong><span>Use <kbd>Esc</kbd> at any time to disable it. Pasted multiline input still requires confirmation.</span></div></div><div className="broadcast-target-list"><div className="macro-targets-heading"><span>Target terminals</span><small>{selectedIds.length} selected · {ready.length} ready</small></div>{terminals.map((terminal) => { const isReady = terminal.status === "connected"; return <label className={`macro-target ${!isReady ? "disabled" : ""}`} key={terminal.id}><input type="checkbox" disabled={!isReady} checked={selectedIds.includes(terminal.id)} onChange={() => onToggle(terminal.id)} /><span>{terminal.label}</span><small>{isReady ? (terminal.remoteHost ?? "local") : terminal.status}</small></label>; })}</div><div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> No input is sent while configuring</span><div><button type="button" className="outline-button" onClick={enabled ? onDisable : onClose}>{enabled ? "Disable" : "Cancel"}</button>{!enabled && <button type="button" className="primary-button" onClick={onEnable} disabled={selectedIds.length === 0}><Radio size={14} /> Enable broadcast</button>}</div></div></section></div>;
 }
 
 function SnippetForm({ snippet, isNew, onSave, onDelete, onCopy }: { snippet: SnippetRecord; isNew: boolean; onSave: (snippet: SnippetRecord) => Promise<void>; onDelete: () => Promise<void>; onCopy: (command: string) => Promise<void> }) {

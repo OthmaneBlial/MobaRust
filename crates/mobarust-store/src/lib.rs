@@ -9,7 +9,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord, SnippetRecord};
+use mobarust_core::{
+    AppSettings, AuthMethod, MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -61,6 +63,19 @@ pub enum StoreError {
     SnippetEncode(serde_json::Error),
     #[error("could not write snippet file {path}: {source}")]
     SnippetWrite { path: PathBuf, source: io::Error },
+    #[error("macro is invalid: {0}")]
+    InvalidMacro(#[from] mobarust_core::MacroValidationError),
+    #[error("macro file {path} contains invalid data: {source}")]
+    MacroDecode {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("macro file {path} uses unsupported schema version {version}")]
+    MacroUnsupportedSchema { path: PathBuf, version: u32 },
+    #[error("could not serialize macros: {0}")]
+    MacroEncode(serde_json::Error),
+    #[error("could not write macro file {path}: {source}")]
+    MacroWrite { path: PathBuf, source: io::Error },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,6 +102,15 @@ const CURRENT_SNIPPET_SCHEMA_VERSION: u32 = 1;
 struct SnippetFile {
     schema_version: u32,
     snippets: Vec<SnippetRecord>,
+}
+
+const CURRENT_MACRO_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MacroFile {
+    schema_version: u32,
+    macros: Vec<MacroRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +160,119 @@ pub struct SettingsStore {
 pub struct SnippetStore {
     path: PathBuf,
     snippets: Vec<SnippetRecord>,
+}
+
+/// A versioned, secret-free macro catalog. Macro actions are typed data and
+/// never execute as part of loading or saving; the desktop must request an
+/// explicit, visible run.
+#[derive(Debug)]
+pub struct MacroStore {
+    path: PathBuf,
+    macros: Vec<MacroRecord>,
+}
+
+impl MacroStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        let macros = if path.exists() {
+            let bytes = fs::read(&path).map_err(|source| StoreError::MacroWrite {
+                path: path.clone(),
+                source,
+            })?;
+            let file: MacroFile =
+                serde_json::from_slice(&bytes).map_err(|source| StoreError::MacroDecode {
+                    path: path.clone(),
+                    source,
+                })?;
+            if file.schema_version != CURRENT_MACRO_SCHEMA_VERSION {
+                return Err(StoreError::MacroUnsupportedSchema {
+                    path,
+                    version: file.schema_version,
+                });
+            }
+            for record in &file.macros {
+                record.validate()?;
+            }
+            file.macros
+        } else {
+            Vec::new()
+        };
+        Ok(Self { path, macros })
+    }
+
+    pub fn list(&self) -> &[MacroRecord] {
+        &self.macros
+    }
+
+    pub fn save(&mut self, record: MacroRecord) -> Result<MacroRecord, StoreError> {
+        record.validate()?;
+        let previous = self.macros.clone();
+        if let Some(existing) = self.macros.iter_mut().find(|item| item.id == record.id) {
+            *existing = record.clone();
+        } else {
+            self.macros.push(record.clone());
+        }
+        if let Err(error) = self.persist() {
+            self.macros = previous;
+            return Err(error);
+        }
+        Ok(record)
+    }
+
+    pub fn delete(&mut self, id: Uuid) -> Result<bool, StoreError> {
+        let previous = self.macros.clone();
+        let original_len = self.macros.len();
+        self.macros.retain(|record| record.id != id);
+        if self.macros.len() == original_len {
+            return Ok(false);
+        }
+        if let Err(error) = self.persist() {
+            self.macros = previous;
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    fn persist(&self) -> Result<(), StoreError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|source| StoreError::MacroWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let bytes = serde_json::to_vec_pretty(&MacroFile {
+            schema_version: CURRENT_MACRO_SCHEMA_VERSION,
+            macros: self.macros.clone(),
+        })
+        .map_err(StoreError::MacroEncode)?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("macros.json");
+        let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+        let mut temporary = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|source| StoreError::MacroWrite {
+                path: temporary_path.clone(),
+                source,
+            })?;
+        let write_result = (|| -> io::Result<()> {
+            temporary.write_all(&bytes)?;
+            temporary.sync_all()?;
+            drop(temporary);
+            replace_file(&temporary_path, &self.path)
+        })();
+        if let Err(source) = write_result {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(StoreError::MacroWrite {
+                path: self.path.clone(),
+                source,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl SnippetStore {
@@ -704,7 +841,10 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mobarust_core::{AuthMethod, JumpHostRecord, Protocol, SessionRecord, SnippetRecord};
+    use mobarust_core::{
+        AuthMethod, JumpHostRecord, MacroAction, MacroKey, MacroRecord, Protocol, SessionRecord,
+        SnippetRecord,
+    };
     use tempfile::tempdir;
 
     fn remote_session() -> SessionRecord {
@@ -1018,6 +1158,41 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             r#"{"schema_version":1,"snippets":[],"unknown":true}"#
+        );
+    }
+
+    #[test]
+    fn macros_round_trip_and_delete_durably() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("macros.json");
+        let mut store = MacroStore::open(&path).unwrap();
+        let mut record = MacroRecord::new("Restart service");
+        record.tags = vec!["ops".into()];
+        record.actions = vec![
+            MacroAction::ExecuteCommand {
+                command: "sudo systemctl restart app".into(),
+            },
+            MacroAction::SendKey {
+                key: MacroKey::Enter,
+            },
+            MacroAction::Wait { milliseconds: 250 },
+        ];
+        store.save(record.clone()).unwrap();
+        assert_eq!(MacroStore::open(&path).unwrap().list(), &[record.clone()]);
+        assert!(store.delete(record.id).unwrap());
+        assert!(MacroStore::open(&path).unwrap().list().is_empty());
+    }
+
+    #[test]
+    fn corrupt_macros_are_not_silently_replaced() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("macros.json");
+        fs::write(&path, br#"{"schema_version":1,"macros":[],"unknown":true}"#).unwrap();
+        let error = MacroStore::open(&path).unwrap_err();
+        assert!(matches!(error, StoreError::MacroDecode { .. }));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"schema_version":1,"macros":[],"unknown":true}"#
         );
     }
 }

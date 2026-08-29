@@ -2,6 +2,7 @@
 //! SSH/SFTP adapters. Secrets intentionally never appear in these types.
 
 pub mod lifecycle;
+pub mod r#macro;
 pub mod session;
 pub mod settings;
 pub mod snippet;
@@ -9,6 +10,10 @@ pub mod terminal;
 pub mod transfer;
 
 pub use lifecycle::{ConnectionEvent, ConnectionLifecycle, ConnectionState, TransitionError};
+pub use r#macro::{
+    MAX_MACRO_ACTIONS, MAX_MACRO_TEXT_BYTES, MAX_MACRO_WAIT_MILLISECONDS, MacroAction, MacroKey,
+    MacroRecord, MacroValidationError,
+};
 pub use session::{
     AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
     SessionValidationError,

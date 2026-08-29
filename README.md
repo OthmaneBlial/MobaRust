@@ -31,6 +31,7 @@ The first working slice provides:
 - terminal multiline paste is intercepted and confirmed visibly before it is sent to a remote or local shell;
 - typed non-secret settings are persisted separately with validation, atomic writes, reset, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
 - a secret-free snippet library with tags, validated `${variable}` placeholders, rendered preview, and explicit manual clipboard copy (never automatic execution);
+- a bounded macro runner and explicit broadcast-input mode with typed actions, target preflight, visible progress, cooperative cancellation, and an `Esc` emergency disable;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
 - persistent terminal tabs and two-pane splits for simultaneous local, SSH, Telnet, and serial sessions, with per-tab event routing and lifecycle cleanup;
@@ -40,7 +41,7 @@ The first working slice provides:
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets, explicit native vault reference save/delete flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 

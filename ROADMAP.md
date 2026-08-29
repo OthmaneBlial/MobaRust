@@ -69,8 +69,9 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## Operator workflows
 
-- [ ] Terminal macros with visible, cancellable execution and permission boundaries
-- [ ] Explicit multi-exec/broadcast mode with selected targets, strong indicator, and emergency disable
+- [x] Bounded terminal macros with visible confirmation, cancellable execution, and typed permission boundaries
+- [x] Explicit multi-exec/broadcast mode with selected targets, strong indicator, whole-event preflight, and emergency disable
+- [ ] Macro recording, per-action approval policies, and browser stress testing
 - [x] Bounded UTF-8 remote text editing with conflict detection and rollback-safe temporary-file promotion
 - [ ] Editor syntax highlighting, search/replace, encoding selection, and save-as workflow
 
