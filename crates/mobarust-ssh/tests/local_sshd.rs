@@ -182,6 +182,54 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         assert!(!sftp.try_exists(&renamed_path).await.expect("check removal"));
         sftp.close().await.expect("close SFTP subsystem");
 
+        let scp_remote_path = format!("/tmp/mobarust-scp-{}", std::process::id());
+        let scp_uploaded = connection
+            .scp_upload(
+                &scp_remote_path,
+                128 * 1024,
+                tokio::fs::File::open(&source)
+                    .await
+                    .expect("open SCP upload source"),
+            )
+            .await
+            .expect("stream upload through SCP");
+        assert_eq!(scp_uploaded, 128 * 1024);
+        let verify_scp = connection
+            .open_sftp()
+            .await
+            .expect("open SCP verification SFTP");
+        assert!(
+            verify_scp
+                .try_exists(&scp_remote_path)
+                .await
+                .expect("check SCP upload")
+        );
+        verify_scp
+            .close()
+            .await
+            .expect("close SCP verification SFTP");
+        let scp_downloaded = fixture.directory.path().join("scp-downloaded.bin");
+        let scp_downloaded_bytes = connection
+            .scp_download(
+                &scp_remote_path,
+                tokio::fs::File::create(&scp_downloaded)
+                    .await
+                    .expect("create SCP download destination"),
+            )
+            .await
+            .expect("stream download through SCP");
+        assert_eq!(scp_downloaded_bytes, 128 * 1024);
+        assert_eq!(
+            fs::read(&scp_downloaded).expect("read SCP download"),
+            vec![b'R'; 128 * 1024]
+        );
+        let cleanup_sftp = connection.open_sftp().await.expect("open SCP cleanup SFTP");
+        cleanup_sftp
+            .remove_file(&scp_remote_path)
+            .await
+            .expect("remove SCP fixture file");
+        cleanup_sftp.close().await.expect("close SCP cleanup SFTP");
+
         let echo_listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind direct-tcpip echo fixture");

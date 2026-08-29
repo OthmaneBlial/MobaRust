@@ -23,7 +23,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 ## 0.3 — remote files and movement
 
 - [x] SFTP browser with listing, create-folder, rename, delete, and single-file streaming/cancellation/progress
-- [ ] SCP compatibility path
+- [x] Native SCP compatibility primitive for streaming single-file upload/download
+- [ ] SCP transfer-manager wiring and recursive transfer UX
 - [x] Bounded native transfer manager (three concurrent single-file jobs)
 - [ ] Remote terminal and file browser composition
 
@@ -31,7 +32,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 - [x] Local and remote SSH forwarding through native direct-tcpip/forwarded-tcpip channels with bounded clients and cancellation
 - [x] Bounded local SOCKS5 `-D` proxy path with explicit tunnel-manager controls
-- [ ] Remote and dynamic SSH forwarding
+- [x] Native remote and dynamic forwarding transport primitives
+- [ ] Remote and dynamic forwarding manager UI
 - [x] Native jump-host chain transport with host-key policy per hop
 - [x] Bounded shell reconnect attempts with explicit lifecycle telemetry
 - [ ] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles

@@ -1,6 +1,7 @@
 //! Rust-owned SSH transport. The crate deliberately keeps credential material
 //! out of serde models and out of the frontend-facing data types.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -57,6 +58,8 @@ pub enum SshError {
     Channel(#[source] russh::Error),
     #[error("SFTP operation failed: {0}")]
     Sftp(String),
+    #[error("SCP operation failed: {0}")]
+    Scp(String),
     #[error("local file operation failed: {0}")]
     LocalIo(#[source] std::io::Error),
     #[error("SFTP transfer cancelled")]
@@ -592,6 +595,107 @@ impl SshConnection {
         Ok(SftpConnection { session })
     }
 
+    pub async fn scp_upload<R>(
+        &self,
+        remote_path: impl Into<String>,
+        size: u64,
+        mut source: R,
+    ) -> Result<u64, SshError>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let remote_path = remote_path.into();
+        let file_name = scp_file_name(&remote_path)?;
+        let command = format!("scp -O -t {}", shell_quote(&remote_path)?);
+        let mut channel = self.open_scp_channel(command.into_bytes()).await?;
+        channel.read_ack().await?;
+        channel
+            .write_bytes(format!("C0644 {size} {file_name}\n").into_bytes())
+            .await?;
+        channel.read_ack().await?;
+
+        let mut buffer = vec![0_u8; 64 * 1024];
+        let mut copied = 0_u64;
+        while copied < size {
+            let remaining = size - copied;
+            let read_limit = remaining.min(buffer.len() as u64) as usize;
+            let read = source
+                .read(&mut buffer[..read_limit])
+                .await
+                .map_err(SshError::LocalIo)?;
+            if read == 0 {
+                return Err(SshError::Scp(format!(
+                    "source ended before declared size ({copied}/{size} bytes)"
+                )));
+            }
+            channel.write_bytes(buffer[..read].to_vec()).await?;
+            copied += read as u64;
+        }
+        channel.write_bytes(vec![0]).await?;
+        channel.read_ack().await?;
+        channel.close().await?;
+        Ok(copied)
+    }
+
+    pub async fn scp_download<W>(
+        &self,
+        remote_path: impl Into<String>,
+        mut destination: W,
+    ) -> Result<u64, SshError>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let remote_path = remote_path.into();
+        let command = format!("scp -O -f {}", shell_quote(&remote_path)?);
+        let mut channel = self.open_scp_channel(command.into_bytes()).await?;
+        channel.write_bytes(vec![0]).await?;
+        let metadata = channel.read_line().await?;
+        let size = parse_scp_metadata(&metadata)?;
+        channel.write_bytes(vec![0]).await?;
+        let mut remaining = size;
+        let mut copied = 0_u64;
+        let mut buffer = vec![0_u8; 64 * 1024];
+        while remaining > 0 {
+            let read = channel.read_bytes(&mut buffer, remaining).await?;
+            if read == 0 {
+                return Err(SshError::Scp("source ended before declared size".into()));
+            }
+            destination
+                .write_all(&buffer[..read])
+                .await
+                .map_err(SshError::LocalIo)?;
+            copied += read as u64;
+            remaining -= read as u64;
+        }
+        destination.flush().await.map_err(SshError::LocalIo)?;
+        channel.read_ack().await?;
+        channel.write_bytes(vec![0]).await?;
+        channel.close().await?;
+        Ok(copied)
+    }
+
+    async fn open_scp_channel(&self, command: Vec<u8>) -> Result<ScpChannel, SshError> {
+        let channel = tokio::time::timeout(Duration::from_secs(12), async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(SshError::Channel)?;
+            channel
+                .exec(true, command)
+                .await
+                .map_err(SshError::Channel)?;
+            Ok::<_, SshError>(channel)
+        })
+        .await
+        .map_err(|_| SshError::Timeout)??;
+        Ok(ScpChannel {
+            channel,
+            buffer: VecDeque::new(),
+            closed: false,
+        })
+    }
+
     /// Opens one SSH direct-tcpip channel for local port forwarding. The
     /// caller owns the local listener and the lifecycle of the returned
     /// bidirectional stream.
@@ -660,6 +764,151 @@ impl SshConnection {
     pub async fn next_forwarded_channel(&self) -> Option<SshForwardedChannel> {
         self.forwarded_channels.lock().await.recv().await
     }
+}
+
+struct ScpChannel {
+    channel: Channel<client::Msg>,
+    buffer: VecDeque<u8>,
+    closed: bool,
+}
+
+impl ScpChannel {
+    async fn fill(&mut self) -> Result<(), SshError> {
+        if self.closed {
+            return Ok(());
+        }
+        match self.channel.wait().await {
+            Some(ChannelMsg::Data { data }) => self.buffer.extend(data),
+            Some(ChannelMsg::ExtendedData { data, .. }) => {
+                return Err(SshError::Scp(String::from_utf8_lossy(&data).trim().into()));
+            }
+            Some(ChannelMsg::Eof | ChannelMsg::Close) | None => self.closed = true,
+            Some(ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
+                return Err(SshError::Scp(format!(
+                    "remote scp exited with status {exit_status}"
+                )));
+            }
+            Some(_) => {}
+        }
+        Ok(())
+    }
+
+    async fn read_byte(&mut self) -> Result<u8, SshError> {
+        loop {
+            if let Some(byte) = self.buffer.pop_front() {
+                return Ok(byte);
+            }
+            self.fill().await?;
+            if self.closed && self.buffer.is_empty() {
+                return Err(SshError::Scp(
+                    "remote scp closed before the response".into(),
+                ));
+            }
+        }
+    }
+
+    async fn read_line(&mut self) -> Result<Vec<u8>, SshError> {
+        const MAX_LINE_BYTES: usize = 4096;
+        let mut line = Vec::new();
+        loop {
+            let byte = self.read_byte().await?;
+            if byte == b'\n' {
+                return Ok(line);
+            }
+            line.push(byte);
+            if line.len() >= MAX_LINE_BYTES {
+                return Err(SshError::Scp("remote scp control line is too long".into()));
+            }
+        }
+    }
+
+    async fn read_ack(&mut self) -> Result<(), SshError> {
+        loop {
+            match self.read_byte().await? {
+                0 => return Ok(()),
+                1 => {
+                    let _warning = self.read_line().await?;
+                }
+                2 => {
+                    let error = String::from_utf8_lossy(&self.read_line().await?).into_owned();
+                    return Err(SshError::Scp(error));
+                }
+                code => return Err(SshError::Scp(format!("invalid scp acknowledgement {code}"))),
+            }
+        }
+    }
+
+    async fn read_bytes(
+        &mut self,
+        destination: &mut [u8],
+        maximum: u64,
+    ) -> Result<usize, SshError> {
+        while self.buffer.is_empty() {
+            self.fill().await?;
+            if self.closed {
+                return Ok(0);
+            }
+        }
+        let count = destination
+            .len()
+            .min(maximum as usize)
+            .min(self.buffer.len());
+        for byte in &mut destination[..count] {
+            *byte = self
+                .buffer
+                .pop_front()
+                .expect("count comes from buffer length");
+        }
+        Ok(count)
+    }
+
+    async fn write_bytes(&self, bytes: Vec<u8>) -> Result<(), SshError> {
+        self.channel
+            .data_bytes(bytes)
+            .await
+            .map_err(SshError::Channel)
+    }
+
+    async fn close(&self) -> Result<(), SshError> {
+        self.channel.eof().await.map_err(SshError::Channel)
+    }
+}
+
+fn scp_file_name(path: &str) -> Result<String, SshError> {
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| SshError::Scp("remote path has no file name".into()))?;
+    if name.contains('\0') || name.contains('\n') {
+        return Err(SshError::Scp(
+            "remote file name contains a control character".into(),
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+fn shell_quote(path: &str) -> Result<String, SshError> {
+    if path.trim().is_empty() || path.contains('\0') || path.contains('\n') || path.contains('\r') {
+        return Err(SshError::Scp(
+            "remote path contains an invalid control character".into(),
+        ));
+    }
+    Ok(format!("'{}'", path.replace('\'', "'\\''")))
+}
+
+fn parse_scp_metadata(line: &[u8]) -> Result<u64, SshError> {
+    let line = String::from_utf8_lossy(line);
+    let mut fields = line.splitn(3, ' ');
+    let mode = fields.next().unwrap_or_default();
+    let size = fields.next().unwrap_or_default();
+    let name = fields.next().unwrap_or_default();
+    if !mode.starts_with('C') || name.is_empty() {
+        return Err(SshError::Scp(format!("invalid scp metadata: {line}")));
+    }
+    size.parse::<u64>()
+        .map_err(|_| SshError::Scp("invalid scp file size".into()))
 }
 
 fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
