@@ -100,6 +100,7 @@ impl ConnectionLifecycle {
             | (ConnectionState::Resolving, ConnectionEvent::Cancel)
             | (ConnectionState::Connecting, ConnectionEvent::Cancel)
             | (ConnectionState::Authenticating, ConnectionEvent::Cancel)
+            | (ConnectionState::Connected, ConnectionEvent::Cancel)
             | (ConnectionState::Reconnecting, ConnectionEvent::Cancel) => {
                 ConnectionState::Cancelled
             }

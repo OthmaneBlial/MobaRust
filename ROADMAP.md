@@ -48,7 +48,10 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] RDP/VNC helper-boundary research and versioned Rust-side contract
 - [ ] Real FreeRDP integration with a controlled helper and Windows evidence
 - [ ] Real VNC integration with a mature engine and local/manual fixtures
-- [ ] Telnet, Serial, X11 forwarding, monitoring, and portable packaging
+- [x] Native Telnet transport with bounded negotiation and a local TCP fixture
+- [ ] Telnet session-manager/UI wiring
+- [ ] Serial transport and device lifecycle
+- [ ] X11 forwarding, monitoring, and portable packaging
 
 Each adapter must have a real lifecycle, failure tests, and an honest platform
 support statement before it is presented as complete.

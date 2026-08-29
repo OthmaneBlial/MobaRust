@@ -13,6 +13,7 @@ The first working slice provides:
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
 - an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
 - a native SCP compatibility primitive for streaming single-file upload/download, verified against the isolated local SSH fixture;
+- a native Telnet transport primitive with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, and a local TCP fixture; Telnet is clearly unencrypted;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
@@ -29,7 +30,7 @@ The first working slice provides:
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport, local forwarding channel, jump-host handshake, cancellation path, and Quick Connect path are tested against a local `sshd` fixture. The bounded reconnect worker uses the same native transport but still needs dedicated failure-injection coverage before release. Saved-session editing, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP transfer-manager wiring, remote/dynamic forwarding manager UI, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport, local forwarding channel, jump-host handshake, cancellation path, Quick Connect path, and Telnet protocol fixture are tested locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Saved-session editing, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP transfer-manager wiring, Telnet session-manager/UI wiring, remote/dynamic forwarding manager UI, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
