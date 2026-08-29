@@ -241,6 +241,16 @@ enum SshCommand {
         path: String,
         reply: oneshot::Sender<Result<Vec<mobarust_ssh::RemoteEntry>, String>>,
     },
+    OpenTextFile {
+        path: String,
+        reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
+    },
+    SaveTextFile {
+        path: String,
+        expected_revision: String,
+        content: String,
+        reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
+    },
     FileOperation {
         operation: SshFileOperation,
         reply: oneshot::Sender<Result<(), String>>,
@@ -552,6 +562,57 @@ impl SshManager {
         let (reply, response) = oneshot::channel();
         self.sender(terminal_id)?
             .send(SshCommand::ListDirectory { path, reply })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
+    }
+
+    pub async fn open_remote_text_file(
+        &self,
+        terminal_id: &str,
+        path: String,
+    ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
+        let path = validate_remote_file_path(&path)?;
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::OpenTextFile { path, reply })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
+    }
+
+    pub async fn save_remote_text_file(
+        &self,
+        terminal_id: &str,
+        path: String,
+        expected_revision: String,
+        content: String,
+    ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
+        let path = validate_remote_file_path(&path)?;
+        if content.len() > mobarust_ssh::MAX_REMOTE_EDITOR_BYTES {
+            return Err(SshManagerError::InvalidRequest(
+                "remote editor content exceeds the 4 MiB limit".into(),
+            ));
+        }
+        if expected_revision.trim().is_empty() {
+            return Err(SshManagerError::InvalidRequest(
+                "remote editor revision is required".into(),
+            ));
+        }
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::SaveTextFile {
+                path,
+                expected_revision,
+                content,
+                reply,
+            })
             .await
             .map_err(|_| SshManagerError::Closed)?;
         response
@@ -1330,6 +1391,26 @@ async fn run_shell_once(
                             let _ = reply.send(result);
                         });
                     }
+                    Some(SshCommand::OpenTextFile { path, reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = read_remote_text_file(&operation_connection, path).await;
+                            let _ = reply.send(result);
+                        });
+                    }
+                    Some(SshCommand::SaveTextFile { path, expected_revision, content, reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = save_remote_text_file(
+                                &operation_connection,
+                                path,
+                                expected_revision,
+                                content,
+                            )
+                            .await;
+                            let _ = reply.send(result);
+                        });
+                    }
                     Some(SshCommand::FileOperation { operation, reply }) => {
                         let operation_connection = Arc::clone(connection);
                         tauri::async_runtime::spawn(async move {
@@ -1394,6 +1475,38 @@ async fn list_remote_directory(
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp.read_dir(path).await.map_err(|error| error.to_string());
+    let _ = sftp.close().await;
+    result
+}
+
+async fn read_remote_text_file(
+    connection: &SshConnection,
+    path: String,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    let sftp = open_sftp_with_timeout(connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = sftp
+        .read_text_document(path)
+        .await
+        .map_err(|error| error.to_string());
+    let _ = sftp.close().await;
+    result
+}
+
+async fn save_remote_text_file(
+    connection: &SshConnection,
+    path: String,
+    expected_revision: String,
+    content: String,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    let sftp = open_sftp_with_timeout(connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = sftp
+        .save_text_document(path, &expected_revision, &content)
+        .await
+        .map_err(|error| error.to_string());
     let _ = sftp.close().await;
     result
 }

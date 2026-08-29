@@ -34,6 +34,7 @@ The first working slice provides:
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
 - persistent terminal tabs and two-pane splits for simultaneous local, SSH, Telnet, and serial sessions, with per-tab event routing and lifecycle cleanup;
+- a bounded UTF-8 remote text editor with SHA-256 conflict detection, mode preservation, and rollback-safe temporary-file promotion;
 - an explicit SSH tunnel manager for bounded local forwarding, remote `-R` forwarding, and local SOCKS5 `-D`, with direction-aware lifecycle events and stop controls;
 - a local quality command: `cargo xtask check`.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and

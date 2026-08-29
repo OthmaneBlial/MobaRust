@@ -298,6 +298,15 @@ type RemoteEntry = {
   modifiedUnixSeconds?: number | null;
 };
 
+type RemoteTextDocument = {
+  path: string;
+  content: string;
+  revision: string;
+  size: number;
+  modifiedUnixSeconds?: number | null;
+  permissions?: number | null;
+};
+
 type TransferProtocol = "sftp" | "scp";
 
 type TransferState = "queued" | "preparing" | "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
@@ -588,6 +597,7 @@ function App() {
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
+  const [editingRemoteFile, setEditingRemoteFile] = useState<RemoteTextDocument | null>(null);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
   const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
@@ -1026,6 +1036,34 @@ function App() {
     setRemotePath(path);
     void loadRemoteDirectory(path);
   }, [loadRemoteDirectory]);
+
+  const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
+    if (!remoteSessionId || entry.isDirectory) return;
+    try {
+      const document = await invoke<RemoteTextDocument>("ssh_open_remote_text_file", {
+        terminalId: remoteSessionId,
+        path: entry.path,
+      });
+      setEditingRemoteFile(document);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Remote file could not be opened: ${String(error)}`);
+    }
+  }, [remoteSessionId]);
+
+  const saveRemoteTextFile = useCallback(async (content: string) => {
+    if (!remoteSessionId || !editingRemoteFile) return;
+    const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file", {
+      terminalId: remoteSessionId,
+      path: editingRemoteFile.path,
+      expectedRevision: editingRemoteFile.revision,
+      content,
+    });
+    setEditingRemoteFile(saved);
+    setConnectionError(null);
+    setSessionNotice(`Saved ${saved.path}. Remote changes were checked before temporary-file promotion.`);
+    void loadRemoteDirectory(remotePath);
+  }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
 
   const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
@@ -1601,7 +1639,7 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "diagnostics" ? (
@@ -1638,6 +1676,7 @@ function App() {
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
       {credentialsOpen && <CredentialVaultModal onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} />}
+      {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
     </main>
   );
@@ -1747,7 +1786,7 @@ function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, on
   return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><div className="session-row-actions">{onEdit && <button className="session-action" onClick={onEdit} aria-label={`Edit ${name}`} title="Edit session"><Pencil size={12} /></button>}{onDelete && <button className="session-action danger" onClick={onDelete} aria-label={`Delete ${name}`} title="Delete session"><Trash2 size={12} /></button>}<button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div></div>;
 }
 
-function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onCancelTransfer }: {
+function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onEdit, onCancelTransfer }: {
   entries: RemoteEntry[];
   path: string;
   status: "idle" | "loading" | "ready" | "error";
@@ -1759,6 +1798,7 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
   onCreateDirectory: () => void;
   onRename: (entry: RemoteEntry) => void;
   onDelete: (entry: RemoteEntry) => void;
+  onEdit: (entry: RemoteEntry) => void;
   onCancelTransfer: (transferId: string) => void;
 }) {
   const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
@@ -1782,6 +1822,7 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
+        {!entry.isDirectory && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
         <button className="remote-file-action danger" onClick={() => onDelete(entry)} title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}><Trash2 size={14} /></button>
       </div>)}
@@ -1790,6 +1831,40 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
     {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />}
     <div className="remote-files-note">SFTP is the default and supports bounded recursive transfers. SCP is available for single-file compatibility transfers; directories always use SFTP. Individual files commit from temporary local or remote paths, and cancellation never presents a partial local file as complete.</div>
   </section>;
+}
+
+function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string) => Promise<void> }) {
+  const [content, setContent] = useState(document.content);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dirty = content !== document.content;
+  const lineCount = content.split(/\r?\n/).length;
+
+  const close = () => {
+    if (dirty && !window.confirm("Discard unsaved remote changes?")) return;
+    onClose();
+  };
+
+  const save = async () => {
+    if (!dirty) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(content);
+    } catch (saveError) {
+      setError(String(saveError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={close}><section className="remote-editor-modal" role="dialog" aria-modal="true" aria-label={`Edit ${document.path}`} onMouseDown={(event) => event.stopPropagation()}>
+    <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / UTF-8</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close}><X size={17} /></button></div>
+    <div className="remote-editor-toolbar"><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div>
+    {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error}</span></div>}
+    <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" />
+    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
+  </section></div>;
 }
 
 function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {

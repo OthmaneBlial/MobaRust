@@ -180,6 +180,36 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("remove fixture file");
         assert!(!sftp.try_exists(&renamed_path).await.expect("check removal"));
+
+        let editor_source = fixture.directory.path().join("editor-source.txt");
+        fs::write(&editor_source, "before\neditor fixture\n").expect("write editor source");
+        let editor_path = format!("/tmp/mobarust-editor-{}.txt", std::process::id());
+        sftp.upload_from(
+            tokio::fs::File::open(&editor_source)
+                .await
+                .expect("open editor source"),
+            &editor_path,
+        )
+        .await
+        .expect("upload editor fixture");
+        let document = sftp
+            .read_text_document(&editor_path)
+            .await
+            .expect("read bounded remote text document");
+        assert_eq!(document.content, "before\neditor fixture\n");
+        let saved = sftp
+            .save_text_document(&editor_path, &document.revision, "after\n")
+            .await
+            .expect("atomically save remote text document");
+        assert_eq!(saved.content, "after\n");
+        assert!(matches!(
+            sftp.save_text_document(&editor_path, &document.revision, "stale\n")
+                .await,
+            Err(SshError::RemoteConflict)
+        ));
+        sftp.remove_file(&editor_path)
+            .await
+            .expect("remove editor fixture");
         sftp.close().await.expect("close SFTP subsystem");
 
         let scp_remote_path = format!("/tmp/mobarust-scp-{}", std::process::id());

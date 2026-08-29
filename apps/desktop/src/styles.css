@@ -71,6 +71,15 @@ button:not(:disabled) { cursor: pointer; }
 .remote-file-main small { overflow: hidden; color: var(--faint); font-size: 8px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .remote-file-action { display: grid; flex: 0 0 34px; place-items: center; min-height: 42px; border: 0; border-left: 1px solid rgba(193, 214, 195, .07); background: transparent; color: var(--faint); }
 .remote-file-action:hover, .transfer-cancel:hover { background: rgba(232, 180, 92, .1); color: var(--amber); }
+.remote-editor-modal { display: flex; flex-direction: column; width: min(1000px, calc(100vw - 40px)); height: min(760px, calc(100vh - 48px)); padding: 22px; border: 1px solid var(--line-strong); background: #121a18; box-shadow: 0 25px 80px rgba(0, 0, 0, .45); }
+.remote-editor-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; color: var(--faint); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+.remote-editor-dirty { color: var(--amber); }
+.remote-editor-error { flex-direction: row; align-items: flex-start; margin-bottom: 10px; }
+.remote-editor-error span { color: var(--muted); }
+.remote-editor-textarea { flex: 1; min-height: 0; width: 100%; padding: 14px; border: 1px solid var(--line); outline: 0; resize: none; background: #0b100f; color: var(--text); font-family: var(--mono); font-size: 11px; line-height: 1.55; tab-size: 4; white-space: pre; }
+.remote-editor-textarea:focus { border-color: rgba(232, 180, 92, .6); }
+.remote-editor-safety { display: inline-flex; align-items: center; gap: 6px; color: var(--mint); font-family: var(--mono); font-size: 8px; }
+.app-shell.theme-light .remote-editor-modal { background: #ffffff; }.app-shell.theme-light .remote-editor-textarea { background: #f8faf6; }
 .transfer-panel { border-top: 1px solid var(--line); background: rgba(7, 11, 10, .2); }
 .transfer-panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px 8px; color: var(--faint); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
 .transfer-panel-heading .eyebrow { font-size: 8px; }

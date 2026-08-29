@@ -559,6 +559,32 @@ async fn ssh_list_directory(
 }
 
 #[tauri::command]
+async fn ssh_open_remote_text_file(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    manager
+        .open_remote_text_file(&terminal_id, path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_save_remote_text_file(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+    expected_revision: String,
+    content: String,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    manager
+        .save_remote_text_file(&terminal_id, path, expected_revision, content)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_rename_remote(
     manager: State<'_, SshManager>,
     terminal_id: String,
@@ -886,6 +912,8 @@ fn main() {
             ssh_close,
             ssh_attach,
             ssh_list_directory,
+            ssh_open_remote_text_file,
+            ssh_save_remote_text_file,
             ssh_rename_remote,
             ssh_delete_remote,
             ssh_create_remote_directory,

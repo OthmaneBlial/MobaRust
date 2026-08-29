@@ -12,6 +12,7 @@ use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
@@ -58,6 +59,12 @@ pub enum SshError {
     Channel(#[source] russh::Error),
     #[error("SFTP operation failed: {0}")]
     Sftp(String),
+    #[error("remote file changed since it was opened")]
+    RemoteConflict,
+    #[error("remote text file exceeds the 4 MiB editor limit")]
+    RemoteFileTooLarge,
+    #[error("remote file is not valid UTF-8 text")]
+    RemoteFileNotUtf8,
     #[error("SCP operation failed: {0}")]
     Scp(String),
     #[error("local file operation failed: {0}")]
@@ -653,6 +660,9 @@ impl SshConnection {
                 .await?;
             copied += read as u64;
             on_progress(copied);
+            if cancel.try_recv().is_ok() {
+                return Err(SshError::Cancelled);
+            }
         }
         channel.write_bytes_with_cancel(vec![0], cancel).await?;
         channel.read_ack_with_cancel(cancel).await?;
@@ -712,6 +722,9 @@ impl SshConnection {
             copied += read as u64;
             remaining -= read as u64;
             on_progress(copied, size);
+            if cancel.try_recv().is_ok() {
+                return Err(SshError::Cancelled);
+            }
         }
         tokio::select! {
             _ = &mut *cancel => return Err(SshError::Cancelled),
@@ -1153,6 +1166,19 @@ pub struct SftpConnection {
     session: russh_sftp::client::SftpSession,
 }
 
+pub const MAX_REMOTE_EDITOR_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTextDocument {
+    pub path: String,
+    pub content: String,
+    pub revision: String,
+    pub size: u64,
+    pub modified_unix_seconds: Option<u64>,
+    pub permissions: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteEntry {
@@ -1203,6 +1229,154 @@ impl SftpConnection {
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         Ok((metadata.len(), metadata.is_dir()))
+    }
+
+    /// Read a bounded UTF-8 document together with a content revision. The
+    /// bound keeps the editor path from becoming an accidental large-file
+    /// transfer mechanism.
+    pub async fn read_text_document(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<RemoteTextDocument, SshError> {
+        let path = path.into();
+        let metadata = self
+            .session
+            .metadata(&path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        if metadata.is_dir() {
+            return Err(SshError::Sftp("remote path is a directory".into()));
+        }
+        if metadata.len() > MAX_REMOTE_EDITOR_BYTES as u64 {
+            return Err(SshError::RemoteFileTooLarge);
+        }
+        let mut file = self
+            .session
+            .open(&path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        let mut limited = (&mut file).take((MAX_REMOTE_EDITOR_BYTES + 1) as u64);
+        let result = limited
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        let close_result = file
+            .close()
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        result?;
+        close_result?;
+        if bytes.len() > MAX_REMOTE_EDITOR_BYTES {
+            return Err(SshError::RemoteFileTooLarge);
+        }
+        let content = String::from_utf8(bytes).map_err(|_| SshError::RemoteFileNotUtf8)?;
+        Ok(RemoteTextDocument {
+            path,
+            revision: text_revision(content.as_bytes()),
+            size: content.len() as u64,
+            modified_unix_seconds: metadata.mtime.map(u64::from),
+            permissions: metadata.permissions,
+            content,
+        })
+    }
+
+    /// Replace a document through a remote temporary file after rechecking
+    /// the content revision. The original mode is reapplied before a
+    /// rollback-safe promotion. SFTP servers without POSIX rename semantics
+    /// cannot guarantee a zero-gap replacement, so that limitation is kept
+    /// explicit instead of being hidden behind an atomicity claim.
+    pub async fn save_text_document(
+        &self,
+        path: impl Into<String>,
+        expected_revision: &str,
+        content: &str,
+    ) -> Result<RemoteTextDocument, SshError> {
+        if content.len() > MAX_REMOTE_EDITOR_BYTES {
+            return Err(SshError::RemoteFileTooLarge);
+        }
+        let path = path.into();
+        let current = self.read_text_document(path.clone()).await?;
+        if current.revision != expected_revision {
+            return Err(SshError::RemoteConflict);
+        }
+        let temporary = format!(
+            "{path}.mobarust-edit-{}-{}",
+            std::process::id(),
+            next_editor_temp_id()
+        );
+        let mut file = self
+            .session
+            .create(&temporary)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let write_result = file
+            .write_all(content.as_bytes())
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        let close_result = file
+            .shutdown()
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        if let Err(error) = write_result {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(error);
+        }
+        if let Err(error) = close_result {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(error);
+        }
+        if let Some(permissions) = current.permissions {
+            let mut metadata = russh_sftp::client::fs::Metadata::empty();
+            metadata.permissions = Some(permissions);
+            let file = match self.session.open(&temporary).await {
+                Ok(file) => file,
+                Err(error) => {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(SshError::Sftp(error.to_string()));
+                }
+            };
+            let set_result = file
+                .set_metadata(metadata)
+                .await
+                .map_err(|error| SshError::Sftp(error.to_string()));
+            let close_result = file
+                .close()
+                .await
+                .map_err(|error| SshError::Sftp(error.to_string()));
+            if let Err(error) = set_result {
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(error);
+            }
+            if let Err(error) = close_result {
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(error);
+            }
+        }
+
+        // Some SFTP servers reject rename-over-existing. Move the original to
+        // a unique rollback name first, then promote the complete temporary
+        // file. If promotion fails, restore the original before returning.
+        let backup = format!(
+            "{path}.mobarust-edit-backup-{}-{}",
+            std::process::id(),
+            next_editor_temp_id()
+        );
+        if let Err(error) = self.session.rename(&path, &backup).await {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(SshError::Sftp(error.to_string()));
+        }
+        if let Err(error) = self.session.rename(&temporary, &path).await {
+            let _ = self.session.rename(&backup, &path).await;
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(SshError::Sftp(error.to_string()));
+        }
+        if let Err(error) = self.session.remove_file(&backup).await {
+            return Err(SshError::Sftp(format!(
+                "remote file saved but backup cleanup failed: {error}"
+            )));
+        }
+        self.read_text_document(path).await
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
@@ -1343,6 +1517,22 @@ impl SftpConnection {
     }
 }
 
+fn text_revision(content: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(content);
+    let mut revision = String::from("sha256:");
+    for byte in digest {
+        let _ = write!(revision, "{byte:02x}");
+    }
+    revision
+}
+
+fn next_editor_temp_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 async fn copy_with_cancel<R, W, F>(
     source: &mut R,
     destination: &mut W,
@@ -1373,6 +1563,9 @@ where
         }
         copied += read as u64;
         on_progress(copied);
+        if cancel.try_recv().is_ok() {
+            return Err(SshError::Cancelled);
+        }
     }
 
     tokio::select! {
@@ -1548,6 +1741,16 @@ mod tests {
                 Err(Socks5Error::NoUnauthenticatedMethod)
             ));
         });
+    }
+
+    #[test]
+    fn remote_text_revisions_are_stable_and_content_bound() {
+        let first = text_revision(b"line one\n");
+        let second = text_revision(b"line one\n");
+        let changed = text_revision(b"line two\n");
+        assert_eq!(first, second);
+        assert_ne!(first, changed);
+        assert!(first.starts_with("sha256:"));
     }
 
     fn accepted_fingerprint(policy: &HostKeyPolicy, fingerprint: &str) -> Option<bool> {
