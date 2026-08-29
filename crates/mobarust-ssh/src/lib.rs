@@ -40,6 +40,8 @@ pub enum SshError {
     HostKeyRejected { fingerprint: String },
     #[error("SSH authentication was rejected")]
     AuthenticationRejected,
+    #[error("SSH agent authentication failed: {0}")]
+    Agent(String),
     #[error("SSH connection timed out")]
     Timeout,
     #[error("SSH private key could not be loaded: {0}")]
@@ -94,6 +96,9 @@ pub enum SshCredentials {
         path: PathBuf,
         passphrase: Option<Secret>,
     },
+    Agent {
+        username: String,
+    },
 }
 
 impl fmt::Debug for SshCredentials {
@@ -126,9 +131,17 @@ impl SshCredentials {
         }
     }
 
+    pub fn agent(username: impl Into<String>) -> Self {
+        Self::Agent {
+            username: username.into(),
+        }
+    }
+
     fn username(&self) -> &str {
         match self {
-            Self::Password { username, .. } | Self::PrivateKey { username, .. } => username,
+            Self::Password { username, .. }
+            | Self::PrivateKey { username, .. }
+            | Self::Agent { username } => username,
         }
     }
 
@@ -136,6 +149,7 @@ impl SshCredentials {
         match self {
             Self::Password { .. } => "password",
             Self::PrivateKey { .. } => "private-key",
+            Self::Agent { .. } => "agent",
         }
     }
 }
@@ -264,6 +278,9 @@ impl SshConnection {
                     .await
                     .map_err(SshError::Transport)?
             }
+            SshCredentials::Agent { username } => {
+                authenticate_with_agent(&mut handle, username).await?
+            }
         };
 
         if !authentication.success() {
@@ -337,6 +354,74 @@ impl SshConnection {
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         Ok(SftpConnection { session })
     }
+}
+
+#[cfg(unix)]
+async fn authenticate_with_agent(
+    handle: &mut client::Handle<ClientHandler>,
+    username: String,
+) -> Result<client::AuthResult, SshError> {
+    use russh::keys::agent::{AgentIdentity, client::AgentClient};
+
+    let mut agent = AgentClient::connect_env()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+
+    for identity in identities {
+        let authentication = match identity {
+            AgentIdentity::PublicKey { key, .. } => handle
+                .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+                .await
+                .map_err(|error| SshError::Agent(error.to_string()))?,
+            AgentIdentity::Certificate { certificate, .. } => handle
+                .authenticate_certificate_with(username.clone(), certificate, None, &mut agent)
+                .await
+                .map_err(|error| SshError::Agent(error.to_string()))?,
+        };
+        if authentication.success() {
+            return Ok(authentication);
+        }
+    }
+
+    Err(SshError::AuthenticationRejected)
+}
+
+#[cfg(windows)]
+async fn authenticate_with_agent(
+    handle: &mut client::Handle<ClientHandler>,
+    username: String,
+) -> Result<client::AuthResult, SshError> {
+    use russh::keys::agent::{AgentIdentity, client::AgentClient};
+
+    let mut agent = AgentClient::connect_pageant()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|error| SshError::Agent(error.to_string()))?;
+
+    for identity in identities {
+        let authentication = match identity {
+            AgentIdentity::PublicKey { key, .. } => handle
+                .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+                .await
+                .map_err(|error| SshError::Agent(error.to_string()))?,
+            AgentIdentity::Certificate { certificate, .. } => handle
+                .authenticate_certificate_with(username.clone(), certificate, None, &mut agent)
+                .await
+                .map_err(|error| SshError::Agent(error.to_string()))?,
+        };
+        if authentication.success() {
+            return Ok(authentication);
+        }
+    }
+
+    Err(SshError::AuthenticationRejected)
 }
 
 pub struct SshShell {
@@ -582,6 +667,13 @@ mod tests {
         let debug = format!("{credentials:?}");
         assert!(debug.contains("ops"));
         assert!(!debug.contains("do-not-print-me"));
+    }
+
+    #[test]
+    fn agent_credentials_have_no_secret_bearing_debug_fields() {
+        let debug = format!("{:?}", SshCredentials::agent("ops"));
+        assert!(debug.contains("agent"));
+        assert!(debug.contains("ops"));
     }
 
     fn accepted_fingerprint(policy: &HostKeyPolicy, fingerprint: &str) -> Option<bool> {

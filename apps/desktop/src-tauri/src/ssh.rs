@@ -36,6 +36,7 @@ pub struct SshConnectRequest {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum SshAuthRequest {
+    Agent,
     Password {
         credential_id: String,
     },
@@ -212,6 +213,7 @@ fn credentials_from_request(
     request: &SshConnectRequest,
 ) -> Result<SshCredentials, SshManagerError> {
     match &request.auth {
+        SshAuthRequest::Agent => Ok(SshCredentials::agent(&request.username)),
         SshAuthRequest::Password { credential_id } => {
             let id = CredentialId::new(credential_id.clone())?;
             let secret = vault.get(&id)?;
@@ -231,7 +233,7 @@ fn credentials_from_request(
                 .transpose()?;
             Ok(SshCredentials::private_key(
                 &request.username,
-                PathBuf::from(path),
+                expand_user_path(path),
                 passphrase,
             ))
         }
@@ -243,13 +245,25 @@ fn host_key_policy(request: &SshConnectRequest) -> Result<HostKeyPolicy, SshMana
         (Some(_), Some(_)) => Err(SshManagerError::InvalidRequest(
             "choose known_hosts or a pinned fingerprint, not both".into(),
         )),
-        (Some(path), None) => Ok(HostKeyPolicy::KnownHosts(PathBuf::from(path))),
+        (Some(path), None) => Ok(HostKeyPolicy::KnownHosts(expand_user_path(path))),
         (None, Some(fingerprint)) if fingerprint.trim().is_empty() => Err(
             SshManagerError::InvalidRequest("pinned fingerprint cannot be empty".into()),
         ),
         (None, Some(fingerprint)) => Ok(HostKeyPolicy::PinnedFingerprint(fingerprint.clone())),
         (None, None) => Ok(HostKeyPolicy::default()),
     }
+}
+
+fn expand_user_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return std::env::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(relative) = path.strip_prefix("~/")
+        && let Some(home) = std::env::home_dir()
+    {
+        return home.join(relative);
+    }
+    PathBuf::from(path)
 }
 
 async fn run_remote_session(
