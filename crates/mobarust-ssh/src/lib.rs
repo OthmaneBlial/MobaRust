@@ -384,6 +384,32 @@ impl SshConnection {
         session.set_timeout(12);
         Ok(SftpConnection { session })
     }
+
+    /// Opens one SSH direct-tcpip channel for local port forwarding. The
+    /// caller owns the local listener and the lifecycle of the returned
+    /// bidirectional stream.
+    pub async fn open_direct_tcpip(
+        &self,
+        target_host: impl Into<String>,
+        target_port: u32,
+    ) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        if target_port == 0 {
+            return Err(SshError::InvalidOptions);
+        }
+        let target_host = target_host.into();
+        if target_host.trim().is_empty() {
+            return Err(SshError::InvalidOptions);
+        }
+        let channel = tokio::time::timeout(
+            Duration::from_secs(12),
+            self.handle
+                .channel_open_direct_tcpip(target_host, target_port, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|_| SshError::Timeout)?
+        .map_err(SshError::Channel)?;
+        Ok(channel.into_stream())
+    }
 }
 
 #[cfg(unix)]

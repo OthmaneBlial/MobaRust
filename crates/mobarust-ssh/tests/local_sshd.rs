@@ -8,7 +8,8 @@ use std::time::Duration;
 use mobarust_ssh::{
     HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
 };
-use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 #[test]
@@ -180,6 +181,40 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("remove fixture file");
         assert!(!sftp.try_exists(&renamed_path).await.expect("check removal"));
         sftp.close().await.expect("close SFTP subsystem");
+
+        let echo_listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind direct-tcpip echo fixture");
+        let echo_port = echo_listener.local_addr().expect("read echo port").port();
+        let echo_task = tokio::spawn(async move {
+            let (mut socket, _) = echo_listener.accept().await.expect("accept echo client");
+            let mut payload = [0_u8; 13];
+            socket
+                .read_exact(&mut payload)
+                .await
+                .expect("read echo payload");
+            socket
+                .write_all(&payload)
+                .await
+                .expect("write echo payload");
+        });
+        let mut forwarded = connection
+            .open_direct_tcpip("127.0.0.1", u32::from(echo_port))
+            .await
+            .expect("open SSH direct-tcpip channel");
+        forwarded
+            .write_all(b"MOBARUST_TUNL")
+            .await
+            .expect("write through direct-tcpip channel");
+        let mut response = [0_u8; 13];
+        tokio::time::timeout(Duration::from_secs(5), forwarded.read_exact(&mut response))
+            .await
+            .expect("direct-tcpip response timeout")
+            .expect("read through direct-tcpip channel");
+        assert_eq!(&response, b"MOBARUST_TUNL");
+        drop(forwarded);
+        echo_task.await.expect("join echo fixture");
+
         connection
             .disconnect()
             .await

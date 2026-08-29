@@ -119,6 +119,21 @@ type SshTransferEvent = {
   error?: string | null;
 };
 
+type TunnelState = "listening" | "running" | "stopping" | "stopped" | "failed";
+
+type SshTunnelEvent = {
+  tunnelId: string;
+  terminalId: string;
+  localHost: string;
+  localPort: number;
+  targetHost: string;
+  targetPort: number;
+  state: TunnelState;
+  connections: number;
+  bytesForwarded: number;
+  error?: string | null;
+};
+
 const previewSessions: SessionListItem[] = [
   { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true },
   { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false },
@@ -288,6 +303,7 @@ function App() {
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
+  const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
@@ -460,9 +476,66 @@ function App() {
     }
   }, []);
 
+  const startLocalForward = useCallback(async () => {
+    if (!remoteSessionId) return;
+    const targetHost = window.prompt("Remote target host", "127.0.0.1");
+    if (!targetHost?.trim()) return;
+    const targetPortValue = window.prompt("Remote target port", "5432");
+    const targetPort = Number(targetPortValue);
+    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+      setConnectionError("Target port must be an integer between 1 and 65535.");
+      return;
+    }
+    const bindHost = window.prompt("Local bind host", "127.0.0.1");
+    if (!bindHost?.trim()) return;
+    const bindPortValue = window.prompt("Local bind port (0 chooses a free port)", "0");
+    const bindPort = Number(bindPortValue);
+    if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
+      setConnectionError("Local bind port must be an integer between 0 and 65535.");
+      return;
+    }
+    try {
+      await invoke("ssh_start_local_forward", {
+        terminalId: remoteSessionId,
+        request: { bindHost: bindHost.trim(), bindPort, targetHost: targetHost.trim(), targetPort },
+      });
+      setConnectionError(null);
+      setActiveView("tunnels");
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [remoteSessionId]);
+
+  const cancelTunnel = useCallback(async (tunnelId: string) => {
+    try {
+      await invoke("ssh_cancel_tunnel", { tunnelId });
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<SshTunnelEvent>("ssh://tunnel", (event) => {
+      setTunnels((current) => {
+        const next = current.filter((tunnel) => tunnel.tunnelId !== event.payload.tunnelId);
+        return [...next, event.payload].slice(-20);
+      });
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -519,6 +592,7 @@ function App() {
   const localSessionCount = sessionRows.filter((session) => session.type === "LOCAL").length;
   const remoteSessionCount = sessionRows.filter((session) => session.type !== "LOCAL").length;
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
+  const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
@@ -595,7 +669,7 @@ function App() {
 
           <div className="sidebar-footer">
             <div className="security-note"><ShieldCheck size={15} /><span><strong>Secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
-            <button className="nav-item"><Network size={15} /> Tunnel manager</button>
+            <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
         </aside>
@@ -625,7 +699,7 @@ function App() {
               <div className="view-tabs" role="tablist" aria-label="Workspace views">
                 <button className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
                 <button className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
-                <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">0</span></button>
+                <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
               </div>
 
               {activeView === "terminal" ? (
@@ -639,8 +713,10 @@ function App() {
                 </section>
               ) : activeView === "files" && remoteSessionId ? (
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
+              ) : activeView === "tunnels" && remoteSessionId ? (
+                <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onCancelTunnel={cancelTunnel} />
               ) : (
-                <EmptyProtocolView view={activeView} />
+                <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" ? () => setQuickConnectOpen(true) : undefined} />
               )}
 
               <div className="lower-grid">
@@ -759,15 +835,35 @@ function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransfer
   })}</section>;
 }
 
+function TunnelView({ tunnels, onNewTunnel, onCancelTunnel }: { tunnels: SshTunnelEvent[]; onNewTunnel: () => void; onCancelTunnel: (tunnelId: string) => void }) {
+  return <section className="tunnel-view" aria-label="SSH tunnel manager">
+    <div className="tunnel-view-toolbar">
+      <div><span className="eyebrow">SSH / LOCAL FORWARDING</span><strong>Port forwarding</strong><p>Expose a service reachable from the SSH host on a bounded local listener.</p></div>
+      <button className="primary-button" onClick={onNewTunnel}><Plus size={14} /> New local forward</button>
+    </div>
+    <div className="tunnel-view-meta"><span>{tunnels.length} recent tunnel{tunnels.length === 1 ? "" : "s"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native direct-tcpip · max 16 clients</span></div>
+    {tunnels.length === 0 ? <div className="tunnel-empty"><Network size={19} /><strong>No tunnels yet</strong><span>Create a local forward to reach a private service through this SSH session.</span><button className="outline-button" onClick={onNewTunnel}><Plus size={14} /> Create tunnel</button></div> : <div className="tunnel-list">{tunnels.slice().reverse().map((tunnel) => {
+      const active = !["stopped", "failed"].includes(tunnel.state);
+      const stateIcon = tunnel.state === "failed" ? <CircleX size={15} /> : tunnel.state === "stopped" ? <CheckCircle2 size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />;
+      return <article className={`tunnel-row tunnel-${tunnel.state}`} key={tunnel.tunnelId}>
+        <div className="tunnel-row-icon">{stateIcon}</div>
+        <div className="tunnel-row-copy"><div className="tunnel-endpoints"><strong>{tunnel.localHost}:{tunnel.localPort}</strong><span>→</span><strong>{tunnel.targetHost}:{tunnel.targetPort}</strong></div><small>{tunnel.state} · {tunnel.connections} connection{tunnel.connections === 1 ? "" : "s"} · {formatBytes(tunnel.bytesForwarded)} forwarded</small>{tunnel.error && <small className="tunnel-error">{tunnel.error}</small>}</div>
+        {active && <button className="transfer-cancel" onClick={() => onCancelTunnel(tunnel.tunnelId)} aria-label="Stop tunnel" title="Stop tunnel"><CircleX size={14} /></button>}
+      </article>;
+    })}</div>}
+    <div className="tunnel-view-note">Local forwarding listens only on the bind address you choose. The remote target is resolved from the SSH server, and tunnel output is not interpreted as terminal HTML.</div>
+  </section>;
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EmptyProtocolView({ view }: { view: Exclude<View, "terminal"> }) {
+function EmptyProtocolView({ view, onAction }: { view: Exclude<View, "terminal">; onAction?: () => void }) {
   const isFiles = view === "files";
-  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p><button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button></section>;
+  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
 }
 
 function InfoCard({ icon: Icon, label, title, detail, action }: { icon: LucideIcon; label: string; title: string; detail: string; action: string }) {

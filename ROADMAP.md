@@ -29,7 +29,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## 0.4 — network workstation
 
-- [ ] Local, remote, and dynamic SSH forwarding
+- [x] Local SSH forwarding through native direct-tcpip channels with bounded clients and cancellation
+- [ ] Remote and dynamic SSH forwarding
 - [ ] Jump hosts and multi-hop chains
 - [ ] Session folders, tags, search, favorites, editing, and import/export
 - [x] OS credential vault abstraction

@@ -11,9 +11,13 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
+use tokio::io::copy_bidirectional;
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
@@ -42,11 +46,13 @@ pub struct SshConnectRequest {
 pub enum SshAuthRequest {
     Agent,
     Password {
+        #[serde(rename = "credentialId", alias = "credential_id")]
         credential_id: String,
     },
     PrivateKey {
         path: String,
         #[serde(default)]
+        #[serde(rename = "passphraseCredentialId", alias = "passphrase_credential_id")]
         passphrase_credential_id: Option<String>,
     },
 }
@@ -71,6 +77,49 @@ pub struct SshTransferRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SshTransferResponse {
     pub transfer_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshLocalForwardRequest {
+    #[serde(default = "default_bind_host")]
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTunnelResponse {
+    pub tunnel_id: String,
+    pub bind_host: String,
+    pub bind_port: u16,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum TunnelState {
+    Listening,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshTunnelEvent {
+    tunnel_id: String,
+    terminal_id: String,
+    local_host: String,
+    local_port: u16,
+    target_host: String,
+    target_port: u16,
+    state: TunnelState,
+    connections: usize,
+    bytes_forwarded: u64,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -122,6 +171,9 @@ enum SshCommand {
         operation: SshFileOperation,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    StartLocalForward {
+        job: LocalForwardJob,
+    },
     StartTransfer {
         job: TransferJob,
     },
@@ -152,6 +204,7 @@ pub enum SshManagerError {
 pub struct SshManager {
     sessions: Arc<Mutex<HashMap<String, SessionState>>>,
     transfers: Arc<Mutex<HashMap<String, TransferControl>>>,
+    tunnels: Arc<Mutex<HashMap<String, TunnelControl>>>,
     transfer_slots: Arc<Semaphore>,
 }
 
@@ -160,6 +213,7 @@ impl Default for SshManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             transfers: Arc::new(Mutex::new(HashMap::new())),
+            tunnels: Arc::new(Mutex::new(HashMap::new())),
             transfer_slots: Arc::new(Semaphore::new(3)),
         }
     }
@@ -174,6 +228,45 @@ struct SessionState {
 struct TransferControl {
     terminal_id: String,
     cancel: oneshot::Sender<()>,
+}
+
+struct TunnelControl {
+    terminal_id: String,
+    cancel: watch::Sender<bool>,
+}
+
+struct LocalForwardJob {
+    tunnel_id: String,
+    terminal_id: String,
+    bind_host: String,
+    bind_port: u16,
+    target_host: String,
+    target_port: u16,
+    listener: TcpListener,
+    cancel: watch::Receiver<bool>,
+}
+
+impl LocalForwardJob {
+    fn event(
+        &self,
+        state: TunnelState,
+        connections: usize,
+        bytes_forwarded: u64,
+        error: Option<String>,
+    ) -> SshTunnelEvent {
+        SshTunnelEvent {
+            tunnel_id: self.tunnel_id.clone(),
+            terminal_id: self.terminal_id.clone(),
+            local_host: self.bind_host.clone(),
+            local_port: self.bind_port,
+            target_host: self.target_host.clone(),
+            target_port: self.target_port,
+            state,
+            connections,
+            bytes_forwarded,
+            error,
+        }
+    }
 }
 
 struct TransferJob {
@@ -363,6 +456,104 @@ impl SshManager {
             .map_err(SshManagerError::InvalidRequest)
     }
 
+    pub async fn start_local_forward(
+        &self,
+        app: AppHandle,
+        terminal_id: String,
+        request: SshLocalForwardRequest,
+    ) -> Result<SshTunnelResponse, SshManagerError> {
+        let sender = self.sender(&terminal_id)?;
+        let bind_host = if request.bind_host.trim().is_empty() {
+            default_bind_host().to_owned()
+        } else {
+            request.bind_host.trim().to_owned()
+        };
+        let target_host = request.target_host.trim().to_owned();
+        if target_host.is_empty() || target_host.contains('\0') || request.target_port == 0 {
+            return Err(SshManagerError::InvalidRequest(
+                "tunnel target host and port are required".into(),
+            ));
+        }
+        if bind_host.contains('\0') {
+            return Err(SshManagerError::InvalidRequest(
+                "tunnel bind host cannot contain NUL".into(),
+            ));
+        }
+        let listener = TcpListener::bind((bind_host.as_str(), request.bind_port))
+            .await
+            .map_err(|error| {
+                SshManagerError::InvalidRequest(format!(
+                    "could not bind local tunnel listener: {error}"
+                ))
+            })?;
+        let local_port = listener
+            .local_addr()
+            .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?
+            .port();
+        let tunnel_id = Uuid::new_v4().to_string();
+        let (cancel, cancel_receiver) = watch::channel(false);
+        self.tunnels
+            .lock()
+            .map_err(|_| SshManagerError::Closed)?
+            .insert(
+                tunnel_id.clone(),
+                TunnelControl {
+                    terminal_id: terminal_id.clone(),
+                    cancel,
+                },
+            );
+        self.emit_tunnel(
+            &app,
+            SshTunnelEvent {
+                tunnel_id: tunnel_id.clone(),
+                terminal_id: terminal_id.clone(),
+                local_host: bind_host.clone(),
+                local_port,
+                target_host: target_host.clone(),
+                target_port: request.target_port,
+                state: TunnelState::Listening,
+                connections: 0,
+                bytes_forwarded: 0,
+                error: None,
+            },
+        );
+        let command = SshCommand::StartLocalForward {
+            job: LocalForwardJob {
+                tunnel_id: tunnel_id.clone(),
+                terminal_id: terminal_id.clone(),
+                bind_host: bind_host.clone(),
+                bind_port: local_port,
+                target_host: target_host.clone(),
+                target_port: request.target_port,
+                listener,
+                cancel: cancel_receiver,
+            },
+        };
+        if sender.send(command).await.is_err() {
+            self.finish_tunnel(&tunnel_id);
+            return Err(SshManagerError::Closed);
+        }
+        Ok(SshTunnelResponse {
+            tunnel_id,
+            bind_host,
+            bind_port: local_port,
+        })
+    }
+
+    pub fn cancel_tunnel(&self, tunnel_id: &str) -> Result<bool, SshManagerError> {
+        let control = self
+            .tunnels
+            .lock()
+            .map_err(|_| SshManagerError::Closed)?
+            .remove(tunnel_id);
+        if let Some(control) = control {
+            let _ = control.cancel.send(true);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub async fn start_download(
         &self,
         app: AppHandle,
@@ -507,6 +698,21 @@ impl SshManager {
         for control in transfers {
             let _ = control.cancel.send(());
         }
+        let tunnels = if let Ok(mut tunnels) = self.tunnels.lock() {
+            let ids = tunnels
+                .iter()
+                .filter(|(_, control)| control.terminal_id == terminal_id)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            ids.into_iter()
+                .filter_map(|id| tunnels.remove(&id))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        for control in tunnels {
+            let _ = control.cancel.send(true);
+        }
     }
 
     fn finish_transfer(&self, transfer_id: &str) {
@@ -515,8 +721,18 @@ impl SshManager {
         }
     }
 
+    fn finish_tunnel(&self, tunnel_id: &str) {
+        if let Ok(mut tunnels) = self.tunnels.lock() {
+            tunnels.remove(tunnel_id);
+        }
+    }
+
     fn emit_transfer(&self, app: &AppHandle, event: SshTransferEvent) {
         let _ = app.emit("sftp://transfer", event);
+    }
+
+    fn emit_tunnel(&self, app: &AppHandle, event: SshTunnelEvent) {
+        let _ = app.emit("ssh://tunnel", event);
     }
 }
 
@@ -633,6 +849,15 @@ async fn run_remote_session(
                             let _ = reply.send(result);
                         });
                     }
+                    Some(SshCommand::StartLocalForward { job }) => {
+                        let tunnel_manager = manager.clone();
+                        let tunnel_connection = Arc::clone(&connection);
+                        let tunnel_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_local_forward(tunnel_app, tunnel_manager, tunnel_connection, job)
+                                .await;
+                        });
+                    }
                     Some(SshCommand::StartTransfer { job }) => {
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(&connection);
@@ -709,6 +934,92 @@ async fn run_file_operation(
     let close_result = sftp.close().await;
     result?;
     close_result.map_err(|error| error.to_string())
+}
+
+async fn run_local_forward(
+    app: AppHandle,
+    manager: SshManager,
+    connection: Arc<SshConnection>,
+    mut job: LocalForwardJob,
+) {
+    const MAX_CONNECTIONS: usize = 16;
+    let mut connections = 0_usize;
+    let mut bytes_forwarded = 0_u64;
+    let mut failed = false;
+    let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
+
+    manager.emit_tunnel(
+        &app,
+        job.event(TunnelState::Running, connections, bytes_forwarded, None),
+    );
+
+    loop {
+        tokio::select! {
+            changed = job.cancel.changed() => {
+                if changed.is_err() || *job.cancel.borrow() {
+                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    break;
+                }
+            }
+            worker = workers.join_next(), if !workers.is_empty() => {
+                if let Some(result) = worker {
+                    match result {
+                        Ok(Ok((uploaded, downloaded))) => {
+                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        }
+                        Ok(Err(error)) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                        }
+                        Err(error) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                        }
+                    }
+                }
+            }
+            accepted = job.listener.accept() => {
+                match accepted {
+                    Ok((mut local, _peer)) => {
+                        if workers.len() >= MAX_CONNECTIONS {
+                            drop(local);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("tunnel connection limit reached".into())));
+                            continue;
+                        }
+                        connections = connections.saturating_add(1);
+                        let connection = Arc::clone(&connection);
+                        let target_host = job.target_host.clone();
+                        let target_port = job.target_port;
+                        let mut cancel = job.cancel.clone();
+                        workers.spawn(async move {
+                            let mut remote = connection
+                                .open_direct_tcpip(target_host, u32::from(target_port))
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            tokio::select! {
+                                _ = cancel.changed() => Err("tunnel connection cancelled".into()),
+                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                            }
+                        });
+                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                    }
+                    Err(error) => {
+                        failed = true;
+                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("local tunnel listener failed: {error}"))));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    workers.shutdown().await;
+    if !failed {
+        manager.emit_tunnel(
+            &app,
+            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
+        );
+    }
+    manager.finish_tunnel(&job.tunnel_id);
 }
 
 async fn run_transfer(
@@ -1064,6 +1375,10 @@ fn transfer_destination(
 
 fn default_terminal_cols() -> u32 {
     120
+}
+
+fn default_bind_host() -> String {
+    "127.0.0.1".to_owned()
 }
 
 fn default_terminal_rows() -> u32 {

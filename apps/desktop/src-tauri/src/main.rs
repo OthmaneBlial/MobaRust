@@ -7,7 +7,9 @@ use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
 use mobarust_store::SessionStore;
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
-use ssh::{SshAuthRequest, SshConnectRequest, SshManager, SshTransferRequest};
+use ssh::{
+    SshAuthRequest, SshConnectRequest, SshLocalForwardRequest, SshManager, SshTransferRequest,
+};
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
@@ -267,6 +269,26 @@ fn ssh_cancel_transfer(
 }
 
 #[tauri::command]
+async fn ssh_start_local_forward(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    request: SshLocalForwardRequest,
+) -> Result<ssh::SshTunnelResponse, String> {
+    manager
+        .start_local_forward(app, terminal_id, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ssh_cancel_tunnel(manager: State<'_, SshManager>, tunnel_id: String) -> Result<bool, String> {
+    manager
+        .cancel_tunnel(&tunnel_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -346,6 +368,8 @@ fn main() {
             ssh_download,
             ssh_upload,
             ssh_cancel_transfer,
+            ssh_start_local_forward,
+            ssh_cancel_tunnel,
             terminal_spawn,
             terminal_write,
             terminal_resize,

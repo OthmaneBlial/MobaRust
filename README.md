@@ -17,11 +17,12 @@ The first working slice provides:
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
 - explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
+- native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.
 
-The native SSH/SFTP transport, cancellation path, and Quick Connect path are tested against a local `sshd` fixture, but saved-session editing, reconnect policy, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, tunnels, jump hosts, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP transport, local forwarding channel, cancellation path, and Quick Connect path are tested against a local `sshd` fixture, but saved-session editing, reconnect policy, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, remote/dynamic forwarding, jump hosts, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
