@@ -684,13 +684,13 @@ function App() {
 
   const startDownload = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
-    const localPath = window.prompt("Local destination path", entry.name);
+    const localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
     if (!localPath?.trim()) return;
-    const overwrite = window.confirm("Allow replacing an existing local file?");
+    const overwrite = window.confirm(entry.isDirectory ? "Allow replacing existing files inside this directory?" : "Allow replacing an existing local file?");
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
-        request: { remotePath: entry.path, localPath: localPath.trim(), overwrite },
+        request: { remotePath: entry.path, localPath: localPath.trim(), overwrite, recursive: entry.isDirectory },
       });
       setConnectionError(null);
     } catch (error) {
@@ -700,7 +700,7 @@ function App() {
 
   const startUpload = useCallback(async () => {
     if (!remoteSessionId) return;
-    const localPath = window.prompt("Local file to upload", "");
+    const localPath = window.prompt("Local file or directory to upload", "");
     if (!localPath?.trim()) return;
     const fallbackName = localPath.trim().split(/[\\/]/).pop() || "upload.bin";
     const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
@@ -710,7 +710,7 @@ function App() {
     try {
       await invoke("ssh_upload", {
         terminalId: remoteSessionId,
-        request: { remotePath: destination.trim(), localPath: localPath.trim(), overwrite },
+        request: { remotePath: destination.trim(), localPath: localPath.trim(), overwrite, recursive: true },
       });
       setConnectionError(null);
     } catch (error) {
@@ -1350,14 +1350,14 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
         <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
         </button>
-        {!entry.isDirectory && <button className="remote-file-action" onClick={() => onDownload(entry)} title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}><Download size={14} /></button>}
+        <button className="remote-file-action" onClick={() => onDownload(entry)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
         <button className="remote-file-action danger" onClick={() => onDelete(entry)} title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}><Trash2 size={14} /></button>
       </div>)}
       {status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}
     </div>
     {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />}
-    <div className="remote-files-note">Files are written through native Rust SFTP. Downloads commit from a temporary local file; uploads commit through a remote temporary path, so cancellation does not present a partial destination as complete.</div>
+    <div className="remote-files-note">Files and bounded recursive transfers run through native Rust SFTP. Individual files commit from temporary local or remote paths; cancellation never presents a partial file as complete. Directory transfers refuse symlink traversal and cap the walk at 100,000 entries.</div>
   </section>;
 }
 

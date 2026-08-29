@@ -5,7 +5,7 @@ use mobarust_ssh::{
 };
 use mobarust_vault::{CredentialId, PlatformVault, VaultError};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -105,6 +105,8 @@ pub struct SshTransferRequest {
     pub local_path: String,
     #[serde(default)]
     pub overwrite: bool,
+    #[serde(default)]
+    pub recursive: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -422,6 +424,7 @@ struct TransferJob {
     remote_path: String,
     local_path: PathBuf,
     overwrite: bool,
+    recursive: bool,
     cancel: Option<oneshot::Receiver<()>>,
     source: String,
     destination: String,
@@ -871,6 +874,7 @@ impl SshManager {
             remote_path: remote_path.clone(),
             local_path: local_path.clone(),
             overwrite: request.overwrite,
+            recursive: request.recursive,
             cancel: Some(cancel_receiver),
             source: transfer_source(&direction, &remote_path, &local_path),
             destination: transfer_destination(&direction, &remote_path, &local_path),
@@ -1822,6 +1826,7 @@ async fn run_transfer(
                 &job.remote_path,
                 &job.local_path,
                 job.overwrite,
+                job.recursive,
                 &mut cancel,
                 |bytes, total| {
                     transferred = bytes;
@@ -1838,6 +1843,7 @@ async fn run_transfer(
                 &job.remote_path,
                 &job.local_path,
                 job.overwrite,
+                job.recursive,
                 &mut cancel,
                 |bytes, total| {
                     transferred = bytes;
@@ -1891,6 +1897,7 @@ async fn run_download<F>(
     remote_path: &str,
     destination: &Path,
     overwrite: bool,
+    recursive: bool,
     cancel: &mut oneshot::Receiver<()>,
     mut on_progress: F,
 ) -> Result<u64, SshError>
@@ -1900,7 +1907,24 @@ where
     let sftp = open_sftp_with_timeout(connection).await?;
     let (total, is_directory) = sftp.file_info(remote_path).await?;
     if is_directory {
-        return Err(SshError::Sftp("download source is a directory".into()));
+        if !recursive {
+            return Err(SshError::Sftp(
+                "download source is a directory; enable recursive transfer".into(),
+            ));
+        }
+        let result = download_directory(
+            &sftp,
+            remote_path,
+            destination,
+            overwrite,
+            cancel,
+            &mut on_progress,
+        )
+        .await;
+        let close_result = sftp.close().await;
+        let copied = result?;
+        close_result?;
+        return Ok(copied);
     }
     let destination_metadata = fs::metadata(destination).await;
     match destination_metadata {
@@ -1972,6 +1996,7 @@ async fn run_upload<F>(
     remote_path: &str,
     source: &Path,
     overwrite: bool,
+    recursive: bool,
     cancel: &mut oneshot::Receiver<()>,
     mut on_progress: F,
 ) -> Result<u64, SshError>
@@ -1979,6 +2004,28 @@ where
     F: FnMut(u64, Option<u64>),
 {
     let metadata = fs::metadata(source).await.map_err(SshError::LocalIo)?;
+    if metadata.is_dir() {
+        if !recursive {
+            return Err(SshError::LocalIo(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "upload source is a directory; enable recursive transfer",
+            )));
+        }
+        let sftp = open_sftp_with_timeout(connection).await?;
+        let result = upload_directory(
+            &sftp,
+            source,
+            remote_path,
+            overwrite,
+            cancel,
+            &mut on_progress,
+        )
+        .await;
+        let close_result = sftp.close().await;
+        let copied = result?;
+        close_result?;
+        return Ok(copied);
+    }
     if !metadata.is_file() {
         return Err(SshError::LocalIo(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -2027,6 +2074,438 @@ where
     }
     let _ = sftp.close().await;
     Ok(copied)
+}
+
+const MAX_RECURSIVE_ENTRIES: usize = 100_000;
+
+type RemoteDownloadFile = (String, PathBuf, u64);
+type LocalUploadFile = (PathBuf, String, u64);
+
+struct FileTransferProgress<'a, F> {
+    base: u64,
+    total: u64,
+    cancel: &'a mut oneshot::Receiver<()>,
+    on_progress: &'a mut F,
+}
+
+async fn download_directory<F>(
+    sftp: &mobarust_ssh::SftpConnection,
+    remote_root: &str,
+    local_root: &Path,
+    overwrite: bool,
+    cancel: &mut oneshot::Receiver<()>,
+    on_progress: &mut F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    match fs::symlink_metadata(local_root).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SshError::Sftp(
+                "recursive download refuses a symlink destination".into(),
+            ));
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(SshError::Sftp(
+                "recursive download destination is not a directory".into(),
+            ));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(SshError::LocalIo(error));
+        }
+        _ => {}
+    }
+    fs::create_dir_all(local_root)
+        .await
+        .map_err(SshError::LocalIo)?;
+
+    let (files, directories, total) =
+        collect_remote_files(sftp, remote_root, local_root, cancel).await?;
+    for directory in directories {
+        fs::create_dir_all(directory)
+            .await
+            .map_err(SshError::LocalIo)?;
+    }
+
+    let mut transferred = 0_u64;
+    on_progress(0, Some(total));
+    for (remote_path, local_path, size) in files {
+        if cancel.try_recv().is_ok() {
+            return Err(SshError::Cancelled);
+        }
+        let mut progress = FileTransferProgress {
+            base: transferred,
+            total,
+            cancel,
+            on_progress,
+        };
+        let copied = download_file_atomically(
+            sftp,
+            &remote_path,
+            &local_path,
+            size,
+            overwrite,
+            &mut progress,
+        )
+        .await?;
+        transferred = transferred.saturating_add(copied);
+        on_progress(transferred, Some(total));
+    }
+    Ok(transferred)
+}
+
+async fn collect_remote_files(
+    sftp: &mobarust_ssh::SftpConnection,
+    remote_root: &str,
+    local_root: &Path,
+    cancel: &mut oneshot::Receiver<()>,
+) -> Result<(Vec<RemoteDownloadFile>, Vec<PathBuf>, u64), SshError> {
+    let mut pending = VecDeque::from([(remote_root.to_owned(), local_root.to_owned())]);
+    let mut files = Vec::new();
+    let mut directories = vec![local_root.to_owned()];
+    let mut total = 0_u64;
+    let mut seen = 0_usize;
+
+    while let Some((remote_directory, local_directory)) = pending.pop_front() {
+        if cancel.try_recv().is_ok() {
+            return Err(SshError::Cancelled);
+        }
+        let entries = tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = sftp.read_dir(remote_directory.clone()) => result?,
+        };
+        for entry in entries {
+            seen = seen.saturating_add(1);
+            if seen > MAX_RECURSIVE_ENTRIES {
+                return Err(SshError::Sftp(format!(
+                    "recursive transfer exceeds the {MAX_RECURSIVE_ENTRIES} entry limit"
+                )));
+            }
+            validate_transfer_component(&entry.name)?;
+            let remote_path = remote_child_path(&remote_directory, &entry.name);
+            let local_path = local_directory.join(&entry.name);
+            if entry.is_directory {
+                directories.push(local_path.clone());
+                pending.push_back((remote_path, local_path));
+            } else {
+                total = total.saturating_add(entry.size);
+                files.push((remote_path, local_path, entry.size));
+            }
+        }
+    }
+    Ok((files, directories, total))
+}
+
+async fn download_file_atomically<F>(
+    sftp: &mobarust_ssh::SftpConnection,
+    remote_path: &str,
+    destination: &Path,
+    total_size: u64,
+    overwrite: bool,
+    progress: &mut FileTransferProgress<'_, F>,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    match fs::symlink_metadata(destination).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SshError::Sftp(
+                "recursive download refuses a symlink destination".into(),
+            ));
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(SshError::Sftp("download destination is a directory".into()));
+        }
+        Ok(_) if !overwrite => {
+            return Err(SshError::Sftp(
+                "download destination already exists; enable overwrite explicitly".into(),
+            ));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(SshError::LocalIo(error));
+        }
+        _ => {}
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(SshError::LocalIo)?;
+    }
+    let temporary = local_part_path(destination)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .await
+        .map_err(SshError::LocalIo)?;
+    let copied = match sftp
+        .download_to_with_cancel(remote_path, &mut file, progress.cancel, |bytes| {
+            (progress.on_progress)(
+                progress.base.saturating_add(bytes),
+                Some(progress.total.max(total_size)),
+            );
+        })
+        .await
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
+    file.sync_all().await.map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        SshError::LocalIo(error)
+    })?;
+    drop(file);
+    if !overwrite
+        && fs::try_exists(destination)
+            .await
+            .map_err(SshError::LocalIo)?
+    {
+        let _ = fs::remove_file(&temporary).await;
+        return Err(SshError::Sftp(
+            "download destination appeared during transfer".into(),
+        ));
+    }
+    if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
+        let _ = fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    Ok(copied)
+}
+
+async fn upload_directory<F>(
+    sftp: &mobarust_ssh::SftpConnection,
+    local_root: &Path,
+    remote_root: &str,
+    overwrite: bool,
+    cancel: &mut oneshot::Receiver<()>,
+    on_progress: &mut F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    let (files, directories, total) = collect_local_files(local_root, remote_root, cancel).await?;
+    if cancel.try_recv().is_ok() {
+        return Err(SshError::Cancelled);
+    }
+    ensure_remote_directory(sftp, remote_root).await?;
+    for directory in directories {
+        ensure_remote_directory(sftp, &directory).await?;
+    }
+
+    let mut transferred = 0_u64;
+    on_progress(0, Some(total));
+    for (local_path, remote_path, size) in files {
+        if cancel.try_recv().is_ok() {
+            return Err(SshError::Cancelled);
+        }
+        let mut progress = FileTransferProgress {
+            base: transferred,
+            total,
+            cancel,
+            on_progress,
+        };
+        let copied = upload_file_atomically(
+            sftp,
+            &local_path,
+            &remote_path,
+            size,
+            overwrite,
+            &mut progress,
+        )
+        .await?;
+        transferred = transferred.saturating_add(copied);
+        on_progress(transferred, Some(total));
+    }
+    Ok(transferred)
+}
+
+async fn collect_local_files(
+    local_root: &Path,
+    remote_root: &str,
+    cancel: &mut oneshot::Receiver<()>,
+) -> Result<(Vec<LocalUploadFile>, Vec<String>, u64), SshError> {
+    let metadata = fs::symlink_metadata(local_root)
+        .await
+        .map_err(SshError::LocalIo)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(SshError::Sftp(
+            "recursive upload source must be a real directory".into(),
+        ));
+    }
+    let mut pending = VecDeque::from([(local_root.to_owned(), remote_root.to_owned())]);
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let mut total = 0_u64;
+    let mut seen = 0_usize;
+
+    while let Some((local_directory, remote_directory)) = pending.pop_front() {
+        if cancel.try_recv().is_ok() {
+            return Err(SshError::Cancelled);
+        }
+        let mut entries = fs::read_dir(&local_directory)
+            .await
+            .map_err(SshError::LocalIo)?;
+        loop {
+            let entry = tokio::select! {
+                _ = &mut *cancel => return Err(SshError::Cancelled),
+                result = entries.next_entry() => result.map_err(SshError::LocalIo)?,
+            };
+            let Some(entry) = entry else { break };
+            seen = seen.saturating_add(1);
+            if seen > MAX_RECURSIVE_ENTRIES {
+                return Err(SshError::Sftp(format!(
+                    "recursive transfer exceeds the {MAX_RECURSIVE_ENTRIES} entry limit"
+                )));
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            validate_transfer_component(&name)?;
+            let file_type = entry.file_type().await.map_err(SshError::LocalIo)?;
+            let local_path = entry.path();
+            let remote_path = remote_child_path(&remote_directory, &name);
+            if file_type.is_symlink() {
+                return Err(SshError::Sftp(
+                    "recursive upload refuses to follow symlinks".into(),
+                ));
+            }
+            if file_type.is_dir() {
+                directories.push(remote_path.clone());
+                pending.push_back((local_path, remote_path));
+            } else if file_type.is_file() {
+                let size = entry.metadata().await.map_err(SshError::LocalIo)?.len();
+                total = total.saturating_add(size);
+                files.push((local_path, remote_path, size));
+            } else {
+                return Err(SshError::Sftp(
+                    "recursive upload supports regular files and directories only".into(),
+                ));
+            }
+        }
+    }
+    Ok((files, directories, total))
+}
+
+async fn upload_file_atomically<F>(
+    sftp: &mobarust_ssh::SftpConnection,
+    source: &Path,
+    remote_path: &str,
+    total_size: u64,
+    overwrite: bool,
+    progress: &mut FileTransferProgress<'_, F>,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    if sftp.try_exists(remote_path).await? {
+        let (_, is_directory) = sftp.file_info(remote_path).await?;
+        if is_directory {
+            return Err(SshError::Sftp("upload destination is a directory".into()));
+        }
+        if !overwrite {
+            return Err(SshError::Sftp(
+                "upload destination already exists; enable overwrite explicitly".into(),
+            ));
+        }
+    }
+    let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
+    let mut file = fs::File::open(source).await.map_err(SshError::LocalIo)?;
+    let copied = match sftp
+        .upload_from_with_cancel(&mut file, &temporary, progress.cancel, |bytes| {
+            (progress.on_progress)(
+                progress.base.saturating_add(bytes),
+                Some(progress.total.max(total_size)),
+            );
+        })
+        .await
+    {
+        Ok(copied) => copied,
+        Err(error) => {
+            let _ = sftp.remove_file(&temporary).await;
+            return Err(error);
+        }
+    };
+    if !overwrite && sftp.try_exists(remote_path).await? {
+        let _ = sftp.remove_file(&temporary).await;
+        return Err(SshError::Sftp(
+            "upload destination appeared during transfer".into(),
+        ));
+    }
+    if let Err(error) = sftp.rename(&temporary, remote_path).await {
+        let _ = sftp.remove_file(&temporary).await;
+        return Err(error);
+    }
+    Ok(copied)
+}
+
+async fn ensure_remote_directory(
+    sftp: &mobarust_ssh::SftpConnection,
+    path: &str,
+) -> Result<(), SshError> {
+    let path = path.trim();
+    if path.is_empty() || path == "." || path == "/" {
+        return Ok(());
+    }
+    let absolute = path.starts_with('/');
+    let mut current = if absolute {
+        "/".to_owned()
+    } else {
+        String::new()
+    };
+    for component in path
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+    {
+        if component == ".." {
+            return Err(SshError::Sftp(
+                "recursive upload refuses parent-directory traversal".into(),
+            ));
+        }
+        validate_transfer_component(component)?;
+        current = if current == "/" {
+            format!("/{component}")
+        } else if current.is_empty() {
+            component.to_owned()
+        } else {
+            format!("{current}/{component}")
+        };
+        if !sftp.try_exists(current.clone()).await? {
+            sftp.create_dir(current.clone()).await?;
+        }
+        let (_, is_directory) = sftp.file_info(current.clone()).await?;
+        if !is_directory {
+            return Err(SshError::Sftp(format!(
+                "remote path component is not a directory: {current}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_transfer_component(component: &str) -> Result<(), SshError> {
+    if component.is_empty()
+        || component == "."
+        || component == ".."
+        || component.contains('/')
+        || component.contains('\\')
+        || component.contains('\0')
+    {
+        return Err(SshError::Sftp(
+            "recursive transfer encountered an unsafe path component".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn remote_child_path(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{name}")
+    } else if parent.ends_with('/') {
+        format!("{parent}{name}")
+    } else {
+        format!("{parent}/{name}")
+    }
 }
 
 async fn open_sftp_with_timeout(
@@ -2138,4 +2617,27 @@ fn default_bind_host() -> String {
 
 fn default_terminal_rows() -> u32 {
     32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{remote_child_path, validate_transfer_component};
+
+    #[test]
+    fn recursive_remote_paths_keep_root_boundaries() {
+        assert_eq!(remote_child_path("/", "etc"), "/etc");
+        assert_eq!(remote_child_path("/var/", "log"), "/var/log");
+        assert_eq!(remote_child_path("./tree", "file.txt"), "./tree/file.txt");
+    }
+
+    #[test]
+    fn recursive_transfer_rejects_path_escape_components() {
+        for component in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(
+                validate_transfer_component(component).is_err(),
+                "{component:?}"
+            );
+        }
+        assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
 }
