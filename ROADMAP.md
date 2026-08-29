@@ -50,7 +50,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [ ] Real VNC integration with a mature engine and local/manual fixtures
 - [x] Native Telnet transport with bounded negotiation and a local TCP fixture
 - [ ] Telnet session-manager/UI wiring
-- [ ] Serial transport and device lifecycle
+- [x] Native serial transport configuration and recoverable device lifecycle
+- [ ] Serial device refresh and session-manager/UI wiring
 - [ ] X11 forwarding, monitoring, and portable packaging
 
 Each adapter must have a real lifecycle, failure tests, and an honest platform

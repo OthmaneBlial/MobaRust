@@ -6,6 +6,7 @@ members = [
   "crates/mobarust-vault",
   "crates/mobarust-remote-desktop",
   "crates/mobarust-telnet",
+  "crates/mobarust-serial",
   "apps/desktop/src-tauri",
   "xtask",
 ]
@@ -27,5 +28,6 @@ anyhow = "1.0"
 encoding_rs = "0.8"
 russh = { version = "0.63.1", default-features = true }
 russh-sftp = "2.4.0"
+serialport = { version = "4.7", default-features = false }
 tokio = { version = "1.47", features = ["fs", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
 zeroize = "1.8"
