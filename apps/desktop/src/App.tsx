@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -42,6 +42,7 @@ type TerminalClosedEvent = {
 
 type TerminalViewportProps = {
   instanceKey: number;
+  remoteSessionId: string | null;
   onStatusChange: (status: "starting" | "connected" | "closed" | "error") => void;
 };
 
@@ -63,6 +64,21 @@ type SavedSession = {
   username?: string | null;
 };
 
+type SshConnectRequest = {
+  host: string;
+  port: number;
+  username: string;
+  auth: { method: "privateKey"; path: string; passphraseCredentialId?: string } | { method: "password"; credentialId: string };
+  knownHostsPath?: string;
+  cols: number;
+  rows: number;
+};
+
+type SshConnectResponse = {
+  terminalId: string;
+  host: string;
+};
+
 const previewSessions: SessionListItem[] = [
   { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true },
   { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false },
@@ -75,7 +91,7 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ instanceKey, onStatusChange }: TerminalViewportProps) {
+function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
 
@@ -127,7 +143,7 @@ function TerminalViewport({ instanceKey, onStatusChange }: TerminalViewportProps
       if (host.clientWidth > 0 && host.clientHeight > 0) fitAddon.fit();
       const terminalId = terminalIdRef.current;
       if (IS_TAURI && terminalId) {
-        void invoke("terminal_resize", {
+        void invoke(remoteSessionId ? "ssh_resize" : "terminal_resize", {
           terminalId,
           cols: terminal.cols,
           rows: terminal.rows,
@@ -145,7 +161,7 @@ function TerminalViewport({ instanceKey, onStatusChange }: TerminalViewportProps
         terminal.write(data.replace(/\r/g, "\r\n"));
         return;
       }
-      void invoke("terminal_write", { terminalId, data }).catch(() => onStatusChange("error"));
+      void invoke(remoteSessionId ? "ssh_write" : "terminal_write", { terminalId, data }).catch(() => onStatusChange("error"));
     });
 
     const boot = async () => {
@@ -159,12 +175,20 @@ function TerminalViewport({ instanceKey, onStatusChange }: TerminalViewportProps
       }
 
       try {
-        unlistenOutput = await listen<TerminalOutputEvent>("terminal://output", (event) => {
+        const outputEvent = remoteSessionId ? "ssh://output" : "terminal://output";
+        const closedEvent = remoteSessionId ? "ssh://closed" : "terminal://closed";
+        unlistenOutput = await listen<TerminalOutputEvent>(outputEvent, (event) => {
           if (event.payload.terminalId === terminalIdRef.current) terminal.write(event.payload.data);
         });
-        unlistenClosed = await listen<TerminalClosedEvent>("terminal://closed", (event) => {
+        unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
           if (event.payload.terminalId === terminalIdRef.current) onStatusChange("closed");
         });
+        if (remoteSessionId) {
+          terminalIdRef.current = remoteSessionId;
+          onStatusChange("connected");
+          fit();
+          return;
+        }
         const terminalId = await invoke<string>("terminal_spawn", {
           cols: terminal.cols,
           rows: terminal.rows,
@@ -190,11 +214,11 @@ function TerminalViewport({ instanceKey, onStatusChange }: TerminalViewportProps
       unlistenOutput?.();
       unlistenClosed?.();
       const terminalId = terminalIdRef.current;
-      if (IS_TAURI && terminalId) void invoke("terminal_close", { terminalId });
+      if (IS_TAURI && terminalId) void invoke(remoteSessionId ? "ssh_close" : "terminal_close", { terminalId });
       terminalIdRef.current = null;
       terminal.dispose();
     };
-  }, [instanceKey, onStatusChange]);
+  }, [instanceKey, onStatusChange, remoteSessionId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -206,11 +230,18 @@ function App() {
   const [terminalStatus, setTerminalStatus] = useState<"starting" | "connected" | "closed" | "error">("starting");
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickConnectOpen, setQuickConnectOpen] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
+  const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
+  const [remoteHost, setRemoteHost] = useState<string | null>(null);
 
   const startNewTerminal = useCallback(() => {
+    setRemoteSessionId(null);
+    setRemoteHost(null);
+    setConnectionError(null);
     setTerminalStatus("starting");
     setTerminalOpen(true);
     setTerminalKey((key) => key + 1);
@@ -219,6 +250,26 @@ function App() {
 
   const handleTerminalStatus = useCallback((status: "starting" | "connected" | "closed" | "error") => {
     setTerminalStatus(status);
+  }, []);
+
+  const connectSsh = useCallback(async (request: SshConnectRequest) => {
+    setConnectionError(null);
+    if (!IS_TAURI) {
+      setConnectionError("SSH connections require the desktop runtime.");
+      return;
+    }
+    try {
+      const response = await invoke<SshConnectResponse>("ssh_connect", { request });
+      setRemoteSessionId(response.terminalId);
+      setRemoteHost(response.host);
+      setTerminalOpen(true);
+      setTerminalStatus("starting");
+      setTerminalKey((key) => key + 1);
+      setActiveView("terminal");
+      setQuickConnectOpen(false);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
   }, []);
 
   useEffect(() => {
@@ -239,6 +290,10 @@ function App() {
       if (command && event.key.toLowerCase() === "n") {
         event.preventDefault();
         startNewTerminal();
+      }
+      if (command && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setQuickConnectOpen(true);
       }
       if (command && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
@@ -337,12 +392,13 @@ function App() {
           {!sidebarOpen && <button className="floating-sidebar-button" onClick={() => setSidebarOpen(true)} aria-label="Expand sidebar"><PanelLeftClose size={16} /></button>}
           <div className="workspace-heading">
             <div>
-              <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">LOCAL</span></div>
-              <h1>Local workstation</h1>
-              <p className="workspace-subtitle">A quiet command surface for the machine in front of you.</p>
+              <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">{remoteSessionId ? "SSH" : "LOCAL"}</span></div>
+              <h1>{remoteHost ?? "Local workstation"}</h1>
+              <p className="workspace-subtitle">{remoteHost ? "Interactive SSH shell with native host-key verification." : "A quiet command surface for the machine in front of you."}</p>
             </div>
             <div className="heading-actions">
               <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
+              <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>⌘ K</span></button>
               <button className="primary-button" onClick={startNewTerminal}><Plus size={15} /> New terminal</button>
             </div>
           </div>
@@ -350,7 +406,7 @@ function App() {
           <div className="workspace-grid">
             <div className="main-column">
               <div className="context-strip">
-                <div className="context-title"><span className="status-pulse" /> localhost <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
+                <div className="context-title"><span className="status-pulse" /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
                 <div className="context-metrics"><span><TerminalIcon size={13} /> PTY</span><span><ArrowUpFromLine size={13} /> bidirectional</span><span><Radio size={13} /> 32 KB batches</span></div>
               </div>
 
@@ -363,10 +419,10 @@ function App() {
               {activeView === "terminal" ? (
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
-                    <div className="terminal-tab"><span className="terminal-tab-dot" /><span>local shell</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? "zsh" : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); }}><X size={14} /></button></div>
+                    <div className="terminal-tab"><span className="terminal-tab-dot" /><span>{remoteHost ? "remote shell" : "local shell"}</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? (remoteHost ? "ssh" : "zsh") : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); setRemoteSessionId(null); setRemoteHost(null); }}><X size={14} /></button></div>
                     <div className="terminal-toolbar-actions"><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button aria-label="Copy terminal output"><Copy size={14} /></button><button aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Local shell closed</strong><span>Start a fresh PTY when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
+                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or SSH shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>local process</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : (
@@ -383,12 +439,12 @@ function App() {
               <div className="rail-heading"><span>Session brief</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
               <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
-                <div><div className="machine-name">This Mac</div><div className="machine-detail">Apple Silicon · local</div></div>
+                <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? "SSH · verified transport" : "Apple Silicon · local"}</div></div>
                 <span className="machine-live">LIVE</span>
               </div>
-              <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Shell" value="zsh" /><Metric label="Terminal" value="xterm-256color" /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
+              <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Shell" value={remoteHost ? "remote" : "zsh"} /><Metric label="Terminal" value="xterm-256color" /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
               <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">The local terminal is the first real vertical slice. SSH and SFTP slots are visible so the workspace can grow without hiding unfinished protocol claims.</p></div>
-              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>Next: secure SSH</strong><p>Host-key verification and PTY negotiation are the next protocol gate.</p><button onClick={() => setPaletteOpen(true)}>Open delivery map <ExternalLink size={12} /></button></div></div>
+              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
             </aside>
           </div>
 
@@ -396,7 +452,8 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnect={connectSsh} />}
     </main>
   );
 }
@@ -427,10 +484,38 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; return <button key={action.label} className="palette-item" onClick={action.label === "New local terminal" ? () => { onNewTerminal(); onClose(); } : onClose}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+}
+
+function QuickConnectDialog({ error, onClose, onConnect }: { error: string | null; onClose: () => void; onConnect: (request: SshConnectRequest) => void }) {
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("22");
+  const [username, setUsername] = useState("");
+  const [method, setMethod] = useState<"privateKey" | "password">("privateKey");
+  const [keyPath, setKeyPath] = useState("");
+  const [credentialId, setCredentialId] = useState("");
+  const [knownHostsPath, setKnownHostsPath] = useState("");
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const auth = method === "privateKey"
+      ? { method: "privateKey" as const, path: keyPath }
+      : { method: "password" as const, credentialId };
+    onConnect({
+      host: host.trim(),
+      port: Number(port),
+      username: username.trim(),
+      auth,
+      knownHostsPath: knownHostsPath.trim() || undefined,
+      cols: 120,
+      rows: 32,
+    });
+  };
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="quick-connect" role="dialog" aria-modal="true" aria-label="Quick connect" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}><div className="quick-connect-heading"><div><span className="eyebrow">NEW SSH SESSION</span><h2>Quick connect</h2><p>Open a real native SSH shell in seconds.</p></div><button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}><X size={17} /></button></div><div className="quick-connect-grid"><label>Host<input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" /></label><label>Port<input required inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => setPort(event.target.value)} /></label><label className="quick-connect-wide">Username<input required value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ops" /></label><label className="quick-connect-wide">Authentication<select value={method} onChange={(event) => setMethod(event.target.value as "privateKey" | "password")}><option value="privateKey">Private key path</option><option value="password">Existing vault credential reference</option></select></label>{method === "privateKey" ? <label className="quick-connect-wide">Private key path<input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /><small>The key stays on disk; its passphrase is never entered here.</small></label> : <label className="quick-connect-wide">Credential reference<input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" /><small>Only an opaque vault reference crosses IPC, never the password.</small></label>}<label className="quick-connect-wide">Known hosts path <span className="optional">optional</span><input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" /></label></div>{error && <div className="connect-error" role="alert"><strong>Connection failed</strong><span>{error}</span></div>}<div className="quick-connect-footer"><span><ShieldCheck size={14} /> Unknown host keys are rejected.</span><div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Network size={14} /> Connect SSH</button></div></div></form></div>;
 }
 
 export default App;

@@ -12,10 +12,13 @@ tauri-build = { version = "2.4", features = [] }
 [dependencies]
 anyhow.workspace = true
 mobarust-core = { path = "../../../crates/mobarust-core" }
+mobarust-ssh = { path = "../../../crates/mobarust-ssh" }
 mobarust-store = { path = "../../../crates/mobarust-store" }
+mobarust-vault = { path = "../../../crates/mobarust-vault" }
 portable-pty = "0.9"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.8", features = [] }
 thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true

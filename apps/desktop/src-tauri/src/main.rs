@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ssh;
 mod terminal;
 
 use mobarust_core::{SessionId, SessionRecord};
 use mobarust_store::SessionStore;
+use mobarust_vault::PlatformVault;
 use serde::Serialize;
+use ssh::{SshConnectRequest, SshManager};
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
@@ -62,6 +65,52 @@ fn session_delete(
 }
 
 #[tauri::command]
+async fn ssh_connect(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    vault: State<'_, PlatformVault>,
+    request: SshConnectRequest,
+) -> Result<ssh::SshConnectResponse, String> {
+    manager
+        .connect(app, &vault, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_write(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    data: String,
+) -> Result<(), String> {
+    manager
+        .write(&terminal_id, data)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_resize(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    cols: u32,
+    rows: u32,
+) -> Result<(), String> {
+    manager
+        .resize(&terminal_id, cols, rows)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_close(manager: State<'_, SshManager>, terminal_id: String) -> Result<(), String> {
+    manager
+        .close(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -106,6 +155,8 @@ fn terminal_close(manager: State<'_, TerminalManager>, terminal_id: String) -> R
 fn main() {
     tauri::Builder::default()
         .manage(TerminalManager::default())
+        .manage(SshManager::default())
+        .manage(PlatformVault::default())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -126,6 +177,10 @@ fn main() {
             session_list,
             session_save,
             session_delete,
+            ssh_connect,
+            ssh_write,
+            ssh_resize,
+            ssh_close,
             terminal_spawn,
             terminal_write,
             terminal_resize,

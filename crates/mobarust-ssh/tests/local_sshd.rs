@@ -56,14 +56,16 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             connection.state(),
             mobarust_core::ConnectionState::Connected
         );
-        let mut shell = connection.open_shell(100, 30).await.expect("open SSH PTY");
-        shell
+        let shell = connection.open_shell(100, 30).await.expect("open SSH PTY");
+        let (mut reader, writer) = shell.split();
+        writer.resize(120, 40).await.expect("resize SSH PTY");
+        writer
             .write(b"printf 'MOBARUST_SSH_OK\n'; exit\n")
             .await
             .expect("write shell command");
 
         let mut output = Vec::new();
-        while let Some(message) = tokio::time::timeout(Duration::from_secs(5), shell.next_output())
+        while let Some(message) = tokio::time::timeout(Duration::from_secs(5), reader.next_output())
             .await
             .expect("SSH shell output timeout")
         {

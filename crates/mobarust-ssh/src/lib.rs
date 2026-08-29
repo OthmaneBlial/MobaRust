@@ -9,7 +9,7 @@ use std::time::Duration;
 use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{Channel, ChannelMsg, Disconnect};
+use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroize;
@@ -342,6 +342,17 @@ pub struct SshShell {
     channel: Channel<client::Msg>,
 }
 
+/// Read-only half of an interactive SSH shell. It can run concurrently with
+/// [`SshShellWriter`] so terminal input never blocks remote output.
+pub struct SshShellReader {
+    channel: ChannelReadHalf,
+}
+
+/// Write/control half of an interactive SSH shell.
+pub struct SshShellWriter {
+    channel: ChannelWriteHalf<client::Msg>,
+}
+
 /// Streaming SFTP surface. The methods copy between async readers/writers so
 /// a multi-gigabyte file is never accumulated in application memory.
 pub struct SftpConnection {
@@ -451,6 +462,14 @@ impl SftpConnection {
 }
 
 impl SshShell {
+    pub fn split(self) -> (SshShellReader, SshShellWriter) {
+        let (reader, writer) = self.channel.split();
+        (
+            SshShellReader { channel: reader },
+            SshShellWriter { channel: writer },
+        )
+    }
+
     pub async fn write(&self, data: &[u8]) -> Result<(), SshError> {
         self.channel.data(data).await.map_err(SshError::Channel)
     }
@@ -470,6 +489,38 @@ impl SshShell {
             ChannelMsg::Eof | ChannelMsg::Close => None,
             _ => Some(Ok(SshOutput::Control)),
         }
+    }
+
+    pub async fn close(&self) -> Result<(), SshError> {
+        self.channel.eof().await.map_err(SshError::Channel)
+    }
+}
+
+impl SshShellReader {
+    pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
+        match self.channel.wait().await? {
+            ChannelMsg::Data { data } => Some(Ok(SshOutput::Stdout(data.to_vec()))),
+            ChannelMsg::ExtendedData { data, .. } => Some(Ok(SshOutput::Stderr(data.to_vec()))),
+            ChannelMsg::ExitStatus { exit_status } => Some(Ok(SshOutput::ExitStatus(exit_status))),
+            ChannelMsg::Eof | ChannelMsg::Close => None,
+            _ => Some(Ok(SshOutput::Control)),
+        }
+    }
+}
+
+impl SshShellWriter {
+    pub async fn write(&self, data: &[u8]) -> Result<(), SshError> {
+        self.channel
+            .data_bytes(data.to_vec())
+            .await
+            .map_err(SshError::Channel)
+    }
+
+    pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
+        self.channel
+            .window_change(cols.max(1), rows.max(1), 0, 0)
+            .await
+            .map_err(SshError::Channel)
     }
 
     pub async fn close(&self) -> Result<(), SshError> {

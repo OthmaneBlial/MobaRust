@@ -12,11 +12,11 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## 0.2 — SSH vertical slice
 
-- [ ] Host-key verification and known_hosts policy
-- [ ] Interactive SSH with PTY resize and clean cancellation
-- [ ] Password, key, encrypted key, agent, and keyboard-interactive auth
+- [x] Host-key verification and known_hosts policy
+- [x] Interactive SSH with PTY resize and cooperative close
+- [ ] Password, key, encrypted key, agent, and keyboard-interactive auth in the saved-session UX
 - [ ] Reconnect policy and failure-state telemetry
-- [ ] Local integration fixtures for authentication, resize, and disconnects
+- [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
 
 ## 0.3 — remote files and movement
 
