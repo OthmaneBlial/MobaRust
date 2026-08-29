@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted for the first credential-storage slice.
+Accepted and implemented for the native credential boundary and explicit
+reference save/delete flow.
 
 ## Decision
 
@@ -30,6 +31,9 @@ Portable mode is not allowed to fall back to plaintext JSON. An encrypted
 portable vault requires a separate design, key lifecycle, recovery story, and
 tests before portable mode can claim parity with native storage.
 
-The current crate is a storage boundary, not yet a complete saved-session UI
-flow. Wiring references into session CRUD and typed Tauri commands is the next
-step.
+The desktop now exposes only typed `vault_put` and `vault_delete` commands.
+Saving is an explicit action: the transient secret is accepted by the native
+command, written to the platform store, and never returned to the renderer.
+The credential modal clears its input after the operation and does not list or
+export stored secrets. Tests deliberately avoid the platform backend so they
+cannot write to a developer's Keychain, Credential Manager, or Secret Service.

@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Folder,
   FolderPlus,
+  KeyRound,
   LoaderCircle,
   LayoutDashboard,
   MoreHorizontal,
@@ -324,6 +325,7 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "New local terminal", hint: "⌘ N", icon: TerminalIcon },
   { label: "Quick connect", hint: "⌘ K", icon: Network },
   { label: "Settings", hint: "", icon: Settings2 },
+  { label: "Credential vault", hint: "", icon: KeyRound },
   { label: "Snippets", hint: "", icon: BookOpen },
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
@@ -523,6 +525,7 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -655,6 +658,40 @@ function App() {
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Settings could not be reset: ${String(error)}`);
+    }
+  }, []);
+
+  const saveCredential = useCallback(async (credentialId: string, secret: string) => {
+    if (!IS_TAURI) {
+      setConnectionError("Credential vault operations require the desktop runtime.");
+      return;
+    }
+    try {
+      const savedId = await invoke<string>("vault_put", {
+        payload: { credentialId: credentialId.trim(), secret },
+      });
+      setCredentialsOpen(false);
+      setSessionNotice(`Saved credential reference “${savedId}”. The secret remains in the native vault.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Credential could not be saved: ${String(error)}`);
+    }
+  }, []);
+
+  const deleteCredential = useCallback(async (credentialId: string) => {
+    if (!IS_TAURI) {
+      setConnectionError("Credential vault operations require the desktop runtime.");
+      return;
+    }
+    try {
+      const deletedId = await invoke<string>("vault_delete", {
+        payload: { credentialId: credentialId.trim() },
+      });
+      setCredentialsOpen(false);
+      setSessionNotice(`Deleted credential reference “${deletedId}”.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Credential could not be deleted: ${String(error)}`);
     }
   }, []);
 
@@ -1335,6 +1372,9 @@ function App() {
           <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={17} strokeWidth={1.7} />
           </button>
+          <button className="icon-button" aria-label="Credential vault" title="Credential vault" onClick={() => setCredentialsOpen(true)}>
+            <KeyRound size={17} strokeWidth={1.7} />
+          </button>
           <button className="icon-button" aria-label="Snippets" title="Snippets" onClick={() => setSnippetsOpen(true)}>
             <BookOpen size={17} strokeWidth={1.7} />
           </button>
@@ -1475,10 +1515,11 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
+      {credentialsOpen && <CredentialVaultModal onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
     </main>
   );
@@ -1737,10 +1778,49 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onOpenSnippets, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onOpenSnippets: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings, onOpenCredentials, onOpenSnippets, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Snippets" ? onOpenSnippets : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Credential vault" ? onOpenCredentials : action.label === "Snippets" ? onOpenSnippets : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+}
+
+function CredentialVaultModal({ onClose, onSave, onDelete }: { onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void> }) {
+  const [credentialId, setCredentialId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!credentialId.trim() || !secret) return;
+    setBusy(true);
+    try {
+      await onSave(credentialId, secret);
+    } finally {
+      setSecret("");
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!credentialId.trim() || !window.confirm(`Delete credential “${credentialId.trim()}” from the platform vault?`)) return;
+    setBusy(true);
+    try {
+      await onDelete(credentialId);
+    } finally {
+      setSecret("");
+      setBusy(false);
+    }
+  };
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="credential-modal" role="dialog" aria-modal="true" aria-label="Credential vault" onMouseDown={(event) => event.stopPropagation()} onSubmit={save}>
+    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference in the platform keyring. MobaRust never lists or returns the secret.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={onClose}><X size={17} /></button></div>
+    <div className="credential-modal-body">
+      <label>Credential reference<input required autoFocus value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" autoComplete="off" /><small>Letters, numbers, dots, dashes, and underscores only.</small></label>
+      <label>Secret<input required type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Enter only for this explicit save" autoComplete="new-password" /><small>The field is cleared after the native operation. It is not persisted in app state.</small></label>
+    </div>
+    <div className="credential-modal-note"><KeyRound size={14} /><span>Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service through Rust. No vault operation runs until you confirm.</span></div>
+    <div className="session-editor-footer"><button type="button" className="outline-button danger-button" onClick={() => void remove()} disabled={busy || !credentialId.trim()}><Trash2 size={14} /> Delete reference</button><div><button type="button" className="outline-button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !credentialId.trim() || !secret}>{busy ? "Saving…" : "Save secret"}</button></div></div>
+  </form></div>;
 }
 
 function newSnippetRecord(): SnippetRecord {

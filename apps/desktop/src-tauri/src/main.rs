@@ -13,7 +13,7 @@ use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{
     OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
 };
-use mobarust_vault::PlatformVault;
+use mobarust_vault::{CredentialId, PlatformVault, SecretMaterial};
 use network::{NetworkManager, NetworkScanRequest};
 use serde::Serialize;
 use serial::{SerialConnectRequest, SerialManager};
@@ -76,6 +76,19 @@ struct NetworkTcpCheckRequest {
     host: String,
     port: u16,
     timeout_ms: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultPutRequest {
+    credential_id: String,
+    secret: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultCredentialRequest {
+    credential_id: String,
 }
 
 fn diagnostic_timeout(timeout_ms: u64) -> Result<std::time::Duration, String> {
@@ -205,6 +218,38 @@ fn settings_reset(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings,
         .map_err(|_| "settings store lock poisoned".to_owned())?
         .reset()
         .map_err(|error| error.to_string())
+}
+
+/// Store a secret only after an explicit user action. The secret is never
+/// returned to the renderer and is owned by a zeroizing native wrapper while
+/// the platform keyring call is in progress.
+#[tauri::command]
+fn vault_put(vault: State<'_, PlatformVault>, payload: VaultPutRequest) -> Result<String, String> {
+    let credential_id =
+        CredentialId::new(payload.credential_id).map_err(|error| error.to_string())?;
+    if payload.secret.is_empty() {
+        return Err("vault secret cannot be empty".into());
+    }
+    let secret = SecretMaterial::new(payload.secret);
+    vault
+        .put(&credential_id, &secret)
+        .map_err(|error| error.to_string())?;
+    Ok(credential_id.to_string())
+}
+
+/// Delete is idempotent in the native vault and returns only the validated
+/// opaque reference, never credential material.
+#[tauri::command]
+fn vault_delete(
+    vault: State<'_, PlatformVault>,
+    payload: VaultCredentialRequest,
+) -> Result<String, String> {
+    let credential_id =
+        CredentialId::new(payload.credential_id).map_err(|error| error.to_string())?;
+    vault
+        .delete(&credential_id)
+        .map_err(|error| error.to_string())?;
+    Ok(credential_id.to_string())
 }
 
 #[tauri::command]
@@ -822,6 +867,8 @@ fn main() {
             settings_get,
             settings_save,
             settings_reset,
+            vault_put,
+            vault_delete,
             snippet_list,
             snippet_save,
             snippet_delete,
