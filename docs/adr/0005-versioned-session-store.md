@@ -9,7 +9,10 @@ Accepted for the first saved-session slice.
 Saved session definitions use a small versioned JSON document under the
 platform application-data directory. Writes use a unique temporary file,
 `fsync`, and rename. The document stores connection metadata and opaque
-credential references only. Unknown top-level fields and corrupt JSON are
+credential references only. SSH host-trust selection (known-hosts path or
+operator-pinned fingerprint) is also persisted as non-secret connection
+metadata, so reconnecting a saved profile does not silently change its trust
+policy. Unknown top-level fields and corrupt JSON are
 reported instead of being replaced or silently discarded.
 
 This is an intentionally narrow foundation. SQLite remains an option for the

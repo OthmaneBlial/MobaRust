@@ -3,11 +3,11 @@
 mod ssh;
 mod terminal;
 
-use mobarust_core::{SessionId, SessionRecord};
+use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
 use mobarust_store::SessionStore;
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
-use ssh::{SshConnectRequest, SshManager, SshTransferRequest};
+use ssh::{SshAuthRequest, SshConnectRequest, SshManager, SshTransferRequest};
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
@@ -20,6 +20,13 @@ struct AppSnapshot {
     version: &'static str,
     platform: &'static str,
     local_terminal_available: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveSshSessionRequest {
+    name: String,
+    request: SshConnectRequest,
 }
 
 #[tauri::command]
@@ -61,6 +68,63 @@ fn session_delete(
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?
         .delete(session_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_save_ssh(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: SaveSshSessionRequest,
+) -> Result<SessionRecord, String> {
+    let SaveSshSessionRequest { name, request } = payload;
+    let SshConnectRequest {
+        host,
+        port,
+        username,
+        auth: request_auth,
+        known_hosts_path,
+        pinned_fingerprint,
+        ..
+    } = request;
+    let auth = match request_auth {
+        SshAuthRequest::Agent => AuthMethod::Agent,
+        SshAuthRequest::Password { credential_id } if !credential_id.trim().is_empty() => {
+            AuthMethod::Password {
+                credential_ref: credential_id,
+            }
+        }
+        SshAuthRequest::PrivateKey {
+            path,
+            passphrase_credential_id,
+        } if !path.trim().is_empty() => AuthMethod::PrivateKey {
+            key_ref: path,
+            credential_ref: passphrase_credential_id,
+        },
+        _ => return Err("cannot save an SSH session with incomplete authentication".into()),
+    };
+    let session = SessionRecord {
+        id: SessionId::new(),
+        name,
+        protocol: Protocol::Ssh,
+        hostname: host,
+        port,
+        username: Some(username),
+        auth,
+        known_hosts_path,
+        pinned_fingerprint,
+        folder: Some("Remote sessions".into()),
+        tags: Vec::new(),
+        favorite: false,
+        startup_directory: None,
+        startup_command: None,
+        environment: Vec::new(),
+        jump_hosts: Vec::new(),
+        notes: None,
+    };
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .save(session)
         .map_err(|error| error.to_string())
 }
 
@@ -268,6 +332,7 @@ fn main() {
             app_snapshot,
             session_list,
             session_save,
+            session_save_ssh,
             session_delete,
             ssh_connect,
             ssh_write,

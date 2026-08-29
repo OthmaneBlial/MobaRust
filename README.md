@@ -16,6 +16,7 @@ The first working slice provides:
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
+- explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.

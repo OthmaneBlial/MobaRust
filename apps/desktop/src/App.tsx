@@ -58,6 +58,7 @@ type TerminalViewportProps = {
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 type SessionListItem = {
+  id?: string;
   name: string;
   detail: string;
   type: string;
@@ -71,6 +72,13 @@ type SavedSession = {
   hostname: string;
   port: number;
   username?: string | null;
+  known_hosts_path?: string | null;
+  pinned_fingerprint?: string | null;
+  auth:
+    | { kind: "none" }
+    | { kind: "agent" }
+    | { kind: "password"; credentialRef: string }
+    | { kind: "privateKey"; keyRef: string; credentialRef?: string | null };
 };
 
 type SshConnectRequest = {
@@ -273,6 +281,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
   const [remoteHost, setRemoteHost] = useState<string | null>(null);
   const [remotePath, setRemotePath] = useState(".");
@@ -294,7 +303,17 @@ function App() {
     setTerminalStatus(status);
   }, []);
 
-  const connectSsh = useCallback(async (request: SshConnectRequest) => {
+  const refreshSavedSessions = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<SavedSession[]>("session_list")
+      .then((sessions) => {
+        setSavedSessions(sessions);
+        setSessionRows(sessions.map(toSessionListItem));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true) => {
     setConnectionError(null);
     if (!IS_TAURI) {
       setConnectionError("SSH connections require the desktop runtime.");
@@ -309,10 +328,31 @@ function App() {
       setTerminalKey((key) => key + 1);
       setActiveView("terminal");
       setQuickConnectOpen(false);
+      if (offerSave) {
+        const suggestedName = `${request.username}@${response.host}`;
+        const name = window.prompt("Save this SSH session as", suggestedName);
+        if (name?.trim()) {
+          try {
+            await invoke("session_save_ssh", { payload: { name: name.trim(), request } });
+            refreshSavedSessions();
+          } catch (error) {
+            setConnectionError(`Connected, but the session could not be saved: ${String(error)}`);
+          }
+        }
+      }
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, []);
+  }, [refreshSavedSessions]);
+
+  const connectSavedSession = useCallback((session: SavedSession) => {
+    const request = requestFromSavedSession(session);
+    if (!request) {
+      setConnectionError("This saved session uses an authentication method that is not available yet.");
+      return;
+    }
+    void connectSsh(request, false);
+  }, [connectSsh]);
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
     if (!remoteSessionId) return;
@@ -426,11 +466,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!IS_TAURI) return;
-    void invoke<SavedSession[]>("session_list")
-      .then((savedSessions) => setSessionRows(savedSessions.map(toSessionListItem)))
-      .catch(() => undefined);
-  }, []);
+    refreshSavedSessions();
+  }, [refreshSavedSessions]);
 
   useEffect(() => {
     if (activeView === "files" && remoteSessionId) void loadRemoteDirectory(".");
@@ -544,11 +581,14 @@ function App() {
             <div className="list-heading"><span>Sessions</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
-              <SessionRow key={session.name} {...session} />
+              <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "SSH").map((session) => (
-              <SessionRow key={session.name} {...session} />
+              <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                const saved = savedSessions.find((item) => item.id === session.id);
+                if (saved) connectSavedSession(saved);
+              }} />
             ))}
             {filteredSessions.length === 0 && <div className="empty-search">No matching sessions</div>}
           </div>
@@ -632,17 +672,40 @@ function App() {
   );
 }
 
+function requestFromSavedSession(session: SavedSession): SshConnectRequest | null {
+  const username = session.username?.trim();
+  if (!username || session.port === 0) return null;
+  const auth = session.auth.kind === "agent"
+    ? { method: "agent" as const }
+    : session.auth.kind === "password" && session.auth.credentialRef.trim()
+      ? { method: "password" as const, credentialId: session.auth.credentialRef }
+      : session.auth.kind === "privateKey" && session.auth.keyRef.trim()
+        ? { method: "privateKey" as const, path: session.auth.keyRef, passphraseCredentialId: session.auth.credentialRef ?? undefined }
+        : null;
+  if (!auth) return null;
+  return {
+    host: session.hostname,
+    port: session.port,
+    username,
+    auth,
+    knownHostsPath: session.known_hosts_path ?? undefined,
+    pinnedFingerprint: session.pinned_fingerprint ?? undefined,
+    cols: 120,
+    rows: 32,
+  };
+}
+
 function toSessionListItem(session: SavedSession): SessionListItem {
   if (session.protocol === "LOCAL") {
-    return { name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true };
+    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";
-  return { name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false };
+  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false };
 }
 
-function SessionRow({ name, detail, type, active }: SessionListItem) {
-  return <button className={`session-row ${active ? "active" : ""}`}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
+function SessionRow({ name, detail, type, active, onSelect }: SessionListItem & { onSelect: () => void }) {
+  return <button className={`session-row ${active ? "active" : ""}`} onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
 }
 
 function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onCancelTransfer }: {

@@ -20,10 +20,13 @@ pub enum Protocol {
 pub enum AuthMethod {
     None,
     Password {
+        #[serde(rename = "credentialRef", alias = "credential_ref")]
         credential_ref: String,
     },
     PrivateKey {
+        #[serde(rename = "keyRef", alias = "key_ref")]
         key_ref: String,
+        #[serde(rename = "credentialRef", alias = "credential_ref")]
         credential_ref: Option<String>,
     },
     Agent,
@@ -60,6 +63,10 @@ pub struct SessionRecord {
     pub port: u16,
     pub username: Option<String>,
     pub auth: AuthMethod,
+    #[serde(default)]
+    pub known_hosts_path: Option<String>,
+    #[serde(default)]
+    pub pinned_fingerprint: Option<String>,
     pub folder: Option<String>,
     pub tags: Vec<String>,
     pub favorite: bool,
@@ -92,6 +99,8 @@ impl SessionRecord {
             port: 0,
             username: None,
             auth: AuthMethod::None,
+            known_hosts_path: None,
+            pinned_fingerprint: None,
             folder: Some("Local terminals".into()),
             tags: vec!["local".into()],
             favorite: true,
@@ -142,6 +151,8 @@ mod tests {
             port: 0,
             username: Some("ops".into()),
             auth: AuthMethod::Agent,
+            known_hosts_path: None,
+            pinned_fingerprint: None,
             folder: None,
             tags: vec!["production".into()],
             favorite: false,

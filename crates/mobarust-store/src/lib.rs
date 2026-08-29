@@ -187,6 +187,8 @@ mod tests {
             auth: AuthMethod::Password {
                 credential_ref: "session-password".into(),
             },
+            known_hosts_path: None,
+            pinned_fingerprint: None,
             folder: Some("Production".into()),
             tags: vec!["prod".into()],
             favorite: true,
@@ -242,5 +244,33 @@ mod tests {
         assert!(store.delete(id).unwrap());
         assert!(!store.delete(id).unwrap());
         assert!(SessionStore::open(&path).unwrap().list().is_empty());
+    }
+
+    #[test]
+    fn schema_one_sessions_without_host_trust_fields_still_migrate_in_memory() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let session = remote_session();
+        let mut serialized = serde_json::to_value(&session).unwrap();
+        let object = serialized.as_object_mut().unwrap();
+        object.remove("known_hosts_path");
+        object.remove("pinned_fingerprint");
+        let file = serde_json::json!({ "schema_version": 1, "sessions": [serialized] });
+        fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(reopened.list()[0].known_hosts_path, None);
+        assert_eq!(reopened.list()[0].pinned_fingerprint, None);
+    }
+
+    #[test]
+    fn credential_references_use_stable_frontend_safe_names() {
+        let value = serde_json::to_value(AuthMethod::Password {
+            credential_ref: "prod-password".into(),
+        })
+        .unwrap();
+        assert_eq!(value["kind"], "password");
+        assert_eq!(value["credentialRef"], "prod-password");
+        assert!(value.get("credential_ref").is_none());
     }
 }
