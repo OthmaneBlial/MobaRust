@@ -6,16 +6,22 @@
 
 use std::io;
 use std::net::IpAddr;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::{TcpStream, lookup_host};
+use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 const MAX_PORTS_PER_SCAN: u16 = 4096;
 const MAX_CONCURRENCY: usize = 128;
+const MAX_TRACE_HOPS: u8 = 32;
+const MAX_TRACE_LINES: usize = 64;
+const MAX_TRACE_LINE_BYTES: usize = 256;
 
 #[derive(Debug, Error)]
 pub enum NetworkDiagnosticError {
@@ -31,6 +37,8 @@ pub enum NetworkDiagnosticError {
     Cancelled,
     #[error("network diagnostic worker failed: {0}")]
     Worker(String),
+    #[error("network diagnostic process failed: {0}")]
+    Process(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +242,209 @@ pub async fn resolve_host(
     Ok(addresses)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PingOptions {
+    pub host: String,
+    pub timeout: Duration,
+}
+
+impl PingOptions {
+    pub fn validate(&self) -> Result<(), NetworkDiagnosticError> {
+        validate_host(&self.host)?;
+        if self.timeout.is_zero() {
+            return Err(NetworkDiagnosticError::InvalidTarget);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PingResult {
+    pub host: String,
+    pub reachable: bool,
+    pub elapsed_ms: u64,
+}
+
+/// Runs one platform-native ping with one explicit echo request. The command
+/// receives an argument array, never a shell string, and is killed when the
+/// operation times out or is cancelled.
+pub async fn ping(
+    options: PingOptions,
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<PingResult, NetworkDiagnosticError> {
+    options.validate()?;
+    if *cancellation.borrow() {
+        return Err(NetworkDiagnosticError::Cancelled);
+    }
+    let host = options.host.clone();
+    let started = Instant::now();
+    let output = run_diagnostic_command(
+        ping_program(),
+        ping_arguments(&options.host),
+        options.timeout,
+        cancellation,
+    )
+    .await?;
+    Ok(PingResult {
+        host,
+        reachable: output.status.success(),
+        elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TracerouteOptions {
+    pub host: String,
+    pub timeout: Duration,
+    pub max_hops: u8,
+}
+
+impl TracerouteOptions {
+    pub fn validate(&self) -> Result<(), NetworkDiagnosticError> {
+        validate_host(&self.host)?;
+        if self.timeout.is_zero() || !(1..=MAX_TRACE_HOPS).contains(&self.max_hops) {
+            return Err(NetworkDiagnosticError::InvalidTarget);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TracerouteResult {
+    pub host: String,
+    pub reached: bool,
+    pub hops: Vec<String>,
+    pub elapsed_ms: u64,
+}
+
+/// Runs one bounded platform-native traceroute. Hop text is treated as
+/// untrusted diagnostic output and is truncated before crossing the IPC
+/// boundary.
+pub async fn traceroute(
+    options: TracerouteOptions,
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<TracerouteResult, NetworkDiagnosticError> {
+    options.validate()?;
+    if *cancellation.borrow() {
+        return Err(NetworkDiagnosticError::Cancelled);
+    }
+    let started = Instant::now();
+    let output = run_diagnostic_command(
+        traceroute_program(),
+        traceroute_arguments(&options.host, options.timeout, options.max_hops),
+        options.timeout,
+        cancellation,
+    )
+    .await?;
+    let hops = bounded_trace_lines(&output.stdout);
+    Ok(TracerouteResult {
+        host: options.host,
+        reached: output.status.success(),
+        hops,
+        elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+    })
+}
+
+async fn run_diagnostic_command(
+    program: &'static str,
+    arguments: Vec<String>,
+    timeout: Duration,
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<Output, NetworkDiagnosticError> {
+    let child = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| NetworkDiagnosticError::Process(format!("{program}: {error}")))?;
+    let mut output = Box::pin(child.wait_with_output());
+    let mut deadline = Box::pin(tokio::time::sleep(timeout));
+    let mut cancellation_closed = false;
+
+    loop {
+        tokio::select! {
+            result = &mut output => {
+                return result.map_err(|error| NetworkDiagnosticError::Process(error.to_string()));
+            }
+            changed = cancellation.changed(), if !cancellation_closed => {
+                match changed {
+                    Ok(()) if *cancellation.borrow() => return Err(NetworkDiagnosticError::Cancelled),
+                    Ok(()) => {},
+                    Err(_) => cancellation_closed = true,
+                }
+            }
+            _ = &mut deadline => return Err(NetworkDiagnosticError::Timeout),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn ping_program() -> &'static str {
+    "ping"
+}
+
+#[cfg(windows)]
+fn ping_program() -> &'static str {
+    "ping.exe"
+}
+
+#[cfg(unix)]
+fn ping_arguments(host: &str) -> Vec<String> {
+    vec!["-n".into(), "-c".into(), "1".into(), host.into()]
+}
+
+#[cfg(windows)]
+fn ping_arguments(host: &str) -> Vec<String> {
+    vec!["-n".into(), "1".into(), host.into()]
+}
+
+#[cfg(unix)]
+fn traceroute_program() -> &'static str {
+    "traceroute"
+}
+
+#[cfg(windows)]
+fn traceroute_program() -> &'static str {
+    "tracert.exe"
+}
+
+#[cfg(unix)]
+fn traceroute_arguments(host: &str, timeout: Duration, max_hops: u8) -> Vec<String> {
+    let per_hop_seconds = timeout.as_secs().clamp(1, 60);
+    vec![
+        "-n".into(),
+        "-m".into(),
+        max_hops.to_string(),
+        "-w".into(),
+        per_hop_seconds.to_string(),
+        host.into(),
+    ]
+}
+
+#[cfg(windows)]
+fn traceroute_arguments(host: &str, timeout: Duration, max_hops: u8) -> Vec<String> {
+    vec![
+        "-d".into(),
+        "-h".into(),
+        max_hops.to_string(),
+        "-w".into(),
+        timeout.as_millis().clamp(1, 60_000).to_string(),
+        host.into(),
+    ]
+}
+
+fn bounded_trace_lines(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .take(MAX_TRACE_LINES)
+        .map(|line| line.chars().take(MAX_TRACE_LINE_BYTES).collect())
+        .collect()
+}
+
 fn validate_host(host: &str) -> Result<(), NetworkDiagnosticError> {
     if host.trim().is_empty()
         || host.len() > 253
@@ -357,5 +568,63 @@ mod tests {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].port, u16::MAX);
         });
+    }
+
+    #[test]
+    fn ping_uses_one_explicit_loopback_probe() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let options = PingOptions {
+                host: "127.0.0.1".into(),
+                timeout: Duration::from_secs(5),
+            };
+            let (_sender, mut cancellation) = watch::channel(false);
+            let result = ping(options, &mut cancellation).await.unwrap();
+            assert_eq!(result.host, "127.0.0.1");
+            assert!(result.reachable);
+        });
+    }
+
+    #[test]
+    fn diagnostics_cancel_before_process_start() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (_sender, mut cancellation) = watch::channel(true);
+            let ping_result = ping(
+                PingOptions {
+                    host: "127.0.0.1".into(),
+                    timeout: Duration::from_secs(5),
+                },
+                &mut cancellation,
+            )
+            .await;
+            assert!(matches!(
+                ping_result,
+                Err(NetworkDiagnosticError::Cancelled)
+            ));
+
+            let trace_result = traceroute(
+                TracerouteOptions {
+                    host: "127.0.0.1".into(),
+                    timeout: Duration::from_secs(5),
+                    max_hops: 4,
+                },
+                &mut cancellation,
+            )
+            .await;
+            assert!(matches!(
+                trace_result,
+                Err(NetworkDiagnosticError::Cancelled)
+            ));
+        });
+    }
+
+    #[test]
+    fn traceroute_output_is_bounded_before_ipc() {
+        let input = vec![b'x'; MAX_TRACE_LINE_BYTES + 20];
+        let output = bounded_trace_lines(&[input, b"\nsecond".to_vec()].concat());
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].len(), MAX_TRACE_LINE_BYTES);
+        assert_eq!(output[1], "second");
     }
 }

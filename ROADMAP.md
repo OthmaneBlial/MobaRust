@@ -64,7 +64,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Bounded native TCP check and port-range diagnostic primitive
 - [x] DNS resolution, bounded TCP checks, and explicit diagnostics UI
 - [x] Bounded port-scan UI with progress and cancellation
-- [ ] Ping, traceroute, and fingerprint inspection
+- [x] Bounded platform-native ping and traceroute with cancellation and output limits
+- [ ] SSH fingerprint inspection
 - [ ] X11 forwarding, monitoring, and portable packaging
 
 ## Operator workflows

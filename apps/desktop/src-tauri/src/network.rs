@@ -1,5 +1,6 @@
 use mobarust_network::{
-    NetworkDiagnosticError, PortScanOptions, TcpCheckResult, scan_tcp_with_progress,
+    NetworkDiagnosticError, PingOptions, PingResult, PortScanOptions, TcpCheckResult,
+    TracerouteOptions, TracerouteResult, ping, scan_tcp_with_progress, traceroute,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,6 +31,12 @@ pub struct NetworkScanResponse {
     pub scan_id: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDiagnosticResponse {
+    pub operation_id: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum NetworkScanState {
@@ -50,6 +57,33 @@ struct NetworkScanEvent {
     error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum NetworkDiagnosticKind {
+    Ping,
+    Traceroute,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum NetworkDiagnosticState {
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkDiagnosticEvent {
+    operation_id: String,
+    kind: NetworkDiagnosticKind,
+    state: NetworkDiagnosticState,
+    ping: Option<PingResult>,
+    traceroute: Option<TracerouteResult>,
+    error: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum NetworkManagerError {
     #[error("network scan is not found: {0}")]
@@ -67,6 +101,7 @@ pub enum NetworkManagerError {
 #[derive(Clone, Default)]
 pub struct NetworkManager {
     scans: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+    diagnostics: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
 
 impl NetworkManager {
@@ -190,13 +225,190 @@ impl NetworkManager {
         Ok(true)
     }
 
+    pub async fn start_ping(
+        &self,
+        app: AppHandle,
+        host: String,
+        timeout_ms: u64,
+    ) -> Result<NetworkDiagnosticResponse, NetworkManagerError> {
+        let options = PingOptions {
+            host,
+            timeout: validated_timeout(timeout_ms)?,
+        };
+        options.validate()?;
+        let operation_id = Uuid::new_v4().to_string();
+        let (cancel_sender, mut cancellation) = watch::channel(false);
+        self.diagnostics
+            .lock()
+            .map_err(|_| NetworkManagerError::LockPoisoned)?
+            .insert(operation_id.clone(), cancel_sender);
+        emit_diagnostic_event(
+            &app,
+            NetworkDiagnosticEvent {
+                operation_id: operation_id.clone(),
+                kind: NetworkDiagnosticKind::Ping,
+                state: NetworkDiagnosticState::Running,
+                ping: None,
+                traceroute: None,
+                error: None,
+            },
+        );
+        let manager = self.clone();
+        let id_for_task = operation_id.clone();
+        tauri::async_runtime::spawn(async move {
+            match ping(options, &mut cancellation).await {
+                Ok(result) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Ping,
+                        state: NetworkDiagnosticState::Completed,
+                        ping: Some(result),
+                        traceroute: None,
+                        error: None,
+                    },
+                ),
+                Err(NetworkDiagnosticError::Cancelled) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Ping,
+                        state: NetworkDiagnosticState::Cancelled,
+                        ping: None,
+                        traceroute: None,
+                        error: None,
+                    },
+                ),
+                Err(error) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Ping,
+                        state: NetworkDiagnosticState::Failed,
+                        ping: None,
+                        traceroute: None,
+                        error: Some(error.to_string()),
+                    },
+                ),
+            }
+            manager.remove_diagnostic(&id_for_task);
+        });
+        Ok(NetworkDiagnosticResponse { operation_id })
+    }
+
+    pub async fn start_traceroute(
+        &self,
+        app: AppHandle,
+        host: String,
+        timeout_ms: u64,
+        max_hops: u8,
+    ) -> Result<NetworkDiagnosticResponse, NetworkManagerError> {
+        let options = TracerouteOptions {
+            host,
+            timeout: validated_timeout(timeout_ms)?,
+            max_hops,
+        };
+        options.validate()?;
+        let operation_id = Uuid::new_v4().to_string();
+        let (cancel_sender, mut cancellation) = watch::channel(false);
+        self.diagnostics
+            .lock()
+            .map_err(|_| NetworkManagerError::LockPoisoned)?
+            .insert(operation_id.clone(), cancel_sender);
+        emit_diagnostic_event(
+            &app,
+            NetworkDiagnosticEvent {
+                operation_id: operation_id.clone(),
+                kind: NetworkDiagnosticKind::Traceroute,
+                state: NetworkDiagnosticState::Running,
+                ping: None,
+                traceroute: None,
+                error: None,
+            },
+        );
+        let manager = self.clone();
+        let id_for_task = operation_id.clone();
+        tauri::async_runtime::spawn(async move {
+            match traceroute(options, &mut cancellation).await {
+                Ok(result) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Traceroute,
+                        state: NetworkDiagnosticState::Completed,
+                        ping: None,
+                        traceroute: Some(result),
+                        error: None,
+                    },
+                ),
+                Err(NetworkDiagnosticError::Cancelled) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Traceroute,
+                        state: NetworkDiagnosticState::Cancelled,
+                        ping: None,
+                        traceroute: None,
+                        error: None,
+                    },
+                ),
+                Err(error) => emit_diagnostic_event(
+                    &app,
+                    NetworkDiagnosticEvent {
+                        operation_id: id_for_task.clone(),
+                        kind: NetworkDiagnosticKind::Traceroute,
+                        state: NetworkDiagnosticState::Failed,
+                        ping: None,
+                        traceroute: None,
+                        error: Some(error.to_string()),
+                    },
+                ),
+            }
+            manager.remove_diagnostic(&id_for_task);
+        });
+        Ok(NetworkDiagnosticResponse { operation_id })
+    }
+
+    pub fn cancel_diagnostic(&self, operation_id: &str) -> Result<bool, NetworkManagerError> {
+        let sender = self
+            .diagnostics
+            .lock()
+            .map_err(|_| NetworkManagerError::LockPoisoned)?
+            .get(operation_id)
+            .cloned();
+        let Some(sender) = sender else {
+            return Ok(false);
+        };
+        sender
+            .send(true)
+            .map_err(|_| NetworkManagerError::MissingScan(operation_id.to_owned()))?;
+        Ok(true)
+    }
+
     fn remove(&self, scan_id: &str) {
         if let Ok(mut scans) = self.scans.lock() {
             scans.remove(scan_id);
+        }
+    }
+
+    fn remove_diagnostic(&self, operation_id: &str) {
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            diagnostics.remove(operation_id);
         }
     }
 }
 
 fn emit_scan_event(app: &AppHandle, event: NetworkScanEvent) {
     let _ = app.emit("network://scan", event);
+}
+
+fn emit_diagnostic_event(app: &AppHandle, event: NetworkDiagnosticEvent) {
+    let _ = app.emit("network://diagnostic", event);
+}
+
+fn validated_timeout(timeout_ms: u64) -> Result<Duration, NetworkManagerError> {
+    if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&timeout_ms) {
+        return Err(NetworkManagerError::InvalidTimeout);
+    }
+    Ok(Duration::from_millis(timeout_ms))
 }

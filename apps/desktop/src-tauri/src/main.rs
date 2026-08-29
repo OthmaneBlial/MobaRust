@@ -79,6 +79,14 @@ struct NetworkTcpCheckRequest {
     timeout_ms: u64,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkTracerouteRequest {
+    host: String,
+    timeout_ms: u64,
+    max_hops: u8,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultPutRequest {
@@ -493,6 +501,40 @@ async fn network_scan_start(
     manager
         .start_scan(app, request)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_ping_start(
+    app: tauri::AppHandle,
+    manager: State<'_, NetworkManager>,
+    request: NetworkResolveRequest,
+) -> Result<network::NetworkDiagnosticResponse, String> {
+    manager
+        .start_ping(app, request.host, request.timeout_ms)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_traceroute_start(
+    app: tauri::AppHandle,
+    manager: State<'_, NetworkManager>,
+    request: NetworkTracerouteRequest,
+) -> Result<network::NetworkDiagnosticResponse, String> {
+    manager
+        .start_traceroute(app, request.host, request.timeout_ms, request.max_hops)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn network_diagnostic_cancel(
+    manager: State<'_, NetworkManager>,
+    operation_id: String,
+) -> Result<bool, String> {
+    manager
+        .cancel_diagnostic(&operation_id)
         .map_err(|error| error.to_string())
 }
 
@@ -941,6 +983,9 @@ fn main() {
             session_delete,
             network_resolve_host,
             network_check_tcp,
+            network_ping_start,
+            network_traceroute_start,
+            network_diagnostic_cancel,
             network_scan_start,
             network_scan_cancel,
             ssh_connect,
