@@ -37,6 +37,8 @@ pub enum SerialError {
     Closed,
     #[error("serial connection was cancelled")]
     Cancelled,
+    #[error("serial devices could not be enumerated: {0}")]
+    Enumeration(String),
     #[error("serial lifecycle error: {0}")]
     Lifecycle(String),
     #[error("serial worker failed: {0}")]
@@ -93,6 +95,36 @@ pub enum LineEnding {
     CrLf,
     Cr,
     Lf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerialDeviceInfo {
+    pub device: String,
+    pub kind: String,
+}
+
+/// Enumerates port metadata without opening a device. Callers should invoke
+/// this explicitly from a user-visible refresh action; the transport never
+/// performs enumeration implicitly.
+pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, SerialError> {
+    serialport::available_ports()
+        .map(|ports| {
+            ports
+                .into_iter()
+                .map(|port| SerialDeviceInfo {
+                    device: port.port_name,
+                    kind: match port.port_type {
+                        serialport::SerialPortType::UsbPort(_) => "USB",
+                        serialport::SerialPortType::PciPort => "PCI",
+                        serialport::SerialPortType::BluetoothPort => "Bluetooth",
+                        serialport::SerialPortType::Unknown => "Unknown",
+                    }
+                    .to_owned(),
+                })
+                .collect()
+        })
+        .map_err(|error| SerialError::Enumeration(error.to_string()))
 }
 
 impl LineEnding {

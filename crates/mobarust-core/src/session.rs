@@ -55,6 +55,35 @@ impl std::fmt::Display for SessionId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialProfile {
+    pub device: String,
+    pub baud_rate: u32,
+    pub data_bits: String,
+    pub stop_bits: String,
+    pub parity: String,
+    pub flow_control: String,
+    pub line_ending: String,
+}
+
+impl SerialProfile {
+    pub fn validate(&self) -> Result<(), SessionValidationError> {
+        let valid_choice = |value: &str, choices: &[&str]| choices.contains(&value);
+        if self.device.trim().is_empty()
+            || self.device.contains('\0')
+            || self.baud_rate == 0
+            || !valid_choice(&self.data_bits, &["five", "six", "seven", "eight"])
+            || !valid_choice(&self.stop_bits, &["one", "two"])
+            || !valid_choice(&self.parity, &["none", "odd", "even"])
+            || !valid_choice(&self.flow_control, &["none", "software", "hardware"])
+            || !valid_choice(&self.line_ending, &["none", "cr-lf", "cr", "lf"])
+        {
+            return Err(SessionValidationError::InvalidSerialProfile);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: SessionId,
     pub name: String,
@@ -75,6 +104,8 @@ pub struct SessionRecord {
     pub environment: Vec<(String, String)>,
     pub jump_hosts: Vec<String>,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub serial_profile: Option<SerialProfile>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -87,6 +118,8 @@ pub enum SessionValidationError {
     MissingPort,
     #[error("session tags cannot be empty")]
     EmptyTag,
+    #[error("serial profile is invalid")]
+    InvalidSerialProfile,
 }
 
 impl SessionRecord {
@@ -109,6 +142,7 @@ impl SessionRecord {
             environment: Vec::new(),
             jump_hosts: Vec::new(),
             notes: None,
+            serial_profile: None,
         }
     }
 
@@ -119,11 +153,17 @@ impl SessionRecord {
         if self.hostname.trim().is_empty() {
             return Err(SessionValidationError::EmptyHostname);
         }
-        if self.protocol != Protocol::Local && self.port == 0 {
+        if !matches!(self.protocol, Protocol::Local | Protocol::Serial) && self.port == 0 {
             return Err(SessionValidationError::MissingPort);
         }
         if self.tags.iter().any(|tag| tag.trim().is_empty()) {
             return Err(SessionValidationError::EmptyTag);
+        }
+        match (self.protocol, &self.serial_profile) {
+            (Protocol::Serial, Some(profile)) => profile.validate()?,
+            (Protocol::Serial, None) => return Err(SessionValidationError::InvalidSerialProfile),
+            (_, Some(profile)) => profile.validate()?,
+            (_, None) => {}
         }
         Ok(())
     }
@@ -161,8 +201,29 @@ mod tests {
             environment: Vec::new(),
             jump_hosts: Vec::new(),
             notes: None,
+            serial_profile: None,
         };
 
         assert_eq!(session.validate(), Err(SessionValidationError::MissingPort));
+    }
+
+    #[test]
+    fn serial_profile_accepts_only_bounded_wire_choices() {
+        let profile = SerialProfile {
+            device: "/dev/tty.test".into(),
+            baud_rate: 115_200,
+            data_bits: "eight".into(),
+            stop_bits: "one".into(),
+            parity: "none".into(),
+            flow_control: "none".into(),
+            line_ending: "cr-lf".into(),
+        };
+        profile.validate().unwrap();
+        let mut invalid = profile;
+        invalid.line_ending = "shell-command".into();
+        assert_eq!(
+            invalid.validate(),
+            Err(SessionValidationError::InvalidSerialProfile)
+        );
     }
 }

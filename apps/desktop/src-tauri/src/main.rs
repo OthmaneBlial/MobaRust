@@ -6,7 +6,7 @@ mod ssh;
 mod telnet;
 mod terminal;
 
-use mobarust_core::{AppSettings, AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_core::{AppSettings, AuthMethod, Protocol, SerialProfile, SessionId, SessionRecord};
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore};
 use mobarust_vault::PlatformVault;
@@ -38,6 +38,13 @@ struct AppSnapshot {
 struct SaveSshSessionRequest {
     name: String,
     request: SshConnectRequest,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveSerialSessionRequest {
+    name: String,
+    request: SerialConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -246,6 +253,54 @@ fn session_save_ssh(
         environment: Vec::new(),
         jump_hosts: jump_hosts.into_iter().map(|jump| jump.host).collect(),
         notes: None,
+        serial_profile: None,
+    };
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .save(session)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_save_serial(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: SaveSerialSessionRequest,
+) -> Result<SessionRecord, String> {
+    let SaveSerialSessionRequest { name, request } = payload;
+    let session = SessionRecord {
+        id: SessionId::new(),
+        name,
+        protocol: Protocol::Serial,
+        hostname: request.device.clone(),
+        port: 0,
+        username: None,
+        auth: AuthMethod::None,
+        known_hosts_path: None,
+        pinned_fingerprint: None,
+        folder: Some("Serial devices".into()),
+        tags: vec!["serial".into()],
+        favorite: false,
+        startup_directory: None,
+        startup_command: None,
+        environment: Vec::new(),
+        jump_hosts: Vec::new(),
+        notes: None,
+        serial_profile: Some(SerialProfile {
+            device: request.device,
+            baud_rate: request.baud_rate,
+            data_bits: format!("{:?}", request.data_bits).to_lowercase(),
+            stop_bits: format!("{:?}", request.stop_bits).to_lowercase(),
+            parity: format!("{:?}", request.parity).to_lowercase(),
+            flow_control: format!("{:?}", request.flow_control).to_lowercase(),
+            line_ending: match request.line_ending {
+                mobarust_serial::LineEnding::None => "none",
+                mobarust_serial::LineEnding::CrLf => "cr-lf",
+                mobarust_serial::LineEnding::Cr => "cr",
+                mobarust_serial::LineEnding::Lf => "lf",
+            }
+            .into(),
+        }),
     };
     store
         .lock()
@@ -576,6 +631,13 @@ async fn serial_connect(
 }
 
 #[tauri::command]
+async fn serial_list_devices() -> Result<Vec<mobarust_serial::SerialDeviceInfo>, String> {
+    SerialManager::list_devices()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn serial_write(
     manager: State<'_, SerialManager>,
     terminal_id: String,
@@ -688,6 +750,7 @@ fn main() {
             settings_save,
             settings_reset,
             session_save_ssh,
+            session_save_serial,
             session_delete,
             network_resolve_host,
             network_check_tcp,
@@ -715,6 +778,7 @@ fn main() {
             telnet_attach,
             telnet_close,
             serial_connect,
+            serial_list_devices,
             serial_write,
             serial_attach,
             serial_close,

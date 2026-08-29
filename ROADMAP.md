@@ -54,7 +54,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Telnet Quick Connect, native session manager, terminal output, input, and resize wiring
 - [x] Native serial transport configuration and recoverable device lifecycle
 - [x] Serial Quick Connect, native session manager, terminal output, and input wiring
-- [ ] Serial device refresh, saved profiles, and hardware interoperability matrix
+- [x] Explicit serial device refresh and secret-free saved serial profiles
+- [ ] Hardware interoperability matrix
 - [x] Bounded native TCP check and port-range diagnostic primitive
 - [x] DNS resolution, bounded TCP checks, and explicit diagnostics UI
 - [x] Bounded port-scan UI with progress and cancellation

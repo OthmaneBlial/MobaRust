@@ -396,6 +396,7 @@ impl SessionStore {
                 environment: Vec::new(),
                 jump_hosts,
                 notes,
+                serial_profile: None,
             });
         }
 
@@ -591,6 +592,7 @@ mod tests {
             environment: Vec::new(),
             jump_hosts: Vec::new(),
             notes: None,
+            serial_profile: None,
         }
     }
 

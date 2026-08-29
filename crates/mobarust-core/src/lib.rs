@@ -8,7 +8,9 @@ pub mod terminal;
 pub mod transfer;
 
 pub use lifecycle::{ConnectionEvent, ConnectionLifecycle, ConnectionState, TransitionError};
-pub use session::{AuthMethod, Protocol, SessionId, SessionRecord, SessionValidationError};
+pub use session::{
+    AuthMethod, Protocol, SerialProfile, SessionId, SessionRecord, SessionValidationError,
+};
 pub use settings::{
     AppSettings, AppearanceSettings, GeneralSettings, NetworkSettings, SettingsValidationError,
     SshSettings, TerminalSettings, ThemePreference,

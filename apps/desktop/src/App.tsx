@@ -143,6 +143,15 @@ type SavedSession = {
   startup_command: string | null;
   environment: Array<[string, string]>;
   notes: string | null;
+  serial_profile?: {
+    device: string;
+    baud_rate: number;
+    data_bits: "five" | "six" | "seven" | "eight";
+    stop_bits: "one" | "two";
+    parity: "none" | "odd" | "even";
+    flow_control: "none" | "software" | "hardware";
+    line_ending: "none" | "cr-lf" | "cr" | "lf";
+  } | null;
   auth:
     | { kind: "none" }
     | { kind: "agent" }
@@ -210,6 +219,11 @@ type SerialConnectRequest = {
   parity: "none" | "odd" | "even";
   flowControl: "none" | "software" | "hardware";
   lineEnding: "none" | "cr-lf" | "cr" | "lf";
+};
+
+type SerialDeviceInfo = {
+  device: string;
+  kind: string;
 };
 
 type SerialConnectResponse = {
@@ -630,7 +644,7 @@ function App() {
     }
   }, []);
 
-  const connectSerial = useCallback(async (request: SerialConnectRequest) => {
+  const connectSerial = useCallback(async (request: SerialConnectRequest, offerSave = true) => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
@@ -648,10 +662,22 @@ function App() {
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice(`Connected to ${response.device}. Serial traffic is not encrypted by MobaRust.`);
+      if (offerSave) {
+        const suggestedName = `${response.device} · ${request.baudRate}`;
+        const name = window.prompt("Save this serial profile as", suggestedName);
+        if (name?.trim()) {
+          try {
+            await invoke("session_save_serial", { payload: { name: name.trim(), request } });
+            refreshSavedSessions();
+          } catch (error) {
+            setConnectionError(`Connected, but the serial profile could not be saved: ${String(error)}`);
+          }
+        }
+      }
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, []);
+  }, [refreshSavedSessions]);
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
@@ -736,6 +762,23 @@ function App() {
   }, [editingSession?.id, refreshSavedSessions]);
 
   const connectSavedSession = useCallback((session: SavedSession) => {
+    if (session.protocol === "SERIAL") {
+      const profile = session.serial_profile;
+      if (!profile) {
+        setConnectionError("This serial profile has no saved device parameters.");
+        return;
+      }
+      void connectSerial({
+        device: profile.device,
+        baudRate: profile.baud_rate,
+        dataBits: profile.data_bits,
+        stopBits: profile.stop_bits,
+        parity: profile.parity,
+        flowControl: profile.flow_control,
+        lineEnding: profile.line_ending,
+      }, false);
+      return;
+    }
     if (session.jump_hosts.length > 0) {
       setConnectionError("This profile uses ProxyJump. Jump-host connections are imported but not implemented yet.");
       return;
@@ -746,7 +789,7 @@ function App() {
       return;
     }
     void connectSsh(request, false);
-  }, [connectSsh]);
+  }, [connectSerial, connectSsh]);
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
     if (!remoteSessionId) return;
@@ -1258,7 +1301,7 @@ function App() {
               <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
-            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH")).map(([folder, sessions]) => (
+            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL")).map(([folder, sessions]) => (
               <div key={folder} className="session-folder-group">
                 <div className="folder-heading nested-folder"><Folder size={12} /> {folder} <span>{sessions.length}</span></div>
                 {sessions.map((session) => (
@@ -1392,6 +1435,9 @@ function requestFromSavedSession(session: SavedSession): SshConnectRequest | nul
 function toSessionListItem(session: SavedSession): SessionListItem {
   if (session.protocol === "LOCAL") {
     return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", folder: session.folder ?? "Local terminals", active: true, favorite: session.favorite, tags: session.tags };
+  }
+  if (session.protocol === "SERIAL" && session.serial_profile) {
+    return { id: session.id, name: session.name, detail: `${session.serial_profile.device} · ${session.serial_profile.baud_rate}`, type: session.protocol, folder: session.folder ?? "Serial devices", active: false, favorite: session.favorite, tags: session.tags };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";
@@ -1738,12 +1784,31 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [terminal, setTerminal] = useState("xterm-256color");
   const [encoding, setEncoding] = useState<"utf-8" | "windows-1252">("utf-8");
   const [serialDevice, setSerialDevice] = useState("");
+  const [serialDevices, setSerialDevices] = useState<SerialDeviceInfo[]>([]);
+  const [serialDevicesLoading, setSerialDevicesLoading] = useState(false);
+  const [serialDevicesError, setSerialDevicesError] = useState<string | null>(null);
   const [baudRate, setBaudRate] = useState("115200");
   const [dataBits, setDataBits] = useState<SerialConnectRequest["dataBits"]>("eight");
   const [stopBits, setStopBits] = useState<SerialConnectRequest["stopBits"]>("one");
   const [parity, setParity] = useState<SerialConnectRequest["parity"]>("none");
   const [flowControl, setFlowControl] = useState<SerialConnectRequest["flowControl"]>("none");
   const [lineEnding, setLineEnding] = useState<SerialConnectRequest["lineEnding"]>("cr-lf");
+
+  const refreshSerialDevices = async () => {
+    if (!IS_TAURI) {
+      setSerialDevicesError("Device refresh requires the desktop runtime.");
+      return;
+    }
+    setSerialDevicesLoading(true);
+    setSerialDevicesError(null);
+    try {
+      setSerialDevices(await invoke<SerialDeviceInfo[]>("serial_list_devices"));
+    } catch (refreshError) {
+      setSerialDevicesError(String(refreshError));
+    } finally {
+      setSerialDevicesLoading(false);
+    }
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1840,8 +1905,10 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
             <>
               <label className="quick-connect-wide">
                 Device path
-                <input autoFocus required value={serialDevice} onChange={(event) => setSerialDevice(event.target.value)} placeholder="/dev/tty.usbserial-… or COM3" />
-                <small>No device enumeration is performed automatically.</small>
+                <div className="serial-device-input"><input autoFocus required list="serial-device-options" value={serialDevice} onChange={(event) => setSerialDevice(event.target.value)} placeholder="/dev/tty.usbserial-… or COM3" /><button type="button" className="outline-button" onClick={() => void refreshSerialDevices()} disabled={serialDevicesLoading}>{serialDevicesLoading ? "Refreshing" : "Refresh"}</button></div>
+                <datalist id="serial-device-options">{serialDevices.map((item) => <option key={item.device} value={item.device}>{item.kind}</option>)}</datalist>
+                <small>Refresh is explicit and reads port metadata only; manual entry remains available.</small>
+                {serialDevicesError && <small className="connect-error-inline" role="alert">{serialDevicesError}</small>}
               </label>
               <label>
                 Baud rate

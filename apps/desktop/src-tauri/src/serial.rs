@@ -94,6 +94,18 @@ pub struct SerialManager {
 }
 
 impl SerialManager {
+    pub async fn list_devices() -> Result<Vec<mobarust_serial::SerialDeviceInfo>, SerialManagerError>
+    {
+        tokio::task::spawn_blocking(mobarust_serial::enumerate_devices)
+            .await
+            .map_err(|error| {
+                SerialManagerError::Transport(mobarust_serial::SerialError::Worker(
+                    error.to_string(),
+                ))
+            })?
+            .map_err(SerialManagerError::Transport)
+    }
+
     pub async fn connect(
         &self,
         app: AppHandle,

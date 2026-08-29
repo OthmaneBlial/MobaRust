@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted and implemented for the native transport/configuration primitive and
-an explicit Quick Connect/session-manager path. Device enumeration and saved
-serial profiles remain pending.
+Accepted and implemented for the native transport/configuration primitive,
+explicit Quick Connect/session-manager path, read-only device refresh, and
+secret-free saved serial profiles.
 
 ## Decision
 
@@ -27,8 +27,11 @@ The configuration explicitly models:
 
 The `serialport` dependency is used as the cross-platform driver abstraction
 with default system-enumeration features disabled. A device is opened only
-after an explicit native connection request. Tests never enumerate or open
-real devices, `/dev` paths, USB adapters, or the user's hardware.
+after an explicit native connection request. Device enumeration is a separate,
+read-only command invoked only by the visible Refresh action. Tests never
+enumerate or open real devices, `/dev` paths, USB adapters, or the user's
+hardware. Saved serial profiles contain only the device path and line
+parameters; they contain no secret material.
 
 ## Lifecycle and device loss
 
@@ -41,7 +44,8 @@ Reconnect is explicit and bounded; there is no aggressive background probing
 of hardware. The Tauri manager owns one typed session command channel per
 connection, batches output, retains a small bounded pre-attach buffer, and
 emits `serial://state`, `serial://output`, and `serial://closed` events. The
-React shell only sends typed connection parameters and terminal input.
+React shell only sends typed connection parameters and terminal input; the
+refresh result contains device path and coarse port type metadata only.
 
 ## Security and safety
 
@@ -62,8 +66,8 @@ devices.
 
 ## Follow-ups
 
-- add an explicit, read-only device refresh command;
 - add platform fixtures for a disposable pseudo-terminal/loopback device;
 - verify USB adapter disappearance on Windows, Linux, and macOS in controlled
   environments;
 - add reconnect policy and line-ending/encoding controls to saved profiles.
+- complete a hardware interoperability matrix on dedicated test hardware.

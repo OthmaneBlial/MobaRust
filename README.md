@@ -15,6 +15,7 @@ The first working slice provides:
 - a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
 - a native Telnet transport and Quick Connect path with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, resize support, and a local TCP fixture; Telnet is clearly unencrypted;
 - a native serial transport primitive with explicit line parameters, bounded driver I/O, line-ending framing, and recoverable device-loss errors; hardware access is explicit and not exercised by tests;
+- an explicit serial-port refresh action and secret-free saved serial profiles that can be reopened with their line parameters;
 - a bounded native TCP diagnostic primitive with explicit targets, port ranges, concurrency, timeouts, cancellation, and loopback-only fixtures;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
@@ -36,7 +37,7 @@ The first working slice provides:
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake, cancellation path, Quick Connect path, Telnet session path, protocol fixture, serial session path, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth and vault-backed CRUD are still in progress. Native file/directory pickers, serial device refresh, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth and vault-backed CRUD are still in progress. Native file/directory pickers, hardware interoperability, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
