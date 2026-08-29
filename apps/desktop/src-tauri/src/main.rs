@@ -15,7 +15,7 @@ use serde::Serialize;
 use serial::{SerialConnectRequest, SerialManager};
 use ssh::{
     SshAuthRequest, SshConnectRequest, SshDynamicForwardRequest, SshLocalForwardRequest,
-    SshManager, SshTransferRequest,
+    SshManager, SshRemoteForwardRequest, SshTransferRequest,
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -458,6 +458,18 @@ async fn ssh_start_dynamic_forward(
 }
 
 #[tauri::command]
+async fn ssh_start_remote_forward(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    request: SshRemoteForwardRequest,
+) -> Result<ssh::SshTunnelResponse, String> {
+    manager
+        .start_remote_forward(terminal_id, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn ssh_cancel_tunnel(manager: State<'_, SshManager>, tunnel_id: String) -> Result<bool, String> {
     manager
         .cancel_tunnel(&tunnel_id)
@@ -660,6 +672,7 @@ fn main() {
             ssh_cancel_transfer,
             ssh_start_local_forward,
             ssh_start_dynamic_forward,
+            ssh_start_remote_forward,
             ssh_cancel_tunnel,
             telnet_connect,
             telnet_write,

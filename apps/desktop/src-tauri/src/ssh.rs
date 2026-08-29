@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::copy_bidirectional;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -131,6 +131,16 @@ pub struct SshDynamicForwardRequest {
     pub bind_port: u16,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshRemoteForwardRequest {
+    #[serde(default = "default_bind_host")]
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshTunnelResponse {
@@ -151,6 +161,14 @@ enum TunnelState {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+enum TunnelKind {
+    Local,
+    Dynamic,
+    Remote,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SshTunnelEvent {
     tunnel_id: String,
     terminal_id: String,
@@ -158,6 +176,7 @@ struct SshTunnelEvent {
     local_port: u16,
     target_host: String,
     target_port: u16,
+    kind: TunnelKind,
     state: TunnelState,
     connections: usize,
     bytes_forwarded: u64,
@@ -219,6 +238,10 @@ enum SshCommand {
     StartDynamicForward {
         job: DynamicForwardJob,
     },
+    StartRemoteForward {
+        job: RemoteForwardJob,
+        reply: oneshot::Sender<Result<SshTunnelResponse, String>>,
+    },
     StartTransfer {
         job: TransferJob,
     },
@@ -250,6 +273,7 @@ pub struct SshManager {
     sessions: Arc<Mutex<HashMap<String, SessionState>>>,
     transfers: Arc<Mutex<HashMap<String, TransferControl>>>,
     tunnels: Arc<Mutex<HashMap<String, TunnelControl>>>,
+    remote_forwards: Arc<Mutex<HashMap<String, String>>>,
     transfer_slots: Arc<Semaphore>,
 }
 
@@ -259,6 +283,7 @@ impl Default for SshManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             transfers: Arc::new(Mutex::new(HashMap::new())),
             tunnels: Arc::new(Mutex::new(HashMap::new())),
+            remote_forwards: Arc::new(Mutex::new(HashMap::new())),
             transfer_slots: Arc::new(Semaphore::new(3)),
         }
     }
@@ -308,6 +333,16 @@ struct DynamicForwardJob {
     cancel: watch::Receiver<bool>,
 }
 
+struct RemoteForwardJob {
+    tunnel_id: String,
+    terminal_id: String,
+    bind_host: String,
+    bind_port: u16,
+    target_host: String,
+    target_port: u16,
+    cancel: watch::Receiver<bool>,
+}
+
 impl DynamicForwardJob {
     fn event(
         &self,
@@ -323,6 +358,7 @@ impl DynamicForwardJob {
             local_port: self.bind_port,
             target_host: "SOCKS5".into(),
             target_port: 0,
+            kind: TunnelKind::Dynamic,
             state,
             connections,
             bytes_forwarded,
@@ -346,6 +382,31 @@ impl LocalForwardJob {
             local_port: self.bind_port,
             target_host: self.target_host.clone(),
             target_port: self.target_port,
+            kind: TunnelKind::Local,
+            state,
+            connections,
+            bytes_forwarded,
+            error,
+        }
+    }
+}
+
+impl RemoteForwardJob {
+    fn event(
+        &self,
+        state: TunnelState,
+        connections: usize,
+        bytes_forwarded: u64,
+        error: Option<String>,
+    ) -> SshTunnelEvent {
+        SshTunnelEvent {
+            tunnel_id: self.tunnel_id.clone(),
+            terminal_id: self.terminal_id.clone(),
+            local_host: self.bind_host.clone(),
+            local_port: self.bind_port,
+            target_host: self.target_host.clone(),
+            target_port: self.target_port,
+            kind: TunnelKind::Remote,
             state,
             connections,
             bytes_forwarded,
@@ -586,6 +647,7 @@ impl SshManager {
                 local_port,
                 target_host: target_host.clone(),
                 target_port: request.target_port,
+                kind: TunnelKind::Local,
                 state: TunnelState::Listening,
                 connections: 0,
                 bytes_forwarded: 0,
@@ -675,6 +737,85 @@ impl SshManager {
             bind_host,
             bind_port: local_port,
         })
+    }
+
+    pub async fn start_remote_forward(
+        &self,
+        terminal_id: String,
+        request: SshRemoteForwardRequest,
+    ) -> Result<SshTunnelResponse, SshManagerError> {
+        let sender = self.sender(&terminal_id)?;
+        let bind_host = if request.bind_host.trim().is_empty() {
+            default_bind_host().to_owned()
+        } else {
+            request.bind_host.trim().to_owned()
+        };
+        let target_host = request.target_host.trim().to_owned();
+        if bind_host.contains('\0') {
+            return Err(SshManagerError::InvalidRequest(
+                "remote bind host cannot contain NUL".into(),
+            ));
+        }
+        if target_host.is_empty() || target_host.contains('\0') || request.target_port == 0 {
+            return Err(SshManagerError::InvalidRequest(
+                "remote forward target host and port are required".into(),
+            ));
+        }
+        let tunnel_id = Uuid::new_v4().to_string();
+        {
+            let mut remote_forwards = self
+                .remote_forwards
+                .lock()
+                .map_err(|_| SshManagerError::Closed)?;
+            if remote_forwards.contains_key(&terminal_id) {
+                return Err(SshManagerError::InvalidRequest(
+                    "only one remote forward can be active per SSH session".into(),
+                ));
+            }
+            remote_forwards.insert(terminal_id.clone(), tunnel_id.clone());
+        }
+
+        let (cancel, cancel_receiver) = watch::channel(false);
+        {
+            let mut tunnels = match self.tunnels.lock() {
+                Ok(tunnels) => tunnels,
+                Err(_) => {
+                    if let Ok(mut remote_forwards) = self.remote_forwards.lock() {
+                        remote_forwards.remove(&terminal_id);
+                    }
+                    return Err(SshManagerError::Closed);
+                }
+            };
+            tunnels.insert(
+                tunnel_id.clone(),
+                TunnelControl {
+                    terminal_id: terminal_id.clone(),
+                    cancel,
+                },
+            );
+        }
+        let (reply, response) = oneshot::channel();
+        let job = RemoteForwardJob {
+            tunnel_id: tunnel_id.clone(),
+            terminal_id: terminal_id.clone(),
+            bind_host,
+            bind_port: request.bind_port,
+            target_host,
+            target_port: request.target_port,
+            cancel: cancel_receiver,
+        };
+        if sender
+            .send(SshCommand::StartRemoteForward { job, reply })
+            .await
+            .is_err()
+        {
+            self.finish_tunnel(&tunnel_id);
+            return Err(SshManagerError::Closed);
+        }
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
     }
 
     pub fn cancel_tunnel(&self, tunnel_id: &str) -> Result<bool, SshManagerError> {
@@ -861,6 +1002,9 @@ impl SshManager {
     fn finish_tunnel(&self, tunnel_id: &str) {
         if let Ok(mut tunnels) = self.tunnels.lock() {
             tunnels.remove(tunnel_id);
+        }
+        if let Ok(mut remote_forwards) = self.remote_forwards.lock() {
+            remote_forwards.retain(|_, active_tunnel_id| active_tunnel_id != tunnel_id);
         }
     }
 
@@ -1186,6 +1330,21 @@ async fn run_shell_once(
                             run_dynamic_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
                         });
                     }
+                    Some(SshCommand::StartRemoteForward { job, reply }) => {
+                        let tunnel_manager = manager.clone();
+                        let tunnel_connection = Arc::clone(connection);
+                        let tunnel_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_remote_forward(
+                                tunnel_app,
+                                tunnel_manager,
+                                tunnel_connection,
+                                job,
+                                reply,
+                            )
+                            .await;
+                        });
+                    }
                     Some(SshCommand::StartTransfer { job }) => {
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
@@ -1454,6 +1613,161 @@ async fn run_dynamic_forward(
     }
 
     workers.shutdown().await;
+    if !failed {
+        manager.emit_tunnel(
+            &app,
+            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
+        );
+    }
+    manager.finish_tunnel(&job.tunnel_id);
+}
+
+async fn run_remote_forward(
+    app: AppHandle,
+    manager: SshManager,
+    connection: Arc<SshConnection>,
+    mut job: RemoteForwardJob,
+    reply: oneshot::Sender<Result<SshTunnelResponse, String>>,
+) {
+    const MAX_CONNECTIONS: usize = 16;
+    let mut connections = 0_usize;
+    let mut bytes_forwarded = 0_u64;
+    let mut failed = false;
+    let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
+    let requested_port = job.bind_port;
+    let mut request_cancel = job.cancel.clone();
+
+    let remote_port = tokio::select! {
+        changed = request_cancel.changed() => {
+            let message = if changed.is_err() || *request_cancel.borrow() {
+                "remote forward cancelled before the server listener was ready".to_owned()
+            } else {
+                "remote forward cancellation channel closed".to_owned()
+            };
+            let _ = reply.send(Err(message));
+            manager.finish_tunnel(&job.tunnel_id);
+            return;
+        }
+        result = connection.request_remote_forward(job.bind_host.clone(), u32::from(requested_port)) => {
+            match result {
+                Ok(port) => port,
+                Err(error) => {
+                    let message = error.to_string();
+                    manager.emit_tunnel(&app, job.event(TunnelState::Failed, 0, 0, Some(message.clone())));
+                    let _ = reply.send(Err(message));
+                    manager.finish_tunnel(&job.tunnel_id);
+                    return;
+                }
+            }
+        }
+    };
+    job.bind_port = remote_port;
+
+    manager.emit_tunnel(
+        &app,
+        job.event(TunnelState::Listening, connections, bytes_forwarded, None),
+    );
+    let response = SshTunnelResponse {
+        tunnel_id: job.tunnel_id.clone(),
+        bind_host: job.bind_host.clone(),
+        bind_port: remote_port,
+    };
+    if reply.send(Ok(response)).is_err() {
+        let _ = connection
+            .cancel_remote_forward(job.bind_host.clone(), u32::from(remote_port))
+            .await;
+        manager.finish_tunnel(&job.tunnel_id);
+        return;
+    }
+    manager.emit_tunnel(
+        &app,
+        job.event(TunnelState::Running, connections, bytes_forwarded, None),
+    );
+
+    loop {
+        tokio::select! {
+            changed = job.cancel.changed() => {
+                if changed.is_err() || *job.cancel.borrow() {
+                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    break;
+                }
+            }
+            worker = workers.join_next(), if !workers.is_empty() => {
+                if let Some(result) = worker {
+                    match result {
+                        Ok(Ok((uploaded, downloaded))) => {
+                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        }
+                        Ok(Err(error)) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                        }
+                        Err(error) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                        }
+                    }
+                }
+            }
+            forwarded = connection.next_forwarded_channel() => {
+                match forwarded {
+                    Some(channel) => {
+                        if workers.len() >= MAX_CONNECTIONS {
+                            drop(channel);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("remote tunnel connection limit reached".into())));
+                            continue;
+                        }
+                        connections = connections.saturating_add(1);
+                        let target_host = job.target_host.clone();
+                        let target_port = job.target_port;
+                        let mut cancel = job.cancel.clone();
+                        workers.spawn(async move {
+                            let mut local = tokio::select! {
+                                _ = cancel.changed() => return Err("remote tunnel connection cancelled".into()),
+                                result = tokio::time::timeout(
+                                    Duration::from_secs(12),
+                                    TcpStream::connect((target_host.as_str(), target_port)),
+                                ) => {
+                                    match result {
+                                        Ok(Ok(stream)) => stream,
+                                        Ok(Err(error)) => return Err(format!("local remote-forward target connection failed: {error}")),
+                                        Err(_) => return Err("local remote-forward target connection timed out".into()),
+                                    }
+                                }
+                            };
+                            let mut remote = channel.into_stream();
+                            tokio::select! {
+                                _ = cancel.changed() => Err("remote tunnel connection cancelled".into()),
+                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                            }
+                        });
+                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                    }
+                    None => {
+                        failed = true;
+                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some("SSH connection closed while remote forwarding was active".into())));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    workers.shutdown().await;
+    if let Err(error) = connection
+        .cancel_remote_forward(job.bind_host.clone(), u32::from(remote_port))
+        .await
+    {
+        failed = true;
+        manager.emit_tunnel(
+            &app,
+            job.event(
+                TunnelState::Failed,
+                connections,
+                bytes_forwarded,
+                Some(format!("could not cancel remote listener: {error}")),
+            ),
+        );
+    }
     if !failed {
         manager.emit_tunnel(
             &app,

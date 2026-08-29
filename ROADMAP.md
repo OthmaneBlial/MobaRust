@@ -33,12 +33,12 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Local and remote SSH forwarding through native direct-tcpip/forwarded-tcpip channels with bounded clients and cancellation
 - [x] Bounded local SOCKS5 `-D` proxy path with explicit tunnel-manager controls
 - [x] Native remote and dynamic forwarding transport primitives
-- [ ] Remote and dynamic forwarding manager UI
+- [x] Local, remote, and dynamic forwarding manager UI with explicit direction labels and stop controls
 - [x] Native jump-host chain transport with host-key policy per hop
 - [x] Bounded shell reconnect attempts with explicit lifecycle telemetry
 - [ ] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles
 - [x] Session tags, search, favorites, and secret-free MobaRust import/export
-- [ ] Session folders, editing, and richer file-based import/export workflows
+- [x] Session folders and metadata-only profile editing/deletion
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
 - [ ] Portable encrypted vault research and implementation

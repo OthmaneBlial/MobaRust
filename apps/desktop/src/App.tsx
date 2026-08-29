@@ -213,6 +213,7 @@ type SshTunnelEvent = {
   localPort: number;
   targetHost: string;
   targetPort: number;
+  kind: "local" | "dynamic" | "remote";
   state: TunnelState;
   connections: number;
   bytesForwarded: number;
@@ -795,6 +796,36 @@ function App() {
     }
   }, [remoteSessionId]);
 
+  const startRemoteForward = useCallback(async () => {
+    if (!remoteSessionId) return;
+    const bindHost = window.prompt("Remote bind host (on the SSH server)", "127.0.0.1");
+    if (!bindHost?.trim()) return;
+    const bindPortValue = window.prompt("Remote bind port (0 chooses a free port)", "0");
+    const bindPort = Number(bindPortValue);
+    if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
+      setConnectionError("Remote bind port must be an integer between 0 and 65535.");
+      return;
+    }
+    const targetHost = window.prompt("Local target host (from this Mac)", "127.0.0.1");
+    if (!targetHost?.trim()) return;
+    const targetPortValue = window.prompt("Local target port", "3000");
+    const targetPort = Number(targetPortValue);
+    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+      setConnectionError("Local target port must be an integer between 1 and 65535.");
+      return;
+    }
+    try {
+      await invoke("ssh_start_remote_forward", {
+        terminalId: remoteSessionId,
+        request: { bindHost: bindHost.trim(), bindPort, targetHost: targetHost.trim(), targetPort },
+      });
+      setConnectionError(null);
+      setActiveView("tunnels");
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [remoteSessionId]);
+
   const startDynamicForward = useCallback(async () => {
     if (!remoteSessionId) return;
     const bindHost = window.prompt("SOCKS5 bind host", "127.0.0.1");
@@ -1205,7 +1236,7 @@ function App() {
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onCancelTunnel={cancelTunnel} />
+                <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
@@ -1338,19 +1369,21 @@ function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransfer
   })}</section>;
 }
 
-function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onCancelTunnel }: { tunnels: SshTunnelEvent[]; onNewTunnel: () => void; onNewDynamicForward: () => void; onCancelTunnel: (tunnelId: string) => void }) {
+function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onNewRemoteForward, onCancelTunnel }: { tunnels: SshTunnelEvent[]; onNewTunnel: () => void; onNewDynamicForward: () => void; onNewRemoteForward: () => void; onCancelTunnel: (tunnelId: string) => void }) {
   return <section className="tunnel-view" aria-label="SSH tunnel manager">
     <div className="tunnel-view-toolbar">
-      <div><span className="eyebrow">SSH / LOCAL FORWARDING</span><strong>Port forwarding</strong><p>Expose a service reachable from the SSH host on a bounded local listener.</p></div>
-      <div className="tunnel-view-actions"><button className="outline-button" onClick={onNewDynamicForward}><Network size={14} /> New SOCKS5 proxy</button><button className="primary-button" onClick={onNewTunnel}><Plus size={14} /> New local forward</button></div>
+      <div><span className="eyebrow">SSH / PORT FORWARDING</span><strong>Port forwarding</strong><p>Choose the direction explicitly. Listeners stay bounded and every tunnel can be stopped.</p></div>
+      <div className="tunnel-view-actions"><button className="outline-button" onClick={onNewDynamicForward}><Network size={14} /> New SOCKS5 proxy</button><button className="outline-button" onClick={onNewRemoteForward}><ArrowUpFromLine size={14} /> New remote forward</button><button className="primary-button" onClick={onNewTunnel}><Plus size={14} /> New local forward</button></div>
     </div>
     <div className="tunnel-view-meta"><span>{tunnels.length} recent tunnel{tunnels.length === 1 ? "" : "s"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native direct-tcpip · max 16 clients</span></div>
-    {tunnels.length === 0 ? <div className="tunnel-empty"><Network size={19} /><strong>No tunnels yet</strong><span>Create a local forward or SOCKS5 proxy through this SSH session.</span><div className="tunnel-empty-actions"><button className="outline-button" onClick={onNewTunnel}><Plus size={14} /> Create local forward</button><button className="outline-button" onClick={onNewDynamicForward}><Network size={14} /> Create SOCKS5 proxy</button></div></div> : <div className="tunnel-list">{tunnels.slice().reverse().map((tunnel) => {
+    {tunnels.length === 0 ? <div className="tunnel-empty"><Network size={19} /><strong>No tunnels yet</strong><span>Create a local, remote, or SOCKS5 tunnel through this SSH session.</span><div className="tunnel-empty-actions"><button className="outline-button" onClick={onNewTunnel}><Plus size={14} /> Create local forward</button><button className="outline-button" onClick={onNewRemoteForward}><ArrowUpFromLine size={14} /> Create remote forward</button><button className="outline-button" onClick={onNewDynamicForward}><Network size={14} /> Create SOCKS5 proxy</button></div></div> : <div className="tunnel-list">{tunnels.slice().reverse().map((tunnel) => {
       const active = !["stopped", "failed"].includes(tunnel.state);
       const stateIcon = tunnel.state === "failed" ? <CircleX size={15} /> : tunnel.state === "stopped" ? <CheckCircle2 size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />;
+      const remote = tunnel.kind === "remote";
+      const dynamic = tunnel.kind === "dynamic";
       return <article className={`tunnel-row tunnel-${tunnel.state}`} key={tunnel.tunnelId}>
         <div className="tunnel-row-icon">{stateIcon}</div>
-        <div className="tunnel-row-copy"><div className="tunnel-endpoints"><strong>{tunnel.localHost}:{tunnel.localPort}</strong><span>→</span><strong>{tunnel.targetHost}:{tunnel.targetPort}</strong></div><small>{tunnel.state} · {tunnel.connections} connection{tunnel.connections === 1 ? "" : "s"} · {formatBytes(tunnel.bytesForwarded)} forwarded</small>{tunnel.error && <small className="tunnel-error">{tunnel.error}</small>}</div>
+        <div className="tunnel-row-copy"><div className="tunnel-endpoints"><strong>{tunnel.localHost}:{tunnel.localPort}</strong><span>{remote ? "⇢" : "→"}</span><strong>{dynamic ? "SOCKS5" : `${tunnel.targetHost}:${tunnel.targetPort}`}</strong></div><small>{remote ? "remote listener → local target" : dynamic ? "local SOCKS5 proxy" : "local listener → remote target"} · {tunnel.state} · {tunnel.connections} connection{tunnel.connections === 1 ? "" : "s"} · {formatBytes(tunnel.bytesForwarded)} forwarded</small>{tunnel.error && <small className="tunnel-error">{tunnel.error}</small>}</div>
         {active && <button className="transfer-cancel" onClick={() => onCancelTunnel(tunnel.tunnelId)} aria-label="Stop tunnel" title="Stop tunnel"><CircleX size={14} /></button>}
       </article>;
     })}</div>}

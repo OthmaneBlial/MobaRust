@@ -27,12 +27,13 @@ The first working slice provides:
 - native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
 - native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
 - a transfer lifecycle model used by the native SFTP manager;
-- a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
+- a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
+- an explicit SSH tunnel manager for bounded local forwarding, remote `-R` forwarding, and local SOCKS5 `-D`, with direction-aware lifecycle events and stop controls;
 - a local quality command: `cargo xtask check`.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport, local forwarding channel, jump-host handshake, cancellation path, Quick Connect path, Telnet session path, protocol fixture, serial session path, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP transfer-manager wiring, serial device refresh, remote/dynamic forwarding manager UI, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport, local/remote/dynamic forwarding paths and manager UI, jump-host handshake, cancellation path, Quick Connect path, Telnet session path, protocol fixture, serial session path, serial configuration/lifecycle tests, bounded TCP diagnostics, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP transfer-manager wiring, serial device refresh, OpenSSH `ProxyJump` profile resolution, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
