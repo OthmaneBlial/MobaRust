@@ -43,6 +43,24 @@ pub struct SshConnectRequest {
     pub rows: u32,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SshSessionState {
+    Reconnecting,
+    Connected,
+    Failed,
+    Disconnected,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshSessionEvent {
+    terminal_id: String,
+    state: SshSessionState,
+    attempt: u8,
+    error: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshJumpHostRequest {
@@ -240,6 +258,14 @@ struct SessionState {
     pending_output: Vec<String>,
 }
 
+struct RemoteSessionContext {
+    app: AppHandle,
+    manager: SshManager,
+    terminal_id: String,
+    request: SshConnectRequest,
+    vault: PlatformVault,
+}
+
 struct TransferControl {
     terminal_id: String,
     cancel: oneshot::Sender<()>,
@@ -325,37 +351,11 @@ impl SshManager {
         vault: &PlatformVault,
         request: SshConnectRequest,
     ) -> Result<SshConnectResponse, SshManagerError> {
-        let credentials = credentials_from_request(vault, &request)?;
-        let host_key_policy = host_key_policy(&request)?;
         let host = request.host.clone();
-        let options = SshConnectOptions {
-            host: request.host,
-            port: request.port,
-            host_key_policy,
-            timeout: Duration::from_secs(12),
-            credentials,
-        };
-        let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
-        for jump in request.jump_hosts {
-            let credentials = credentials_from_jump_request(vault, &jump)?;
-            let host_key_policy =
-                host_key_policy_for(jump.known_hosts_path, jump.pinned_fingerprint)?;
-            jump_options.push(SshConnectOptions {
-                host: jump.host,
-                port: jump.port,
-                host_key_policy,
-                timeout: Duration::from_secs(12),
-                credentials,
-            });
-        }
-        let connection = if jump_options.is_empty() {
-            SshConnection::connect(options).await?
-        } else {
-            SshConnection::connect_with_jump_chain(options, jump_options).await?
-        };
+        let connection = connect_transport(vault, &request).await?;
         let connection = Arc::new(connection);
         let shell = connection.open_shell(request.cols, request.rows).await?;
-        let (mut reader, writer) = shell.split();
+        let (reader, writer) = shell.split();
         let terminal_id = Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         self.sessions
@@ -372,17 +372,16 @@ impl SshManager {
 
         let manager = self.clone();
         let id_for_task = terminal_id.clone();
+        let reconnect_vault = vault.clone();
+        let context = RemoteSessionContext {
+            app,
+            manager,
+            terminal_id: id_for_task,
+            request,
+            vault: reconnect_vault,
+        };
         tauri::async_runtime::spawn(async move {
-            run_remote_session(
-                app,
-                manager,
-                id_for_task,
-                connection,
-                &mut reader,
-                writer,
-                receiver,
-            )
-            .await;
+            run_remote_session(context, connection, reader, writer, receiver).await;
         });
 
         Ok(SshConnectResponse { terminal_id, host })
@@ -766,6 +765,60 @@ impl SshManager {
     fn emit_tunnel(&self, app: &AppHandle, event: SshTunnelEvent) {
         let _ = app.emit("ssh://tunnel", event);
     }
+
+    fn emit_session_state(
+        &self,
+        app: &AppHandle,
+        terminal_id: &str,
+        state: SshSessionState,
+        attempt: u8,
+        error: Option<String>,
+    ) {
+        let _ = app.emit(
+            "ssh://state",
+            SshSessionEvent {
+                terminal_id: terminal_id.to_owned(),
+                state,
+                attempt,
+                error,
+            },
+        );
+    }
+}
+
+async fn connect_transport(
+    vault: &PlatformVault,
+    request: &SshConnectRequest,
+) -> Result<SshConnection, SshManagerError> {
+    let credentials = credentials_from_request(vault, request)?;
+    let host_key_policy = host_key_policy(request)?;
+    let options = SshConnectOptions {
+        host: request.host.clone(),
+        port: request.port,
+        host_key_policy,
+        timeout: Duration::from_secs(12),
+        credentials,
+    };
+    let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
+    for jump in &request.jump_hosts {
+        let credentials = credentials_from_jump_request(vault, jump)?;
+        let host_key_policy = host_key_policy_for(
+            jump.known_hosts_path.clone(),
+            jump.pinned_fingerprint.clone(),
+        )?;
+        jump_options.push(SshConnectOptions {
+            host: jump.host.clone(),
+            port: jump.port,
+            host_key_policy,
+            timeout: Duration::from_secs(12),
+            credentials,
+        });
+    }
+    if jump_options.is_empty() {
+        Ok(SshConnection::connect(options).await?)
+    } else {
+        Ok(SshConnection::connect_with_jump_chain(options, jump_options).await?)
+    }
 }
 
 fn credentials_from_request(
@@ -852,89 +905,103 @@ fn expand_user_path(path: &str) -> PathBuf {
 }
 
 async fn run_remote_session(
-    app: AppHandle,
-    manager: SshManager,
-    terminal_id: String,
-    connection: Arc<SshConnection>,
-    reader: &mut mobarust_ssh::SshShellReader,
-    writer: mobarust_ssh::SshShellWriter,
+    context: RemoteSessionContext,
+    mut connection: Arc<SshConnection>,
+    mut reader: mobarust_ssh::SshShellReader,
+    mut writer: mobarust_ssh::SshShellWriter,
     mut commands: mpsc::Receiver<SshCommand>,
 ) {
+    let RemoteSessionContext {
+        app,
+        manager,
+        terminal_id,
+        request,
+        vault,
+    } = context;
     let mut should_report_error = None;
-    let writer = writer;
+    let mut connection_is_live = true;
 
     'session: loop {
-        tokio::select! {
-            output = reader.next_output() => {
-                match output {
-                    None => break 'session,
-                    Some(Ok(SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes))) => {
-                        manager.emit_output(&app, &terminal_id, &bytes);
-                    }
-                    Some(Ok(SshOutput::ExitStatus(_))) | Some(Ok(SshOutput::Control)) => {}
-                    Some(Err(error)) => {
-                        should_report_error = Some(error.to_string());
-                        break 'session;
+        match run_shell_once(
+            &app,
+            &manager,
+            &terminal_id,
+            &connection,
+            &mut reader,
+            &writer,
+            &mut commands,
+        )
+        .await
+        {
+            ShellRunResult::Closed => break 'session,
+            ShellRunResult::Lost(error) => {
+                should_report_error = Some(error.clone());
+                connection_is_live = false;
+                let _ = connection.disconnect().await;
+                let mut last_error = error;
+                let mut reconnected = false;
+                for attempt in 1..=3 {
+                    manager.emit_session_state(
+                        &app,
+                        &terminal_id,
+                        SshSessionState::Reconnecting,
+                        attempt,
+                        Some(last_error.clone()),
+                    );
+                    tokio::time::sleep(Duration::from_secs(1_u64 << (attempt - 1))).await;
+                    match connect_transport(&vault, &request).await {
+                        Ok(new_connection) => {
+                            match new_connection.open_shell(request.cols, request.rows).await {
+                                Ok(shell) => {
+                                    let (new_reader, new_writer) = shell.split();
+                                    connection = Arc::new(new_connection);
+                                    reader = new_reader;
+                                    writer = new_writer;
+                                    connection_is_live = true;
+                                    manager.emit_session_state(
+                                        &app,
+                                        &terminal_id,
+                                        SshSessionState::Connected,
+                                        attempt,
+                                        None,
+                                    );
+                                    should_report_error = None;
+                                    reconnected = true;
+                                    break;
+                                }
+                                Err(error) => last_error = error.to_string(),
+                            }
+                        }
+                        Err(error) => last_error = error.to_string(),
                     }
                 }
-            }
-            command = commands.recv() => {
-                match command {
-                    Some(SshCommand::Write(data)) => {
-                        if let Err(error) = writer.write(&data).await {
-                            should_report_error = Some(error.to_string());
-                            break 'session;
-                        }
-                    }
-                    Some(SshCommand::Resize { cols, rows }) => {
-                        if let Err(error) = writer.resize(cols, rows).await {
-                            should_report_error = Some(error.to_string());
-                            break 'session;
-                        }
-                    }
-                    Some(SshCommand::ListDirectory { path, reply }) => {
-                        let operation_connection = Arc::clone(&connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = list_remote_directory(&operation_connection, path).await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::FileOperation { operation, reply }) => {
-                        let operation_connection = Arc::clone(&connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = run_file_operation(&operation_connection, operation).await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::StartLocalForward { job }) => {
-                        let tunnel_manager = manager.clone();
-                        let tunnel_connection = Arc::clone(&connection);
-                        let tunnel_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_local_forward(tunnel_app, tunnel_manager, tunnel_connection, job)
-                                .await;
-                        });
-                    }
-                    Some(SshCommand::StartTransfer { job }) => {
-                        let transfer_manager = manager.clone();
-                        let transfer_connection = Arc::clone(&connection);
-                        let transfer_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_transfer(transfer_app, transfer_manager, transfer_connection, job)
-                                .await;
-                        });
-                    }
-                    Some(SshCommand::Close) | None => {
-                        let _ = writer.close().await;
-                        break 'session;
-                    }
+                if !reconnected {
+                    manager.emit_session_state(
+                        &app,
+                        &terminal_id,
+                        SshSessionState::Failed,
+                        3,
+                        Some(last_error.clone()),
+                    );
+                    should_report_error =
+                        Some(format!("connection lost; reconnect failed: {last_error}"));
+                    break 'session;
                 }
             }
         }
     }
 
-    let _ = connection.disconnect().await;
+    if connection_is_live {
+        let _ = connection.disconnect().await;
+    }
     manager.remove(&terminal_id);
+    manager.emit_session_state(
+        &app,
+        &terminal_id,
+        SshSessionState::Disconnected,
+        0,
+        should_report_error.clone(),
+    );
     let _ = app.emit(
         "ssh://closed",
         SshClosedEvent {
@@ -942,6 +1009,85 @@ async fn run_remote_session(
             reason: should_report_error.unwrap_or_else(|| "closed".into()),
         },
     );
+}
+
+enum ShellRunResult {
+    Closed,
+    Lost(String),
+}
+
+async fn run_shell_once(
+    app: &AppHandle,
+    manager: &SshManager,
+    terminal_id: &str,
+    connection: &Arc<SshConnection>,
+    reader: &mut mobarust_ssh::SshShellReader,
+    writer: &mobarust_ssh::SshShellWriter,
+    commands: &mut mpsc::Receiver<SshCommand>,
+) -> ShellRunResult {
+    loop {
+        tokio::select! {
+            output = reader.next_output() => {
+                match output {
+                    None => return ShellRunResult::Lost("SSH shell channel closed".into()),
+                    Some(Ok(SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes))) => {
+                        manager.emit_output(app, terminal_id, &bytes);
+                    }
+                    Some(Ok(SshOutput::ExitStatus(_))) => return ShellRunResult::Closed,
+                    Some(Ok(SshOutput::Control)) => {}
+                    Some(Err(error)) => return ShellRunResult::Lost(error.to_string()),
+                }
+            }
+            command = commands.recv() => {
+                match command {
+                    Some(SshCommand::Write(data)) => {
+                        if let Err(error) = writer.write(&data).await {
+                            return ShellRunResult::Lost(error.to_string());
+                        }
+                    }
+                    Some(SshCommand::Resize { cols, rows }) => {
+                        if let Err(error) = writer.resize(cols, rows).await {
+                            return ShellRunResult::Lost(error.to_string());
+                        }
+                    }
+                    Some(SshCommand::ListDirectory { path, reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = list_remote_directory(&operation_connection, path).await;
+                            let _ = reply.send(result);
+                        });
+                    }
+                    Some(SshCommand::FileOperation { operation, reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = run_file_operation(&operation_connection, operation).await;
+                            let _ = reply.send(result);
+                        });
+                    }
+                    Some(SshCommand::StartLocalForward { job }) => {
+                        let tunnel_manager = manager.clone();
+                        let tunnel_connection = Arc::clone(connection);
+                        let tunnel_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_local_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
+                        });
+                    }
+                    Some(SshCommand::StartTransfer { job }) => {
+                        let transfer_manager = manager.clone();
+                        let transfer_connection = Arc::clone(connection);
+                        let transfer_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_transfer(transfer_app, transfer_manager, transfer_connection, job).await;
+                        });
+                    }
+                    Some(SshCommand::Close) | None => {
+                        let _ = writer.close().await;
+                        return ShellRunResult::Closed;
+                    }
+                }
+            }
+        }
+    }
 }
 
 async fn list_remote_directory(

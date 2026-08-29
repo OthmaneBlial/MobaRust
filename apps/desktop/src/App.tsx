@@ -47,12 +47,22 @@ type TerminalOutputEvent = {
 
 type TerminalClosedEvent = {
   terminalId: string;
+  reason?: string;
+};
+
+type TerminalStatus = "starting" | "connected" | "reconnecting" | "closed" | "error";
+
+type SshSessionEvent = {
+  terminalId: string;
+  state: "reconnecting" | "connected" | "failed" | "disconnected";
+  attempt: number;
+  error?: string | null;
 };
 
 type TerminalViewportProps = {
   instanceKey: number;
   remoteSessionId: string | null;
-  onStatusChange: (status: "starting" | "connected" | "closed" | "error") => void;
+  onStatusChange: (status: TerminalStatus) => void;
 };
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -175,6 +185,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
     let disposed = false;
     let unlistenOutput: UnlistenFn | undefined;
     let unlistenClosed: UnlistenFn | undefined;
+    let unlistenState: UnlistenFn | undefined;
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
@@ -257,6 +268,14 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
           if (event.payload.terminalId === terminalIdRef.current) onStatusChange("closed");
         });
         if (remoteSessionId) {
+          unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
+            if (event.payload.terminalId !== terminalIdRef.current) return;
+            if (event.payload.state === "connected") onStatusChange("connected");
+            else if (event.payload.state === "reconnecting") onStatusChange("reconnecting");
+            else if (event.payload.state === "failed") onStatusChange("error");
+          });
+        }
+        if (remoteSessionId) {
           terminalIdRef.current = remoteSessionId;
           const pendingOutput = await invoke<string[]>("ssh_attach", { terminalId: remoteSessionId });
           if (disposed) {
@@ -292,6 +311,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
       resizeObserver.disconnect();
       unlistenOutput?.();
       unlistenClosed?.();
+      unlistenState?.();
       const terminalId = terminalIdRef.current;
       if (IS_TAURI && terminalId) void invoke(remoteSessionId ? "ssh_close" : "terminal_close", { terminalId });
       terminalIdRef.current = null;
@@ -306,7 +326,7 @@ function App() {
   const [activeView, setActiveView] = useState<View>("terminal");
   const [terminalKey, setTerminalKey] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(true);
-  const [terminalStatus, setTerminalStatus] = useState<"starting" | "connected" | "closed" | "error">("starting");
+  const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>("starting");
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -335,7 +355,7 @@ function App() {
     setActiveView("terminal");
   }, []);
 
-  const handleTerminalStatus = useCallback((status: "starting" | "connected" | "closed" | "error") => {
+  const handleTerminalStatus = useCallback((status: TerminalStatus) => {
     setTerminalStatus(status);
   }, []);
 

@@ -18,12 +18,13 @@ The first working slice provides:
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
 - explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
 - real SSH jump-host chaining through native `direct-tcpip` streams, with an optional agent-backed hop in Quick Connect;
+- bounded SSH shell reconnection with explicit reconnecting/failed state events and preserved terminal identity;
 - native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.
 
-The native SSH/SFTP transport, local forwarding channel, jump-host handshake, cancellation path, and Quick Connect path are tested against a local `sshd` fixture, but saved-session editing, reconnect policy, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, remote/dynamic forwarding, OpenSSH `ProxyJump` profile resolution, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP transport, local forwarding channel, jump-host handshake, cancellation path, and Quick Connect path are tested against a local `sshd` fixture. The bounded reconnect worker uses the same native transport but still needs dedicated failure-injection coverage before release. Saved-session editing, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, remote/dynamic forwarding, OpenSSH `ProxyJump` profile resolution, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
