@@ -12,6 +12,7 @@ tauri-build = { version = "2.4", features = [] }
 [dependencies]
 anyhow.workspace = true
 mobarust-core = { path = "../../../crates/mobarust-core" }
+mobarust-telnet = { path = "../../../crates/mobarust-telnet" }
 mobarust-ssh = { path = "../../../crates/mobarust-ssh" }
 mobarust-store = { path = "../../../crates/mobarust-store" }
 mobarust-vault = { path = "../../../crates/mobarust-vault" }

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ssh;
+mod telnet;
 mod terminal;
 
 use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
@@ -15,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
+use telnet::{TelnetConnectRequest, TelnetManager};
 use terminal::TerminalManager;
 
 #[derive(Debug, Serialize)]
@@ -386,6 +388,64 @@ fn ssh_cancel_tunnel(manager: State<'_, SshManager>, tunnel_id: String) -> Resul
 }
 
 #[tauri::command]
+async fn telnet_connect(
+    app: tauri::AppHandle,
+    manager: State<'_, TelnetManager>,
+    request: TelnetConnectRequest,
+) -> Result<telnet::TelnetConnectResponse, String> {
+    manager
+        .connect(app, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn telnet_write(
+    manager: State<'_, TelnetManager>,
+    terminal_id: String,
+    data: String,
+) -> Result<(), String> {
+    manager
+        .write(&terminal_id, data)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn telnet_resize(
+    manager: State<'_, TelnetManager>,
+    terminal_id: String,
+    columns: u16,
+    rows: u16,
+) -> Result<(), String> {
+    manager
+        .resize(&terminal_id, columns, rows)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn telnet_attach(
+    manager: State<'_, TelnetManager>,
+    terminal_id: String,
+) -> Result<Vec<String>, String> {
+    manager
+        .attach(&terminal_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn telnet_close(
+    manager: State<'_, TelnetManager>,
+    terminal_id: String,
+) -> Result<(), String> {
+    manager
+        .close(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -431,6 +491,7 @@ fn main() {
     tauri::Builder::default()
         .manage(TerminalManager::default())
         .manage(SshManager::default())
+        .manage(TelnetManager::default())
         .manage(PlatformVault::default())
         .setup(|app| {
             let data_dir = app
@@ -472,6 +533,11 @@ fn main() {
             ssh_start_local_forward,
             ssh_start_dynamic_forward,
             ssh_cancel_tunnel,
+            telnet_connect,
+            telnet_write,
+            telnet_resize,
+            telnet_attach,
+            telnet_close,
             terminal_spawn,
             terminal_write,
             terminal_resize,

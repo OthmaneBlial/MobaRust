@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted and implemented for the native single-connection transport. Desktop
-session-manager and saved-profile wiring remain pending.
+Accepted and implemented for the native single-connection transport and the
+desktop Quick Connect/session-manager path. Saved-profile wiring remains
+pending.
 
 ## Decision
 
@@ -16,7 +17,9 @@ will expose only typed requests and terminal events to React.
 The adapter supports UTF-8 and Windows-1252 text decoding, terminal type,
 NAWS dimensions, suppress-go-ahead, and server echo negotiation. Unknown
 options are refused explicitly. Subnegotiation frames are bounded to 4 KiB and
-terminal reads use a bounded raw buffer.
+terminal reads use a bounded raw buffer. The desktop manager exposes typed
+`telnet://output`, `telnet://state`, and `telnet://closed` events and keeps
+output pending until the renderer explicitly attaches.
 
 Telnet is always presented as unencrypted. The adapter must not reuse SSH
 security copy or imply host-key verification, credential confidentiality, or
@@ -46,4 +49,5 @@ behavior. It binds only to `127.0.0.1` on an operating-system-selected port.
 - accepting arbitrary option negotiation without bounds;
 - testing against legacy equipment or internet hosts from the developer
   workstation;
-- claiming the desktop protocol is complete before manager/UI integration.
+- claiming saved-profile support before the credential-free profile path is
+  implemented.

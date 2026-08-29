@@ -2854,6 +2854,7 @@ dependencies = [
  "mobarust-core",
  "mobarust-ssh",
  "mobarust-store",
+ "mobarust-telnet",
  "mobarust-vault",
  "portable-pty",
  "serde",

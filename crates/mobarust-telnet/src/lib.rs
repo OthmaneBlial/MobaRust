@@ -502,6 +502,18 @@ impl TelnetConnection {
         self.write(&bytes).await
     }
 
+    pub async fn resize(&mut self, columns: u16, rows: u16) -> Result<(), TelnetError> {
+        if columns == 0 || rows == 0 {
+            return Err(TelnetError::InvalidOptions);
+        }
+        self.options.columns = columns;
+        self.options.rows = rows;
+        if self.codec.local_options.contains(&NAWS) {
+            self.write_control(naws_response(&self.options)).await?;
+        }
+        Ok(())
+    }
+
     pub async fn reconnect(&mut self) -> Result<(), TelnetError> {
         if self.state() == ConnectionState::Connected {
             self.lifecycle

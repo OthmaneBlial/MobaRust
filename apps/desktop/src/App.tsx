@@ -59,9 +59,16 @@ type SshSessionEvent = {
   error?: string | null;
 };
 
+type TelnetSessionEvent = {
+  terminalId: string;
+  state: "connected" | "disconnected" | "failed";
+  error?: string | null;
+};
+
 type TerminalViewportProps = {
   instanceKey: number;
   remoteSessionId: string | null;
+  remoteProtocol: "ssh" | "telnet" | null;
   onStatusChange: (status: TerminalStatus) => void;
 };
 
@@ -134,6 +141,20 @@ type SshConnectResponse = {
   host: string;
 };
 
+type TelnetConnectRequest = {
+  host: string;
+  port: number;
+  terminal: string;
+  encoding: "utf-8" | "windows-1252";
+  columns: number;
+  rows: number;
+};
+
+type TelnetConnectResponse = {
+  terminalId: string;
+  host: string;
+};
+
 type RemoteEntry = {
   name: string;
   path: string;
@@ -183,7 +204,7 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: TerminalViewportProps) {
+function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStatusChange }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
 
@@ -236,7 +257,8 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
       if (host.clientWidth > 0 && host.clientHeight > 0) fitAddon.fit();
       const terminalId = terminalIdRef.current;
       if (IS_TAURI && terminalId) {
-        void invoke(remoteSessionId ? "ssh_resize" : "terminal_resize", {
+        const resizeCommand = remoteProtocol === "ssh" ? "ssh_resize" : remoteProtocol === "telnet" ? "telnet_resize" : "terminal_resize";
+        void invoke(resizeCommand, {
           terminalId,
           cols: terminal.cols,
           rows: terminal.rows,
@@ -254,7 +276,8 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
         terminal.write(data.replace(/\r/g, "\r\n"));
         return;
       }
-      void invoke(remoteSessionId ? "ssh_write" : "terminal_write", { terminalId, data }).catch(() => onStatusChange("error"));
+      const command = remoteProtocol === "ssh" ? "ssh_write" : remoteProtocol === "telnet" ? "telnet_write" : "terminal_write";
+      void invoke(command, { terminalId, data }).catch(() => onStatusChange("error"));
     });
 
     const boot = async () => {
@@ -268,15 +291,15 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
       }
 
       try {
-        const outputEvent = remoteSessionId ? "ssh://output" : "terminal://output";
-        const closedEvent = remoteSessionId ? "ssh://closed" : "terminal://closed";
+        const outputEvent = remoteProtocol === "ssh" ? "ssh://output" : remoteProtocol === "telnet" ? "telnet://output" : "terminal://output";
+        const closedEvent = remoteProtocol === "ssh" ? "ssh://closed" : remoteProtocol === "telnet" ? "telnet://closed" : "terminal://closed";
         unlistenOutput = await listen<TerminalOutputEvent>(outputEvent, (event) => {
           if (event.payload.terminalId === terminalIdRef.current) terminal.write(event.payload.data);
         });
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
           if (event.payload.terminalId === terminalIdRef.current) onStatusChange("closed");
         });
-        if (remoteSessionId) {
+        if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
             if (event.payload.state === "connected") onStatusChange("connected");
@@ -284,11 +307,21 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
             else if (event.payload.state === "failed") onStatusChange("error");
           });
         }
+        if (remoteProtocol === "telnet") {
+          unlistenState = await listen<TelnetSessionEvent>("telnet://state", (event) => {
+            if (event.payload.terminalId !== terminalIdRef.current) return;
+            if (event.payload.state === "connected") onStatusChange("connected");
+            else if (event.payload.state === "failed") onStatusChange("error");
+            else if (event.payload.state === "disconnected") onStatusChange("closed");
+          });
+        }
         if (remoteSessionId) {
           terminalIdRef.current = remoteSessionId;
-          const pendingOutput = await invoke<string[]>("ssh_attach", { terminalId: remoteSessionId });
+          const attachCommand = remoteProtocol === "telnet" ? "telnet_attach" : "ssh_attach";
+          const closeCommand = remoteProtocol === "telnet" ? "telnet_close" : "ssh_close";
+          const pendingOutput = await invoke<string[]>(attachCommand, { terminalId: remoteSessionId });
           if (disposed) {
-            void invoke("ssh_close", { terminalId: remoteSessionId });
+            void invoke(closeCommand, { terminalId: remoteSessionId });
             return;
           }
           pendingOutput.forEach((data) => terminal.write(data));
@@ -322,11 +355,14 @@ function TerminalViewport({ instanceKey, remoteSessionId, onStatusChange }: Term
       unlistenClosed?.();
       unlistenState?.();
       const terminalId = terminalIdRef.current;
-      if (IS_TAURI && terminalId) void invoke(remoteSessionId ? "ssh_close" : "terminal_close", { terminalId });
+      if (IS_TAURI && terminalId) {
+        const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : "terminal_close";
+        void invoke(closeCommand, { terminalId });
+      }
       terminalIdRef.current = null;
       terminal.dispose();
     };
-  }, [instanceKey, onStatusChange, remoteSessionId]);
+  }, [instanceKey, onStatusChange, remoteProtocol, remoteSessionId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -347,6 +383,7 @@ function App() {
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
+  const [remoteProtocol, setRemoteProtocol] = useState<"ssh" | "telnet" | null>(null);
   const [remoteHost, setRemoteHost] = useState<string | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
@@ -356,6 +393,7 @@ function App() {
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
+    setRemoteProtocol(null);
     setRemoteHost(null);
     setConnectionError(null);
     setSessionNotice(null);
@@ -389,6 +427,7 @@ function App() {
     try {
       const response = await invoke<SshConnectResponse>("ssh_connect", { request });
       setRemoteSessionId(response.terminalId);
+      setRemoteProtocol("ssh");
       setRemoteHost(response.host);
       setTerminalOpen(true);
       setTerminalStatus("starting");
@@ -411,6 +450,29 @@ function App() {
       setConnectionError(String(error));
     }
   }, [refreshSavedSessions]);
+
+  const connectTelnet = useCallback(async (request: TelnetConnectRequest) => {
+    setConnectionError(null);
+    setSessionNotice(null);
+    if (!IS_TAURI) {
+      setConnectionError("Telnet connections require the desktop runtime.");
+      return;
+    }
+    try {
+      const response = await invoke<TelnetConnectResponse>("telnet_connect", { request });
+      setRemoteSessionId(response.terminalId);
+      setRemoteProtocol("telnet");
+      setRemoteHost(response.host);
+      setTerminalOpen(true);
+      setTerminalStatus("starting");
+      setTerminalKey((key) => key + 1);
+      setActiveView("terminal");
+      setQuickConnectOpen(false);
+      setSessionNotice("Connected over Telnet. This connection is unencrypted.");
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, []);
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
@@ -678,8 +740,8 @@ function App() {
   }, [refreshSavedSessions]);
 
   useEffect(() => {
-    if (activeView === "files" && remoteSessionId) void loadRemoteDirectory(".");
-  }, [activeView, loadRemoteDirectory, remoteSessionId]);
+    if (activeView === "files" && remoteSessionId && remoteProtocol === "ssh") void loadRemoteDirectory(".");
+  }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
   useEffect(() => {
     if (!IS_TAURI) return;
@@ -814,9 +876,9 @@ function App() {
           {!sidebarOpen && <button className="floating-sidebar-button" onClick={() => setSidebarOpen(true)} aria-label="Expand sidebar"><PanelLeftClose size={16} /></button>}
           <div className="workspace-heading">
             <div>
-              <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">{remoteSessionId ? "SSH" : "LOCAL"}</span></div>
+              <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">{remoteProtocol ? remoteProtocol.toUpperCase() : "LOCAL"}</span></div>
               <h1>{remoteHost ?? "Local workstation"}</h1>
-              <p className="workspace-subtitle">{remoteHost ? "Interactive SSH shell with native host-key verification." : "A quiet command surface for the machine in front of you."}</p>
+              <p className="workspace-subtitle">{remoteProtocol === "ssh" ? "Interactive SSH shell with native host-key verification." : remoteProtocol === "telnet" ? "Legacy Telnet terminal. Traffic is unencrypted." : "A quiet command surface for the machine in front of you."}</p>
             </div>
             <div className="heading-actions">
               <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
@@ -842,15 +904,15 @@ function App() {
               {activeView === "terminal" ? (
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
-                    <div className="terminal-tab"><span className="terminal-tab-dot" /><span>{remoteHost ? "remote shell" : "local shell"}</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? (remoteHost ? "ssh" : "zsh") : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); setRemoteSessionId(null); setRemoteHost(null); }}><X size={14} /></button></div>
+                    <div className="terminal-tab"><span className="terminal-tab-dot" /><span>{remoteHost ? "remote shell" : "local shell"}</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? (remoteHost ? remoteProtocol : "zsh") : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); setRemoteSessionId(null); setRemoteProtocol(null); setRemoteHost(null); }}><X size={14} /></button></div>
                     <div className="terminal-toolbar-actions"><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button aria-label="Copy terminal output"><Copy size={14} /></button><button aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or SSH shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
-                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>local process</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
+                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} remoteProtocol={remoteProtocol} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or SSH shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
+                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
-              ) : activeView === "files" && remoteSessionId ? (
+              ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
-              ) : activeView === "tunnels" && remoteSessionId ? (
+              ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onCancelTunnel={cancelTunnel} />
               ) : (
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" ? () => setQuickConnectOpen(true) : undefined} />
@@ -866,12 +928,12 @@ function App() {
               <div className="rail-heading"><span>Session brief</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
               <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
-                <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? "SSH · verified transport" : "Apple Silicon · local"}</div></div>
+                <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? (remoteProtocol === "telnet" ? "Telnet · unencrypted" : "SSH · verified transport") : "Apple Silicon · local"}</div></div>
                 <span className="machine-live">LIVE</span>
               </div>
               <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Shell" value={remoteHost ? "remote" : "zsh"} /><Metric label="Terminal" value="xterm-256color" /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
               <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">The local terminal is the first real vertical slice. SSH and SFTP slots are visible so the workspace can grow without hiding unfinished protocol claims.</p></div>
-              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
+              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteProtocol === "telnet" ? "Telnet transport active" : remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteProtocol === "telnet" ? "This legacy terminal is unencrypted; use SSH for protected administration." : remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
             </aside>
           </div>
 
@@ -880,7 +942,7 @@ function App() {
       </div>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
-      {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnect={connectSsh} />}
+      {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} />}
     </main>
   );
 }
@@ -1017,31 +1079,46 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onToggleSideba
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
 }
 
-function QuickConnectDialog({ error, onClose, onConnect }: { error: string | null; onClose: () => void; onConnect: (request: SshConnectRequest) => void }) {
+function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
+  const [protocol, setProtocol] = useState<"ssh" | "telnet">("ssh");
   const [method, setMethod] = useState<"agent" | "privateKey" | "password">("agent");
   const [keyPath, setKeyPath] = useState("");
+  const [passphraseCredentialId, setPassphraseCredentialId] = useState("");
   const [credentialId, setCredentialId] = useState("");
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
   const [jumpHost, setJumpHost] = useState("");
   const [jumpPort, setJumpPort] = useState("22");
   const [jumpUsername, setJumpUsername] = useState("");
+  const [terminal, setTerminal] = useState("xterm-256color");
+  const [encoding, setEncoding] = useState<"utf-8" | "windows-1252">("utf-8");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (protocol === "telnet") {
+      onConnectTelnet({
+        host: host.trim(),
+        port: Number(port),
+        terminal: terminal.trim(),
+        encoding,
+        columns: 120,
+        rows: 32,
+      });
+      return;
+    }
     const auth = method === "agent"
       ? { method: "agent" as const }
       : method === "privateKey"
-        ? { method: "privateKey" as const, path: keyPath }
+        ? { method: "privateKey" as const, path: keyPath, passphraseCredentialId: passphraseCredentialId.trim() || undefined }
         : { method: "password" as const, credentialId };
     const parsedJumpPort = Number(jumpPort);
     const jumpHosts = jumpHost.trim() && Number.isInteger(parsedJumpPort) && parsedJumpPort > 0 && parsedJumpPort <= 65535
       ? [{ host: jumpHost.trim(), port: parsedJumpPort, username: jumpUsername.trim() || username.trim(), auth: { method: "agent" as const } }]
       : undefined;
-    onConnect({
+    onConnectSsh({
       host: host.trim(),
       port: Number(port),
       username: username.trim(),
@@ -1054,7 +1131,7 @@ function QuickConnectDialog({ error, onClose, onConnect }: { error: string | nul
     });
   };
 
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="quick-connect" role="dialog" aria-modal="true" aria-label="Quick connect" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}><div className="quick-connect-heading"><div><span className="eyebrow">NEW SSH SESSION</span><h2>Quick connect</h2><p>Open a real native SSH shell in seconds.</p></div><button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}><X size={17} /></button></div><div className="quick-connect-grid"><label>Host<input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" /></label><label>Port<input required inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => setPort(event.target.value)} /></label><label className="quick-connect-wide">Username<input required value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ops" /></label><label className="quick-connect-wide">Authentication<select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password")}><option value="agent">Local SSH agent</option><option value="privateKey">Private key path</option><option value="password">Existing vault credential reference</option></select></label>{method === "privateKey" ? <label className="quick-connect-wide">Private key path<input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /><small>The key stays on disk; its passphrase is never entered here.</small></label> : method === "password" ? <label className="quick-connect-wide">Credential reference<input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" /><small>Only an opaque vault reference crosses IPC, never the password.</small></label> : <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>The native SSH agent signs authentication; private key material stays with the agent.</span></div>}<label className="quick-connect-wide">Jump host <span className="optional">optional · SSH agent</span><input value={jumpHost} onChange={(event) => setJumpHost(event.target.value)} placeholder="bastion.internal.example" /></label>{jumpHost.trim() && <><label>Jump port<input required inputMode="numeric" pattern="[0-9]+" value={jumpPort} onChange={(event) => setJumpPort(event.target.value)} /></label><label>Jump username<input required value={jumpUsername} onChange={(event) => setJumpUsername(event.target.value)} placeholder={username || "ops"} /></label></>}<label className="quick-connect-wide">Known hosts path <span className="optional">optional</span><input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" /></label><label className="quick-connect-wide">Pinned SHA-256 fingerprint <span className="optional">optional</span><input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" /></label></div>{error && <div className="connect-error" role="alert"><strong>Connection failed</strong><span>{error}</span></div>}<div className="quick-connect-footer"><span><ShieldCheck size={14} /> Unknown host keys are rejected.</span><div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Network size={14} /> Connect SSH</button></div></div></form></div>;
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="quick-connect" role="dialog" aria-modal="true" aria-label="Quick connect" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}><div className="quick-connect-heading"><div><span className="eyebrow">NEW REMOTE SESSION</span><h2>Quick connect</h2><p>{protocol === "ssh" ? "Open a real native SSH shell in seconds." : "Open a legacy Telnet terminal with a visible plaintext warning."}</p></div><button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}><X size={17} /></button></div><div className="quick-connect-grid"><label className="quick-connect-wide">Protocol<select value={protocol} onChange={(event) => { const next = event.target.value as "ssh" | "telnet"; setProtocol(next); setPort(next === "ssh" ? "22" : "23"); }}><option value="ssh">SSH</option><option value="telnet">Telnet · unencrypted</option></select></label><label>Host<input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" /></label><label>Port<input required inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => setPort(event.target.value)} /></label>{protocol === "ssh" ? <><label className="quick-connect-wide">Username<input required value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ops" /></label><label className="quick-connect-wide">Authentication<select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password")}><option value="agent">Local SSH agent</option><option value="privateKey">Private key path</option><option value="password">Existing vault credential reference</option></select></label>{method === "privateKey" ? <><label className="quick-connect-wide">Private key path<input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} placeholder="~/.ssh/id_ed25519" /><small>The key stays on disk; only its path crosses IPC.</small></label><label className="quick-connect-wide">Passphrase credential reference <span className="optional">optional</span><input value={passphraseCredentialId} onChange={(event) => setPassphraseCredentialId(event.target.value)} placeholder="prod-key-passphrase" /><small>Encrypted-key passphrases are retrieved natively from the vault.</small></label></> : method === "password" ? <label className="quick-connect-wide">Credential reference<input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" /><small>Only an opaque vault reference crosses IPC, never the password.</small></label> : <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>The native SSH agent signs authentication; private key material stays with the agent.</span></div>}<label className="quick-connect-wide">Jump host <span className="optional">optional · SSH agent</span><input value={jumpHost} onChange={(event) => setJumpHost(event.target.value)} placeholder="bastion.internal.example" /></label>{jumpHost.trim() && <><label>Jump port<input required inputMode="numeric" pattern="[0-9]+" value={jumpPort} onChange={(event) => setJumpPort(event.target.value)} /></label><label>Jump username<input required value={jumpUsername} onChange={(event) => setJumpUsername(event.target.value)} placeholder={username || "ops"} /></label></>}<label className="quick-connect-wide">Known hosts path <span className="optional">optional</span><input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" /></label><label className="quick-connect-wide">Pinned SHA-256 fingerprint <span className="optional">optional</span><input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" /></label></> : <><label className="quick-connect-wide">Terminal type<input required value={terminal} onChange={(event) => setTerminal(event.target.value)} placeholder="xterm-256color" /></label><label className="quick-connect-wide">Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as "utf-8" | "windows-1252")}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label></>}</div>{error && <div className="connect-error" role="alert"><strong>Connection failed</strong><span>{error}</span></div>}<div className="quick-connect-footer"><span><ShieldCheck size={14} /> {protocol === "ssh" ? "Unknown host keys are rejected." : "Telnet traffic is plaintext and unauthenticated."}</span><div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Network size={14} /> Connect {protocol === "ssh" ? "SSH" : "Telnet"}</button></div></div></form></div>;
 }
 
 export default App;
