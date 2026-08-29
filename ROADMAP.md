@@ -17,7 +17,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Agent, password-reference, and private-key-reference auth in the saved-session UX
 - [ ] Encrypted-key passphrase entry and keyboard-interactive auth in the saved-session UX
 - [x] SSH agent authentication through the native Quick Connect path
-- [ ] Reconnect policy and failure-state telemetry
+- [x] Bounded reconnect policy and failure-state telemetry
 - [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
 
 ## 0.3 — remote files and movement
@@ -34,7 +34,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Native jump-host chain transport with host-key policy per hop
 - [x] Bounded shell reconnect attempts with explicit lifecycle telemetry
 - [ ] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles
-- [ ] Session folders, tags, search, favorites, editing, and full import/export
+- [x] Session tags, search, favorites, and secret-free MobaRust import/export
+- [ ] Session folders, editing, and richer file-based import/export workflows
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
 - [ ] Portable encrypted vault research and implementation
