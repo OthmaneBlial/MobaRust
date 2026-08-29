@@ -52,6 +52,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Telnet Quick Connect, native session manager, terminal output, input, and resize wiring
 - [x] Native serial transport configuration and recoverable device lifecycle
 - [ ] Serial device refresh and session-manager/UI wiring
+- [x] Bounded native TCP check and port-range diagnostic primitive
+- [ ] DNS, ping, traceroute, fingerprint inspection, and diagnostics UI
 - [ ] X11 forwarding, monitoring, and portable packaging
 
 Each adapter must have a real lifecycle, failure tests, and an honest platform

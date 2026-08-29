@@ -2876,6 +2876,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mobarust-network"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "mobarust-remote-desktop"
 version = "0.1.0"
 dependencies = [
