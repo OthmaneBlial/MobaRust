@@ -1,8 +1,9 @@
-# ADR 0009: Use native direct-tcpip channels for local SSH forwarding
+# ADR 0009: Use native SSH channels for forwarding
 
 ## Status
 
-Accepted and implemented for local (`-L`) forwarding.
+Accepted and implemented for local (`-L`), remote (`-R`), and bounded dynamic
+SOCKS5 (`-D`) forwarding paths.
 
 ## Decision
 
@@ -27,6 +28,13 @@ gets endpoint metadata, state, connection count, byte count, and sanitized
 errors through `ssh://tunnel` events. Bind and target values are validated in
 Rust, and a local bind failure is reported before the tunnel is registered.
 
+Remote forwarding uses the SSH server's `tcpip-forward` request and routes
+each server-initiated `forwarded-tcpip` channel through a native receiver.
+Dynamic forwarding performs an unauthenticated SOCKS5 CONNECT handshake on a
+bounded local listener, then opens a native `direct-tcpip` channel for the
+requested destination. The SOCKS proxy is deliberately local-only and does
+not expose a shell or arbitrary IPC operation.
+
 ## Rationale
 
 - `direct-tcpip` is the SSH mechanism intended for client-side local
@@ -39,7 +47,6 @@ Rust, and a local bind failure is reported before the tunnel is registered.
 
 ## Rejected for this milestone
 
-- implementing remote (`-R`) or dynamic SOCKS forwarding in the same change;
 - exposing a generic `execute_anything` or socket-open IPC command;
 - unbounded client tasks;
 - silently binding a wildcard address;
@@ -47,16 +54,15 @@ Rust, and a local bind failure is reported before the tunnel is registered.
 
 ## Verification
 
-The local SSH fixture opens a real `direct-tcpip` channel to a local echo
-server and verifies bidirectional payload delivery. Manager-level lifecycle
-and cancellation remain native integration coverage to extend with a desktop
+The local SSH fixture opens real `direct-tcpip` and `forwarded-tcpip` channels
+to local echo servers and verifies bidirectional payload delivery. SOCKS5
+framing has deterministic in-memory tests. Manager-level lifecycle and
+cancellation remain native integration coverage to extend with a desktop
 fixture; manual interoperability checks are still required on Windows, Linux,
 and macOS.
 
 ## Follow-ups
 
-- remote forwarding with explicit remote-listener policy;
-- dynamic SOCKS5 forwarding with destination validation;
 - saved tunnel definitions and session ownership UI;
 - reconnect behavior for tunnels when an SSH session drops;
 - platform matrix and security review for binding addresses.

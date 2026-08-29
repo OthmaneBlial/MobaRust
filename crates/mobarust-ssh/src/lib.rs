@@ -13,7 +13,7 @@ use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
@@ -189,6 +189,14 @@ struct ClientHandler {
     port: u16,
     policy: HostKeyPolicy,
     observed_fingerprint: Arc<Mutex<Option<String>>>,
+    forwarded_channels: mpsc::UnboundedSender<SshForwardedChannel>,
+}
+
+struct ConnectionParts {
+    observed_fingerprint: Arc<Mutex<Option<String>>>,
+    handler: ClientHandler,
+    config: Arc<client::Config>,
+    forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
 }
 
 impl client::Handler for ClientHandler {
@@ -213,25 +221,215 @@ impl client::Handler for ClientHandler {
             }
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let forwarded_channels = self.forwarded_channels.clone();
+        let connected_address = connected_address.to_owned();
+        let originator_address = originator_address.to_owned();
+        async move {
+            reply.accept().await;
+            let _ = forwarded_channels.send(SshForwardedChannel {
+                channel,
+                connected_address,
+                connected_port,
+                originator_address,
+                originator_port,
+            });
+            Ok(())
+        }
+    }
 }
 
 pub struct SshConnection {
     handle: Arc<client::Handle<ClientHandler>>,
     lifecycle: Mutex<ConnectionLifecycle>,
     parent: Option<Arc<SshConnection>>,
+    forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
+}
+
+/// A server-initiated channel created by an SSH remote `-R` forward.
+///
+/// The channel is delivered only after the server-side open request has been
+/// accepted. The caller owns the stream and must apply its own bounded worker
+/// and cancellation policy.
+pub struct SshForwardedChannel {
+    channel: Channel<client::Msg>,
+    pub connected_address: String,
+    pub connected_port: u32,
+    pub originator_address: String,
+    pub originator_port: u32,
+}
+
+impl SshForwardedChannel {
+    pub fn into_stream(self) -> russh::ChannelStream<client::Msg> {
+        self.channel.into_stream()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Socks5Request {
+    pub target_host: String,
+    pub target_port: u16,
+}
+
+#[derive(Debug, Error)]
+pub enum Socks5Error {
+    #[error("SOCKS5 I/O failed: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("unsupported SOCKS version {0}")]
+    UnsupportedVersion(u8),
+    #[error("SOCKS5 client offered no unauthenticated method")]
+    NoUnauthenticatedMethod,
+    #[error("SOCKS5 command is not CONNECT: {0}")]
+    UnsupportedCommand(u8),
+    #[error("SOCKS5 address type is unsupported: {0}")]
+    UnsupportedAddressType(u8),
+    #[error("SOCKS5 domain name is empty")]
+    EmptyDomain,
+    #[error("SOCKS5 target port is zero")]
+    InvalidPort,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Socks5ReplyCode {
+    Succeeded = 0,
+    GeneralFailure = 1,
+    ConnectionNotAllowed = 2,
+    NetworkUnreachable = 3,
+    HostUnreachable = 4,
+    ConnectionRefused = 5,
+    TtlExpired = 6,
+    CommandNotSupported = 7,
+    AddressTypeNotSupported = 8,
+}
+
+/// Performs the bounded unauthenticated SOCKS5 CONNECT handshake. SSH
+/// authentication protects the upstream connection; local proxy clients are
+/// deliberately not given a second arbitrary authentication surface here.
+pub async fn negotiate_socks5<S>(stream: &mut S) -> Result<Socks5Request, Socks5Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let version = stream.read_u8().await.map_err(Socks5Error::Io)?;
+    if version != 5 {
+        return Err(Socks5Error::UnsupportedVersion(version));
+    }
+    let method_count = stream.read_u8().await.map_err(Socks5Error::Io)? as usize;
+    if method_count > 32 {
+        stream
+            .write_all(&[5, 0xff])
+            .await
+            .map_err(Socks5Error::Io)?;
+        return Err(Socks5Error::NoUnauthenticatedMethod);
+    }
+    let mut methods = vec![0_u8; method_count];
+    stream
+        .read_exact(&mut methods)
+        .await
+        .map_err(Socks5Error::Io)?;
+    if !methods.contains(&0) {
+        stream
+            .write_all(&[5, 0xff])
+            .await
+            .map_err(Socks5Error::Io)?;
+        return Err(Socks5Error::NoUnauthenticatedMethod);
+    }
+    stream.write_all(&[5, 0]).await.map_err(Socks5Error::Io)?;
+
+    let version = stream.read_u8().await.map_err(Socks5Error::Io)?;
+    if version != 5 {
+        return Err(Socks5Error::UnsupportedVersion(version));
+    }
+    let command = stream.read_u8().await.map_err(Socks5Error::Io)?;
+    if command != 1 {
+        let _ = send_socks5_reply(stream, Socks5ReplyCode::CommandNotSupported).await;
+        return Err(Socks5Error::UnsupportedCommand(command));
+    }
+    let _reserved = stream.read_u8().await.map_err(Socks5Error::Io)?;
+    let address_type = stream.read_u8().await.map_err(Socks5Error::Io)?;
+    let target_host = match address_type {
+        1 => {
+            let mut bytes = [0_u8; 4];
+            stream
+                .read_exact(&mut bytes)
+                .await
+                .map_err(Socks5Error::Io)?;
+            std::net::Ipv4Addr::from(bytes).to_string()
+        }
+        3 => {
+            let length = stream.read_u8().await.map_err(Socks5Error::Io)? as usize;
+            let mut bytes = vec![0_u8; length];
+            stream
+                .read_exact(&mut bytes)
+                .await
+                .map_err(Socks5Error::Io)?;
+            let host = String::from_utf8_lossy(&bytes).trim().to_owned();
+            if host.is_empty() {
+                return Err(Socks5Error::EmptyDomain);
+            }
+            host
+        }
+        4 => {
+            let mut bytes = [0_u8; 16];
+            stream
+                .read_exact(&mut bytes)
+                .await
+                .map_err(Socks5Error::Io)?;
+            std::net::Ipv6Addr::from(bytes).to_string()
+        }
+        other => {
+            let _ = send_socks5_reply(stream, Socks5ReplyCode::AddressTypeNotSupported).await;
+            return Err(Socks5Error::UnsupportedAddressType(other));
+        }
+    };
+    let target_port = stream.read_u16().await.map_err(Socks5Error::Io)?;
+    if target_port == 0 {
+        let _ = send_socks5_reply(stream, Socks5ReplyCode::GeneralFailure).await;
+        return Err(Socks5Error::InvalidPort);
+    }
+    Ok(Socks5Request {
+        target_host,
+        target_port,
+    })
+}
+
+pub async fn send_socks5_reply<S>(stream: &mut S, reply: Socks5ReplyCode) -> Result<(), Socks5Error>
+where
+    S: AsyncWrite + Unpin,
+{
+    stream
+        .write_all(&[5, reply as u8, 0, 1, 0, 0, 0, 0, 0, 0])
+        .await
+        .map_err(Socks5Error::Io)
 }
 
 impl SshConnection {
     pub async fn connect(options: SshConnectOptions) -> Result<Self, SshError> {
         validate_options(&options)?;
-        let (observed_fingerprint, handler, config) = connection_parts(&options);
+        let ConnectionParts {
+            observed_fingerprint,
+            handler,
+            config,
+            forwarded_channels,
+        } = connection_parts(&options);
         let connect = tokio::time::timeout(
             options.timeout,
             client::connect(config, (options.host.as_str(), options.port), handler),
         )
         .await;
         let handle = map_connect_result(connect, observed_fingerprint)?;
-        Self::finish_authenticated(options, handle, None).await
+        Self::finish_authenticated(options, handle, None, forwarded_channels).await
     }
 
     /// Connects through one or more already described jump hosts. Every hop
@@ -262,20 +460,26 @@ impl SshConnection {
         let stream = upstream
             .open_direct_tcpip(options.host.clone(), u32::from(options.port))
             .await?;
-        let (observed_fingerprint, handler, config) = connection_parts(&options);
+        let ConnectionParts {
+            observed_fingerprint,
+            handler,
+            config,
+            forwarded_channels,
+        } = connection_parts(&options);
         let connect = tokio::time::timeout(
             options.timeout,
             client::connect_stream(config, stream, handler),
         )
         .await;
         let handle = map_connect_result(connect, observed_fingerprint)?;
-        Self::finish_authenticated(options, handle, Some(upstream)).await
+        Self::finish_authenticated(options, handle, Some(upstream), forwarded_channels).await
     }
 
     async fn finish_authenticated(
         options: SshConnectOptions,
         mut handle: client::Handle<ClientHandler>,
         parent: Option<Arc<SshConnection>>,
+        forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
     ) -> Result<Self, SshError> {
         let authentication = tokio::time::timeout(
             options.timeout,
@@ -302,6 +506,7 @@ impl SshConnection {
             handle: Arc::new(handle),
             lifecycle: Mutex::new(lifecycle),
             parent,
+            forwarded_channels: AsyncMutex::new(forwarded_channels),
         })
     }
 
@@ -412,6 +617,49 @@ impl SshConnection {
         .map_err(SshError::Channel)?;
         Ok(channel.into_stream())
     }
+
+    /// Requests the SSH server to listen on a remote endpoint. A returned
+    /// forwarded channel becomes available through `next_forwarded_channel`.
+    pub async fn request_remote_forward(
+        &self,
+        address: impl Into<String>,
+        port: u32,
+    ) -> Result<u16, SshError> {
+        let address = address.into();
+        if address.trim().is_empty() || address.contains('\0') {
+            return Err(SshError::InvalidOptions);
+        }
+        let port = tokio::time::timeout(
+            Duration::from_secs(12),
+            self.handle.tcpip_forward(address, port),
+        )
+        .await
+        .map_err(|_| SshError::Timeout)?
+        .map_err(SshError::Channel)?;
+        u16::try_from(port).map_err(|_| SshError::InvalidOptions)
+    }
+
+    pub async fn cancel_remote_forward(
+        &self,
+        address: impl Into<String>,
+        port: u32,
+    ) -> Result<(), SshError> {
+        let address = address.into();
+        if address.trim().is_empty() || address.contains('\0') || port == 0 {
+            return Err(SshError::InvalidOptions);
+        }
+        tokio::time::timeout(
+            Duration::from_secs(12),
+            self.handle.cancel_tcpip_forward(address, port),
+        )
+        .await
+        .map_err(|_| SshError::Timeout)?
+        .map_err(SshError::Channel)
+    }
+
+    pub async fn next_forwarded_channel(&self) -> Option<SshForwardedChannel> {
+        self.forwarded_channels.lock().await.recv().await
+    }
 }
 
 fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
@@ -425,25 +673,26 @@ fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
     Ok(())
 }
 
-fn connection_parts(
-    options: &SshConnectOptions,
-) -> (
-    Arc<Mutex<Option<String>>>,
-    ClientHandler,
-    Arc<client::Config>,
-) {
+fn connection_parts(options: &SshConnectOptions) -> ConnectionParts {
     let observed_fingerprint = Arc::new(Mutex::new(None));
+    let (forwarded_sender, forwarded_receiver) = mpsc::unbounded_channel();
     let handler = ClientHandler {
         host: options.host.clone(),
         port: options.port,
         policy: options.host_key_policy.clone(),
         observed_fingerprint: Arc::clone(&observed_fingerprint),
+        forwarded_channels: forwarded_sender,
     };
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(options.timeout),
         ..Default::default()
     });
-    (observed_fingerprint, handler, config)
+    ConnectionParts {
+        observed_fingerprint,
+        handler,
+        config,
+        forwarded_channels: forwarded_receiver,
+    }
 }
 
 fn map_connect_result(
@@ -942,6 +1191,47 @@ mod tests {
         let debug = format!("{:?}", SshCredentials::agent("ops"));
         assert!(debug.contains("agent"));
         assert!(debug.contains("ops"));
+    }
+
+    #[test]
+    fn socks5_domain_connect_handshake_is_bounded_and_typed() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (mut client, mut proxy) = tokio::io::duplex(4096);
+            let proxy_task = tokio::spawn(async move { negotiate_socks5(&mut proxy).await });
+            client.write_all(&[5, 1, 0]).await.unwrap();
+            let mut method_reply = [0_u8; 2];
+            client.read_exact(&mut method_reply).await.unwrap();
+            assert_eq!(method_reply, [5, 0]);
+            client.write_all(&[5, 1, 0, 3, 13]).await.unwrap();
+            client.write_all(b"fixture.local").await.unwrap();
+            client.write_all(&443_u16.to_be_bytes()).await.unwrap();
+            let request = proxy_task.await.unwrap().unwrap();
+            assert_eq!(
+                request,
+                Socks5Request {
+                    target_host: "fixture.local".into(),
+                    target_port: 443,
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn socks5_rejects_authentication_instead_of_falling_back() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (mut client, mut proxy) = tokio::io::duplex(128);
+            let proxy_task = tokio::spawn(async move { negotiate_socks5(&mut proxy).await });
+            client.write_all(&[5, 1, 2]).await.unwrap();
+            let mut method_reply = [0_u8; 2];
+            client.read_exact(&mut method_reply).await.unwrap();
+            assert_eq!(method_reply, [5, 0xff]);
+            assert!(matches!(
+                proxy_task.await.unwrap(),
+                Err(Socks5Error::NoUnauthenticatedMethod)
+            ));
+        });
     }
 
     fn accepted_fingerprint(policy: &HostKeyPolicy, fingerprint: &str) -> Option<bool> {

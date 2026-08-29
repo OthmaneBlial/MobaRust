@@ -8,7 +8,8 @@ use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
 use ssh::{
-    SshAuthRequest, SshConnectRequest, SshLocalForwardRequest, SshManager, SshTransferRequest,
+    SshAuthRequest, SshConnectRequest, SshDynamicForwardRequest, SshLocalForwardRequest,
+    SshManager, SshTransferRequest,
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -365,6 +366,19 @@ async fn ssh_start_local_forward(
 }
 
 #[tauri::command]
+async fn ssh_start_dynamic_forward(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    request: SshDynamicForwardRequest,
+) -> Result<ssh::SshTunnelResponse, String> {
+    manager
+        .start_dynamic_forward(app, terminal_id, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn ssh_cancel_tunnel(manager: State<'_, SshManager>, tunnel_id: String) -> Result<bool, String> {
     manager
         .cancel_tunnel(&tunnel_id)
@@ -456,6 +470,7 @@ fn main() {
             ssh_upload,
             ssh_cancel_transfer,
             ssh_start_local_forward,
+            ssh_start_dynamic_forward,
             ssh_cancel_tunnel,
             terminal_spawn,
             terminal_write,

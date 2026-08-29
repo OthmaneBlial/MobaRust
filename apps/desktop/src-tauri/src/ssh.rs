@@ -1,6 +1,7 @@
 use mobarust_core::{TransferEvent, TransferLifecycle, TransferState};
 use mobarust_ssh::{
-    HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
+    HostKeyPolicy, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials, SshError,
+    SshOutput, negotiate_socks5, send_socks5_reply,
 };
 use mobarust_vault::{CredentialId, PlatformVault, VaultError};
 use serde::{Deserialize, Serialize};
@@ -122,6 +123,14 @@ pub struct SshLocalForwardRequest {
     pub target_port: u16,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshDynamicForwardRequest {
+    #[serde(default = "default_bind_host")]
+    pub bind_host: String,
+    pub bind_port: u16,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshTunnelResponse {
@@ -207,6 +216,9 @@ enum SshCommand {
     StartLocalForward {
         job: LocalForwardJob,
     },
+    StartDynamicForward {
+        job: DynamicForwardJob,
+    },
     StartTransfer {
         job: TransferJob,
     },
@@ -285,6 +297,38 @@ struct LocalForwardJob {
     target_port: u16,
     listener: TcpListener,
     cancel: watch::Receiver<bool>,
+}
+
+struct DynamicForwardJob {
+    tunnel_id: String,
+    terminal_id: String,
+    bind_host: String,
+    bind_port: u16,
+    listener: TcpListener,
+    cancel: watch::Receiver<bool>,
+}
+
+impl DynamicForwardJob {
+    fn event(
+        &self,
+        state: TunnelState,
+        connections: usize,
+        bytes_forwarded: u64,
+        error: Option<String>,
+    ) -> SshTunnelEvent {
+        SshTunnelEvent {
+            tunnel_id: self.tunnel_id.clone(),
+            terminal_id: self.terminal_id.clone(),
+            local_host: self.bind_host.clone(),
+            local_port: self.bind_port,
+            target_host: "SOCKS5".into(),
+            target_port: 0,
+            state,
+            connections,
+            bytes_forwarded,
+            error,
+        }
+    }
 }
 
 impl LocalForwardJob {
@@ -561,6 +605,68 @@ impl SshManager {
             },
         };
         if sender.send(command).await.is_err() {
+            self.finish_tunnel(&tunnel_id);
+            return Err(SshManagerError::Closed);
+        }
+        Ok(SshTunnelResponse {
+            tunnel_id,
+            bind_host,
+            bind_port: local_port,
+        })
+    }
+
+    pub async fn start_dynamic_forward(
+        &self,
+        app: AppHandle,
+        terminal_id: String,
+        request: SshDynamicForwardRequest,
+    ) -> Result<SshTunnelResponse, SshManagerError> {
+        let sender = self.sender(&terminal_id)?;
+        let bind_host = if request.bind_host.trim().is_empty() {
+            default_bind_host().to_owned()
+        } else {
+            request.bind_host.trim().to_owned()
+        };
+        if bind_host.contains('\0') {
+            return Err(SshManagerError::InvalidRequest(
+                "SOCKS bind host cannot contain NUL".into(),
+            ));
+        }
+        let listener = TcpListener::bind((bind_host.as_str(), request.bind_port))
+            .await
+            .map_err(|error| {
+                SshManagerError::InvalidRequest(format!("could not bind SOCKS listener: {error}"))
+            })?;
+        let local_port = listener
+            .local_addr()
+            .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?
+            .port();
+        let tunnel_id = Uuid::new_v4().to_string();
+        let (cancel, cancel_receiver) = watch::channel(false);
+        self.tunnels
+            .lock()
+            .map_err(|_| SshManagerError::Closed)?
+            .insert(
+                tunnel_id.clone(),
+                TunnelControl {
+                    terminal_id: terminal_id.clone(),
+                    cancel,
+                },
+            );
+        let job = DynamicForwardJob {
+            tunnel_id: tunnel_id.clone(),
+            terminal_id: terminal_id.clone(),
+            bind_host: bind_host.clone(),
+            bind_port: local_port,
+            listener,
+            cancel: cancel_receiver,
+        };
+        self.emit_tunnel(&app, job.event(TunnelState::Listening, 0, 0, None));
+        if sender
+            .send(SshCommand::StartDynamicForward { job })
+            .await
+            .is_err()
+        {
             self.finish_tunnel(&tunnel_id);
             return Err(SshManagerError::Closed);
         }
@@ -1072,6 +1178,14 @@ async fn run_shell_once(
                             run_local_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
                         });
                     }
+                    Some(SshCommand::StartDynamicForward { job }) => {
+                        let tunnel_manager = manager.clone();
+                        let tunnel_connection = Arc::clone(connection);
+                        let tunnel_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            run_dynamic_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
+                        });
+                    }
                     Some(SshCommand::StartTransfer { job }) => {
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
@@ -1208,6 +1322,130 @@ async fn run_local_forward(
                     Err(error) => {
                         failed = true;
                         manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("local tunnel listener failed: {error}"))));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    workers.shutdown().await;
+    if !failed {
+        manager.emit_tunnel(
+            &app,
+            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
+        );
+    }
+    manager.finish_tunnel(&job.tunnel_id);
+}
+
+async fn run_dynamic_forward(
+    app: AppHandle,
+    manager: SshManager,
+    connection: Arc<SshConnection>,
+    mut job: DynamicForwardJob,
+) {
+    const MAX_CONNECTIONS: usize = 16;
+    let mut connections = 0_usize;
+    let mut bytes_forwarded = 0_u64;
+    let mut failed = false;
+    let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
+
+    manager.emit_tunnel(
+        &app,
+        job.event(TunnelState::Running, connections, bytes_forwarded, None),
+    );
+
+    loop {
+        tokio::select! {
+            changed = job.cancel.changed() => {
+                if changed.is_err() || *job.cancel.borrow() {
+                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    break;
+                }
+            }
+            worker = workers.join_next(), if !workers.is_empty() => {
+                if let Some(result) = worker {
+                    match result {
+                        Ok(Ok((uploaded, downloaded))) => {
+                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        }
+                        Ok(Err(error)) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                        }
+                        Err(error) => {
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                        }
+                    }
+                }
+            }
+            accepted = job.listener.accept() => {
+                match accepted {
+                    Ok((mut local, _peer)) => {
+                        if workers.len() >= MAX_CONNECTIONS {
+                            drop(local);
+                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("SOCKS connection limit reached".into())));
+                            continue;
+                        }
+                        connections = connections.saturating_add(1);
+                        let connection = Arc::clone(&connection);
+                        let mut cancel = job.cancel.clone();
+                        workers.spawn(async move {
+                            let request = tokio::select! {
+                                _ = cancel.changed() => {
+                                    let _ = send_socks5_reply(&mut local, Socks5ReplyCode::GeneralFailure).await;
+                                    return Err("SOCKS connection cancelled".into());
+                                }
+                                result = tokio::time::timeout(Duration::from_secs(12), negotiate_socks5(&mut local)) => {
+                                    match result {
+                                        Ok(Ok(request)) => request,
+                                        Ok(Err(error)) => {
+                                            let _ = send_socks5_reply(&mut local, Socks5ReplyCode::GeneralFailure).await;
+                                            return Err(error.to_string());
+                                        }
+                                        Err(_) => {
+                                            let _ = send_socks5_reply(&mut local, Socks5ReplyCode::TtlExpired).await;
+                                            return Err("SOCKS handshake timed out".into());
+                                        }
+                                    }
+                                }
+                            };
+                            let mut remote = tokio::select! {
+                                _ = cancel.changed() => {
+                                    let _ = send_socks5_reply(&mut local, Socks5ReplyCode::GeneralFailure).await;
+                                    return Err("SOCKS connection cancelled".into());
+                                }
+                                result = tokio::time::timeout(
+                                    Duration::from_secs(12),
+                                    connection.open_direct_tcpip(request.target_host, u32::from(request.target_port)),
+                                ) => {
+                                    match result {
+                                        Ok(Ok(remote)) => remote,
+                                        Ok(Err(error)) => {
+                                            let _ = send_socks5_reply(&mut local, Socks5ReplyCode::ConnectionRefused).await;
+                                            return Err(error.to_string());
+                                        }
+                                        Err(_) => {
+                                            let _ = send_socks5_reply(&mut local, Socks5ReplyCode::TtlExpired).await;
+                                            return Err("SOCKS target connection timed out".into());
+                                        }
+                                    }
+                                }
+                            };
+                            send_socks5_reply(&mut local, Socks5ReplyCode::Succeeded)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            tokio::select! {
+                                _ = cancel.changed() => Err("SOCKS connection cancelled".into()),
+                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                            }
+                        });
+                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                    }
+                    Err(error) => {
+                        failed = true;
+                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("SOCKS listener failed: {error}"))));
                         break;
                     }
                 }

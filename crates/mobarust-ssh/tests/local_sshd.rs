@@ -8,7 +8,7 @@ use std::time::Duration;
 use mobarust_ssh::{
     HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
@@ -215,6 +215,68 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         drop(forwarded);
         echo_task.await.expect("join echo fixture");
 
+        let remote_forward_target = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind remote-forward target fixture");
+        let remote_forward_target_port = remote_forward_target
+            .local_addr()
+            .expect("read remote-forward target port")
+            .port();
+        let target_task = tokio::spawn(async move {
+            let (mut socket, _) = remote_forward_target
+                .accept()
+                .await
+                .expect("accept remote-forward target");
+            let mut payload = [0_u8; 15];
+            socket
+                .read_exact(&mut payload)
+                .await
+                .expect("read remote-forward payload");
+            socket
+                .write_all(&payload)
+                .await
+                .expect("write remote-forward payload");
+        });
+        let remote_forward_port = connection
+            .request_remote_forward("127.0.0.1", 0)
+            .await
+            .expect("request SSH remote port forward");
+        let remote_client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(("127.0.0.1", remote_forward_port))
+                .await
+                .expect("connect to remote-forward listener");
+            client
+                .write_all(b"MOBARUST_REMOTE")
+                .await
+                .expect("write remote-forward payload");
+            let mut response = [0_u8; 15];
+            client
+                .read_exact(&mut response)
+                .await
+                .expect("read remote-forward response");
+            assert_eq!(&response, b"MOBARUST_REMOTE");
+        });
+        let forwarded_channel =
+            tokio::time::timeout(Duration::from_secs(5), connection.next_forwarded_channel())
+                .await
+                .expect("remote-forward channel timeout")
+                .expect("remote-forward channel closed");
+        let mut forwarded_stream = forwarded_channel.into_stream();
+        let mut target = TcpStream::connect(("127.0.0.1", remote_forward_target_port))
+            .await
+            .expect("connect local remote-forward target");
+        copy_bidirectional(&mut forwarded_stream, &mut target)
+            .await
+            .expect("bridge remote-forward channel");
+        connection
+            .cancel_remote_forward("127.0.0.1", u32::from(remote_forward_port))
+            .await
+            .expect("cancel SSH remote port forward");
+        remote_client_task
+            .await
+            .expect("join remote-forward client");
+        target_task.await.expect("join remote-forward target");
+
         let jumped = SshConnection::connect_with_jump_chain(
             SshConnectOptions {
                 host: "127.0.0.1".into(),
@@ -318,7 +380,7 @@ impl LocalSshd {
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),

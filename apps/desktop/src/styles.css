@@ -83,12 +83,14 @@ button:not(:disabled) { cursor: pointer; }
 .tunnel-view-toolbar > div { display: flex; flex-direction: column; gap: 7px; }
 .tunnel-view-toolbar strong { color: var(--text); font-size: 16px; letter-spacing: -.03em; }
 .tunnel-view-toolbar p { max-width: 460px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.tunnel-view-actions, .tunnel-empty-actions { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
 .tunnel-view-meta { display: flex; justify-content: space-between; padding: 10px 16px; color: var(--faint); font-family: var(--mono); font-size: 9px; }
 .tunnel-empty { display: flex; flex-direction: column; align-items: center; gap: 9px; min-height: 332px; padding: 78px 20px 40px; color: var(--faint); text-align: center; }
 .tunnel-empty > svg { color: var(--amber); }
 .tunnel-empty strong { color: var(--text); font-size: 13px; }
 .tunnel-empty span { max-width: 360px; font-size: 10px; line-height: 1.5; }
 .tunnel-empty .outline-button { margin-top: 8px; }
+.tunnel-empty-actions { margin-top: 8px; flex-wrap: wrap; justify-content: center; }
 .tunnel-list { padding: 0 10px 10px; }
 .tunnel-row { display: flex; align-items: flex-start; gap: 10px; padding: 13px 7px; border-top: 1px solid rgba(193, 214, 195, .07); }
 .tunnel-row-icon { display: grid; flex: 0 0 18px; place-items: center; padding-top: 2px; color: var(--mint); }

@@ -29,7 +29,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## 0.4 — network workstation
 
-- [x] Local SSH forwarding through native direct-tcpip channels with bounded clients and cancellation
+- [x] Local and remote SSH forwarding through native direct-tcpip/forwarded-tcpip channels with bounded clients and cancellation
+- [x] Bounded local SOCKS5 `-D` proxy path with explicit tunnel-manager controls
 - [ ] Remote and dynamic SSH forwarding
 - [x] Native jump-host chain transport with host-key policy per hop
 - [x] Bounded shell reconnect attempts with explicit lifecycle telemetry

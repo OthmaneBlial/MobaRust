@@ -21,6 +21,7 @@ The first working slice provides:
 - real SSH jump-host chaining through native `direct-tcpip` streams, with an optional agent-backed hop in Quick Connect;
 - bounded SSH shell reconnection with explicit reconnecting/failed state events and preserved terminal identity;
 - native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
+- native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.
