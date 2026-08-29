@@ -53,6 +53,13 @@ pub struct OpenSshImportReport {
     pub unsupported_directives: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionImportReport {
+    pub imported_count: usize,
+    pub skipped: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 struct OpenSshHostBlock {
     patterns: Vec<String>,
@@ -125,6 +132,66 @@ impl SessionStore {
             self.persist()?;
         }
         Ok(deleted)
+    }
+
+    pub fn set_favorite(&mut self, id: SessionId, favorite: bool) -> Result<bool, StoreError> {
+        let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) else {
+            return Ok(false);
+        };
+        session.favorite = favorite;
+        self.persist()?;
+        Ok(true)
+    }
+
+    /// Serializes only the versioned session catalog. The format contains
+    /// credential references, never credential material.
+    pub fn export_json(&self) -> Result<String, StoreError> {
+        serde_json::to_string_pretty(&StoreFile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            sessions: self.sessions.clone(),
+        })
+        .map_err(StoreError::Encode)
+    }
+
+    /// Merges a previously exported secret-free catalog. A session ID is the
+    /// stable merge key; malformed or unknown-schema input fails before the
+    /// current store is changed.
+    pub fn import_json(&mut self, json: &str) -> Result<SessionImportReport, StoreError> {
+        let source = PathBuf::from("<session-import>");
+        let file: StoreFile =
+            serde_json::from_str(json).map_err(|decode_error| StoreError::Decode {
+                path: source.clone(),
+                source: decode_error,
+            })?;
+        if file.schema_version != CURRENT_SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema {
+                path: source,
+                version: file.schema_version,
+            });
+        }
+        let mut imported_count = 0;
+        let mut skipped = Vec::new();
+        let mut changed = false;
+        for session in file.sessions {
+            if let Err(error) = session.validate() {
+                skipped.push(format!("{}: {error}", session.name));
+                continue;
+            }
+            imported_count += 1;
+            if let Some(existing) = self.sessions.iter_mut().find(|item| item.id == session.id) {
+                *existing = session;
+            } else {
+                self.sessions.push(session);
+            }
+            changed = true;
+        }
+        if changed {
+            self.persist()?;
+        }
+        Ok(SessionImportReport {
+            imported_count,
+            skipped,
+        })
     }
 
     /// Imports the commonly used, secret-free connection fields from an
@@ -482,6 +549,54 @@ mod tests {
         assert_eq!(value["kind"], "password");
         assert_eq!(value["credentialRef"], "prod-password");
         assert!(value.get("credential_ref").is_none());
+    }
+
+    #[test]
+    fn favorites_are_durable_and_unknown_ids_are_safe() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let session = remote_session();
+        let id = session.id;
+        store.save(session).unwrap();
+
+        assert!(store.set_favorite(id, true).unwrap());
+        assert!(!store.set_favorite(SessionId::new(), true).unwrap());
+        let reopened = SessionStore::open(&path).unwrap();
+        assert!(reopened.list()[0].favorite);
+    }
+
+    #[test]
+    fn export_and_import_merge_secret_free_profiles() {
+        let source_directory = tempdir().unwrap();
+        let source_path = source_directory.path().join("sessions.json");
+        let mut source = SessionStore::open(&source_path).unwrap();
+        source.save(remote_session()).unwrap();
+        let exported = source.export_json().unwrap();
+        assert!(exported.contains("credentialRef"));
+        assert!(!exported.contains("super-secret"));
+
+        let target_directory = tempdir().unwrap();
+        let target_path = target_directory.path().join("sessions.json");
+        let mut target = SessionStore::open(&target_path).unwrap();
+        let report = target.import_json(&exported).unwrap();
+        assert_eq!(report.imported_count, 1);
+        assert!(report.skipped.is_empty());
+        assert_eq!(target.list().len(), 1);
+
+        let second = target.import_json(&exported).unwrap();
+        assert_eq!(second.imported_count, 1);
+        assert_eq!(target.list().len(), 1);
+    }
+
+    #[test]
+    fn invalid_export_is_rejected_without_mutating_store() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let error = store.import_json(r#"{"schema_version":1,"sessions":[],"extra":true}"#);
+        assert!(matches!(error, Err(StoreError::Decode { .. })));
+        assert!(store.list().is_empty());
     }
 
     #[test]

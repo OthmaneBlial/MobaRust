@@ -73,6 +73,8 @@ type SessionListItem = {
   detail: string;
   type: string;
   active: boolean;
+  favorite: boolean;
+  tags: string[];
 };
 
 type SavedSession = {
@@ -85,6 +87,8 @@ type SavedSession = {
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
   jump_hosts: string[];
+  tags: string[];
+  favorite: boolean;
   auth:
     | { kind: "none" }
     | { kind: "agent" }
@@ -97,6 +101,11 @@ type OpenSshImportReport = {
   imported: SavedSession[];
   skippedHosts: string[];
   unsupportedDirectives: string[];
+};
+
+type SessionImportReport = {
+  importedCount: number;
+  skipped: string[];
 };
 
 type SshConnectRequest = {
@@ -163,9 +172,9 @@ type SshTunnelEvent = {
 };
 
 const previewSessions: SessionListItem[] = [
-  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true },
-  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false },
-  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", active: false },
+  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true, favorite: true, tags: ["local"] },
+  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false, favorite: true, tags: ["production"] },
+  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", active: false, favorite: false, tags: ["staging"] },
 ];
 
 const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
@@ -333,6 +342,7 @@ function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
@@ -419,6 +429,44 @@ function App() {
     } catch (error) {
       setSessionNotice(null);
       setConnectionError(String(error));
+    }
+  }, [refreshSavedSessions]);
+
+  const exportSessions = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const json = await invoke<string>("session_export");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+        setSessionNotice("Secret-free session definitions copied to the clipboard; credential material is not included.");
+      } else {
+        window.prompt("Copy this secret-free MobaRust session export", json);
+      }
+    } catch (error) {
+      setConnectionError(`Session export failed: ${String(error)}`);
+    }
+  }, []);
+
+  const importSessions = useCallback(async () => {
+    if (!IS_TAURI) return;
+    const json = window.prompt("Paste a secret-free MobaRust session export JSON");
+    if (!json?.trim()) return;
+    try {
+      const report = await invoke<SessionImportReport>("session_import", { payload: { json } });
+      refreshSavedSessions();
+      setSessionNotice(`Imported ${report.importedCount} session${report.importedCount === 1 ? "" : "s"}${report.skipped.length > 0 ? ` · ${report.skipped.length} skipped` : ""}.`);
+    } catch (error) {
+      setConnectionError(`Session import failed: ${String(error)}`);
+    }
+  }, [refreshSavedSessions]);
+
+  const toggleFavorite = useCallback(async (session: SessionListItem) => {
+    if (!IS_TAURI || !session.id) return;
+    try {
+      await invoke("session_set_favorite", { sessionId: session.id, favorite: !session.favorite });
+      refreshSavedSessions();
+    } catch (error) {
+      setConnectionError(`Favorite update failed: ${String(error)}`);
     }
   }, [refreshSavedSessions]);
 
@@ -651,11 +699,12 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [startNewTerminal]);
 
-  const filteredSessions = sessionRows.filter((session) =>
-    `${session.name} ${session.detail} ${session.type}`.toLowerCase().includes(search.toLowerCase()),
-  );
-  const localSessionCount = sessionRows.filter((session) => session.type === "LOCAL").length;
-  const remoteSessionCount = sessionRows.filter((session) => session.type !== "LOCAL").length;
+  const filteredSessions = sessionRows.filter((session) => {
+    const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
+    return matchesSearch && (!favoritesOnly || session.favorite);
+  });
+  const localSessionCount = filteredSessions.filter((session) => session.type === "LOCAL").length;
+  const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
 
@@ -711,23 +760,23 @@ function App() {
 
           <nav className="sidebar-nav" aria-label="Workspace navigation">
             <div className="nav-section-label">Workspace</div>
-            <button className="nav-item active"><LayoutDashboard size={15} /> Overview <span className="nav-count">1</span></button>
-            <button className="nav-item"><Star size={15} /> Favorites <span className="nav-count">1</span></button>
+            <button className={`nav-item ${!favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(false)}><LayoutDashboard size={15} /> Overview <span className="nav-count">{sessionRows.length}</span></button>
+            <button className={`nav-item ${favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(true)}><Star size={15} /> Favorites <span className="nav-count">{sessionRows.filter((session) => session.favorite).length}</span></button>
             <button className="nav-item"><Activity size={15} /> Recent</button>
           </nav>
 
           <div className="session-list">
-            <div className="list-heading"><span>Sessions</span><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button></div>
+            <div className="list-heading"><span>{favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
-              <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} />
+              <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "SSH").map((session) => (
               <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
                 const saved = savedSessions.find((item) => item.id === session.id);
                 if (saved) connectSavedSession(saved);
-              }} />
+              }} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             {filteredSessions.length === 0 && <div className="empty-search">No matching sessions</div>}
           </div>
@@ -839,15 +888,15 @@ function requestFromSavedSession(session: SavedSession): SshConnectRequest | nul
 
 function toSessionListItem(session: SavedSession): SessionListItem {
   if (session.protocol === "LOCAL") {
-    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true };
+    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true, favorite: session.favorite, tags: session.tags };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";
-  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false };
+  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false, favorite: session.favorite, tags: session.tags };
 }
 
-function SessionRow({ name, detail, type, active, onSelect }: SessionListItem & { onSelect: () => void }) {
-  return <button className={`session-row ${active ? "active" : ""}`} onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
+function SessionRow({ name, detail, type, active, favorite, onSelect, onToggleFavorite }: SessionListItem & { onSelect: () => void; onToggleFavorite: () => void }) {
+  return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div>;
 }
 
 function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onCancelTransfer }: {

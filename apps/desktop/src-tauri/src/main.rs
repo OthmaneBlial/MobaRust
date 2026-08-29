@@ -4,7 +4,7 @@ mod ssh;
 mod terminal;
 
 use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
-use mobarust_store::{OpenSshImportReport, SessionStore};
+use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
 use ssh::{
@@ -36,6 +36,12 @@ struct SaveSshSessionRequest {
 #[serde(rename_all = "camelCase")]
 struct ImportOpenSshRequest {
     path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportSessionRequest {
+    json: String,
 }
 
 #[tauri::command]
@@ -94,6 +100,40 @@ fn session_import_openssh(
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?
         .import_openssh_config(path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_export(store: State<'_, Mutex<SessionStore>>) -> Result<String, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .export_json()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_import(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: ImportSessionRequest,
+) -> Result<SessionImportReport, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .import_json(&payload.json)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_set_favorite(
+    store: State<'_, Mutex<SessionStore>>,
+    session_id: SessionId,
+    favorite: bool,
+) -> Result<bool, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .set_favorite(session_id, favorite)
         .map_err(|error| error.to_string())
 }
 
@@ -398,6 +438,9 @@ fn main() {
             session_list,
             session_save,
             session_import_openssh,
+            session_export,
+            session_import,
+            session_set_favorite,
             session_save_ssh,
             session_delete,
             ssh_connect,
