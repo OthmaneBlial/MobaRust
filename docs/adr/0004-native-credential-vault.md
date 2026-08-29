@@ -27,9 +27,10 @@ privileges remains in scope: an OS credential store is not a defense against a
 fully compromised desktop account. Clipboard, crash-dump, export, and logging
 policies still need separate controls.
 
-Portable mode is not allowed to fall back to plaintext JSON. An encrypted
-portable vault requires a separate design, key lifecycle, recovery story, and
-tests before portable mode can claim parity with native storage.
+Portable mode is not allowed to fall back to plaintext JSON. The separate
+encrypted portable backend is now implemented with an explicit passphrase,
+Argon2id + AES-256-GCM, native lock/unlock lifecycle, and repository tests;
+signed distribution and recovery UX remain separate release gates.
 
 The desktop now exposes only typed `vault_put` and `vault_delete` commands.
 Saving is an explicit action: the transient secret is accepted by the native

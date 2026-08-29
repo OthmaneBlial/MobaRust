@@ -3,7 +3,7 @@ use mobarust_ssh::{
     HostKeyPolicy, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials, SshError,
     SshOutput, negotiate_socks5, send_socks5_reply,
 };
-use mobarust_vault::{CredentialId, PlatformVault, VaultError};
+use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -323,7 +323,7 @@ struct RemoteSessionContext {
     manager: SshManager,
     terminal_id: String,
     request: SshConnectRequest,
-    vault: PlatformVault,
+    vault: Arc<dyn CredentialLookup>,
 }
 
 struct TransferControl {
@@ -479,11 +479,11 @@ impl SshManager {
     pub async fn connect(
         &self,
         app: AppHandle,
-        vault: &PlatformVault,
+        vault: Arc<dyn CredentialLookup>,
         request: SshConnectRequest,
     ) -> Result<SshConnectResponse, SshManagerError> {
         let host = request.host.clone();
-        let connection = connect_transport(vault, &request).await?;
+        let connection = connect_transport(vault.as_ref(), &request).await?;
         let connection = Arc::new(connection);
         let shell = connection.open_shell(request.cols, request.rows).await?;
         let (reader, writer) = shell.split();
@@ -503,7 +503,7 @@ impl SshManager {
 
         let manager = self.clone();
         let id_for_task = terminal_id.clone();
-        let reconnect_vault = vault.clone();
+        let reconnect_vault = Arc::clone(&vault);
         let context = RemoteSessionContext {
             app,
             manager,
@@ -1121,7 +1121,7 @@ impl SshManager {
 }
 
 async fn connect_transport(
-    vault: &PlatformVault,
+    vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
 ) -> Result<SshConnection, SshManagerError> {
     let credentials = credentials_from_request(vault, request)?;
@@ -1156,21 +1156,21 @@ async fn connect_transport(
 }
 
 fn credentials_from_request(
-    vault: &PlatformVault,
+    vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
 ) -> Result<SshCredentials, SshManagerError> {
     credentials_from_auth(vault, &request.username, &request.auth)
 }
 
 fn credentials_from_jump_request(
-    vault: &PlatformVault,
+    vault: &dyn CredentialLookup,
     request: &SshJumpHostRequest,
 ) -> Result<SshCredentials, SshManagerError> {
     credentials_from_auth(vault, &request.username, &request.auth)
 }
 
 fn credentials_from_auth(
-    vault: &PlatformVault,
+    vault: &dyn CredentialLookup,
     username: &str,
     auth: &SshAuthRequest,
 ) -> Result<SshCredentials, SshManagerError> {
@@ -1283,7 +1283,7 @@ async fn run_remote_session(
                         Some(last_error.clone()),
                     );
                     tokio::time::sleep(Duration::from_secs(1_u64 << (attempt - 1))).await;
-                    match connect_transport(&vault, &request).await {
+                    match connect_transport(vault.as_ref(), &request).await {
                         Ok(new_connection) => {
                             match new_connection.open_shell(request.cols, request.rows).await {
                                 Ok(shell) => {

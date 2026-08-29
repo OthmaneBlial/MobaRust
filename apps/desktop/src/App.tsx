@@ -70,6 +70,15 @@ type AppSettings = {
   };
 };
 
+type PortableVaultStatus = {
+  enabled: boolean;
+  unlocked: boolean;
+  exists: boolean;
+  path: string;
+};
+
+type VaultBackend = "platform" | "portable";
+
 const defaultSettings: AppSettings = {
   general: { theme: "dark", confirmMultilinePaste: true },
   appearance: { fontSize: 13 },
@@ -639,6 +648,7 @@ function App() {
   const [broadcastTargetIds, setBroadcastTargetIds] = useState<string[]>([]);
   const [macroRun, setMacroRun] = useState<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -809,6 +819,13 @@ function App() {
       .catch((error) => setConnectionError(`Settings could not be loaded: ${String(error)}`));
   }, []);
 
+  const refreshPortableVaultStatus = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<PortableVaultStatus>("portable_vault_status")
+      .then(setPortableVaultStatus)
+      .catch((error) => setConnectionError(`Portable vault status could not be loaded: ${String(error)}`));
+  }, []);
+
   const refreshSnippets = useCallback(() => {
     if (!IS_TAURI) return;
     void invoke<SnippetRecord[]>("snippet_list")
@@ -905,6 +922,42 @@ function App() {
     }
   }, []);
 
+  const createPortableVault = useCallback(async (passphrase: string) => {
+    if (!IS_TAURI) return;
+    try {
+      const status = await invoke<PortableVaultStatus>("portable_vault_create", { payload: { passphrase } });
+      setPortableVaultStatus(status);
+      setSessionNotice("Created and unlocked the encrypted portable vault. Lock it before leaving the computer unattended.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Portable vault could not be created: ${String(error)}`);
+    }
+  }, []);
+
+  const unlockPortableVault = useCallback(async (passphrase: string) => {
+    if (!IS_TAURI) return;
+    try {
+      const status = await invoke<PortableVaultStatus>("portable_vault_unlock", { payload: { passphrase } });
+      setPortableVaultStatus(status);
+      setSessionNotice("Portable vault unlocked in native memory. The passphrase was not returned to the interface.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Portable vault could not be unlocked: ${String(error)}`);
+    }
+  }, []);
+
+  const lockPortableVault = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const status = await invoke<PortableVaultStatus>("portable_vault_lock");
+      setPortableVaultStatus(status);
+      setSessionNotice("Portable vault locked and its native key material was released.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Portable vault could not be locked: ${String(error)}`);
+    }
+  }, []);
+
   const saveCredential = useCallback(async (credentialId: string, secret: string) => {
     if (!IS_TAURI) {
       setConnectionError("Credential vault operations require the desktop runtime.");
@@ -936,6 +989,40 @@ function App() {
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Credential could not be deleted: ${String(error)}`);
+    }
+  }, []);
+
+  const savePortableCredential = useCallback(async (credentialId: string, secret: string) => {
+    if (!IS_TAURI) {
+      setConnectionError("Credential vault operations require the desktop runtime.");
+      return;
+    }
+    try {
+      const savedId = await invoke<string>("portable_vault_put", {
+        payload: { credentialId: credentialId.trim(), secret },
+      });
+      setCredentialsOpen(false);
+      setSessionNotice(`Saved credential reference “${savedId}” in the encrypted portable vault.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Portable credential could not be saved: ${String(error)}`);
+    }
+  }, []);
+
+  const deletePortableCredential = useCallback(async (credentialId: string) => {
+    if (!IS_TAURI) {
+      setConnectionError("Credential vault operations require the desktop runtime.");
+      return;
+    }
+    try {
+      const deletedId = await invoke<string>("portable_vault_delete", {
+        payload: { credentialId: credentialId.trim() },
+      });
+      setCredentialsOpen(false);
+      setSessionNotice(`Deleted credential reference “${deletedId}” from the encrypted portable vault.`);
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Portable credential could not be deleted: ${String(error)}`);
     }
   }, []);
 
@@ -1786,6 +1873,10 @@ function App() {
   }, [refreshSettings]);
 
   useEffect(() => {
+    refreshPortableVaultStatus();
+  }, [refreshPortableVaultStatus]);
+
+  useEffect(() => {
     refreshSnippets();
   }, [refreshSnippets]);
 
@@ -2042,8 +2133,8 @@ function App() {
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
-      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} />}
-      {credentialsOpen && <CredentialVaultModal onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} />}
+      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
+      {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => setMacrosOpen(false)} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
@@ -2360,17 +2451,20 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenSettings
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Settings" ? onOpenSettings : action.label === "Credential vault" ? onOpenCredentials : action.label === "Snippets" ? onOpenSnippets : action.label === "Macros" ? onOpenMacros : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
 }
 
-function CredentialVaultModal({ onClose, onSave, onDelete }: { onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void> }) {
+function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, onPortableSave, onPortableDelete }: { portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void>; onPortableSave: (credentialId: string, secret: string) => Promise<void>; onPortableDelete: (credentialId: string) => Promise<void> }) {
   const [credentialId, setCredentialId] = useState("");
   const [secret, setSecret] = useState("");
+  const [backend, setBackend] = useState<VaultBackend>("platform");
   const [busy, setBusy] = useState(false);
+  const portableReady = portableVaultStatus?.enabled && portableVaultStatus.unlocked;
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!credentialId.trim() || !secret) return;
     setBusy(true);
     try {
-      await onSave(credentialId, secret);
+      if (backend === "portable") await onPortableSave(credentialId, secret);
+      else await onSave(credentialId, secret);
     } finally {
       setSecret("");
       setBusy(false);
@@ -2378,10 +2472,12 @@ function CredentialVaultModal({ onClose, onSave, onDelete }: { onClose: () => vo
   };
 
   const remove = async () => {
-    if (!credentialId.trim() || !window.confirm(`Delete credential “${credentialId.trim()}” from the platform vault?`)) return;
+    const backendLabel = backend === "portable" ? "encrypted portable vault" : "platform vault";
+    if (!credentialId.trim() || !window.confirm(`Delete credential “${credentialId.trim()}” from the ${backendLabel}?`)) return;
     setBusy(true);
     try {
-      await onDelete(credentialId);
+      if (backend === "portable") await onPortableDelete(credentialId);
+      else await onDelete(credentialId);
     } finally {
       setSecret("");
       setBusy(false);
@@ -2389,13 +2485,14 @@ function CredentialVaultModal({ onClose, onSave, onDelete }: { onClose: () => vo
   };
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="credential-modal" role="dialog" aria-modal="true" aria-label="Credential vault" onMouseDown={(event) => event.stopPropagation()} onSubmit={save}>
-    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference in the platform keyring. MobaRust never lists or returns the secret.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={onClose}><X size={17} /></button></div>
+    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference. Secrets stay inside Rust and are never listed or returned to React.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={onClose}><X size={17} /></button></div>
     <div className="credential-modal-body">
       <label>Credential reference<input required autoFocus value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" autoComplete="off" /><small>Letters, numbers, dots, dashes, and underscores only.</small></label>
       <label>Secret<input required type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Enter only for this explicit save" autoComplete="new-password" /><small>The field is cleared after the native operation. It is not persisted in app state.</small></label>
+      <label>Storage backend<select value={backend} onChange={(event) => setBackend(event.target.value as VaultBackend)}><option value="platform">Platform secure store</option><option value="portable" disabled={!portableReady}>Encrypted portable vault{portableReady ? "" : " (unlock in Settings)"}</option></select></label>
     </div>
-    <div className="credential-modal-note"><KeyRound size={14} /><span>Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service through Rust. No vault operation runs until you confirm.</span></div>
-    <div className="session-editor-footer"><button type="button" className="outline-button danger-button" onClick={() => void remove()} disabled={busy || !credentialId.trim()}><Trash2 size={14} /> Delete reference</button><div><button type="button" className="outline-button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !credentialId.trim() || !secret}>{busy ? "Saving…" : "Save secret"}</button></div></div>
+    <div className="credential-modal-note"><KeyRound size={14} /><span>{backend === "portable" ? "Encrypted portable storage uses the explicit unlock passphrase and is kept separate from the platform keyring." : "Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service through Rust."} No vault operation runs until you confirm.</span></div>
+    <div className="session-editor-footer"><button type="button" className="outline-button danger-button" onClick={() => void remove()} disabled={busy || !credentialId.trim() || (backend === "portable" && !portableReady)}><Trash2 size={14} /> Delete reference</button><div><button type="button" className="outline-button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !credentialId.trim() || !secret || (backend === "portable" && !portableReady)}>{busy ? "Saving…" : "Save secret"}</button></div></div>
   </form></div>;
 }
 
@@ -2646,7 +2743,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   );
 }
 
-function SettingsModal({ settings, onClose, onSave, onReset }: { settings: AppSettings; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void }) {
+function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
   const [theme, setTheme] = useState(settings.general.theme);
   const [confirmMultilinePaste, setConfirmMultilinePaste] = useState(settings.general.confirmMultilinePaste);
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
@@ -2657,6 +2754,19 @@ function SettingsModal({ settings, onClose, onSave, onReset }: { settings: AppSe
   const [connectTimeoutMs, setConnectTimeoutMs] = useState(String(settings.ssh.connectTimeoutMs));
   const [diagnosticTimeoutMs, setDiagnosticTimeoutMs] = useState(String(settings.network.diagnosticTimeoutMs));
   const [scanConcurrency, setScanConcurrency] = useState(String(settings.network.scanConcurrency));
+  const [portablePassphrase, setPortablePassphrase] = useState("");
+  const [portableBusy, setPortableBusy] = useState(false);
+
+  const runPortableAction = async (action: (passphrase: string) => Promise<void>) => {
+    if (!portablePassphrase) return;
+    setPortableBusy(true);
+    try {
+      await action(portablePassphrase);
+    } finally {
+      setPortablePassphrase("");
+      setPortableBusy(false);
+    }
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2706,6 +2816,15 @@ function SettingsModal({ settings, onClose, onSave, onReset }: { settings: AppSe
           <div className="settings-grid">
             <label>Default timeout ms<input type="number" min="50" max="60000" value={diagnosticTimeoutMs} onChange={(event) => setDiagnosticTimeoutMs(event.target.value)} /></label>
             <label>Default scan concurrency<input type="number" min="1" max="128" value={scanConcurrency} onChange={(event) => setScanConcurrency(event.target.value)} /><small>1–128 bounded checks.</small></label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">Portable encrypted vault</span>
+          <div className="settings-grid settings-vault-grid">
+            <div className="settings-vault-status"><strong>{portableVaultStatus?.enabled ? portableVaultStatus.unlocked ? "Unlocked" : portableVaultStatus.exists ? "Locked" : "Not created" : "Unavailable"}</strong><small>{portableVaultStatus?.enabled ? `File: ${portableVaultStatus.path}` : "Portable mode activates only when portable.flag is beside the executable."}</small></div>
+            <label>Unlock passphrase<input type="password" value={portablePassphrase} onChange={(event) => setPortablePassphrase(event.target.value)} autoComplete="new-password" placeholder="Required for explicit vault action" /><small>Cleared after the native operation; never returned to React.</small></label>
+            <div className="settings-vault-actions">{portableVaultStatus?.enabled && !portableVaultStatus.unlocked && portableVaultStatus.exists ? <button type="button" className="outline-button" onClick={() => void runPortableAction(onPortableUnlock)} disabled={portableBusy || !portablePassphrase}>Unlock</button> : null}{portableVaultStatus?.enabled && !portableVaultStatus.unlocked && !portableVaultStatus.exists ? <button type="button" className="outline-button" onClick={() => void runPortableAction(onPortableCreate)} disabled={portableBusy || !portablePassphrase}>Create encrypted vault</button> : null}{portableVaultStatus?.unlocked && <button type="button" className="outline-button danger-button" onClick={() => void onPortableLock()} disabled={portableBusy}>Lock vault</button>}</div>
           </div>
         </div>
 

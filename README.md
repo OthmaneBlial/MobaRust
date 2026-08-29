@@ -19,6 +19,7 @@ The first working slice provides:
 - a bounded native TCP diagnostic primitive with explicit targets, port ranges, concurrency, timeouts, cancellation, and loopback-only fixtures;
 - bounded platform-native ping and traceroute diagnostics with explicit targets, hop/timeout limits, process cancellation, and output truncation;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
+- an opt-in portable encrypted vault using Argon2id + AES-256-GCM, atomic private-file writes, explicit unlock/lock, and native-only secret lookup;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
@@ -42,7 +43,7 @@ The first working slice provides:
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
@@ -55,6 +56,11 @@ pnpm --dir apps/desktop tauri dev
 The desktop binary is named `mobarust`.
 
 Reference projects live under `base/` for local research only and are excluded from Git. See [the research log](docs/research/reference-projects.md).
+
+Portable mode is opt-in: a distribution must place an empty `portable.flag`
+beside the executable. MobaRust then keeps non-secret application data and the
+separate encrypted `portable-data/vault.bin` beside it; it never turns normal
+installed or development runs into portable mode automatically.
 
 ## License
 

@@ -13,7 +13,9 @@ use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{
     MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
 };
-use mobarust_vault::{CredentialId, PlatformVault, SecretMaterial};
+use mobarust_vault::{
+    CredentialId, CredentialLookup, PlatformVault, PortableVault, SecretMaterial, VaultError,
+};
 use network::{NetworkManager, NetworkScanRequest};
 use serde::Serialize;
 use serial::{SerialConnectRequest, SerialManager};
@@ -22,7 +24,7 @@ use ssh::{
     SshManager, SshRemoteForwardRequest, SshTransferRequest,
 };
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri::State;
 use telnet::{TelnetConnectRequest, TelnetManager};
@@ -98,6 +100,57 @@ struct VaultPutRequest {
 #[serde(rename_all = "camelCase")]
 struct VaultCredentialRequest {
     credential_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableVaultPassphraseRequest {
+    passphrase: Zeroizing<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableVaultPutRequest {
+    credential_id: String,
+    secret: Zeroizing<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableVaultStatus {
+    enabled: bool,
+    unlocked: bool,
+    exists: bool,
+    path: String,
+}
+
+#[derive(Clone)]
+struct PortableVaultState {
+    enabled: bool,
+    path: PathBuf,
+    vault: Arc<Mutex<Option<PortableVault>>>,
+}
+
+#[derive(Clone)]
+struct CredentialResolver {
+    platform: PlatformVault,
+    portable: Arc<Mutex<Option<PortableVault>>>,
+}
+
+impl CredentialLookup for CredentialResolver {
+    fn get(&self, credential_id: &CredentialId) -> Result<SecretMaterial, VaultError> {
+        let portable = self.portable.lock().map_err(|_| {
+            VaultError::PortableStateUnavailable("credential lookup lock poisoned".into())
+        })?;
+        if let Some(vault) = portable.as_ref() {
+            match vault.get(credential_id) {
+                Ok(secret) => return Ok(secret),
+                Err(VaultError::PortableCredentialMissing(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.platform.get(credential_id)
+    }
 }
 
 fn diagnostic_timeout(timeout_ms: u64) -> Result<std::time::Duration, String> {
@@ -255,6 +308,131 @@ fn vault_delete(
 ) -> Result<String, String> {
     let credential_id =
         CredentialId::new(payload.credential_id).map_err(|error| error.to_string())?;
+    vault
+        .delete(&credential_id)
+        .map_err(|error| error.to_string())?;
+    Ok(credential_id.to_string())
+}
+
+fn portable_vault_status_for(state: &PortableVaultState) -> Result<PortableVaultStatus, String> {
+    let vault = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    Ok(PortableVaultStatus {
+        enabled: state.enabled,
+        unlocked: vault.is_some(),
+        exists: state.path.is_file(),
+        path: state.path.display().to_string(),
+    })
+}
+
+#[tauri::command]
+fn portable_vault_status(
+    state: State<'_, PortableVaultState>,
+) -> Result<PortableVaultStatus, String> {
+    portable_vault_status_for(state.inner())
+}
+
+#[tauri::command]
+fn portable_vault_create(
+    state: State<'_, PortableVaultState>,
+    payload: PortableVaultPassphraseRequest,
+) -> Result<PortableVaultStatus, String> {
+    if !state.enabled {
+        return Err("portable mode is disabled; place portable.flag beside the executable".into());
+    }
+    let passphrase = SecretMaterial::from_zeroizing(payload.passphrase);
+    let vault =
+        PortableVault::create(&state.path, &passphrase).map_err(|error| error.to_string())?;
+    let mut current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    *current = Some(vault);
+    drop(current);
+    portable_vault_status_for(state.inner())
+}
+
+#[tauri::command]
+fn portable_vault_unlock(
+    state: State<'_, PortableVaultState>,
+    payload: PortableVaultPassphraseRequest,
+) -> Result<PortableVaultStatus, String> {
+    if !state.enabled {
+        return Err("portable mode is disabled; place portable.flag beside the executable".into());
+    }
+    let passphrase = SecretMaterial::from_zeroizing(payload.passphrase);
+    let vault = PortableVault::open(&state.path, &passphrase).map_err(|error| error.to_string())?;
+    let mut current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    *current = Some(vault);
+    drop(current);
+    portable_vault_status_for(state.inner())
+}
+
+#[tauri::command]
+fn portable_vault_lock(
+    state: State<'_, PortableVaultState>,
+) -> Result<PortableVaultStatus, String> {
+    let mut current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    current.take();
+    drop(current);
+    portable_vault_status_for(state.inner())
+}
+
+#[tauri::command]
+fn portable_vault_list(state: State<'_, PortableVaultState>) -> Result<Vec<String>, String> {
+    let current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    current
+        .as_ref()
+        .map(PortableVault::list_ids)
+        .ok_or_else(|| "portable vault is locked".to_owned())
+}
+
+#[tauri::command]
+fn portable_vault_put(
+    state: State<'_, PortableVaultState>,
+    payload: PortableVaultPutRequest,
+) -> Result<String, String> {
+    let credential_id =
+        CredentialId::new(payload.credential_id).map_err(|error| error.to_string())?;
+    let secret = SecretMaterial::from_zeroizing(payload.secret);
+    let mut current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    let vault = current
+        .as_mut()
+        .ok_or_else(|| "portable vault is locked".to_owned())?;
+    vault
+        .put(&credential_id, secret)
+        .map_err(|error| error.to_string())?;
+    Ok(credential_id.to_string())
+}
+
+#[tauri::command]
+fn portable_vault_delete(
+    state: State<'_, PortableVaultState>,
+    payload: VaultCredentialRequest,
+) -> Result<String, String> {
+    let credential_id =
+        CredentialId::new(payload.credential_id).map_err(|error| error.to_string())?;
+    let mut current = state
+        .vault
+        .lock()
+        .map_err(|_| "portable vault state lock poisoned".to_owned())?;
+    let vault = current
+        .as_mut()
+        .ok_or_else(|| "portable vault is locked".to_owned())?;
     vault
         .delete(&credential_id)
         .map_err(|error| error.to_string())?;
@@ -570,11 +748,12 @@ fn expand_user_path(path: &str) -> PathBuf {
 async fn ssh_connect(
     app: tauri::AppHandle,
     manager: State<'_, SshManager>,
-    vault: State<'_, PlatformVault>,
+    vault: State<'_, CredentialResolver>,
     request: SshConnectRequest,
 ) -> Result<ssh::SshConnectResponse, String> {
+    let vault: Arc<dyn CredentialLookup> = Arc::new(vault.inner().clone());
     manager
-        .connect(app, &vault, request)
+        .connect(app, vault, request)
         .await
         .map_err(|error| error.to_string())
 }
@@ -927,6 +1106,15 @@ fn terminal_close(manager: State<'_, TerminalManager>, terminal_id: String) -> R
         .map_err(|error| error.to_string())
 }
 
+fn detect_portable_data_dir() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let parent = executable.parent()?;
+    parent
+        .join("portable.flag")
+        .is_file()
+        .then(|| parent.join("portable-data"))
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(TerminalManager::default())
@@ -934,12 +1122,29 @@ fn main() {
         .manage(SerialManager::default())
         .manage(NetworkManager::default())
         .manage(TelnetManager::default())
-        .manage(PlatformVault::default())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_local_data_dir()
-                .map_err(|error| error.to_string())?;
+            let portable_dir = detect_portable_data_dir();
+            let (data_dir, portable_enabled) = match portable_dir {
+                Some(path) => (path, true),
+                None => (
+                    app.path()
+                        .app_local_data_dir()
+                        .map_err(|error| error.to_string())?,
+                    false,
+                ),
+            };
+            let platform_vault = PlatformVault::default();
+            let portable_vault = Arc::new(Mutex::new(None));
+            app.manage(platform_vault.clone());
+            app.manage(CredentialResolver {
+                platform: platform_vault,
+                portable: Arc::clone(&portable_vault),
+            });
+            app.manage(PortableVaultState {
+                enabled: portable_enabled,
+                path: data_dir.join("vault.bin"),
+                vault: portable_vault,
+            });
             let mut store = SessionStore::open(data_dir.join("sessions.json"))
                 .map_err(|error| error.to_string())?;
             let settings = SettingsStore::open(data_dir.join("settings.json"))
@@ -972,6 +1177,13 @@ fn main() {
             settings_reset,
             vault_put,
             vault_delete,
+            portable_vault_status,
+            portable_vault_create,
+            portable_vault_unlock,
+            portable_vault_lock,
+            portable_vault_list,
+            portable_vault_put,
+            portable_vault_delete,
             snippet_list,
             snippet_save,
             snippet_delete,

@@ -27,7 +27,7 @@ This document describes the security boundary for the first vertical slice and t
 | Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. |
 | Clipboard exposure | Paste is explicit; MobaRust intercepts multiline terminal paste and asks for confirmation before sending it. Remote clipboard support will be opt-in per protocol. |
 | Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. |
-| Portable mode | A portable directory is not a plaintext exception. Use an audited cryptographic design and an explicit unlock flow. |
+| Portable mode | Portable mode is marker-gated by `portable.flag`; credentials use a separate Argon2id + AES-256-GCM vault file, atomic private writes, and explicit native unlock/lock. It is not a plaintext JSON exception. |
 | Application backups | Document that backups can contain session metadata; provide a safe export format and migration versioning. |
 | Host impersonation | SSH adapters must verify known_hosts/fingerprints and must never silently accept unknown keys. |
 | Remote content execution | Terminal output is rendered as terminal text only; URLs need explicit user action and are not automatic HTML. |
