@@ -85,6 +85,7 @@ type SessionListItem = {
   name: string;
   detail: string;
   type: string;
+  folder: string;
   active: boolean;
   favorite: boolean;
   tags: string[];
@@ -99,9 +100,14 @@ type SavedSession = {
   username?: string | null;
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
+  folder: string | null;
   jump_hosts: string[];
   tags: string[];
   favorite: boolean;
+  startup_directory: string | null;
+  startup_command: string | null;
+  environment: Array<[string, string]>;
+  notes: string | null;
   auth:
     | { kind: "none" }
     | { kind: "agent" }
@@ -214,9 +220,9 @@ type SshTunnelEvent = {
 };
 
 const previewSessions: SessionListItem[] = [
-  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", active: true, favorite: true, tags: ["local"] },
-  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", active: false, favorite: true, tags: ["production"] },
-  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", active: false, favorite: false, tags: ["staging"] },
+  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", folder: "Local terminals", active: true, favorite: true, tags: ["local"] },
+  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", folder: "Production", active: false, favorite: true, tags: ["production"] },
+  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"] },
 ];
 
 const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
@@ -411,6 +417,7 @@ function App() {
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
   const [remoteProtocol, setRemoteProtocol] = useState<"ssh" | "telnet" | "serial" | null>(null);
   const [remoteHost, setRemoteHost] = useState<string | null>(null);
@@ -583,6 +590,30 @@ function App() {
       setConnectionError(`Favorite update failed: ${String(error)}`);
     }
   }, [refreshSavedSessions]);
+
+  const saveEditedSession = useCallback(async (session: SavedSession) => {
+    if (!IS_TAURI) return;
+    try {
+      await invoke<SavedSession>("session_save", { session });
+      setEditingSession(null);
+      refreshSavedSessions();
+      setSessionNotice(`Saved ${session.name}. Secret references were left unchanged.`);
+    } catch (error) {
+      setConnectionError(`Session update failed: ${String(error)}`);
+    }
+  }, [refreshSavedSessions]);
+
+  const deleteSavedSession = useCallback(async (session: SavedSession) => {
+    if (!IS_TAURI || !window.confirm(`Delete saved session “${session.name}”?`)) return;
+    try {
+      await invoke<boolean>("session_delete", { sessionId: session.id });
+      if (editingSession?.id === session.id) setEditingSession(null);
+      refreshSavedSessions();
+      setSessionNotice(`Deleted ${session.name}.`);
+    } catch (error) {
+      setConnectionError(`Session deletion failed: ${String(error)}`);
+    }
+  }, [editingSession?.id, refreshSavedSessions]);
 
   const connectSavedSession = useCallback((session: SavedSession) => {
     if (session.jump_hosts.length > 0) {
@@ -908,11 +939,22 @@ function App() {
               <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
-            {filteredSessions.filter((session) => session.type === "SSH").map((session) => (
-              <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
-                const saved = savedSessions.find((item) => item.id === session.id);
-                if (saved) connectSavedSession(saved);
-              }} onToggleFavorite={() => void toggleFavorite(session)} />
+            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH")).map(([folder, sessions]) => (
+              <div key={folder} className="session-folder-group">
+                <div className="folder-heading nested-folder"><Folder size={12} /> {folder} <span>{sessions.length}</span></div>
+                {sessions.map((session) => (
+                  <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                    const saved = savedSessions.find((item) => item.id === session.id);
+                    if (saved) connectSavedSession(saved);
+                  }} onEdit={session.id ? () => {
+                    const saved = savedSessions.find((item) => item.id === session.id);
+                    if (saved) setEditingSession(saved);
+                  } : undefined} onDelete={session.id ? () => {
+                    const saved = savedSessions.find((item) => item.id === session.id);
+                    if (saved) void deleteSavedSession(saved);
+                  } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
+                ))}
+              </div>
             ))}
             {filteredSessions.length === 0 && <div className="empty-search">No matching sessions</div>}
           </div>
@@ -995,6 +1037,7 @@ function App() {
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
+      {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
     </main>
   );
 }
@@ -1024,15 +1067,24 @@ function requestFromSavedSession(session: SavedSession): SshConnectRequest | nul
 
 function toSessionListItem(session: SavedSession): SessionListItem {
   if (session.protocol === "LOCAL") {
-    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", active: true, favorite: session.favorite, tags: session.tags };
+    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", folder: session.folder ?? "Local terminals", active: true, favorite: session.favorite, tags: session.tags };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";
-  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, active: false, favorite: session.favorite, tags: session.tags };
+  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, folder: session.folder ?? "Unfiled", active: false, favorite: session.favorite, tags: session.tags };
 }
 
-function SessionRow({ name, detail, type, active, favorite, onSelect, onToggleFavorite }: SessionListItem & { onSelect: () => void; onToggleFavorite: () => void }) {
-  return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div>;
+function groupSessionsByFolder(sessions: SessionListItem[]): Array<[string, SessionListItem[]]> {
+  const groups = new Map<string, SessionListItem[]>();
+  sessions.forEach((session) => {
+    const folder = session.folder.trim() || "Unfiled";
+    groups.set(folder, [...(groups.get(folder) ?? []), session]);
+  });
+  return [...groups.entries()].sort(([first], [second]) => first.localeCompare(second));
+}
+
+function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, onDelete, onToggleFavorite }: SessionListItem & { onSelect: () => void; onEdit?: () => void; onDelete?: () => void; onToggleFavorite: () => void }) {
+  return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><div className="session-row-actions">{onEdit && <button className="session-action" onClick={onEdit} aria-label={`Edit ${name}`} title="Edit session"><Pencil size={12} /></button>}{onDelete && <button className="session-action danger" onClick={onDelete} aria-label={`Delete ${name}`} title="Delete session"><Trash2 size={12} /></button>}<button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div></div>;
 }
 
 function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onCancelTransfer }: {
@@ -1129,6 +1181,89 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onToggleSideba
   const [query, setQuery] = useState("");
   const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+}
+
+function SessionEditor({ session, onClose, onSave }: { session: SavedSession; onClose: () => void; onSave: (session: SavedSession) => void }) {
+  const [name, setName] = useState(session.name);
+  const [folder, setFolder] = useState(session.folder ?? "");
+  const [tags, setTags] = useState(session.tags.join(", "));
+  const [startupDirectory, setStartupDirectory] = useState(session.startup_directory ?? "");
+  const [startupCommand, setStartupCommand] = useState(session.startup_command ?? "");
+  const [notes, setNotes] = useState(session.notes ?? "");
+  const [favorite, setFavorite] = useState(session.favorite);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedTags = [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))];
+    onSave({
+      ...session,
+      name: name.trim(),
+      folder: folder.trim() || null,
+      tags: normalizedTags,
+      favorite,
+      startup_directory: startupDirectory.trim() || null,
+      startup_command: startupCommand.trim() || null,
+      notes: notes.trim() || null,
+      environment: session.environment ?? [],
+    });
+  };
+
+  const endpoint = session.username ? `${session.username}@${session.hostname}:${session.port}` : `${session.hostname}:${session.port}`;
+  const authLabel = session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "privateKey" ? "Private key reference" : "No authentication";
+
+  return (
+    <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+      <form className="session-editor" role="dialog" aria-modal="true" aria-label={`Edit ${session.name}`} onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}>
+        <div className="session-editor-heading">
+          <div>
+            <span className="eyebrow">SESSION / METADATA</span>
+            <h2>Edit session</h2>
+            <p>Organize this profile without exposing or changing its credential material.</p>
+          </div>
+          <button type="button" className="icon-button" aria-label="Close session editor" onClick={onClose}><X size={17} /></button>
+        </div>
+
+        <div className="session-editor-summary">
+          <div><span>Protocol</span><strong>{session.protocol}</strong></div>
+          <div><span>Endpoint</span><strong>{endpoint}</strong></div>
+          <div><span>Authentication</span><strong>{authLabel}</strong></div>
+        </div>
+
+        <div className="session-editor-grid">
+          <label className="quick-connect-wide">
+            Session name
+            <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label>
+            Folder
+            <input value={folder} onChange={(event) => setFolder(event.target.value)} placeholder="Production" />
+          </label>
+          <label>
+            Tags
+            <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="prod, bastion" />
+            <small>Separate tags with commas.</small>
+          </label>
+          <label>
+            Startup directory <span className="optional">optional</span>
+            <input value={startupDirectory} onChange={(event) => setStartupDirectory(event.target.value)} placeholder="/srv/app" />
+          </label>
+          <label>
+            Startup command <span className="optional">optional</span>
+            <input value={startupCommand} onChange={(event) => setStartupCommand(event.target.value)} placeholder="htop" />
+          </label>
+          <label className="quick-connect-wide">
+            Notes <span className="optional">optional</span>
+            <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Operational notes" rows={3} />
+          </label>
+        </div>
+
+        <div className="session-editor-footer">
+          <button type="button" className={`favorite-toggle ${favorite ? "selected" : ""}`} onClick={() => setFavorite((value) => !value)}><Star size={14} fill={favorite ? "currentColor" : "none"} /> {favorite ? "Favorite" : "Add to favorites"}</button>
+          <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save changes</button></div>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onConnectSerial }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void; onConnectSerial: (request: SerialConnectRequest) => void }) {
