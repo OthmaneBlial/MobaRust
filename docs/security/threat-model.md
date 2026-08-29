@@ -25,7 +25,7 @@ This document describes the security boundary for the first vertical slice and t
 | Malicious local process | Documented as an OS limitation; minimize plaintext lifetime and never claim protection from a process with equivalent user privileges. |
 | Compromised application database | The current session store contains metadata and opaque references only. Platform vault entries are separate; portable encrypted storage still needs its own audited design. |
 | Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. |
-| Clipboard exposure | Paste is explicit; multiline shell input is not auto-executed. Remote clipboard support will be opt-in per protocol. |
+| Clipboard exposure | Paste is explicit; MobaRust intercepts multiline terminal paste and asks for confirmation before sending it. Remote clipboard support will be opt-in per protocol. |
 | Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. |
 | Portable mode | A portable directory is not a plaintext exception. Use an audited cryptographic design and an explicit unlock flow. |
 | Application backups | Document that backups can contain session metadata; provide a safe export format and migration versioning. |

@@ -313,7 +313,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
     resizeObserver.observe(host);
     requestAnimationFrame(fit);
 
-    const input = terminal.onData((data) => {
+    const sendTerminalInput = (data: string) => {
       const terminalId = terminalIdRef.current;
       if (!IS_TAURI || !terminalId) {
         terminal.write(data.replace(/\r/g, "\r\n"));
@@ -321,7 +321,21 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
       }
       const command = remoteProtocol === "ssh" ? "ssh_write" : remoteProtocol === "telnet" ? "telnet_write" : remoteProtocol === "serial" ? "serial_write" : "terminal_write";
       void invoke(command, { terminalId, data }).catch(() => onStatusChange("error"));
+    };
+
+    const input = terminal.onData((data) => {
+      sendTerminalInput(data);
     });
+
+    const onPaste = (event: ClipboardEvent) => {
+      const data = event.clipboardData?.getData("text/plain") ?? "";
+      if (!data.includes("\n") && !data.includes("\r")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const accepted = window.confirm("This paste contains multiple lines. Send it to the terminal? Nothing will be executed automatically by MobaRust.");
+      if (accepted) sendTerminalInput(data);
+    };
+    host.addEventListener("paste", onPaste, true);
 
     const boot = async () => {
       onStatusChange("starting");
@@ -401,6 +415,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, onStat
     return () => {
       disposed = true;
       input.dispose();
+      host.removeEventListener("paste", onPaste, true);
       resizeObserver.disconnect();
       unlistenOutput?.();
       unlistenClosed?.();
