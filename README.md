@@ -33,6 +33,7 @@ The first working slice provides:
 - a secret-free snippet library with tags, validated `${variable}` placeholders, rendered preview, and explicit manual clipboard copy (never automatic execution);
 - a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
+- persistent terminal tabs for simultaneous local, SSH, Telnet, and serial sessions, with per-tab event routing and lifecycle cleanup;
 - an explicit SSH tunnel manager for bounded local forwarding, remote `-R` forwarding, and local SOCKS5 `-D`, with direction-aware lifecycle events and stop controls;
 - a local quality command: `cargo xtask check`.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and

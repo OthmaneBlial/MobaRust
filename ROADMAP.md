@@ -7,6 +7,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Rust workspace with explicit connection and transfer state models
 - [x] Rust-owned local PTY with resize, input, output batching, and clean exit
 - [x] Tauri shell and xterm.js operator workspace
+- [x] Persistent terminal tabs for local and remote sessions with per-tab lifecycle routing
+- [ ] Split terminal panes with focus, resize, and explicit close semantics
 - [x] Local validation command and architecture/research records
 - [ ] Cross-platform PTY matrix on Windows, Linux, and macOS
 

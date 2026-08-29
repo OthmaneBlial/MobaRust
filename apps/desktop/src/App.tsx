@@ -105,6 +105,7 @@ type SerialSessionEvent = {
 };
 
 type TerminalViewportProps = {
+  workspaceId: string;
   instanceKey: number;
   remoteSessionId: string | null;
   remoteProtocol: "ssh" | "telnet" | "serial" | null;
@@ -112,8 +113,34 @@ type TerminalViewportProps = {
   scrollbackLines: number;
   cursorBlink: boolean;
   confirmMultilinePaste: boolean;
-  onStatusChange: (status: TerminalStatus) => void;
+  onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
 };
+
+type WorkspaceTerminal = {
+  id: string;
+  instanceKey: number;
+  label: string;
+  remoteSessionId: string | null;
+  remoteProtocol: "ssh" | "telnet" | "serial" | null;
+  remoteHost: string | null;
+  status: TerminalStatus;
+};
+
+let terminalInstanceCounter = 0;
+
+function createWorkspaceTerminal(config: Partial<Omit<WorkspaceTerminal, "id" | "instanceKey" | "status">> = {}): WorkspaceTerminal {
+  terminalInstanceCounter += 1;
+  return {
+    id: crypto.randomUUID(),
+    instanceKey: terminalInstanceCounter,
+    label: "local shell",
+    remoteSessionId: null,
+    remoteProtocol: null,
+    remoteHost: null,
+    status: "starting",
+    ...config,
+  };
+}
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -330,9 +357,24 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange }: TerminalViewportProps) {
+function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const terminalOptionsRef = useRef({ fontSize, scrollbackLines, cursorBlink });
+  const confirmMultilinePasteRef = useRef(confirmMultilinePaste);
+
+  useEffect(() => {
+    terminalOptionsRef.current = { fontSize, scrollbackLines, cursorBlink };
+    if (terminalRef.current) {
+      terminalRef.current.options.fontSize = fontSize;
+      terminalRef.current.options.cursorBlink = cursorBlink;
+    }
+  }, [cursorBlink, fontSize, scrollbackLines]);
+
+  useEffect(() => {
+    confirmMultilinePasteRef.current = confirmMultilinePaste;
+  }, [confirmMultilinePaste]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -345,12 +387,12 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
-      cursorBlink,
+      cursorBlink: terminalOptionsRef.current.cursorBlink,
       cursorStyle: "bar",
       fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, monospace',
-      fontSize,
+      fontSize: terminalOptionsRef.current.fontSize,
       lineHeight: 1.35,
-      scrollback: scrollbackLines,
+      scrollback: terminalOptionsRef.current.scrollbackLines,
       theme: {
         background: "#101514",
         foreground: "#dce8dc",
@@ -375,6 +417,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
         brightWhite: "#f2f5eb",
       },
     });
+    terminalRef.current = terminal;
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(host);
@@ -403,7 +446,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
         return;
       }
       const command = remoteProtocol === "ssh" ? "ssh_write" : remoteProtocol === "telnet" ? "telnet_write" : remoteProtocol === "serial" ? "serial_write" : "terminal_write";
-      void invoke(command, { terminalId, data }).catch(() => onStatusChange("error"));
+      void invoke(command, { terminalId, data }).catch(() => onStatusChange(workspaceId, "error"));
     };
 
     const input = terminal.onData((data) => {
@@ -412,7 +455,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
 
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData?.getData("text/plain") ?? "";
-      if (!confirmMultilinePaste || (!data.includes("\n") && !data.includes("\r"))) return;
+      if (!confirmMultilinePasteRef.current || (!data.includes("\n") && !data.includes("\r"))) return;
       event.preventDefault();
       event.stopPropagation();
       const accepted = window.confirm("This paste contains multiple lines. Send it to the terminal? Nothing will be executed automatically by MobaRust.");
@@ -421,12 +464,12 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
     host.addEventListener("paste", onPaste, true);
 
     const boot = async () => {
-      onStatusChange("starting");
+      onStatusChange(workspaceId, "starting");
       if (!IS_TAURI) {
         terminal.writeln("MobaRust browser preview");
         terminal.writeln("The real PTY is enabled in the desktop runtime.");
         terminal.writeln("\x1b[38;5;179m$\x1b[0m preview --ready");
-        onStatusChange("connected");
+        onStatusChange(workspaceId, "connected");
         return;
       }
 
@@ -437,30 +480,30 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
           if (event.payload.terminalId === terminalIdRef.current) terminal.write(event.payload.data);
         });
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
-          if (event.payload.terminalId === terminalIdRef.current) onStatusChange("closed");
+          if (event.payload.terminalId === terminalIdRef.current) onStatusChange(workspaceId, "closed");
         });
         if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange("connected");
-            else if (event.payload.state === "reconnecting") onStatusChange("reconnecting");
-            else if (event.payload.state === "failed") onStatusChange("error");
+            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
+            else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
+            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
           });
         }
         if (remoteProtocol === "telnet") {
           unlistenState = await listen<TelnetSessionEvent>("telnet://state", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange("connected");
-            else if (event.payload.state === "failed") onStatusChange("error");
-            else if (event.payload.state === "disconnected") onStatusChange("closed");
+            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
+            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
+            else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
           });
         }
         if (remoteProtocol === "serial") {
           unlistenState = await listen<SerialSessionEvent>("serial://state", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange("connected");
-            else if (event.payload.state === "failed") onStatusChange("error");
-            else if (event.payload.state === "disconnected") onStatusChange("closed");
+            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
+            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
+            else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
           });
         }
         if (remoteSessionId) {
@@ -473,7 +516,7 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
             return;
           }
           pendingOutput.forEach((data) => terminal.write(data));
-          onStatusChange("connected");
+          onStatusChange(workspaceId, "connected");
           fit();
           return;
         }
@@ -486,10 +529,10 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
           return;
         }
         terminalIdRef.current = terminalId;
-        onStatusChange("connected");
+        onStatusChange(workspaceId, "connected");
         fit();
       } catch {
-        onStatusChange("error");
+        onStatusChange(workspaceId, "error");
         terminal.writeln("\r\n\x1b[38;5;203mUnable to start the local PTY.\x1b[0m");
       }
     };
@@ -509,18 +552,18 @@ function TerminalViewport({ instanceKey, remoteSessionId, remoteProtocol, fontSi
         void invoke(closeCommand, { terminalId });
       }
       terminalIdRef.current = null;
+      terminalRef.current = null;
       terminal.dispose();
     };
-  }, [confirmMultilinePaste, cursorBlink, fontSize, instanceKey, onStatusChange, remoteProtocol, remoteSessionId, scrollbackLines]);
+  }, [instanceKey, onStatusChange, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
 
 function App() {
   const [activeView, setActiveView] = useState<View>("terminal");
-  const [terminalKey, setTerminalKey] = useState(0);
-  const [terminalOpen, setTerminalOpen] = useState(true);
-  const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>("starting");
+  const [terminalTabs, setTerminalTabs] = useState<WorkspaceTerminal[]>(() => [createWorkspaceTerminal()]);
+  const [activeTerminalId, setActiveTerminalId] = useState("");
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -537,9 +580,6 @@ function App() {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
-  const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
-  const [remoteProtocol, setRemoteProtocol] = useState<"ssh" | "telnet" | "serial" | null>(null);
-  const [remoteHost, setRemoteHost] = useState<string | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -562,21 +602,53 @@ function App() {
   const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
   const networkScanIdRef = useRef<string | null>(null);
 
+  const activeTerminal = terminalTabs.find((terminal) => terminal.id === activeTerminalId) ?? terminalTabs[0];
+  const selectedTerminalId = activeTerminal?.id ?? "";
+  const remoteSessionId = activeTerminal?.remoteSessionId ?? null;
+  const remoteProtocol = activeTerminal?.remoteProtocol ?? null;
+  const remoteHost = activeTerminal?.remoteHost ?? null;
+  const terminalStatus = activeTerminal?.status ?? "closed";
+
+  useEffect(() => {
+    if (!activeTerminalId && activeTerminal) setActiveTerminalId(activeTerminal.id);
+  }, [activeTerminal, activeTerminalId]);
+
   const startNewTerminal = useCallback(() => {
-    setRemoteSessionId(null);
-    setRemoteProtocol(null);
-    setRemoteHost(null);
+    const terminal = createWorkspaceTerminal();
+    setTerminalTabs((current) => [...current, terminal]);
+    setActiveTerminalId(terminal.id);
     setConnectionError(null);
     setSessionNotice(null);
-    setTerminalStatus("starting");
-    setTerminalOpen(true);
-    setTerminalKey((key) => key + 1);
     setActiveView("terminal");
   }, []);
 
-  const handleTerminalStatus = useCallback((status: TerminalStatus) => {
-    setTerminalStatus(status);
+  const handleTerminalStatus = useCallback((workspaceId: string, status: TerminalStatus) => {
+    setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, status } : terminal));
   }, []);
+
+  const closeTerminal = useCallback((workspaceId: string) => {
+    if (terminalTabs.length === 1) {
+      const replacement = createWorkspaceTerminal();
+      setTerminalTabs([replacement]);
+      setActiveTerminalId(replacement.id);
+      setActiveView("terminal");
+      return;
+    }
+    const closingIndex = terminalTabs.findIndex((terminal) => terminal.id === workspaceId);
+    const remaining = terminalTabs.filter((terminal) => terminal.id !== workspaceId);
+    setTerminalTabs(remaining);
+    if (activeTerminalId === workspaceId) {
+      setActiveTerminalId(remaining[Math.min(closingIndex, remaining.length - 1)].id);
+    }
+  }, [activeTerminalId, terminalTabs]);
+
+  const cycleTerminal = useCallback((direction: 1 | -1) => {
+    if (terminalTabs.length < 2) return;
+    const index = Math.max(0, terminalTabs.findIndex((terminal) => terminal.id === selectedTerminalId));
+    const nextIndex = (index + direction + terminalTabs.length) % terminalTabs.length;
+    setActiveTerminalId(terminalTabs[nextIndex].id);
+    setActiveView("terminal");
+  }, [selectedTerminalId, terminalTabs]);
 
   const refreshSavedSessions = useCallback(() => {
     if (!IS_TAURI) return;
@@ -704,12 +776,14 @@ function App() {
     }
     try {
       const response = await invoke<SshConnectResponse>("ssh_connect", { request });
-      setRemoteSessionId(response.terminalId);
-      setRemoteProtocol("ssh");
-      setRemoteHost(response.host);
-      setTerminalOpen(true);
-      setTerminalStatus("starting");
-      setTerminalKey((key) => key + 1);
+      const terminal = createWorkspaceTerminal({
+        label: `${request.username}@${response.host}`,
+        remoteSessionId: response.terminalId,
+        remoteProtocol: "ssh",
+        remoteHost: response.host,
+      });
+      setTerminalTabs((current) => [...current, terminal]);
+      setActiveTerminalId(terminal.id);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       if (offerSave) {
@@ -738,12 +812,14 @@ function App() {
     }
     try {
       const response = await invoke<TelnetConnectResponse>("telnet_connect", { request });
-      setRemoteSessionId(response.terminalId);
-      setRemoteProtocol("telnet");
-      setRemoteHost(response.host);
-      setTerminalOpen(true);
-      setTerminalStatus("starting");
-      setTerminalKey((key) => key + 1);
+      const terminal = createWorkspaceTerminal({
+        label: `Telnet · ${response.host}`,
+        remoteSessionId: response.terminalId,
+        remoteProtocol: "telnet",
+        remoteHost: response.host,
+      });
+      setTerminalTabs((current) => [...current, terminal]);
+      setActiveTerminalId(terminal.id);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
@@ -761,12 +837,14 @@ function App() {
     }
     try {
       const response = await invoke<SerialConnectResponse>("serial_connect", { request });
-      setRemoteSessionId(response.terminalId);
-      setRemoteProtocol("serial");
-      setRemoteHost(response.device);
-      setTerminalOpen(true);
-      setTerminalStatus("starting");
-      setTerminalKey((key) => key + 1);
+      const terminal = createWorkspaceTerminal({
+        label: `Serial · ${response.device}`,
+        remoteSessionId: response.terminalId,
+        remoteProtocol: "serial",
+        remoteHost: response.device,
+      });
+      setTerminalTabs((current) => [...current, terminal]);
+      setActiveTerminalId(terminal.id);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice(`Connected to ${response.device}. Serial traffic is not encrypted by MobaRust.`);
@@ -1322,6 +1400,14 @@ function App() {
         event.preventDefault();
         startNewTerminal();
       }
+      if (command && event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        closeTerminal(selectedTerminalId);
+      }
+      if (event.ctrlKey && event.key === "Tab") {
+        event.preventDefault();
+        cycleTerminal(event.shiftKey ? -1 : 1);
+      }
       if (command && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setQuickConnectOpen(true);
@@ -1334,7 +1420,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [startNewTerminal]);
+  }, [closeTerminal, cycleTerminal, selectedTerminalId, startNewTerminal]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -1476,10 +1562,10 @@ function App() {
               {activeView === "terminal" ? (
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
-                    <div className="terminal-tab"><span className="terminal-tab-dot" /><span>{remoteHost ? "remote shell" : "local shell"}</span><span className="terminal-tab-meta">{terminalStatus === "connected" ? (remoteHost ? remoteProtocol : "zsh") : terminalStatus}</span><button aria-label="Close terminal" onClick={() => { setTerminalOpen(false); setTerminalStatus("closed"); setRemoteSessionId(null); setRemoteProtocol(null); setRemoteHost(null); }}><X size={14} /></button></div>
-                    <div className="terminal-toolbar-actions"><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button aria-label="Copy terminal output"><Copy size={14} /></button><button aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                    <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
+                    <div className="terminal-toolbar-actions"><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className={`terminal-frame ${terminalOpen ? "" : "terminal-frame-closed"}`}>{terminalOpen ? <TerminalViewport key={terminalKey} instanceKey={terminalKey} remoteSessionId={remoteSessionId} remoteProtocol={remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /> : <div className="terminal-closed"><div className="empty-protocol-art"><TerminalIcon size={21} /></div><strong>Terminal closed</strong><span>Start a fresh local or remote shell when you are ready.</span><button className="primary-button" onClick={startNewTerminal}><Plus size={14} /> New terminal</button></div>}</div>
+                  <div className="terminal-frame terminal-tabs-frame">{terminalTabs.map((terminal) => <div key={terminal.id} className={`terminal-pane ${terminal.id === selectedTerminalId ? "active" : ""}`} aria-hidden={terminal.id === selectedTerminalId ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /></div>)}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
