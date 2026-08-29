@@ -53,11 +53,17 @@ impl fmt::Display for CredentialId {
 }
 
 /// Secret material that is scrubbed when the native boundary drops it.
-pub struct SecretMaterial(String);
+pub struct SecretMaterial(Zeroizing<String>);
 
 impl SecretMaterial {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(Zeroizing::new(value.into()))
+    }
+
+    /// Adopt a deserialized zeroizing string without creating a second
+    /// plaintext allocation at the native command boundary.
+    pub fn from_zeroizing(value: Zeroizing<String>) -> Self {
+        Self(value)
     }
 
     pub fn as_str(&self) -> &str {

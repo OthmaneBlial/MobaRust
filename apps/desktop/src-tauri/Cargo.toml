@@ -25,3 +25,4 @@ tauri = { version = "2.8", features = [] }
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+zeroize = { workspace = true, features = ["serde"] }

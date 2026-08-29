@@ -27,6 +27,7 @@ use tauri::Manager;
 use tauri::State;
 use telnet::{TelnetConnectRequest, TelnetManager};
 use terminal::TerminalManager;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +83,7 @@ struct NetworkTcpCheckRequest {
 #[serde(rename_all = "camelCase")]
 struct VaultPutRequest {
     credential_id: String,
-    secret: String,
+    secret: Zeroizing<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -230,7 +231,7 @@ fn vault_put(vault: State<'_, PlatformVault>, payload: VaultPutRequest) -> Resul
     if payload.secret.is_empty() {
         return Err("vault secret cannot be empty".into());
     }
-    let secret = SecretMaterial::new(payload.secret);
+    let secret = SecretMaterial::from_zeroizing(payload.secret);
     vault
         .put(&credential_id, &secret)
         .map_err(|error| error.to_string())?;
