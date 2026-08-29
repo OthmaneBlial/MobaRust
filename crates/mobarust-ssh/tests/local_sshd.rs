@@ -6,7 +6,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use mobarust_ssh::{
-    HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
+    HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError,
+    SshFingerprintOptions, SshOutput, inspect_host_key,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -33,12 +34,24 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             ),
         })
         .await;
-        match rejection {
+        let rejected_fingerprint = match rejection {
             Err(SshError::HostKeyRejected { fingerprint }) => {
                 assert!(fingerprint.starts_with("SHA256:"));
+                fingerprint
             }
             _ => panic!("unknown host key was not rejected"),
-        }
+        };
+
+        let inspection = inspect_host_key(SshFingerprintOptions {
+            host: "127.0.0.1".into(),
+            port: fixture.port,
+            timeout: Duration::from_secs(5),
+        })
+        .await
+        .expect("inspect the local fixture host key without authentication");
+        assert_eq!(inspection.fingerprint, rejected_fingerprint);
+        assert_eq!(inspection.host, "127.0.0.1");
+        assert_eq!(inspection.port, fixture.port);
 
         let connection = SshConnection::connect(SshConnectOptions {
             host: "127.0.0.1".into(),

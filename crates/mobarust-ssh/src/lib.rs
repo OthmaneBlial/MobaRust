@@ -187,6 +187,23 @@ pub struct SshConnectOptions {
 /// credentials remain native and are consumed during authentication.
 pub type SshJumpOptions = SshConnectOptions;
 
+/// An SSH host-key observation that contains no authentication material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyInspection {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+}
+
+/// Options for a one-shot host-key inspection. This deliberately has no
+/// username, credential, known_hosts path, or SSH-agent setting.
+pub struct SshFingerprintOptions {
+    pub host: String,
+    pub port: u16,
+    pub timeout: Duration,
+}
+
 impl fmt::Debug for SshConnectOptions {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -204,6 +221,7 @@ struct ClientHandler {
     host: String,
     port: u16,
     policy: HostKeyPolicy,
+    inspection_only: bool,
     observed_fingerprint: Arc<Mutex<Option<String>>>,
     forwarded_channels: mpsc::UnboundedSender<SshForwardedChannel>,
 }
@@ -228,6 +246,10 @@ impl client::Handler for ClientHandler {
             .observed_fingerprint
             .lock()
             .expect("SSH fingerprint observation poisoned") = Some(fingerprint.clone());
+
+        if self.inspection_only {
+            return Ok(true);
+        }
 
         match &self.policy {
             HostKeyPolicy::PinnedFingerprint(expected) => Ok(expected == &fingerprint),
@@ -271,6 +293,46 @@ pub struct SshConnection {
     lifecycle: Mutex<ConnectionLifecycle>,
     parent: Option<Arc<SshConnection>>,
     forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
+}
+
+/// Performs a one-shot SSH handshake to observe the server host key, then
+/// closes the transport immediately. No authentication is attempted and no
+/// user key, agent, or known_hosts file is consulted.
+pub async fn inspect_host_key(
+    options: SshFingerprintOptions,
+) -> Result<SshHostKeyInspection, SshError> {
+    validate_fingerprint_options(&options)?;
+    let ConnectionParts {
+        observed_fingerprint,
+        handler,
+        config,
+        ..
+    } = inspection_connection_parts(&options);
+    let connect = tokio::time::timeout(
+        options.timeout,
+        client::connect(config, (options.host.as_str(), options.port), handler),
+    )
+    .await;
+    let handle = map_connect_result(connect, Arc::clone(&observed_fingerprint))?;
+    let fingerprint = observed_fingerprint
+        .lock()
+        .expect("SSH fingerprint observation poisoned")
+        .clone()
+        .ok_or_else(|| SshError::Handshake("SSH server did not present a host key".into()))?;
+
+    // Dropping the handle also closes the transport, but attempt the protocol
+    // disconnect first. A failed close must not hide the already observed key.
+    let _ = tokio::time::timeout(
+        options.timeout,
+        handle.disconnect(Disconnect::ByApplication, "", "en"),
+    )
+    .await;
+
+    Ok(SshHostKeyInspection {
+        host: options.host,
+        port: options.port,
+        fingerprint,
+    })
 }
 
 const REMOTE_MONITOR_OUTPUT_LIMIT: usize = 64 * 1024;
@@ -1115,18 +1177,60 @@ fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
     Ok(())
 }
 
+fn validate_fingerprint_options(options: &SshFingerprintOptions) -> Result<(), SshError> {
+    if options.host.trim().is_empty()
+        || options.host.chars().any(char::is_control)
+        || options.port == 0
+        || options.timeout.is_zero()
+        || options.timeout > Duration::from_secs(60)
+    {
+        return Err(SshError::InvalidOptions);
+    }
+    Ok(())
+}
+
 fn connection_parts(options: &SshConnectOptions) -> ConnectionParts {
+    connection_parts_for(
+        &options.host,
+        options.port,
+        options.host_key_policy.clone(),
+        false,
+        options.timeout,
+    )
+}
+
+fn inspection_connection_parts(options: &SshFingerprintOptions) -> ConnectionParts {
+    connection_parts_for(
+        &options.host,
+        options.port,
+        // The policy is unused in observation mode. Keeping a concrete value
+        // here avoids adding an accept-any variant to the public connection
+        // policy, where it could be misused for an authenticated session.
+        HostKeyPolicy::PinnedFingerprint(String::new()),
+        true,
+        options.timeout,
+    )
+}
+
+fn connection_parts_for(
+    host: &str,
+    port: u16,
+    policy: HostKeyPolicy,
+    inspection_only: bool,
+    timeout: Duration,
+) -> ConnectionParts {
     let observed_fingerprint = Arc::new(Mutex::new(None));
     let (forwarded_sender, forwarded_receiver) = mpsc::unbounded_channel();
     let handler = ClientHandler {
-        host: options.host.clone(),
-        port: options.port,
-        policy: options.host_key_policy.clone(),
+        host: host.to_owned(),
+        port,
+        policy,
+        inspection_only,
         observed_fingerprint: Arc::clone(&observed_fingerprint),
         forwarded_channels: forwarded_sender,
     };
     let config = Arc::new(client::Config {
-        inactivity_timeout: Some(options.timeout),
+        inactivity_timeout: Some(timeout),
         ..Default::default()
     });
     ConnectionParts {

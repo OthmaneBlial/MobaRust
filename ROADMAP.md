@@ -66,7 +66,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] DNS resolution, bounded TCP checks, and explicit diagnostics UI
 - [x] Bounded port-scan UI with progress and cancellation
 - [x] Bounded platform-native ping and traceroute with cancellation and output limits
-- [ ] SSH fingerprint inspection
+- [x] Explicit unauthenticated SSH fingerprint inspection with no credential or known_hosts access
 - [ ] X11 forwarding and integrated/external X-server strategy
 - [x] One-shot SSH remote monitoring with capability-aware metrics and bounded collection
 - [ ] Signed portable packaging and cross-platform distribution evidence

@@ -391,6 +391,12 @@ type TcpCheckResult = {
   status: "open" | "closed" | "timed-out";
 };
 
+type SshHostKeyInspection = {
+  host: string;
+  port: number;
+  fingerprint: string;
+};
+
 type NetworkScanEvent = {
   scanId: string;
   state: "running" | "completed" | "cancelled" | "failed";
@@ -687,6 +693,7 @@ function App() {
   const [networkStatus, setNetworkStatus] = useState<"idle" | "running" | "ready" | "error">("idle");
   const [networkAddresses, setNetworkAddresses] = useState<string[]>([]);
   const [networkResult, setNetworkResult] = useState<TcpCheckResult | null>(null);
+  const [networkFingerprint, setNetworkFingerprint] = useState<SshHostKeyInspection | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [networkDiagnosticId, setNetworkDiagnosticId] = useState<string | null>(null);
   const [networkDiagnosticKind, setNetworkDiagnosticKind] = useState<"ping" | "traceroute" | null>(null);
@@ -1669,6 +1676,44 @@ function App() {
     }
   }, [networkHost, networkPort, networkTimeout]);
 
+  const inspectNetworkHostKey = useCallback(async () => {
+    const host = networkHost.trim();
+    const port = Number(networkPort);
+    const timeoutMs = Number(networkTimeout);
+    if (!host) {
+      setNetworkError("Enter an explicit hostname or IP address.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      setNetworkError("Port must be an integer between 1 and 65535.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 50 || timeoutMs > 60_000) {
+      setNetworkError("Timeout must be an integer between 50 and 60000 milliseconds.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!IS_TAURI) {
+      setNetworkError("SSH fingerprint inspection requires the desktop runtime.");
+      setNetworkStatus("error");
+      return;
+    }
+    setNetworkStatus("running");
+    setNetworkFingerprint(null);
+    setNetworkError(null);
+    try {
+      const result = await invoke<SshHostKeyInspection>("ssh_inspect_host_key", { request: { host, port, timeoutMs } });
+      setNetworkFingerprint(result);
+      setNetworkStatus("ready");
+    } catch (error) {
+      setNetworkFingerprint(null);
+      setNetworkStatus("error");
+      setNetworkError(String(error));
+    }
+  }, [networkHost, networkPort, networkTimeout]);
+
   const startNetworkPing = useCallback(async () => {
     const host = networkHost.trim();
     const timeoutMs = Number(networkTimeout);
@@ -2153,7 +2198,7 @@ function App() {
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "diagnostics" ? (
-                <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
+                <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} fingerprint={networkFingerprint} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onInspectFingerprint={inspectNetworkHostKey} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" || activeView === "monitor" ? () => setQuickConnectOpen(true) : undefined} />
               )}
@@ -2439,13 +2484,14 @@ function MonitorMetric({ label, value, detail }: { label: string; value: string;
   return <article className="remote-monitor-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
 }
 
-function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, error, scanId, scanStatus, scanStart, scanEnd, scanConcurrency, scanScanned, scanTotal, scanResults, diagnosticKind, diagnosticStatus, pingResult, tracerouteResult, traceMaxHops, onHostChange, onPortChange, onTimeoutChange, onTraceMaxHopsChange, onResolve, onCheckTcp, onPing, onTraceroute, onCancelDiagnostic, onScanStartChange, onScanEndChange, onScanConcurrencyChange, onStartScan, onCancelScan }: {
+function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, fingerprint, error, scanId, scanStatus, scanStart, scanEnd, scanConcurrency, scanScanned, scanTotal, scanResults, diagnosticKind, diagnosticStatus, pingResult, tracerouteResult, traceMaxHops, onHostChange, onPortChange, onTimeoutChange, onTraceMaxHopsChange, onResolve, onCheckTcp, onInspectFingerprint, onPing, onTraceroute, onCancelDiagnostic, onScanStartChange, onScanEndChange, onScanConcurrencyChange, onStartScan, onCancelScan }: {
   host: string;
   port: string;
   timeout: string;
   status: "idle" | "running" | "ready" | "error";
   addresses: string[];
   result: TcpCheckResult | null;
+  fingerprint: SshHostKeyInspection | null;
   error: string | null;
   scanId: string | null;
   scanStatus: "idle" | "running" | "completed" | "cancelled" | "failed";
@@ -2466,6 +2512,7 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
   onTraceMaxHopsChange: (value: string) => void;
   onResolve: () => void;
   onCheckTcp: () => void;
+  onInspectFingerprint: () => void;
   onPing: () => void;
   onTraceroute: () => void;
   onCancelDiagnostic: () => void;
@@ -2489,12 +2536,13 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
       <label>TCP port<input inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => onPortChange(event.target.value)} /></label>
       <label>Timeout ms<input inputMode="numeric" pattern="[0-9]+" value={timeout} onChange={(event) => onTimeoutChange(event.target.value)} /></label>
     </div>
-    <div className="diagnostics-actions"><button className="outline-button" onClick={onResolve} disabled={status === "running" || diagnosticActive}><Search size={14} /> Resolve DNS</button><button className="primary-button" onClick={onCheckTcp} disabled={status === "running" || diagnosticActive}><Network size={14} /> Check TCP port</button><button className="outline-button" onClick={onPing} disabled={diagnosticActive}><Radio size={14} /> Ping</button><button className="outline-button" onClick={onTraceroute} disabled={diagnosticActive}><Activity size={14} /> Traceroute</button>{diagnosticActive && <button className="outline-button danger-button" onClick={onCancelDiagnostic}><CircleX size={14} /> Cancel {diagnosticKind}</button>}</div>
+    <div className="diagnostics-actions"><button className="outline-button" onClick={onResolve} disabled={status === "running" || diagnosticActive}><Search size={14} /> Resolve DNS</button><button className="primary-button" onClick={onCheckTcp} disabled={status === "running" || diagnosticActive}><Network size={14} /> Check TCP port</button><button className="outline-button" onClick={onInspectFingerprint} disabled={status === "running" || diagnosticActive}><KeyRound size={14} /> Inspect SSH key</button><button className="outline-button" onClick={onPing} disabled={diagnosticActive}><Radio size={14} /> Ping</button><button className="outline-button" onClick={onTraceroute} disabled={diagnosticActive}><Activity size={14} /> Traceroute</button>{diagnosticActive && <button className="outline-button danger-button" onClick={onCancelDiagnostic}><CircleX size={14} /> Cancel {diagnosticKind}</button>}</div>
     <div className="diagnostics-trace-options"><label>Traceroute max hops<input inputMode="numeric" pattern="[0-9]+" value={traceMaxHops} onChange={(event) => onTraceMaxHopsChange(event.target.value)} disabled={diagnosticActive} /><small>1–32 hops; platform permissions may limit results.</small></label></div>
     {error && <div className="connect-error diagnostics-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
     <div className="diagnostics-results">
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">DNS / ADDRESSES</span><Search size={15} /></div><h3>{addresses.length > 0 ? `${addresses.length} address${addresses.length === 1 ? "" : "es"}` : "No lookup yet"}</h3>{addresses.length > 0 ? <div className="diagnostic-addresses">{addresses.map((address) => <code key={address}>{address}</code>)}</div> : <p>Enter a target and run an explicit lookup. Results are kept in this view only.</p>}</article>
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">TCP / REACHABILITY</span><Network size={15} /></div>{result ? <><h3>{result.host}:{result.port}</h3><div className={`diagnostic-result diagnostic-result-${result.status}`}><span /> {result.status === "open" ? "Open" : result.status === "closed" ? "Closed" : "Timed out"}</div><p>The result describes TCP reachability only; it does not authenticate or identify the service.</p></> : <><h3>No TCP check yet</h3><p>Choose a port explicitly, then run a bounded connection check.</p></>}</article>
+      <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">SSH / HOST KEY</span><KeyRound size={15} /></div>{fingerprint ? <><h3>{fingerprint.host}:{fingerprint.port}</h3><div className="diagnostic-fingerprint"><code>{fingerprint.fingerprint}</code></div><p>Observed during one unauthenticated SSH handshake. Nothing was added to known_hosts.</p></> : <><h3>No SSH key observed</h3><p>Inspect an explicit SSH target to read its server fingerprint without using credentials.</p></>}</article>
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">ICMP / PING</span><Radio size={15} /></div>{pingResult ? <><h3>{pingResult.reachable ? "Reachable" : "No reply"}</h3><div className={`diagnostic-result ${pingResult.reachable ? "diagnostic-result-open" : "diagnostic-result-closed"}`}><span /> {pingResult.elapsedMs} ms observed</div><p>One platform-native echo request was sent to the explicit target.</p></> : <><h3>No ping yet</h3><p>Ping uses one bounded platform-native probe and can be cancelled.</p></>}</article>
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">PATH / TRACEROUTE</span><Activity size={15} /></div>{tracerouteResult ? <><h3>{tracerouteResult.reached ? "Destination reached" : "Path incomplete"}</h3><div className={`diagnostic-result ${tracerouteResult.reached ? "diagnostic-result-open" : "diagnostic-result-timed-out"}`}><span /> {tracerouteResult.hops.length} hop lines · {tracerouteResult.elapsedMs} ms</div><pre className="diagnostic-hops">{tracerouteResult.hops.length > 0 ? tracerouteResult.hops.join("\n") : "No hop output returned."}</pre></> : <><h3>No route trace yet</h3><p>Traceroute is bounded to the selected maximum hops and timeout.</p></>}</article>
     </div>
@@ -2503,7 +2551,7 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
       <div className="diagnostics-scan-fields"><label>Start port<input inputMode="numeric" pattern="[0-9]+" value={scanStart} onChange={(event) => onScanStartChange(event.target.value)} disabled={scanActive} /></label><label>End port<input inputMode="numeric" pattern="[0-9]+" value={scanEnd} onChange={(event) => onScanEndChange(event.target.value)} disabled={scanActive} /></label><label>Concurrency<input inputMode="numeric" pattern="[0-9]+" value={scanConcurrency} onChange={(event) => onScanConcurrencyChange(event.target.value)} disabled={scanActive} /></label><div className="diagnostics-scan-action">{scanActive ? <button className="outline-button" onClick={onCancelScan}><CircleX size={14} /> Cancel scan</button> : <button className="primary-button" onClick={onStartScan}><Search size={14} /> Start bounded scan</button>}</div></div>
       {(scanStatus !== "idle" || scanResults.length > 0) && <div className="diagnostics-scan-progress"><div className="diagnostics-progress-label"><span>{scanId ? `Scan ${scanId.slice(0, 8)}` : "Scan"}</span><strong>{scanScanned}/{scanTotal || "—"} · {scanProgress}%</strong></div><div className="diagnostics-progress-track"><span style={{ width: `${scanProgress}%` }} /></div><div className="diagnostics-open-results">{scanResults.length > 0 ? scanResults.filter((item) => item.status === "open").map((item) => <code key={item.port}>{item.port} open</code>) : <span>No open ports reported yet.</span>}</div></div>}
     </section>
-    <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, range, hop limit, concurrency, timeout, and action are explicit. Results are diagnostics only and are not a security audit.</span></div>
+    <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, range, hop limit, concurrency, timeout, and action are explicit. SSH key inspection uses no credentials, agent, personal key, or known_hosts file; results are diagnostics only.</span></div>
   </section>;
 }
 

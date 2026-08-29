@@ -10,6 +10,7 @@ use mobarust_core::{
     AppSettings, AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
+use mobarust_ssh::{SshFingerprintOptions, inspect_host_key};
 use mobarust_store::{
     MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
 };
@@ -87,6 +88,14 @@ struct NetworkTracerouteRequest {
     host: String,
     timeout_ms: u64,
     max_hops: u8,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SshFingerprintRequest {
+    host: String,
+    port: u16,
+    timeout_ms: u64,
 }
 
 #[derive(serde::Deserialize)]
@@ -671,6 +680,20 @@ async fn network_check_tcp(
 }
 
 #[tauri::command]
+async fn ssh_inspect_host_key(
+    request: SshFingerprintRequest,
+) -> Result<mobarust_ssh::SshHostKeyInspection, String> {
+    let timeout = diagnostic_timeout(request.timeout_ms)?;
+    inspect_host_key(SshFingerprintOptions {
+        host: request.host,
+        port: request.port,
+        timeout,
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn network_scan_start(
     app: tauri::AppHandle,
     manager: State<'_, NetworkManager>,
@@ -1206,6 +1229,7 @@ fn main() {
             session_delete,
             network_resolve_host,
             network_check_tcp,
+            ssh_inspect_host_key,
             network_ping_start,
             network_traceroute_start,
             network_diagnostic_cancel,

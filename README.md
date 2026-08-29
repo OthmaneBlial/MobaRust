@@ -18,6 +18,7 @@ The first working slice provides:
 - an explicit serial-port refresh action and secret-free saved serial profiles that can be reopened with their line parameters;
 - a bounded native TCP diagnostic primitive with explicit targets, port ranges, concurrency, timeouts, cancellation, and loopback-only fixtures;
 - bounded platform-native ping and traceroute diagnostics with explicit targets, hop/timeout limits, process cancellation, and output truncation;
+- explicit unauthenticated SSH host-key fingerprint inspection with a bounded timeout and no credential, agent, or known_hosts access;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - an opt-in portable encrypted vault using Argon2id + AES-256-GCM, atomic private-file writes, explicit unlock/lock, and native-only secret lookup;
 - a one-shot SSH remote system monitor using a fixed read-only query, bounded output, a six-second timeout, and graceful per-metric capability detection;
@@ -44,7 +45,7 @@ The first working slice provides:
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests; this is not yet a real RDP/VNC client.
 
-The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, and explicit DNS/TCP/port-scan diagnostics view are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, explicit DNS/TCP/port-scan diagnostics view, and unauthenticated SSH host-key fingerprint inspection are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Keyboard-interactive auth, native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 
