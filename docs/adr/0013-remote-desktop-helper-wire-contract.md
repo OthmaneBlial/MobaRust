@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted. The Rust-side contract is implemented; FreeRDP/VNC engine
-integration remains pending.
+Accepted. The Rust-side contract and an isolated IronRDP candidate helper are
+implemented; production RDP/VNC engine integration remains pending.
 
 ## Context
 
@@ -34,9 +34,11 @@ messages before a process is started:
   clean stop;
 - debug formatting redacts opaque credential references and clipboard text.
 
-The crate is a contract and test seam, not a fake RDP/VNC implementation. The
-desktop UI will not advertise RDP or VNC as available until a real helper is
-packaged and exercised against a real server.
+The crate is a contract, test seam, and native-parent API. The isolated
+`tools/rdp-helper` implements a real IronRDP client path behind that boundary,
+but it is not yet packaged or wired into the desktop UI. The UI will not
+advertise RDP or VNC as available until a helper is packaged and exercised
+against a real server.
 
 ## Consequences
 
@@ -47,6 +49,7 @@ resize behavior, clipboard, reconnect, audio, certificate handling, and
 Windows interoperability before the adapter is promoted.
 
 The protocol-independent contract tests run without spawning a process or
-reading host configuration. A future integration fixture must use a dedicated
-temporary directory and local test server.
-
+reading host configuration. The helper's EOF smoke test also avoids sockets.
+A future interoperability fixture must use a dedicated temporary directory and
+local or explicitly approved test server. See
+`docs/security/safe-testing.md` for the workstation safety boundary.

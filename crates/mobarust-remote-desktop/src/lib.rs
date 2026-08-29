@@ -12,13 +12,16 @@ use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::time::timeout;
+use zeroize::Zeroizing;
 
 pub const WIRE_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 pub const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+pub const MAX_CREDENTIAL_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +87,50 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("credential_ref", &"<opaque-reference>")
             .finish()
     }
+}
+
+/// A password delivered only over the native helper pipe.
+///
+/// This type is deliberately separate from [`HelperCommand`]. It must not be
+/// serialized with ordinary control messages or placed in process arguments.
+/// The helper consumes it once to build the protocol client's native config.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelperCredential {
+    password: Zeroizing<String>,
+}
+
+impl HelperCredential {
+    pub fn new(password: impl Into<String>) -> Self {
+        Self {
+            password: Zeroizing::new(password.into()),
+        }
+    }
+
+    pub fn password(&self) -> &str {
+        self.password.as_str()
+    }
+
+    pub fn validate(&self) -> Result<(), HelperProtocolError> {
+        if self.password.len() > MAX_CREDENTIAL_BYTES {
+            return Err(HelperProtocolError::CredentialTooLarge {
+                bytes: self.password.len(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for HelperCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HelperCredential(<redacted>)")
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialEnvelope {
+    version: u16,
+    credential: HelperCredential,
 }
 
 impl HelperLaunchConfig {
@@ -159,7 +206,7 @@ pub enum HelperCommand {
         buttons: u8,
     },
     Clipboard {
-        text: String,
+        text: Zeroizing<String>,
     },
 }
 
@@ -222,7 +269,7 @@ pub enum HelperEvent {
         pixels: Vec<u8>,
     },
     Clipboard {
-        text: String,
+        text: Zeroizing<String>,
     },
     Diagnostic {
         level: DiagnosticLevel,
@@ -441,6 +488,8 @@ pub enum HelperProtocolError {
     ClipboardTooLarge { bytes: usize },
     #[error("diagnostic payload is too large: {bytes} bytes")]
     DiagnosticTooLarge { bytes: usize },
+    #[error("credential payload is too large: {bytes} bytes")]
+    CredentialTooLarge { bytes: usize },
     #[error("invalid framebuffer payload: expected {expected} bytes, received {actual}")]
     InvalidFramebuffer { expected: usize, actual: usize },
     #[error("frame is too large: {bytes} bytes")]
@@ -456,18 +505,29 @@ pub enum HelperProtocolError {
         state: HelperState,
         event: HelperLifecycleEvent,
     },
+    #[error("helper I/O failed: {0}")]
+    Io(String),
 }
 
 /// Encodes one length-prefixed JSON frame for a helper's native pipe.
 pub fn encode_frame<T: Serialize>(message: &T) -> Result<Vec<u8>, HelperProtocolError> {
-    let body = serde_json::to_vec(message)
-        .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))?;
+    let mut frame = encode_frame_zeroizing(message)?;
+    Ok(std::mem::take(&mut *frame))
+}
+
+fn encode_frame_zeroizing<T: Serialize>(
+    message: &T,
+) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
+    let body = Zeroizing::new(
+        serde_json::to_vec(message)
+            .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))?,
+    );
     if body.len() > MAX_FRAME_BYTES {
         return Err(HelperProtocolError::FrameTooLarge { bytes: body.len() });
     }
     let length = u32::try_from(body.len())
         .map_err(|_| HelperProtocolError::FrameTooLarge { bytes: body.len() })?;
-    let mut frame = Vec::with_capacity(4 + body.len());
+    let mut frame = Zeroizing::new(Vec::with_capacity(4 + body.len()));
     frame.extend_from_slice(&length.to_be_bytes());
     frame.extend_from_slice(&body);
     Ok(frame)
@@ -498,9 +558,11 @@ pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, HelperProtoc
         .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))
 }
 
-pub fn encode_command_frame(command: &HelperCommand) -> Result<Vec<u8>, HelperProtocolError> {
+pub fn encode_command_frame(
+    command: &HelperCommand,
+) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
     command.validate()?;
-    encode_frame(&WireEnvelope {
+    encode_frame_zeroizing(&WireEnvelope {
         version: WIRE_VERSION,
         payload: command,
     })
@@ -515,9 +577,92 @@ pub fn decode_command_frame(frame: &[u8]) -> Result<HelperCommand, HelperProtoco
     Ok(envelope.payload)
 }
 
-pub fn encode_event_frame(event: &HelperEvent) -> Result<Vec<u8>, HelperProtocolError> {
+/// Encodes the one native credential handoff frame. The returned buffer is
+/// zeroizing and should be written directly to the helper pipe, then dropped.
+pub fn encode_credential_frame(
+    credential: &HelperCredential,
+) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
+    credential.validate()?;
+
+    encode_frame_zeroizing(&CredentialEnvelope {
+        version: WIRE_VERSION,
+        credential: credential.clone(),
+    })
+}
+
+pub fn decode_credential_frame(frame: &[u8]) -> Result<HelperCredential, HelperProtocolError> {
+    let envelope: CredentialEnvelope = decode_frame(frame)?;
+    if envelope.version != WIRE_VERSION {
+        return Err(HelperProtocolError::UnsupportedVersion(envelope.version));
+    }
+    envelope.credential.validate()?;
+    Ok(envelope.credential)
+}
+
+/// Reads exactly one length-prefixed frame from a native pipe. The complete
+/// frame is zeroized when the returned value is dropped, which matters because
+/// a credential frame contains a serialized password.
+pub async fn read_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<Zeroizing<Vec<u8>>>, HelperProtocolError> {
+    let mut length_bytes = [0u8; 4];
+    match reader.read_exact(&mut length_bytes).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(HelperProtocolError::Io(error.to_string())),
+    }
+
+    let body_length = u32::from_be_bytes(length_bytes) as usize;
+    if body_length > MAX_FRAME_BYTES {
+        return Err(HelperProtocolError::FrameTooLarge { bytes: body_length });
+    }
+
+    let mut frame = Zeroizing::new(vec![0u8; body_length.saturating_add(4)]);
+    frame[..4].copy_from_slice(&length_bytes);
+    reader
+        .read_exact(&mut frame[4..])
+        .await
+        .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
+    Ok(Some(frame))
+}
+
+/// Writes an event using a zeroizing temporary buffer. This should be used for
+/// all helper output because clipboard events may contain sensitive text.
+pub async fn write_event_frame<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    event: &HelperEvent,
+) -> Result<(), HelperProtocolError> {
+    let frame = encode_event_frame(event)?;
+    writer
+        .write_all(&frame[..])
+        .await
+        .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
+    writer
+        .flush()
+        .await
+        .map_err(|error| HelperProtocolError::Io(error.to_string()))
+}
+
+/// Writes the credential handoff and guarantees that the serialized frame is
+/// zeroized after the pipe write completes.
+pub async fn write_credential_frame<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    credential: &HelperCredential,
+) -> Result<(), HelperProtocolError> {
+    let frame = encode_credential_frame(credential)?;
+    writer
+        .write_all(&frame[..])
+        .await
+        .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
+    writer
+        .flush()
+        .await
+        .map_err(|error| HelperProtocolError::Io(error.to_string()))
+}
+
+pub fn encode_event_frame(event: &HelperEvent) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
     event.validate()?;
-    encode_frame(&WireEnvelope {
+    encode_frame_zeroizing(&WireEnvelope {
         version: WIRE_VERSION,
         payload: event,
     })
@@ -544,6 +689,10 @@ pub enum HelperProcessError {
     Terminate(#[source] std::io::Error),
     #[error("could not wait for remote desktop helper: {0}")]
     Wait(#[source] std::io::Error),
+    #[error("remote desktop helper stdin is unavailable")]
+    StdinUnavailable,
+    #[error("remote desktop helper stdout is unavailable")]
+    StdoutUnavailable,
 }
 
 /// Owns one isolated helper process. The supervisor intentionally exposes only
@@ -571,6 +720,49 @@ impl HelperSupervisor {
 
     pub fn try_exit_status(&mut self) -> Result<Option<ExitStatus>, HelperProcessError> {
         self.child.try_wait().map_err(HelperProcessError::Wait)
+    }
+
+    /// Sends a typed control message without exposing the native pipe to
+    /// callers. Serialized clipboard text is held in a zeroizing frame.
+    pub async fn send_command(
+        &mut self,
+        command: &HelperCommand,
+    ) -> Result<(), HelperProcessError> {
+        let stdin = self.stdin().ok_or(HelperProcessError::StdinUnavailable)?;
+        let frame = encode_command_frame(command)?;
+        stdin.write_all(&frame[..]).await.map_err(|error| {
+            HelperProcessError::Protocol(HelperProtocolError::Io(error.to_string()))
+        })?;
+        stdin.flush().await.map_err(|error| {
+            HelperProcessError::Protocol(HelperProtocolError::Io(error.to_string()))
+        })
+    }
+
+    /// Sends a password through the dedicated zeroizing native channel. The
+    /// password is never part of a `HelperCommand` or process argument.
+    pub async fn send_credentials(
+        &mut self,
+        credential: &HelperCredential,
+    ) -> Result<(), HelperProcessError> {
+        let stdin = self.stdin().ok_or(HelperProcessError::StdinUnavailable)?;
+        write_credential_frame(stdin, credential)
+            .await
+            .map_err(HelperProcessError::Protocol)
+    }
+
+    /// Reads one typed event from the helper. The incoming serialized frame is
+    /// zeroized immediately after decoding.
+    pub async fn read_event(&mut self) -> Result<Option<HelperEvent>, HelperProcessError> {
+        let stdout = self.stdout().ok_or(HelperProcessError::StdoutUnavailable)?;
+        let Some(frame) = read_frame(stdout)
+            .await
+            .map_err(HelperProcessError::Protocol)?
+        else {
+            return Ok(None);
+        };
+        decode_event_frame(&frame)
+            .map(Some)
+            .map_err(HelperProcessError::Protocol)
     }
 
     /// Gives the helper a bounded chance to exit cleanly, then kills it and
@@ -644,16 +836,41 @@ mod tests {
     #[test]
     fn debug_output_redacts_credential_reference_and_clipboard_content() {
         let config = launch_config();
+        let credential = HelperCredential::new("password-secret");
         let command = HelperCommand::Clipboard {
-            text: "clipboard-secret".into(),
+            text: "clipboard-secret".to_owned().into(),
         };
         let event = HelperEvent::Clipboard {
-            text: "clipboard-secret".into(),
+            text: "clipboard-secret".to_owned().into(),
         };
         assert!(!format!("{config:?}").contains("credential:test-only"));
         assert!(!format!("{command:?}").contains("clipboard-secret"));
         assert!(!format!("{event:?}").contains("clipboard-secret"));
+        assert!(!format!("{credential:?}").contains("password-secret"));
         assert!(format!("{command:?}").contains("bytes"));
+    }
+
+    #[test]
+    fn credential_frames_round_trip_without_becoming_control_commands() {
+        let credential = HelperCredential::new("fixture-only-password");
+        let frame = encode_credential_frame(&credential).unwrap();
+        let decoded = decode_credential_frame(&frame).unwrap();
+        assert_eq!(decoded.password(), "fixture-only-password");
+        assert!(decode_command_frame(&frame).is_err());
+        assert!(!format!("{credential:?}").contains("fixture-only-password"));
+    }
+
+    #[tokio::test]
+    async fn native_pipe_helpers_round_trip_a_zeroizing_credential_frame() {
+        let credential = HelperCredential::new("fixture-pipe-password");
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let write_task =
+            tokio::spawn(async move { write_credential_frame(&mut writer, &credential).await });
+
+        let frame = read_frame(&mut reader).await.unwrap().unwrap();
+        let decoded = decode_credential_frame(&frame).unwrap();
+        write_task.await.unwrap().unwrap();
+        assert_eq!(decoded.password(), "fixture-pipe-password");
     }
 
     #[test]
@@ -689,7 +906,7 @@ mod tests {
     #[test]
     fn validation_bounds_clipboard_and_display_payloads() {
         let oversized = HelperCommand::Clipboard {
-            text: "x".repeat(MAX_CLIPBOARD_BYTES + 1),
+            text: "x".repeat(MAX_CLIPBOARD_BYTES + 1).into(),
         };
         assert!(matches!(
             oversized.validate(),

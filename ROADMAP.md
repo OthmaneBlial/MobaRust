@@ -54,6 +54,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 ## Later protocol adapters
 
 - [x] RDP/VNC helper-boundary research and versioned Rust-side contract
+- [x] Isolated IronRDP helper with native credential handoff, lifecycle, input, and framebuffer bridge
 - [ ] Real FreeRDP integration with a controlled helper and Windows evidence
 - [ ] Real VNC integration with a mature engine and local/manual fixtures
 - [x] Native Telnet transport with bounded negotiation and a local TCP fixture

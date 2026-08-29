@@ -43,13 +43,15 @@ It is not a claim that MobaRust currently supports RDP.
 
 ## IronRDP candidate result
 
-The isolated probe confirms that a Rust-native candidate exposes a reusable
-`RdpClient` with typed image output and keyboard/mouse/resize input channels.
-That is enough to continue the helper design, but not enough to select it for
-production: certificate validation, secret lifetime, framebuffer conversion,
-clipboard, reconnect, audio, gateway behavior, packaging, and real Windows
-interoperability remain open gates. No global package or remote server was
-used during this probe.
+The isolated `tools/rdp-helper` adapter confirms that a Rust-native candidate
+can be placed behind the helper boundary with a reusable `RdpClient`, typed
+image output, keyboard/mouse/resize input, TLS/CredSSP configuration, and a
+zeroizing native credential frame. Its clipboard command is intentionally
+rejected until a user-controlled OS clipboard backend is wired. This is still
+not a production selection: certificate policy, reconnect, audio, gateway
+behavior, packaging, and real Windows interoperability remain open gates. No
+global package, personal credential, or remote server was used during the
+local validation.
 
 ## Prototype boundary
 
