@@ -21,9 +21,9 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 
 ## 0.3 — remote files and movement
 
-- [ ] SFTP browser with streaming, cancellation, conflict handling, and progress
+- [x] SFTP browser with single-file streaming, cancellation, conflict handling, and progress
 - [ ] SCP compatibility path
-- [ ] Bounded global transfer manager
+- [x] Bounded native transfer manager (three concurrent single-file jobs)
 - [ ] Remote terminal and file browser composition
 
 ## 0.4 — network workstation

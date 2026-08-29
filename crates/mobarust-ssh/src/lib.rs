@@ -12,7 +12,8 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use serde::Serialize;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::oneshot;
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,10 @@ pub enum SshError {
     Channel(#[source] russh::Error),
     #[error("SFTP operation failed: {0}")]
     Sftp(String),
+    #[error("local file operation failed: {0}")]
+    LocalIo(#[source] std::io::Error),
+    #[error("SFTP transfer cancelled")]
+    Cancelled,
     #[error("SSH credential material is unavailable")]
     MissingCredentials,
 }
@@ -207,8 +212,8 @@ impl client::Handler for ClientHandler {
 }
 
 pub struct SshConnection {
-    handle: client::Handle<ClientHandler>,
-    lifecycle: ConnectionLifecycle,
+    handle: Arc<client::Handle<ClientHandler>>,
+    lifecycle: Mutex<ConnectionLifecycle>,
 }
 
 impl SshConnection {
@@ -304,11 +309,17 @@ impl SshConnection {
             .apply(ConnectionEvent::AuthenticationSucceeded)
             .expect("SSH connection lifecycle must connect after authentication");
 
-        Ok(Self { handle, lifecycle })
+        Ok(Self {
+            handle: Arc::new(handle),
+            lifecycle: Mutex::new(lifecycle),
+        })
     }
 
     pub fn state(&self) -> ConnectionState {
-        self.lifecycle.state()
+        self.lifecycle
+            .lock()
+            .expect("SSH lifecycle lock poisoned")
+            .state()
     }
 
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshShell, SshError> {
@@ -332,8 +343,10 @@ impl SshConnection {
         .map_err(|_| SshError::Timeout)?
     }
 
-    pub async fn disconnect(mut self) -> Result<(), SshError> {
+    pub async fn disconnect(&self) -> Result<(), SshError> {
         self.lifecycle
+            .lock()
+            .expect("SSH lifecycle lock poisoned")
             .apply(ConnectionEvent::DisconnectRequested)
             .expect("connected SSH session must disconnect through the lifecycle");
         let result = self
@@ -343,6 +356,8 @@ impl SshConnection {
             .map_err(SshError::Transport);
         if result.is_ok() {
             self.lifecycle
+                .lock()
+                .expect("SSH lifecycle lock poisoned")
                 .apply(ConnectionEvent::Disconnected)
                 .expect("disconnecting SSH session must finish as disconnected");
         }
@@ -503,6 +518,47 @@ impl SftpConnection {
             .collect())
     }
 
+    pub async fn file_info(&self, path: impl Into<String>) -> Result<(u64, bool), SshError> {
+        let metadata = self
+            .session
+            .metadata(path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        Ok((metadata.len(), metadata.is_dir()))
+    }
+
+    pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
+        self.session
+            .try_exists(path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+
+    pub async fn create_dir(&self, path: impl Into<String>) -> Result<(), SshError> {
+        self.session
+            .create_dir(path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+
+    pub async fn remove_dir(&self, path: impl Into<String>) -> Result<(), SshError> {
+        self.session
+            .remove_dir(path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+
+    pub async fn rename(
+        &self,
+        old_path: impl Into<String>,
+        new_path: impl Into<String>,
+    ) -> Result<(), SshError> {
+        self.session
+            .rename(old_path, new_path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+
     pub async fn download_to<R>(
         &self,
         remote_path: impl Into<String>,
@@ -521,6 +577,29 @@ impl SftpConnection {
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         destination
             .flush()
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        Ok(copied)
+    }
+
+    pub async fn download_to_with_cancel<W, F>(
+        &self,
+        remote_path: impl Into<String>,
+        destination: &mut W,
+        cancel: &mut oneshot::Receiver<()>,
+        on_progress: F,
+    ) -> Result<u64, SshError>
+    where
+        W: AsyncWrite + Unpin,
+        F: FnMut(u64),
+    {
+        let mut file = self
+            .session
+            .open(remote_path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let copied = copy_with_cancel(&mut file, destination, cancel, on_progress).await?;
+        file.close()
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         Ok(copied)
@@ -548,6 +627,29 @@ impl SftpConnection {
         Ok(copied)
     }
 
+    pub async fn upload_from_with_cancel<R, F>(
+        &self,
+        source: &mut R,
+        remote_path: impl Into<String>,
+        cancel: &mut oneshot::Receiver<()>,
+        on_progress: F,
+    ) -> Result<u64, SshError>
+    where
+        R: AsyncRead + Unpin,
+        F: FnMut(u64),
+    {
+        let mut file = self
+            .session
+            .create(remote_path)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let copied = copy_with_cancel(source, &mut file, cancel, on_progress).await?;
+        file.shutdown()
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        Ok(copied)
+    }
+
     pub async fn remove_file(&self, path: impl Into<String>) -> Result<(), SshError> {
         self.session
             .remove_file(path)
@@ -560,6 +662,44 @@ impl SftpConnection {
             .close()
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+}
+
+async fn copy_with_cancel<R, W, F>(
+    source: &mut R,
+    destination: &mut W,
+    cancel: &mut oneshot::Receiver<()>,
+    mut on_progress: F,
+) -> Result<u64, SshError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: FnMut(u64),
+{
+    const BUFFER_SIZE: usize = 64 * 1024;
+    let mut buffer = vec![0_u8; BUFFER_SIZE];
+    let mut copied = 0_u64;
+
+    loop {
+        let read = tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = source.read(&mut buffer) => result.map_err(SshError::LocalIo)?,
+        };
+        if read == 0 {
+            break;
+        }
+
+        tokio::select! {
+            _ = &mut *cancel => return Err(SshError::Cancelled),
+            result = destination.write_all(&buffer[..read]) => result.map_err(SshError::LocalIo)?,
+        }
+        copied += read as u64;
+        on_progress(copied);
+    }
+
+    tokio::select! {
+        _ = &mut *cancel => Err(SshError::Cancelled),
+        result = destination.flush() => result.map(|_| copied).map_err(SshError::LocalIo),
     }
 }
 

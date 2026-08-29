@@ -11,16 +11,16 @@ The first working slice provides:
 - a real local PTY owned by Rust and rendered through xterm.js;
 - a real `russh` transport crate with restrictive host-key policy, interactive SSH PTY, and streaming SFTP primitives;
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
-- a read-only SFTP directory browser over the live SSH connection with typed remote entries;
+- an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
-- a transfer state model ready for bounded SFTP work;
+- a transfer lifecycle model used by the native SFTP manager;
 - a high-signal workspace shell for sessions, tunnels, transfers, and local terminals;
 - a local quality command: `cargo xtask check`.
 
-The native SSH/SFTP transport and Quick Connect path are tested, but saved-session editing, reconnect policy, agent/keyboard-interactive auth, and vault-backed CRUD are still in progress. Tunnels, jump hosts, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+The native SSH/SFTP transport, cancellation path, and Quick Connect path are tested against a local `sshd` fixture, but saved-session editing, reconnect policy, keyboard-interactive auth, and vault-backed CRUD are still in progress. Native file/directory pickers, recursive transfers, SCP, tunnels, jump hosts, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
 ## Development
 

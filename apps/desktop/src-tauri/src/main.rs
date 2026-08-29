@@ -7,7 +7,7 @@ use mobarust_core::{SessionId, SessionRecord};
 use mobarust_store::SessionStore;
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
-use ssh::{SshConnectRequest, SshManager};
+use ssh::{SshConnectRequest, SshManager, SshTransferRequest};
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
@@ -130,6 +130,42 @@ async fn ssh_list_directory(
 }
 
 #[tauri::command]
+async fn ssh_download(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    request: SshTransferRequest,
+) -> Result<ssh::SshTransferResponse, String> {
+    manager
+        .start_download(app, terminal_id, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_upload(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    request: SshTransferRequest,
+) -> Result<ssh::SshTransferResponse, String> {
+    manager
+        .start_upload(app, terminal_id, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ssh_cancel_transfer(
+    manager: State<'_, SshManager>,
+    transfer_id: String,
+) -> Result<bool, String> {
+    manager
+        .cancel_transfer(&transfer_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -202,6 +238,9 @@ fn main() {
             ssh_close,
             ssh_attach,
             ssh_list_directory,
+            ssh_download,
+            ssh_upload,
+            ssh_cancel_transfer,
             terminal_spawn,
             terminal_write,
             terminal_resize,

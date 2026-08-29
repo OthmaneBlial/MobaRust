@@ -9,6 +9,7 @@ use mobarust_ssh::{
     HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
 };
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 
 #[test]
 fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
@@ -95,6 +96,48 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         assert_eq!(uploaded, 128 * 1024);
         let entries = sftp.read_dir("/tmp").await.expect("list remote directory");
         assert!(entries.iter().any(|entry| entry.path == remote_path));
+        assert!(
+            sftp.try_exists(&remote_path)
+                .await
+                .expect("check remote file")
+        );
+        assert_eq!(
+            sftp.file_info(&remote_path)
+                .await
+                .expect("read remote file info"),
+            (128 * 1024, false)
+        );
+
+        let cancelled_destination = fixture.directory.path().join("cancelled.bin");
+        let mut cancelled_file = tokio::fs::File::create(&cancelled_destination)
+            .await
+            .expect("create cancelled download destination");
+        let (cancel_sender, mut cancel_receiver) = oneshot::channel();
+        let mut cancel_sender = Some(cancel_sender);
+        let mut last_progress = 0_u64;
+        let cancellation = sftp
+            .download_to_with_cancel(
+                &remote_path,
+                &mut cancelled_file,
+                &mut cancel_receiver,
+                |bytes| {
+                    last_progress = bytes;
+                    if let Some(sender) = cancel_sender.take() {
+                        let _ = sender.send(());
+                    }
+                },
+            )
+            .await;
+        assert!(matches!(cancellation, Err(SshError::Cancelled)));
+        assert!(last_progress > 0 && last_progress < 128 * 1024);
+        drop(cancelled_file);
+        assert!(
+            fs::metadata(&cancelled_destination)
+                .expect("inspect cancelled destination")
+                .len()
+                < 128 * 1024
+        );
+
         let downloaded_bytes = sftp
             .download_to(
                 &remote_path,
@@ -112,6 +155,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         sftp.remove_file(&remote_path)
             .await
             .expect("remove fixture file");
+        assert!(!sftp.try_exists(&remote_path).await.expect("check removal"));
         sftp.close().await.expect("close SFTP subsystem");
         connection
             .disconnect()

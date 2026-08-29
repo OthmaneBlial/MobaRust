@@ -7,24 +7,30 @@ import {
   Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
+  CheckCircle2,
   ChevronDown,
   CircleHelp,
+  CircleX,
   Command,
   Copy,
+  Download,
   ExternalLink,
   Folder,
+  LoaderCircle,
   LayoutDashboard,
   MoreHorizontal,
   Network,
   PanelLeftClose,
   Plus,
   Radio,
+  RefreshCw,
   Search,
   Server,
   Settings2,
   ShieldCheck,
   Star,
   Terminal as TerminalIcon,
+  Upload,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -86,6 +92,20 @@ type RemoteEntry = {
   size: number;
   isDirectory: boolean;
   modifiedUnixSeconds?: number | null;
+};
+
+type TransferState = "queued" | "preparing" | "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
+
+type SshTransferEvent = {
+  transferId: string;
+  terminalId: string;
+  direction: "download" | "upload";
+  source: string;
+  destination: string;
+  bytesTransferred: number;
+  totalBytes?: number | null;
+  state: TransferState;
+  error?: string | null;
 };
 
 const previewSessions: SessionListItem[] = [
@@ -255,6 +275,7 @@ function App() {
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
@@ -312,6 +333,50 @@ function App() {
     void loadRemoteDirectory(path);
   }, [loadRemoteDirectory]);
 
+  const startDownload = useCallback(async (entry: RemoteEntry) => {
+    if (!remoteSessionId) return;
+    const localPath = window.prompt("Local destination path", entry.name);
+    if (!localPath?.trim()) return;
+    const overwrite = window.confirm("Allow replacing an existing local file?");
+    try {
+      await invoke("ssh_download", {
+        terminalId: remoteSessionId,
+        request: { remotePath: entry.path, localPath: localPath.trim(), overwrite },
+      });
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [remoteSessionId]);
+
+  const startUpload = useCallback(async () => {
+    if (!remoteSessionId) return;
+    const localPath = window.prompt("Local file to upload", "");
+    if (!localPath?.trim()) return;
+    const fallbackName = localPath.trim().split(/[\\/]/).pop() || "upload.bin";
+    const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
+    const destination = window.prompt("Remote destination path", defaultRemotePath);
+    if (!destination?.trim()) return;
+    const overwrite = window.confirm("Allow replacing an existing remote file?");
+    try {
+      await invoke("ssh_upload", {
+        terminalId: remoteSessionId,
+        request: { remotePath: destination.trim(), localPath: localPath.trim(), overwrite },
+      });
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [remotePath, remoteSessionId]);
+
+  const cancelTransfer = useCallback(async (transferId: string) => {
+    try {
+      await invoke("ssh_cancel_transfer", { transferId });
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -327,6 +392,25 @@ function App() {
   useEffect(() => {
     if (activeView === "files" && remoteSessionId) void loadRemoteDirectory(".");
   }, [activeView, loadRemoteDirectory, remoteSessionId]);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<SshTransferEvent>("sftp://transfer", (event) => {
+      setTransfers((current) => {
+        const next = current.filter((transfer) => transfer.transferId !== event.payload.transferId);
+        return [...next, event.payload].slice(-40);
+      });
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -354,6 +438,7 @@ function App() {
   );
   const localSessionCount = sessionRows.filter((session) => session.type === "LOCAL").length;
   const remoteSessionCount = sessionRows.filter((session) => session.type !== "LOCAL").length;
+  const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
@@ -428,7 +513,7 @@ function App() {
           <div className="sidebar-footer">
             <div className="security-note"><ShieldCheck size={15} /><span><strong>Secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
             <button className="nav-item"><Network size={15} /> Tunnel manager</button>
-            <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">0</span></button>
+            <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
         </aside>
 
@@ -470,7 +555,7 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>local process</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} onNavigate={navigateRemote} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCancelTransfer={cancelTransfer} />
               ) : (
                 <EmptyProtocolView view={activeView} />
               )}
@@ -517,9 +602,49 @@ function SessionRow({ name, detail, type, active }: SessionListItem) {
   return <button className={`session-row ${active ? "active" : ""}`}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
 }
 
-function RemoteFilesView({ entries, path, status, onNavigate }: { entries: RemoteEntry[]; path: string; status: "idle" | "loading" | "ready" | "error"; onNavigate: (path: string) => void }) {
+function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCancelTransfer }: {
+  entries: RemoteEntry[];
+  path: string;
+  status: "idle" | "loading" | "ready" | "error";
+  error: string | null;
+  transfers: SshTransferEvent[];
+  onNavigate: (path: string) => void;
+  onDownload: (entry: RemoteEntry) => void;
+  onUpload: () => void;
+  onCancelTransfer: (transferId: string) => void;
+}) {
   const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
-  return <section className="remote-files" aria-label="Remote files"><div className="remote-files-toolbar"><div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div><button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><Radio size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button></div><div className="remote-files-meta"><span>{status === "ready" ? `${entries.length} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · no whole-file buffering</span></div><div className="remote-files-list"><button className="remote-file-row parent" onClick={() => onNavigate(parentPath)}><Folder size={15} /><span>..</span><small>parent directory</small></button>{entries.map((entry) => <button className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path} onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined}><span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small></button>)}{status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}</div><div className="remote-files-note">Remote editing, atomic upload, conflict detection, and transfer progress are deliberately separate follow-up surfaces.</div></section>;
+  return <section className="remote-files" aria-label="Remote files">
+    <div className="remote-files-toolbar">
+      <div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div>
+      <div className="remote-files-toolbar-actions">
+        <button className="outline-button" onClick={onUpload}><Upload size={14} /> Upload</button>
+        <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
+      </div>
+    </div>
+    <div className="remote-files-meta"><span>{status === "ready" ? `${entries.length} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded transfers</span></div>
+    {error && <div className="remote-files-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
+    <div className="remote-files-list">
+      <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
+      {entries.map((entry) => <div className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path}>
+        <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
+          <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
+        </button>
+        {!entry.isDirectory && <button className="remote-file-action" onClick={() => onDownload(entry)} title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}><Download size={14} /></button>}
+      </div>)}
+      {status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}
+    </div>
+    {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />}
+    <div className="remote-files-note">Files are written through native Rust SFTP. Downloads commit from a temporary local file; uploads commit through a remote temporary path, so cancellation does not present a partial destination as complete.</div>
+  </section>;
+}
+
+function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {
+  return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER MANAGER</span><span>{transfers.length} recent</span></div>{transfers.slice().reverse().map((transfer) => {
+    const percent = transfer.totalBytes && transfer.totalBytes > 0 ? Math.min(100, Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)) : null;
+    const active = !["completed", "cancelled", "failed"].includes(transfer.state);
+    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
+  })}</section>;
 }
 
 function formatBytes(bytes: number) {

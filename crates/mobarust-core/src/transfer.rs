@@ -64,9 +64,13 @@ impl TransferLifecycle {
             (TransferState::Preparing, TransferEvent::Start) => TransferState::Running,
             (TransferState::Running, TransferEvent::Pause) => TransferState::Paused,
             (TransferState::Paused, TransferEvent::Resume) => TransferState::Running,
-            (TransferState::Running | TransferState::Paused, TransferEvent::CancelRequested) => {
-                TransferState::Cancelling
-            }
+            (
+                TransferState::Queued
+                | TransferState::Preparing
+                | TransferState::Running
+                | TransferState::Paused,
+                TransferEvent::CancelRequested,
+            ) => TransferState::Cancelling,
             (TransferState::Cancelling, TransferEvent::Cancelled) => TransferState::Cancelled,
             (TransferState::Running, TransferEvent::Complete) => TransferState::Completed,
             (TransferState::Preparing | TransferState::Running, TransferEvent::Fail) => {
@@ -99,5 +103,19 @@ mod tests {
 
         assert_eq!(lifecycle.state(), TransferState::Cancelled);
         assert!(lifecycle.apply(TransferEvent::Resume).is_err());
+    }
+
+    #[test]
+    fn queued_and_preparing_transfers_can_be_cancelled() {
+        let mut queued = TransferLifecycle::new();
+        queued.apply(TransferEvent::CancelRequested).unwrap();
+        queued.apply(TransferEvent::Cancelled).unwrap();
+        assert_eq!(queued.state(), TransferState::Cancelled);
+
+        let mut preparing = TransferLifecycle::new();
+        preparing.apply(TransferEvent::Prepare).unwrap();
+        preparing.apply(TransferEvent::CancelRequested).unwrap();
+        preparing.apply(TransferEvent::Cancelled).unwrap();
+        assert_eq!(preparing.state(), TransferState::Cancelled);
     }
 }
