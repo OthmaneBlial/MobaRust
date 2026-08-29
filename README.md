@@ -20,6 +20,7 @@ The first working slice provides:
 - bounded platform-native ping and traceroute diagnostics with explicit targets, hop/timeout limits, process cancellation, and output truncation;
 - a native credential-vault boundary using platform credential stores without exposing secrets to React;
 - an opt-in portable encrypted vault using Argon2id + AES-256-GCM, atomic private-file writes, explicit unlock/lock, and native-only secret lookup;
+- a one-shot SSH remote system monitor using a fixed read-only query, bounded output, a six-second timeout, and graceful per-metric capability detection;
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;

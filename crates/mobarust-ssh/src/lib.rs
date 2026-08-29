@@ -57,6 +57,12 @@ pub enum SshError {
     Handshake(String),
     #[error("SSH channel failed: {0}")]
     Channel(#[source] russh::Error),
+    #[error("remote monitoring command failed with exit status {0}")]
+    RemoteMonitorCommandFailed(u32),
+    #[error("remote monitoring output exceeded its safety limit")]
+    RemoteMonitorOutputTooLarge,
+    #[error("remote monitoring is not supported by this host")]
+    RemoteMonitorUnsupported,
     #[error("SFTP operation failed: {0}")]
     Sftp(String),
     #[error("remote file changed since it was opened")]
@@ -266,6 +272,38 @@ pub struct SshConnection {
     parent: Option<Arc<SshConnection>>,
     forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
 }
+
+const REMOTE_MONITOR_OUTPUT_LIMIT: usize = 64 * 1024;
+const REMOTE_MONITOR_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// A best-effort, one-shot snapshot collected with a fixed command. Missing
+/// fields are represented as `None` because remote systems are not assumed to
+/// be GNU/Linux and no agent is installed on the host.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMonitorSnapshot {
+    pub hostname: Option<String>,
+    pub kernel: Option<String>,
+    pub uptime_seconds: Option<u64>,
+    pub load_average: Option<[f64; 3]>,
+    pub memory_total_bytes: Option<u64>,
+    pub memory_available_bytes: Option<u64>,
+    pub root_disk_used_percent: Option<u8>,
+    pub process_count: Option<u64>,
+    pub supported_metrics: Vec<String>,
+}
+
+struct RemoteCommandOutput {
+    stdout: Vec<u8>,
+    #[allow(dead_code)]
+    stderr: Vec<u8>,
+    exit_status: Option<u32>,
+}
+
+// This string is intentionally constant. User input never reaches a remote
+// shell through the monitoring API. Every individual metric is optional so a
+// BSD host, a minimal appliance, or a host without /proc can degrade cleanly.
+const REMOTE_MONITOR_COMMAND: &[u8] = br#"sh -c 'printf "__MOBARUST__hostname=%s\n" "$(hostname 2>/dev/null || true)"; printf "__MOBARUST__kernel=%s\n" "$(uname -sr 2>/dev/null || true)"; if [ -r /proc/uptime ]; then read uptime_seconds uptime_rest < /proc/uptime; printf "__MOBARUST__uptime_seconds=%s\n" "$uptime_seconds"; fi; if [ -r /proc/loadavg ]; then read load_one load_two load_three load_rest < /proc/loadavg; printf "__MOBARUST__load=%s,%s,%s\n" "$load_one" "$load_two" "$load_three"; elif command -v sysctl >/dev/null 2>&1; then load_line=$(sysctl -n vm.loadavg 2>/dev/null || true); set -- $load_line; printf "__MOBARUST__load=%s,%s,%s\n" "$(printf %s "$1" | tr -d "{}")" "$2" "$3"; fi; if [ -r /proc/meminfo ]; then mem_total=$(grep ^MemTotal: /proc/meminfo 2>/dev/null || true); set -- $mem_total; printf "__MOBARUST__mem_total_kib=%s\n" "$2"; mem_available=$(grep ^MemAvailable: /proc/meminfo 2>/dev/null || true); set -- $mem_available; printf "__MOBARUST__mem_available_kib=%s\n" "$2"; elif command -v sysctl >/dev/null 2>&1; then printf "__MOBARUST__mem_total_bytes=%s\n" "$(sysctl -n hw.memsize 2>/dev/null || true)"; fi; disk_line=$(df -P / 2>/dev/null | tail -n 1 || true); set -- $disk_line; printf "__MOBARUST__disk_root_used_percent=%s\n" "$(printf %s "$5" | tr -d "%")"; if command -v ps >/dev/null 2>&1; then printf "__MOBARUST__process_count=%s\n" "$(ps -e 2>/dev/null | tail -n +2 | wc -l | tr -d " ")"; fi'"#;
 
 /// A server-initiated channel created by an SSH remote `-R` forward.
 ///
@@ -543,6 +581,81 @@ impl SshConnection {
                 .await
                 .map_err(SshError::Channel)?;
             Ok(SshShell { channel })
+        })
+        .await
+        .map_err(|_| SshError::Timeout)?
+    }
+
+    /// Collects a bounded, one-shot system snapshot through a fixed remote
+    /// command. This is deliberately separate from an arbitrary remote exec
+    /// API: the frontend can request monitoring, but cannot provide shell text.
+    pub async fn remote_monitor_snapshot(&self) -> Result<RemoteMonitorSnapshot, SshError> {
+        let output = self
+            .exec_bounded(REMOTE_MONITOR_COMMAND, REMOTE_MONITOR_OUTPUT_LIMIT)
+            .await?;
+        if let Some(status) = output.exit_status
+            && status != 0
+        {
+            return Err(SshError::RemoteMonitorCommandFailed(status));
+        }
+        parse_remote_monitor_snapshot(&output.stdout)
+    }
+
+    async fn exec_bounded(
+        &self,
+        command: &[u8],
+        output_limit: usize,
+    ) -> Result<RemoteCommandOutput, SshError> {
+        tokio::time::timeout(REMOTE_MONITOR_TIMEOUT, async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(SshError::Channel)?;
+            channel
+                .exec(true, command.to_vec())
+                .await
+                .map_err(SshError::Channel)?;
+            let mut channel = channel;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut exit_status = None;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        if stdout
+                            .len()
+                            .saturating_add(stderr.len())
+                            .saturating_add(data.len())
+                            > output_limit
+                        {
+                            return Err(SshError::RemoteMonitorOutputTooLarge);
+                        }
+                        stdout.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        if stdout
+                            .len()
+                            .saturating_add(stderr.len())
+                            .saturating_add(data.len())
+                            > output_limit
+                        {
+                            return Err(SshError::RemoteMonitorOutputTooLarge);
+                        }
+                        stderr.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExitStatus {
+                        exit_status: status,
+                    } => exit_status = Some(status),
+                    ChannelMsg::Eof | ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            Ok(RemoteCommandOutput {
+                stdout,
+                stderr,
+                exit_status,
+            })
         })
         .await
         .map_err(|_| SshError::Timeout)?
@@ -1649,6 +1762,108 @@ pub enum SshOutput {
     Control,
 }
 
+fn parse_remote_monitor_snapshot(stdout: &[u8]) -> Result<RemoteMonitorSnapshot, SshError> {
+    let text = String::from_utf8_lossy(stdout);
+    let mut hostname = None;
+    let mut kernel = None;
+    let mut uptime_seconds = None;
+    let mut load_average = None;
+    let mut memory_total_bytes = None;
+    let mut memory_available_bytes = None;
+    let mut root_disk_used_percent = None;
+    let mut process_count = None;
+
+    for line in text.lines() {
+        let Some((key, raw_value)) = line
+            .strip_prefix("__MOBARUST__")
+            .and_then(|line| line.split_once('='))
+        else {
+            continue;
+        };
+        let value = raw_value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key {
+            "hostname" => hostname = Some(value.to_owned()),
+            "kernel" => kernel = Some(value.to_owned()),
+            "uptime_seconds" => uptime_seconds = value.parse().ok(),
+            "load" => {
+                let values = value
+                    .split(',')
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok();
+                if let Some(values) = values
+                    && values.len() == 3
+                    && values.iter().all(|number| number.is_finite())
+                {
+                    load_average = Some([values[0], values[1], values[2]]);
+                }
+            }
+            "mem_total_kib" => {
+                memory_total_bytes = value
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|kib| kib.checked_mul(1024));
+            }
+            "mem_available_kib" => {
+                memory_available_bytes = value
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|kib| kib.checked_mul(1024));
+            }
+            "mem_total_bytes" => memory_total_bytes = value.parse().ok(),
+            "disk_root_used_percent" => {
+                root_disk_used_percent = value.parse::<u8>().ok().filter(|percent| *percent <= 100);
+            }
+            "process_count" => process_count = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    let mut supported_metrics = Vec::new();
+    if hostname.is_some() {
+        supported_metrics.push("hostname".to_owned());
+    }
+    if kernel.is_some() {
+        supported_metrics.push("kernel".to_owned());
+    }
+    if uptime_seconds.is_some() {
+        supported_metrics.push("uptime".to_owned());
+    }
+    if load_average.is_some() {
+        supported_metrics.push("load".to_owned());
+    }
+    if memory_total_bytes.is_some() {
+        supported_metrics.push("memory".to_owned());
+    }
+    if memory_available_bytes.is_some() {
+        supported_metrics.push("memory-available".to_owned());
+    }
+    if root_disk_used_percent.is_some() {
+        supported_metrics.push("disk".to_owned());
+    }
+    if process_count.is_some() {
+        supported_metrics.push("processes".to_owned());
+    }
+    if supported_metrics.is_empty() {
+        return Err(SshError::RemoteMonitorUnsupported);
+    }
+
+    Ok(RemoteMonitorSnapshot {
+        hostname,
+        kernel,
+        uptime_seconds,
+        load_average,
+        memory_total_bytes,
+        memory_available_bytes,
+        root_disk_used_percent,
+        process_count,
+        supported_metrics,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1751,6 +1966,35 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, changed);
         assert!(first.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn remote_monitor_parser_keeps_optional_metrics_and_converts_memory() {
+        let snapshot = parse_remote_monitor_snapshot(
+            b"noise from a login banner\n__MOBARUST__hostname=fixture-sshd\n__MOBARUST__kernel=Linux 6.1\n__MOBARUST__uptime_seconds=42\n__MOBARUST__load=0.10,0.20,0.30\n__MOBARUST__mem_total_kib=2048\n__MOBARUST__mem_available_kib=1024\n__MOBARUST__disk_root_used_percent=37\n__MOBARUST__process_count=9\n",
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.hostname.as_deref(), Some("fixture-sshd"));
+        assert_eq!(snapshot.uptime_seconds, Some(42));
+        assert_eq!(snapshot.memory_total_bytes, Some(2 * 1024 * 1024));
+        assert_eq!(snapshot.memory_available_bytes, Some(1024 * 1024));
+        assert_eq!(snapshot.root_disk_used_percent, Some(37));
+        assert_eq!(snapshot.process_count, Some(9));
+        assert_eq!(snapshot.load_average, Some([0.10, 0.20, 0.30]));
+        assert!(snapshot.supported_metrics.contains(&"memory".to_owned()));
+    }
+
+    #[test]
+    fn remote_monitor_parser_rejects_an_empty_or_invalid_snapshot() {
+        assert!(matches!(
+            parse_remote_monitor_snapshot(b"login banner only\n"),
+            Err(SshError::RemoteMonitorUnsupported)
+        ));
+        assert!(matches!(
+            parse_remote_monitor_snapshot(b"__MOBARUST__load=not-a-number\n"),
+            Err(SshError::RemoteMonitorUnsupported)
+        ));
     }
 
     fn accepted_fingerprint(policy: &HostKeyPolicy, fingerprint: &str) -> Option<bool> {

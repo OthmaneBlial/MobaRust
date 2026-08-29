@@ -823,6 +823,17 @@ async fn ssh_open_remote_text_file(
 }
 
 #[tauri::command]
+async fn ssh_collect_remote_monitor(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+) -> Result<mobarust_ssh::RemoteMonitorSnapshot, String> {
+    manager
+        .collect_remote_monitor(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_save_remote_text_file(
     manager: State<'_, SshManager>,
     terminal_id: String,
@@ -1207,6 +1218,7 @@ fn main() {
             ssh_attach,
             ssh_list_directory,
             ssh_open_remote_text_file,
+            ssh_collect_remote_monitor,
             ssh_save_remote_text_file,
             ssh_rename_remote,
             ssh_delete_remote,

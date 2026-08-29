@@ -67,7 +67,9 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Bounded port-scan UI with progress and cancellation
 - [x] Bounded platform-native ping and traceroute with cancellation and output limits
 - [ ] SSH fingerprint inspection
-- [ ] X11 forwarding, monitoring, and portable packaging
+- [ ] X11 forwarding and integrated/external X-server strategy
+- [x] One-shot SSH remote monitoring with capability-aware metrics and bounded collection
+- [ ] Signed portable packaging and cross-platform distribution evidence
 
 ## Operator workflows
 

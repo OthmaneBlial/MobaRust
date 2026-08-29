@@ -58,6 +58,13 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             connection.state(),
             mobarust_core::ConnectionState::Connected
         );
+        let monitor = connection
+            .remote_monitor_snapshot()
+            .await
+            .expect("collect read-only remote monitor snapshot");
+        assert!(monitor.hostname.is_some());
+        assert!(monitor.kernel.is_some());
+        assert!(!monitor.supported_metrics.is_empty());
         let shell = connection.open_shell(100, 30).await.expect("open SSH PTY");
         let (mut reader, writer) = shell.split();
         writer.resize(120, 40).await.expect("resize SSH PTY");

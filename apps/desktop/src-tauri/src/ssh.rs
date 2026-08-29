@@ -245,6 +245,9 @@ enum SshCommand {
         path: String,
         reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
     },
+    CollectMonitor {
+        reply: oneshot::Sender<Result<mobarust_ssh::RemoteMonitorSnapshot, String>>,
+    },
     SaveTextFile {
         path: String,
         expected_revision: String,
@@ -579,6 +582,21 @@ impl SshManager {
         let (reply, response) = oneshot::channel();
         self.sender(terminal_id)?
             .send(SshCommand::OpenTextFile { path, reply })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
+    }
+
+    pub async fn collect_remote_monitor(
+        &self,
+        terminal_id: &str,
+    ) -> Result<mobarust_ssh::RemoteMonitorSnapshot, SshManagerError> {
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::CollectMonitor { reply })
             .await
             .map_err(|_| SshManagerError::Closed)?;
         response
@@ -1395,6 +1413,16 @@ async fn run_shell_once(
                         let operation_connection = Arc::clone(connection);
                         tauri::async_runtime::spawn(async move {
                             let result = read_remote_text_file(&operation_connection, path).await;
+                            let _ = reply.send(result);
+                        });
+                    }
+                    Some(SshCommand::CollectMonitor { reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = operation_connection
+                                .remote_monitor_snapshot()
+                                .await
+                                .map_err(|error| error.to_string());
                             let _ = reply.send(result);
                         });
                     }

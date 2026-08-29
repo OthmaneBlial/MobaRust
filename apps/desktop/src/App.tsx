@@ -18,6 +18,7 @@ import {
   ExternalLink,
   Folder,
   FolderPlus,
+  Gauge,
   KeyRound,
   LoaderCircle,
   LayoutDashboard,
@@ -45,7 +46,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-type View = "terminal" | "files" | "tunnels" | "diagnostics";
+type View = "terminal" | "files" | "tunnels" | "monitor" | "diagnostics";
 
 type AppSettings = {
   general: {
@@ -337,6 +338,18 @@ type RemoteTextDocument = {
   size: number;
   modifiedUnixSeconds?: number | null;
   permissions?: number | null;
+};
+
+type RemoteMonitorSnapshot = {
+  hostname?: string | null;
+  kernel?: string | null;
+  uptimeSeconds?: number | null;
+  loadAverage?: [number, number, number] | null;
+  memoryTotalBytes?: number | null;
+  memoryAvailableBytes?: number | null;
+  rootDiskUsedPercent?: number | null;
+  processCount?: number | null;
+  supportedMetrics: string[];
 };
 
 type TransferProtocol = "sftp" | "scp";
@@ -665,6 +678,9 @@ function App() {
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
   const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
+  const [remoteMonitor, setRemoteMonitor] = useState<RemoteMonitorSnapshot | null>(null);
+  const [remoteMonitorStatus, setRemoteMonitorStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [remoteMonitorError, setRemoteMonitorError] = useState<string | null>(null);
   const [networkHost, setNetworkHost] = useState("");
   const [networkPort, setNetworkPort] = useState("22");
   const [networkTimeout, setNetworkTimeout] = useState("1500");
@@ -1364,6 +1380,25 @@ function App() {
     void loadRemoteDirectory(path);
   }, [loadRemoteDirectory]);
 
+  const collectRemoteMonitor = useCallback(async () => {
+    if (!remoteSessionId || remoteProtocol !== "ssh") return;
+    if (!IS_TAURI) {
+      setRemoteMonitorStatus("error");
+      setRemoteMonitorError("Remote monitoring requires the desktop runtime.");
+      return;
+    }
+    setRemoteMonitorStatus("loading");
+    setRemoteMonitorError(null);
+    try {
+      const snapshot = await invoke<RemoteMonitorSnapshot>("ssh_collect_remote_monitor", { terminalId: remoteSessionId });
+      setRemoteMonitor(snapshot);
+      setRemoteMonitorStatus("ready");
+    } catch (error) {
+      setRemoteMonitorStatus("error");
+      setRemoteMonitorError(String(error));
+    }
+  }, [remoteProtocol, remoteSessionId]);
+
   const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId || entry.isDirectory) return;
     try {
@@ -1889,6 +1924,18 @@ function App() {
   }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
   useEffect(() => {
+    setRemoteMonitor(null);
+    setRemoteMonitorStatus("idle");
+    setRemoteMonitorError(null);
+  }, [remoteSessionId]);
+
+  useEffect(() => {
+    if (activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" && remoteMonitorStatus === "idle") {
+      void collectRemoteMonitor();
+    }
+  }, [activeView, collectRemoteMonitor, remoteMonitorStatus, remoteProtocol, remoteSessionId]);
+
+  useEffect(() => {
     if (!IS_TAURI) return;
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
@@ -2051,6 +2098,7 @@ function App() {
             <div className="security-note"><ShieldCheck size={15} /><span><strong>Secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
             <button className={`nav-item ${activeView === "diagnostics" ? "active" : ""}`} onClick={() => setActiveView("diagnostics")}><Activity size={15} /> Network diagnostics</button>
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
+            <button className={`nav-item ${activeView === "monitor" ? "active" : ""}`} onClick={() => setActiveView("monitor")} disabled={!remoteSessionId || remoteProtocol !== "ssh"} title={remoteSessionId && remoteProtocol === "ssh" ? "Collect a one-shot SSH system snapshot" : "Open an SSH session first"}><Gauge size={15} /> Remote monitor</button>
             <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
         </aside>
@@ -2083,6 +2131,7 @@ function App() {
                 <button className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
                 <button className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
                 <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
+                {remoteSessionId && remoteProtocol === "ssh" && <button className={activeView === "monitor" ? "selected" : ""} onClick={() => setActiveView("monitor")} role="tab" aria-selected={activeView === "monitor"}><Gauge size={15} /> Monitor</button>}
                 <button className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
               </div>
 
@@ -2101,10 +2150,12 @@ function App() {
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
+              ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
+                <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
-                <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" ? () => setQuickConnectOpen(true) : undefined} />
+                <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" || activeView === "monitor" ? () => setQuickConnectOpen(true) : undefined} />
               )}
 
               <div className="lower-grid">
@@ -2358,6 +2409,36 @@ function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onNewRemoteForw
   </section>;
 }
 
+function RemoteMonitorView({ snapshot, status, error, onRefresh }: { snapshot: RemoteMonitorSnapshot | null; status: "idle" | "loading" | "ready" | "error"; error: string | null; onRefresh: () => void }) {
+  const memoryUsed = snapshot?.memoryTotalBytes != null && snapshot.memoryAvailableBytes != null
+    ? Math.max(0, snapshot.memoryTotalBytes - snapshot.memoryAvailableBytes)
+    : null;
+  const statusLabel = status === "loading" ? "Collecting" : status === "ready" ? "Snapshot ready" : status === "error" ? "Unavailable" : "Ready";
+  return <section className="remote-monitor" aria-label="Remote system monitor">
+    <div className="remote-monitor-toolbar">
+      <div><span className="eyebrow">SSH / SYSTEM SNAPSHOT</span><strong>Remote system monitor</strong><p>Collect one bounded snapshot through the active SSH connection. No agent is installed and no polling starts automatically.</p></div>
+      <div className="remote-monitor-actions"><span className={`remote-monitor-status monitor-${status}`}><span /> {statusLabel}</span><button className="primary-button" onClick={onRefresh} disabled={status === "loading"}><RefreshCw className={status === "loading" ? "spin" : ""} size={14} /> {status === "loading" ? "Collecting…" : "Refresh snapshot"}</button></div>
+    </div>
+    {error && <div className="connect-error remote-monitor-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
+    {snapshot ? <>
+      <div className="remote-monitor-identity"><div><span>Host</span><strong>{snapshot.hostname ?? "Unknown host"}</strong></div><div><span>Kernel</span><strong>{snapshot.kernel ?? "Unavailable"}</strong></div><div><span>Metrics</span><strong>{snapshot.supportedMetrics.length} available</strong></div></div>
+      <div className="remote-monitor-grid">
+        <MonitorMetric label="Uptime" value={formatDuration(snapshot.uptimeSeconds)} detail="remote clock" />
+        <MonitorMetric label="Load average" value={snapshot.loadAverage ? snapshot.loadAverage.map((value) => value.toFixed(2)).join(" · ") : "Unavailable"} detail="1 / 5 / 15 min where supported" />
+        <MonitorMetric label="Memory" value={memoryUsed != null && snapshot.memoryTotalBytes != null ? `${formatBytes(memoryUsed)} / ${formatBytes(snapshot.memoryTotalBytes)}` : "Unavailable"} detail="used / total" />
+        <MonitorMetric label="Available memory" value={snapshot.memoryAvailableBytes != null ? formatBytes(snapshot.memoryAvailableBytes) : "Unavailable"} detail="best-effort capability" />
+        <MonitorMetric label="Root disk" value={snapshot.rootDiskUsedPercent != null ? `${snapshot.rootDiskUsedPercent}% used` : "Unavailable"} detail="/ filesystem" />
+        <MonitorMetric label="Processes" value={snapshot.processCount != null ? snapshot.processCount.toLocaleString() : "Unavailable"} detail="visible process count" />
+      </div>
+      <div className="remote-monitor-note"><ShieldCheck size={14} /><span>Only a fixed, read-only metrics query is sent. Missing commands or platform-specific files produce unavailable fields instead of an assumed Linux result.</span></div>
+    </> : <div className="remote-monitor-empty"><Gauge size={21} /><strong>{status === "error" ? "No compatible metrics returned" : "No snapshot yet"}</strong><span>{status === "error" ? "The host may not expose the standard read-only capabilities." : "Refresh to request a one-shot snapshot from this SSH session."}</span></div>}
+  </section>;
+}
+
+function MonitorMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return <article className="remote-monitor-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
+}
+
 function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, error, scanId, scanStatus, scanStart, scanEnd, scanConcurrency, scanScanned, scanTotal, scanResults, diagnosticKind, diagnosticStatus, pingResult, tracerouteResult, traceMaxHops, onHostChange, onPortChange, onTimeoutChange, onTraceMaxHopsChange, onResolve, onCheckTcp, onPing, onTraceroute, onCancelDiagnostic, onScanStartChange, onScanEndChange, onScanConcurrencyChange, onStartScan, onCancelScan }: {
   host: string;
   port: string;
@@ -2432,9 +2513,20 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels"; onAction?: () => void }) {
+function formatDuration(seconds?: number | null) {
+  if (seconds == null || !Number.isFinite(seconds)) return "Unavailable";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels" | "monitor"; onAction?: () => void }) {
   const isFiles = view === "files";
-  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
+  const isMonitor = view === "monitor";
+  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : isMonitor ? <Gauge size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : isMonitor ? "REMOTE MONITOR" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : isMonitor ? "Connect an SSH session to inspect it" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : isMonitor ? "The monitor sends a single bounded read-only query and leaves unsupported platform metrics blank." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
 }
 
 function InfoCard({ icon: Icon, label, title, detail, action }: { icon: LucideIcon; label: string; title: string; detail: string; action: string }) {
