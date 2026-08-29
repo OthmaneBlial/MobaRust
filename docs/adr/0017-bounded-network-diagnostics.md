@@ -3,8 +3,8 @@
 ## Status
 
 Accepted and implemented for native TCP checks, bounded port-range scans, and
-desktop DNS/TCP command and UI wiring. Port-scan UI and additional diagnostics
-remain pending.
+desktop DNS/TCP/port-scan command and UI wiring. Additional diagnostics remain
+pending.
 
 ## Decision
 
@@ -29,9 +29,9 @@ their own platform and permission review before being presented in the UI.
 - no automatic recurring scan;
 - no claim that a TCP result proves a service is safe or authenticated.
 
-The future frontend must show the exact target and range before starting a
-scan, show progress and cancellation, and keep the result framed as a
-legitimate administration diagnostic rather than an offensive security tool.
+The frontend shows the exact target and range before starting a scan, exposes
+progress and cancellation, and keeps the result framed as a legitimate
+administration diagnostic rather than an offensive security tool.
 
 ## Verification
 

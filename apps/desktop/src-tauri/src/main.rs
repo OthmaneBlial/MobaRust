@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod network;
 mod serial;
 mod ssh;
 mod telnet;
@@ -9,6 +10,7 @@ use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
+use network::{NetworkManager, NetworkScanRequest};
 use serde::Serialize;
 use serial::{SerialConnectRequest, SerialManager};
 use ssh::{
@@ -249,6 +251,28 @@ async fn network_check_tcp(
     })
     .await
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_scan_start(
+    app: tauri::AppHandle,
+    manager: State<'_, NetworkManager>,
+    request: NetworkScanRequest,
+) -> Result<network::NetworkScanResponse, String> {
+    manager
+        .start_scan(app, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn network_scan_cancel(
+    manager: State<'_, NetworkManager>,
+    scan_id: String,
+) -> Result<bool, String> {
+    manager
+        .cancel_scan(&scan_id)
+        .map_err(|error| error.to_string())
 }
 
 fn default_openssh_config_path() -> PathBuf {
@@ -590,6 +614,7 @@ fn main() {
         .manage(TerminalManager::default())
         .manage(SshManager::default())
         .manage(SerialManager::default())
+        .manage(NetworkManager::default())
         .manage(TelnetManager::default())
         .manage(PlatformVault::default())
         .setup(|app| {
@@ -619,6 +644,8 @@ fn main() {
             session_delete,
             network_resolve_host,
             network_check_tcp,
+            network_scan_start,
+            network_scan_cancel,
             ssh_connect,
             ssh_write,
             ssh_resize,

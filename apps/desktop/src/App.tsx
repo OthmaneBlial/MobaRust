@@ -225,6 +225,15 @@ type TcpCheckResult = {
   status: "open" | "closed" | "timed-out";
 };
 
+type NetworkScanEvent = {
+  scanId: string;
+  state: "running" | "completed" | "cancelled" | "failed";
+  scanned: number;
+  total: number;
+  result?: TcpCheckResult | null;
+  error?: string | null;
+};
+
 const previewSessions: SessionListItem[] = [
   { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", folder: "Local terminals", active: true, favorite: true, tags: ["local"] },
   { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", folder: "Production", active: false, favorite: true, tags: ["production"] },
@@ -439,6 +448,15 @@ function App() {
   const [networkAddresses, setNetworkAddresses] = useState<string[]>([]);
   const [networkResult, setNetworkResult] = useState<TcpCheckResult | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
+  const [networkScanId, setNetworkScanId] = useState<string | null>(null);
+  const [networkScanStatus, setNetworkScanStatus] = useState<"idle" | "running" | "completed" | "cancelled" | "failed">("idle");
+  const [networkScanStart, setNetworkScanStart] = useState("1");
+  const [networkScanEnd, setNetworkScanEnd] = useState("1024");
+  const [networkScanConcurrency, setNetworkScanConcurrency] = useState("32");
+  const [networkScanScanned, setNetworkScanScanned] = useState(0);
+  const [networkScanTotal, setNetworkScanTotal] = useState(0);
+  const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
+  const networkScanIdRef = useRef<string | null>(null);
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
@@ -875,6 +893,70 @@ function App() {
     }
   }, [networkHost, networkPort, networkTimeout]);
 
+  const startNetworkScan = useCallback(async () => {
+    const host = networkHost.trim();
+    const startPort = Number(networkScanStart);
+    const endPort = Number(networkScanEnd);
+    const concurrency = Number(networkScanConcurrency);
+    const timeoutMs = Number(networkTimeout);
+    if (!host) {
+      setNetworkError("Enter an explicit hostname or IP address.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(startPort) || !Number.isInteger(endPort) || startPort < 1 || endPort < startPort || endPort > 65_535 || endPort - startPort + 1 > 4_096) {
+      setNetworkError("Port range must be explicit, valid, and no larger than 4096 ports.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 128) {
+      setNetworkError("Concurrency must be an integer between 1 and 128.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 50 || timeoutMs > 60_000) {
+      setNetworkError("Timeout must be an integer between 50 and 60000 milliseconds.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!IS_TAURI) {
+      setNetworkError("Network diagnostics require the desktop runtime.");
+      setNetworkStatus("error");
+      return;
+    }
+    networkScanIdRef.current = null;
+    setNetworkScanId(null);
+    setNetworkScanResults([]);
+    setNetworkScanScanned(0);
+    setNetworkScanTotal(endPort - startPort + 1);
+    setNetworkScanStatus("running");
+    setNetworkError(null);
+    try {
+      const response = await invoke<{ scanId: string }>("network_scan_start", {
+        request: { host, startPort, endPort, concurrency, timeoutMs },
+      });
+      if (!networkScanIdRef.current) {
+        networkScanIdRef.current = response.scanId;
+        setNetworkScanId(response.scanId);
+      }
+    } catch (error) {
+      networkScanIdRef.current = null;
+      setNetworkScanId(null);
+      setNetworkScanStatus("failed");
+      setNetworkError(String(error));
+    }
+  }, [networkHost, networkScanConcurrency, networkScanEnd, networkScanStart, networkTimeout]);
+
+  const cancelNetworkScan = useCallback(async () => {
+    const scanId = networkScanIdRef.current ?? networkScanId;
+    if (!scanId || !IS_TAURI) return;
+    try {
+      await invoke("network_scan_cancel", { scanId });
+    } catch (error) {
+      setNetworkError(`Scan cancellation failed: ${String(error)}`);
+    }
+  }, [networkScanId]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -889,6 +971,39 @@ function App() {
         const next = current.filter((tunnel) => tunnel.tunnelId !== event.payload.tunnelId);
         return [...next, event.payload].slice(-20);
       });
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<NetworkScanEvent>("network://scan", (event) => {
+      const payload = event.payload;
+      if (networkScanIdRef.current && payload.scanId !== networkScanIdRef.current) return;
+      if (!networkScanIdRef.current) {
+        networkScanIdRef.current = payload.scanId;
+        setNetworkScanId(payload.scanId);
+      }
+      setNetworkScanScanned(payload.scanned);
+      setNetworkScanTotal(payload.total);
+      if (payload.result) {
+        setNetworkScanResults((current) => current.some((result) => result.port === payload.result?.port) ? current : [...current, payload.result!].sort((a, b) => a.port - b.port));
+      }
+      if (payload.state === "running") setNetworkScanStatus("running");
+      if (payload.state === "completed") setNetworkScanStatus("completed");
+      if (payload.state === "cancelled") setNetworkScanStatus("cancelled");
+      if (payload.state === "failed") {
+        setNetworkScanStatus("failed");
+        setNetworkError(payload.error ?? "Network scan failed.");
+      }
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
@@ -1092,7 +1207,7 @@ function App() {
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "diagnostics" ? (
-                <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} />
+                <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" ? () => setQuickConnectOpen(true) : undefined} />
               )}
@@ -1243,7 +1358,7 @@ function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onCancelTunnel 
   </section>;
 }
 
-function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, error, onHostChange, onPortChange, onTimeoutChange, onResolve, onCheckTcp }: {
+function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, error, scanId, scanStatus, scanStart, scanEnd, scanConcurrency, scanScanned, scanTotal, scanResults, onHostChange, onPortChange, onTimeoutChange, onResolve, onCheckTcp, onScanStartChange, onScanEndChange, onScanConcurrencyChange, onStartScan, onCancelScan }: {
   host: string;
   port: string;
   timeout: string;
@@ -1251,16 +1366,31 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
   addresses: string[];
   result: TcpCheckResult | null;
   error: string | null;
+  scanId: string | null;
+  scanStatus: "idle" | "running" | "completed" | "cancelled" | "failed";
+  scanStart: string;
+  scanEnd: string;
+  scanConcurrency: string;
+  scanScanned: number;
+  scanTotal: number;
+  scanResults: TcpCheckResult[];
   onHostChange: (value: string) => void;
   onPortChange: (value: string) => void;
   onTimeoutChange: (value: string) => void;
   onResolve: () => void;
   onCheckTcp: () => void;
+  onScanStartChange: (value: string) => void;
+  onScanEndChange: (value: string) => void;
+  onScanConcurrencyChange: (value: string) => void;
+  onStartScan: () => void;
+  onCancelScan: () => void;
 }) {
   const statusLabel = status === "running" ? "Running" : status === "ready" ? "Ready" : status === "error" ? "Needs attention" : "Idle";
+  const scanActive = scanStatus === "running";
+  const scanProgress = scanTotal > 0 ? Math.min(100, Math.round((scanScanned / scanTotal) * 100)) : 0;
   return <section className="diagnostics-view" aria-label="Network diagnostics">
     <div className="diagnostics-toolbar">
-      <div><span className="eyebrow">NETWORK / DIAGNOSTICS</span><strong>Inspect one explicit target</strong><p>Resolve a hostname or check one TCP port from the desktop runtime. No background discovery or recurring scan is enabled.</p></div>
+      <div><span className="eyebrow">NETWORK / DIAGNOSTICS</span><strong>Inspect one explicit target</strong><p>Resolve a hostname, check one TCP port, or run a bounded range from the desktop runtime. Nothing starts automatically.</p></div>
       <div className={`diagnostics-status diagnostics-${status}`}><span /> {statusLabel}</div>
     </div>
     <div className="diagnostics-target">
@@ -1274,7 +1404,12 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">DNS / ADDRESSES</span><Search size={15} /></div><h3>{addresses.length > 0 ? `${addresses.length} address${addresses.length === 1 ? "" : "es"}` : "No lookup yet"}</h3>{addresses.length > 0 ? <div className="diagnostic-addresses">{addresses.map((address) => <code key={address}>{address}</code>)}</div> : <p>Enter a target and run an explicit lookup. Results are kept in this view only.</p>}</article>
       <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">TCP / REACHABILITY</span><Network size={15} /></div>{result ? <><h3>{result.host}:{result.port}</h3><div className={`diagnostic-result diagnostic-result-${result.status}`}><span /> {result.status === "open" ? "Open" : result.status === "closed" ? "Closed" : "Timed out"}</div><p>The result describes TCP reachability only; it does not authenticate or identify the service.</p></> : <><h3>No TCP check yet</h3><p>Choose a port explicitly, then run a bounded connection check.</p></>}</article>
     </div>
-    <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, port, timeout, and action are explicit. The port scanner primitive remains bounded to 4096 ports and is not launched from this view.</span></div>
+    <section className="diagnostics-scan" aria-label="Bounded TCP port scan">
+      <div className="diagnostics-scan-heading"><div><span className="eyebrow">TCP / BOUNDED SCAN</span><h3>Scan an explicit range</h3><p>Maximum 4096 ports, maximum 128 concurrent checks, and a visible cancellation control.</p></div><span className={`diagnostics-scan-state scan-${scanStatus}`}>{scanStatus === "idle" ? "Ready" : scanStatus}</span></div>
+      <div className="diagnostics-scan-fields"><label>Start port<input inputMode="numeric" pattern="[0-9]+" value={scanStart} onChange={(event) => onScanStartChange(event.target.value)} disabled={scanActive} /></label><label>End port<input inputMode="numeric" pattern="[0-9]+" value={scanEnd} onChange={(event) => onScanEndChange(event.target.value)} disabled={scanActive} /></label><label>Concurrency<input inputMode="numeric" pattern="[0-9]+" value={scanConcurrency} onChange={(event) => onScanConcurrencyChange(event.target.value)} disabled={scanActive} /></label><div className="diagnostics-scan-action">{scanActive ? <button className="outline-button" onClick={onCancelScan}><CircleX size={14} /> Cancel scan</button> : <button className="primary-button" onClick={onStartScan}><Search size={14} /> Start bounded scan</button>}</div></div>
+      {(scanStatus !== "idle" || scanResults.length > 0) && <div className="diagnostics-scan-progress"><div className="diagnostics-progress-label"><span>{scanId ? `Scan ${scanId.slice(0, 8)}` : "Scan"}</span><strong>{scanScanned}/{scanTotal || "—"} · {scanProgress}%</strong></div><div className="diagnostics-progress-track"><span style={{ width: `${scanProgress}%` }} /></div><div className="diagnostics-open-results">{scanResults.length > 0 ? scanResults.filter((item) => item.status === "open").map((item) => <code key={item.port}>{item.port} open</code>) : <span>No open ports reported yet.</span>}</div></div>}
+    </section>
+    <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, range, concurrency, timeout, and action are explicit. Results describe TCP reachability only and are not a security audit.</span></div>
   </section>;
 }
 

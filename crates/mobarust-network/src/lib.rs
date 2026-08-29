@@ -125,6 +125,20 @@ pub async fn scan_tcp(
     options: PortScanOptions,
     cancellation: &mut watch::Receiver<bool>,
 ) -> Result<Vec<TcpCheckResult>, NetworkDiagnosticError> {
+    scan_tcp_with_progress(options, cancellation, |_, _, _| {}).await
+}
+
+/// Scans one explicit bounded TCP range and calls `on_progress` after each
+/// completed port. The callback is synchronous and must remain lightweight;
+/// it is intended for a native event bridge rather than arbitrary work.
+pub async fn scan_tcp_with_progress<F>(
+    options: PortScanOptions,
+    cancellation: &mut watch::Receiver<bool>,
+    mut on_progress: F,
+) -> Result<Vec<TcpCheckResult>, NetworkDiagnosticError>
+where
+    F: FnMut(&TcpCheckResult, usize, usize),
+{
     options.validate()?;
     if *cancellation.borrow() {
         return Err(NetworkDiagnosticError::Cancelled);
@@ -134,14 +148,16 @@ pub async fn scan_tcp(
     let mut next_port = Some(options.start_port);
     let mut results = Vec::new();
     let mut cancellation_closed = false;
+    let total = usize::from(options.end_port - options.start_port) + 1;
 
     schedule_ports(&mut tasks, &options, &mut next_port);
     while !tasks.is_empty() {
         if cancellation_closed {
             if let Some(result) = tasks.join_next().await {
-                results.push(
-                    result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??,
-                );
+                let result =
+                    result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??;
+                on_progress(&result, results.len() + 1, total);
+                results.push(result);
                 schedule_ports(&mut tasks, &options, &mut next_port);
             }
             continue;
@@ -161,7 +177,9 @@ pub async fn scan_tcp(
             }
             result = tasks.join_next() => {
                 if let Some(result) = result {
-                    results.push(result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??);
+                    let result = result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??;
+                    on_progress(&result, results.len() + 1, total);
+                    results.push(result);
                     schedule_ports(&mut tasks, &options, &mut next_port);
                 }
             }
@@ -294,6 +312,32 @@ mod tests {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].port, port);
             assert_eq!(results[0].status, TcpPortStatus::Open);
+        });
+    }
+
+    #[test]
+    fn progress_reports_each_completed_port_with_a_bounded_total() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let options = PortScanOptions {
+                host: "127.0.0.1".into(),
+                start_port: 31_000,
+                end_port: 31_002,
+                concurrency: 2,
+                timeout: Duration::from_millis(25),
+            };
+            let (_sender, mut cancellation) = watch::channel(false);
+            let mut progress = Vec::new();
+            let results =
+                scan_tcp_with_progress(options, &mut cancellation, |result, scanned, total| {
+                    progress.push((result.port, scanned, total));
+                })
+                .await
+                .unwrap();
+            assert_eq!(results.len(), 3);
+            assert_eq!(progress.len(), 3);
+            assert!(progress.iter().all(|(_, _, total)| *total == 3));
+            assert_eq!(progress.last().map(|(_, scanned, _)| *scanned), Some(3));
         });
     }
 
