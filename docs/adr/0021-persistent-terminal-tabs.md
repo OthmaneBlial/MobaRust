@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted and implemented for terminal tabs; split panes remain a separate
-follow-up.
+Accepted and implemented for terminal tabs and the first two-pane split
+layouts.
 
 ## Decision
 
@@ -17,7 +17,10 @@ cooperatively closes the associated native session.
 
 Remote file and tunnel actions resolve against the active tab’s native session
 identifier. A final tab close creates a fresh local tab so the workspace never
-ends in an unusable empty terminal surface.
+ends in an unusable empty terminal surface. A split can show two existing tabs
+side by side or stacked; if no second tab exists, the action creates a new
+local tab. Selecting a normal tab exits split presentation without closing
+either session.
 
 ## Security and reliability boundary
 
@@ -31,9 +34,9 @@ opened.
 ## Consequences
 
 This provides simultaneous local and remote sessions with predictable
-per-session lifecycle handling. Split panes need a layout/state model and
-careful resize/focus semantics, so they are not represented as implemented by
-this ADR.
+per-session lifecycle handling and a focused two-pane layout. Nested splits,
+drag-resizing, and richer pane focus management remain deliberately out of
+scope for this first layout model.
 
 ## Verification
 

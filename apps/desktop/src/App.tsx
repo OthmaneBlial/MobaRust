@@ -23,7 +23,9 @@ import {
   LayoutDashboard,
   MoreHorizontal,
   Network,
+  PanelBottom,
   PanelLeftClose,
+  PanelRight,
   Pencil,
   Plus,
   Radio,
@@ -125,6 +127,8 @@ type WorkspaceTerminal = {
   remoteHost: string | null;
   status: TerminalStatus;
 };
+
+type SplitDirection = "none" | "right" | "down";
 
 let terminalInstanceCounter = 0;
 
@@ -564,6 +568,8 @@ function App() {
   const [activeView, setActiveView] = useState<View>("terminal");
   const [terminalTabs, setTerminalTabs] = useState<WorkspaceTerminal[]>(() => [createWorkspaceTerminal()]);
   const [activeTerminalId, setActiveTerminalId] = useState("");
+  const [splitDirection, setSplitDirection] = useState<SplitDirection>("none");
+  const [splitTerminalIds, setSplitTerminalIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -617,6 +623,8 @@ function App() {
     const terminal = createWorkspaceTerminal();
     setTerminalTabs((current) => [...current, terminal]);
     setActiveTerminalId(terminal.id);
+    setSplitDirection("none");
+    setSplitTerminalIds([]);
     setConnectionError(null);
     setSessionNotice(null);
     setActiveView("terminal");
@@ -631,22 +639,40 @@ function App() {
       const replacement = createWorkspaceTerminal();
       setTerminalTabs([replacement]);
       setActiveTerminalId(replacement.id);
+      setSplitDirection("none");
+      setSplitTerminalIds([]);
       setActiveView("terminal");
       return;
     }
     const closingIndex = terminalTabs.findIndex((terminal) => terminal.id === workspaceId);
     const remaining = terminalTabs.filter((terminal) => terminal.id !== workspaceId);
     setTerminalTabs(remaining);
+    const remainingSplitIds = splitTerminalIds.filter((id) => id !== workspaceId);
+    setSplitTerminalIds(remainingSplitIds);
+    if (remainingSplitIds.length < 2) setSplitDirection("none");
     if (activeTerminalId === workspaceId) {
       setActiveTerminalId(remaining[Math.min(closingIndex, remaining.length - 1)].id);
     }
-  }, [activeTerminalId, terminalTabs]);
+  }, [activeTerminalId, splitTerminalIds, terminalTabs]);
 
   const cycleTerminal = useCallback((direction: 1 | -1) => {
     if (terminalTabs.length < 2) return;
     const index = Math.max(0, terminalTabs.findIndex((terminal) => terminal.id === selectedTerminalId));
     const nextIndex = (index + direction + terminalTabs.length) % terminalTabs.length;
     setActiveTerminalId(terminalTabs[nextIndex].id);
+    setActiveView("terminal");
+  }, [selectedTerminalId, terminalTabs]);
+
+  const openSplit = useCallback((direction: Exclude<SplitDirection, "none">) => {
+    const firstId = selectedTerminalId;
+    if (!firstId) return;
+    let second = terminalTabs.find((terminal) => terminal.id !== firstId);
+    if (!second) {
+      second = createWorkspaceTerminal();
+      setTerminalTabs((current) => [...current, second!]);
+    }
+    setSplitTerminalIds([firstId, second.id]);
+    setSplitDirection(direction);
     setActiveView("terminal");
   }, [selectedTerminalId, terminalTabs]);
 
@@ -784,6 +810,8 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
+      setSplitDirection("none");
+      setSplitTerminalIds([]);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       if (offerSave) {
@@ -820,6 +848,8 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
+      setSplitDirection("none");
+      setSplitTerminalIds([]);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
@@ -845,6 +875,8 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
+      setSplitDirection("none");
+      setSplitTerminalIds([]);
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice(`Connected to ${response.device}. Serial traffic is not encrypted by MobaRust.`);
@@ -1562,10 +1594,10 @@ function App() {
               {activeView === "terminal" ? (
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
-                    <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                    <div className="terminal-toolbar-actions"><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                    <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setSplitDirection("none"); setSplitTerminalIds([]); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
+                    <div className="terminal-toolbar-actions"><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
-                  <div className="terminal-frame terminal-tabs-frame">{terminalTabs.map((terminal) => <div key={terminal.id} className={`terminal-pane ${terminal.id === selectedTerminalId ? "active" : ""}`} aria-hidden={terminal.id === selectedTerminalId ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /></div>)}</div>
+                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} /></div>; })}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
