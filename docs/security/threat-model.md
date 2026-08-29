@@ -21,9 +21,9 @@ This document describes the security boundary for the first vertical slice and t
 | Threat | Current policy / planned control |
 | --- | --- |
 | Plaintext password exposure | Session records contain credential references only. Password acquisition stays native and is not serialized in diagnostics. |
-| Private-key exposure | Keys are referenced, not copied into session metadata. Zeroization and platform-backed storage are required before key auth ships. |
+| Private-key exposure | Keys are referenced by path and never copied into session metadata. Passphrases use the native vault; loaded key-memory hygiene remains a release-review gate. |
 | Malicious local process | Documented as an OS limitation; minimize plaintext lifetime and never claim protection from a process with equivalent user privileges. |
-| Compromised application database | Keep secrets separate from ordinary state; validate imported data; add platform vault or an audited encrypted portable vault. |
+| Compromised application database | The current session store contains metadata and opaque references only. Platform vault entries are separate; portable encrypted storage still needs its own audited design. |
 | Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. |
 | Clipboard exposure | Paste is explicit; multiline shell input is not auto-executed. Remote clipboard support will be opt-in per protocol. |
 | Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. |

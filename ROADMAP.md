@@ -31,7 +31,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [ ] Local, remote, and dynamic SSH forwarding
 - [ ] Jump hosts and multi-hop chains
 - [ ] Session folders, tags, search, favorites, and import/export
-- [ ] OS credential vault abstraction and portable encrypted vault research
+- [x] OS credential vault abstraction
+- [ ] Portable encrypted vault research and implementation
 
 ## Later protocol adapters
 
