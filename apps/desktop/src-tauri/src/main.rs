@@ -130,6 +130,43 @@ async fn ssh_list_directory(
 }
 
 #[tauri::command]
+async fn ssh_rename_remote(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    manager
+        .rename_remote(&terminal_id, from, to)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_delete_remote(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+) -> Result<(), String> {
+    manager
+        .delete_remote(&terminal_id, path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ssh_create_remote_directory(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+) -> Result<(), String> {
+    manager
+        .create_remote_directory(&terminal_id, path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_download(
     app: tauri::AppHandle,
     manager: State<'_, SshManager>,
@@ -238,6 +275,9 @@ fn main() {
             ssh_close,
             ssh_attach,
             ssh_list_directory,
+            ssh_rename_remote,
+            ssh_delete_remote,
+            ssh_create_remote_directory,
             ssh_download,
             ssh_upload,
             ssh_cancel_transfer,

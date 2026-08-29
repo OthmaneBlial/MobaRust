@@ -32,6 +32,12 @@ secret. It receives only paths, byte counters, lifecycle state, and sanitized
 operation errors. The native layer owns local file handles, SFTP channels,
 cleanup, and cancellation.
 
+Directory listing and the first remote mutations (create directory, rename,
+delete) use separate native SFTP jobs as well. They are spawned from the SSH
+session loop, so a slow directory operation cannot stop the shell reader from
+forwarding terminal output. Delete inspects remote metadata in Rust instead of
+trusting a frontend-provided file type; deleting the remote root is rejected.
+
 ## Rationale
 
 - A single-file transfer can be useful immediately without pretending that

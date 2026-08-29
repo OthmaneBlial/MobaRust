@@ -152,10 +152,33 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             fs::read(&downloaded).expect("read downloaded fixture"),
             vec![b'R'; 128 * 1024]
         );
-        sftp.remove_file(&remote_path)
+        let renamed_path = format!("{remote_path}.renamed");
+        sftp.rename(&remote_path, &renamed_path)
+            .await
+            .expect("rename remote fixture file");
+        assert!(!sftp.try_exists(&remote_path).await.expect("check old name"));
+        assert!(
+            sftp.try_exists(&renamed_path)
+                .await
+                .expect("check new name")
+        );
+        let directory_path = format!("/tmp/mobarust-directory-{}", std::process::id());
+        sftp.create_dir(&directory_path)
+            .await
+            .expect("create remote directory");
+        assert!(
+            sftp.file_info(&directory_path)
+                .await
+                .expect("read directory info")
+                .1
+        );
+        sftp.remove_dir(&directory_path)
+            .await
+            .expect("remove remote directory");
+        sftp.remove_file(&renamed_path)
             .await
             .expect("remove fixture file");
-        assert!(!sftp.try_exists(&remote_path).await.expect("check removal"));
+        assert!(!sftp.try_exists(&renamed_path).await.expect("check removal"));
         sftp.close().await.expect("close SFTP subsystem");
         connection
             .disconnect()

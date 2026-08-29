@@ -118,10 +118,20 @@ enum SshCommand {
         path: String,
         reply: oneshot::Sender<Result<Vec<mobarust_ssh::RemoteEntry>, String>>,
     },
+    FileOperation {
+        operation: SshFileOperation,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     StartTransfer {
         job: TransferJob,
     },
     Close,
+}
+
+enum SshFileOperation {
+    Rename { from: String, to: String },
+    Delete { path: String },
+    CreateDirectory { path: String },
 }
 
 #[derive(Debug, Error)]
@@ -293,14 +303,58 @@ impl SshManager {
         terminal_id: &str,
         path: String,
     ) -> Result<Vec<mobarust_ssh::RemoteEntry>, SshManagerError> {
-        if path.trim().is_empty() {
-            return Err(SshManagerError::InvalidRequest(
-                "remote directory path cannot be empty".into(),
-            ));
-        }
+        let path = validate_remote_directory_path(&path)?;
         let (reply, response) = oneshot::channel();
         self.sender(terminal_id)?
             .send(SshCommand::ListDirectory { path, reply })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
+    }
+
+    pub async fn rename_remote(
+        &self,
+        terminal_id: &str,
+        from: String,
+        to: String,
+    ) -> Result<(), SshManagerError> {
+        let from = validate_remote_mutation_path(&from)?;
+        let to = validate_remote_mutation_path(&to)?;
+        self.run_file_operation(terminal_id, SshFileOperation::Rename { from, to })
+            .await
+    }
+
+    pub async fn delete_remote(
+        &self,
+        terminal_id: &str,
+        path: String,
+    ) -> Result<(), SshManagerError> {
+        let path = validate_remote_mutation_path(&path)?;
+        self.run_file_operation(terminal_id, SshFileOperation::Delete { path })
+            .await
+    }
+
+    pub async fn create_remote_directory(
+        &self,
+        terminal_id: &str,
+        path: String,
+    ) -> Result<(), SshManagerError> {
+        let path = validate_remote_mutation_path(&path)?;
+        self.run_file_operation(terminal_id, SshFileOperation::CreateDirectory { path })
+            .await
+    }
+
+    async fn run_file_operation(
+        &self,
+        terminal_id: &str,
+        operation: SshFileOperation,
+    ) -> Result<(), SshManagerError> {
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::FileOperation { operation, reply })
             .await
             .map_err(|_| SshManagerError::Closed)?;
         response
@@ -566,20 +620,18 @@ async fn run_remote_session(
                         }
                     }
                     Some(SshCommand::ListDirectory { path, reply }) => {
-                        let result = async {
-                            let sftp = connection
-                                .open_sftp()
-                                .await
-                                .map_err(|error| error.to_string())?;
-                            let entries = sftp
-                                .read_dir(path)
-                                .await
-                                .map_err(|error| error.to_string())?;
-                            let _ = sftp.close().await;
-                            Ok(entries)
-                        }
-                        .await;
-                        let _ = reply.send(result);
+                        let operation_connection = Arc::clone(&connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = list_remote_directory(&operation_connection, path).await;
+                            let _ = reply.send(result);
+                        });
+                    }
+                    Some(SshCommand::FileOperation { operation, reply }) => {
+                        let operation_connection = Arc::clone(&connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = run_file_operation(&operation_connection, operation).await;
+                            let _ = reply.send(result);
+                        });
                     }
                     Some(SshCommand::StartTransfer { job }) => {
                         let transfer_manager = manager.clone();
@@ -608,6 +660,55 @@ async fn run_remote_session(
             reason: should_report_error.unwrap_or_else(|| "closed".into()),
         },
     );
+}
+
+async fn list_remote_directory(
+    connection: &SshConnection,
+    path: String,
+) -> Result<Vec<mobarust_ssh::RemoteEntry>, String> {
+    let sftp = open_sftp_with_timeout(connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = sftp.read_dir(path).await.map_err(|error| error.to_string());
+    let _ = sftp.close().await;
+    result
+}
+
+async fn run_file_operation(
+    connection: &SshConnection,
+    operation: SshFileOperation,
+) -> Result<(), String> {
+    let sftp = open_sftp_with_timeout(connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = match operation {
+        SshFileOperation::Rename { from, to } => sftp
+            .rename(from, to)
+            .await
+            .map_err(|error| error.to_string()),
+        SshFileOperation::CreateDirectory { path } => sftp
+            .create_dir(path)
+            .await
+            .map_err(|error| error.to_string()),
+        SshFileOperation::Delete { path } => {
+            let (_, is_directory) = sftp
+                .file_info(&path)
+                .await
+                .map_err(|error| error.to_string())?;
+            if is_directory {
+                sftp.remove_dir(path)
+                    .await
+                    .map_err(|error| error.to_string())
+            } else {
+                sftp.remove_file(path)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
+    };
+    let close_result = sftp.close().await;
+    result?;
+    close_result.map_err(|error| error.to_string())
 }
 
 async fn run_transfer(
@@ -878,6 +979,26 @@ fn validate_remote_file_path(path: &str) -> Result<String, SshManagerError> {
         ));
     }
     Ok(path.to_owned())
+}
+
+fn validate_remote_directory_path(path: &str) -> Result<String, SshManagerError> {
+    let path = path.trim();
+    if path.is_empty() || path.contains('\0') {
+        return Err(SshManagerError::InvalidRequest(
+            "remote directory path cannot be empty or contain NUL".into(),
+        ));
+    }
+    Ok(path.to_owned())
+}
+
+fn validate_remote_mutation_path(path: &str) -> Result<String, SshManagerError> {
+    let path = validate_remote_directory_path(path)?;
+    if path == "." || path == "/" {
+        return Err(SshManagerError::InvalidRequest(
+            "remote root cannot be modified through this command".into(),
+        ));
+    }
+    Ok(path)
 }
 
 fn validate_local_file_path(path: &str) -> Result<PathBuf, SshManagerError> {

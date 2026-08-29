@@ -16,11 +16,13 @@ import {
   Download,
   ExternalLink,
   Folder,
+  FolderPlus,
   LoaderCircle,
   LayoutDashboard,
   MoreHorizontal,
   Network,
   PanelLeftClose,
+  Pencil,
   Plus,
   Radio,
   RefreshCw,
@@ -30,6 +32,7 @@ import {
   ShieldCheck,
   Star,
   Terminal as TerminalIcon,
+  Trash2,
   Upload,
   X,
   type LucideIcon,
@@ -369,6 +372,46 @@ function App() {
     }
   }, [remotePath, remoteSessionId]);
 
+  const createRemoteDirectory = useCallback(async () => {
+    if (!remoteSessionId) return;
+    const defaultPath = remotePath === "." ? "./new-folder" : `${remotePath.replace(/\/$/, "")}/new-folder`;
+    const path = window.prompt("Remote folder path", defaultPath);
+    if (!path?.trim()) return;
+    try {
+      await invoke("ssh_create_remote_directory", { terminalId: remoteSessionId, path: path.trim() });
+      setConnectionError(null);
+      await loadRemoteDirectory(remotePath);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+
+  const renameRemote = useCallback(async (entry: RemoteEntry) => {
+    if (!remoteSessionId) return;
+    const nextName = window.prompt("New remote name or path", entry.name);
+    if (!nextName?.trim()) return;
+    const parent = entry.path.split("/").slice(0, -1).join("/") || ".";
+    const target = nextName.trim().includes("/") ? nextName.trim() : `${parent}/${nextName.trim()}`;
+    try {
+      await invoke("ssh_rename_remote", { terminalId: remoteSessionId, from: entry.path, to: target });
+      setConnectionError(null);
+      await loadRemoteDirectory(remotePath);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+
+  const deleteRemote = useCallback(async (entry: RemoteEntry) => {
+    if (!remoteSessionId || !window.confirm(`Delete remote ${entry.isDirectory ? "directory" : "file"} “${entry.name}”?`)) return;
+    try {
+      await invoke("ssh_delete_remote", { terminalId: remoteSessionId, path: entry.path });
+      setConnectionError(null);
+      await loadRemoteDirectory(remotePath);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+
   const cancelTransfer = useCallback(async (transferId: string) => {
     try {
       await invoke("ssh_cancel_transfer", { transferId });
@@ -555,7 +598,7 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>local process</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCancelTransfer={cancelTransfer} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
               ) : (
                 <EmptyProtocolView view={activeView} />
               )}
@@ -602,7 +645,7 @@ function SessionRow({ name, detail, type, active }: SessionListItem) {
   return <button className={`session-row ${active ? "active" : ""}`}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button>;
 }
 
-function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCancelTransfer }: {
+function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onCancelTransfer }: {
   entries: RemoteEntry[];
   path: string;
   status: "idle" | "loading" | "ready" | "error";
@@ -611,13 +654,17 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
   onNavigate: (path: string) => void;
   onDownload: (entry: RemoteEntry) => void;
   onUpload: () => void;
+  onCreateDirectory: () => void;
+  onRename: (entry: RemoteEntry) => void;
+  onDelete: (entry: RemoteEntry) => void;
   onCancelTransfer: (transferId: string) => void;
 }) {
   const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
   return <section className="remote-files" aria-label="Remote files">
-    <div className="remote-files-toolbar">
+      <div className="remote-files-toolbar">
       <div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div>
       <div className="remote-files-toolbar-actions">
+        <button className="outline-button" onClick={onCreateDirectory}><FolderPlus size={14} /> New folder</button>
         <button className="outline-button" onClick={onUpload}><Upload size={14} /> Upload</button>
         <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
       </div>
@@ -631,6 +678,8 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
         </button>
         {!entry.isDirectory && <button className="remote-file-action" onClick={() => onDownload(entry)} title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}><Download size={14} /></button>}
+        <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
+        <button className="remote-file-action danger" onClick={() => onDelete(entry)} title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}><Trash2 size={14} /></button>
       </div>)}
       {status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}
     </div>
