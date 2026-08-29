@@ -22,6 +22,12 @@ It is not a claim that MobaRust currently supports RDP.
   discoverable FreeRDP `pkg-config` package. No global dependency installation
   was attempted; the first experiment therefore remains process-contract and
   lifecycle work inside the repository.
+- An isolated disposable Cargo probe successfully compiled and instantiated
+  `ironrdp-client 0.1.0` with synthetic configuration, without opening a
+  socket. Adding it directly to the main workspace was deliberately reverted:
+  its `picky` dependency pins `aes-gcm 0.11.0-rc.4`, which conflicts with the
+  portable vault's `aes-gcm 0.11.1`. The vault dependency was not weakened for
+  this experiment.
 
 ## Architecture options
 
@@ -34,6 +40,16 @@ It is not a claim that MobaRust currently supports RDP.
 | Isolated subprocess | Strong failure boundary | Framed protocol and lifecycle complexity | Select with helper |
 | Framebuffer bridge | Cross-platform Tauri surface and testable pixels | Input/display latency and copy cost | Select first |
 | Native window embedding | Potentially best latency | Window-handle lifecycle differs on Win/Linux/macOS | Later experiment |
+
+## IronRDP candidate result
+
+The isolated probe confirms that a Rust-native candidate exposes a reusable
+`RdpClient` with typed image output and keyboard/mouse/resize input channels.
+That is enough to continue the helper design, but not enough to select it for
+production: certificate validation, secret lifetime, framebuffer conversion,
+clipboard, reconnect, audio, gateway behavior, packaging, and real Windows
+interoperability remain open gates. No global package or remote server was
+used during this probe.
 
 ## Prototype boundary
 
