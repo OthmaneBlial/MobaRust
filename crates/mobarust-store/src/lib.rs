@@ -395,6 +395,7 @@ impl SessionStore {
                 startup_command: None,
                 environment: Vec::new(),
                 jump_hosts,
+                jump_host_profiles: Vec::new(),
                 notes,
                 serial_profile: None,
             });
@@ -568,7 +569,7 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mobarust_core::{AuthMethod, Protocol, SessionRecord};
+    use mobarust_core::{AuthMethod, JumpHostRecord, Protocol, SessionRecord};
     use tempfile::tempdir;
 
     fn remote_session() -> SessionRecord {
@@ -591,6 +592,7 @@ mod tests {
             startup_command: None,
             environment: Vec::new(),
             jump_hosts: Vec::new(),
+            jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
         }
@@ -627,6 +629,32 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             r#"{"schema_version":1,"sessions":[],"unknown":true}"#
         );
+    }
+
+    #[test]
+    fn jump_host_profiles_round_trip_as_credential_references() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let mut session = remote_session();
+        session.jump_hosts = vec!["bastion".into()];
+        session.jump_host_profiles = vec![JumpHostRecord {
+            host: "bastion.example.test".into(),
+            port: 22,
+            username: "ops".into(),
+            auth: AuthMethod::Password {
+                credential_ref: "bastion-password".into(),
+            },
+            known_hosts_path: None,
+            pinned_fingerprint: Some("SHA256:test".into()),
+        }];
+        store.save(session.clone()).unwrap();
+
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(reopened.list(), &[session]);
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("bastion-password"));
+        assert!(!json.contains("super-secret"));
     }
 
     #[test]

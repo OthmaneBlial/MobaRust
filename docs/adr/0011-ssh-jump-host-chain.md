@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted and implemented for explicitly described jump hops.
+Accepted and implemented for explicitly described jump hops and saved-profile
+reconnection when each imported alias resolves to a saved SSH profile.
 
 ## Decision
 
@@ -20,7 +21,10 @@ a direct SSH session.
 
 Quick Connect exposes one optional agent-backed hop. The transport API accepts
 multiple hops so deterministic native tests and a later saved-profile editor
-can support multi-hop chains without changing the protocol boundary.
+can support multi-hop chains without changing the protocol boundary. Saved
+Quick Connect profiles retain non-secret hop descriptors. OpenSSH imports keep
+`ProxyJump` aliases, and the renderer resolves them only against the imported
+secret-free catalog before creating the typed hop requests.
 
 ## Safety and lifecycle
 
@@ -35,8 +39,9 @@ connection, and failures are bounded by per-hop timeouts.
 - invoking `ssh -J` through a shell;
 - accepting unknown keys on a bastion for convenience;
 - copying one target credential into every hop;
-- treating an imported `ProxyJump` string as sufficient connection data;
-- claiming saved-profile jump reconnect before alias resolution is complete.
+- silently inventing credentials or ports for an alias that is not present in
+  the saved catalog;
+- using a shell-based `ProxyJump` fallback when a typed hop cannot be resolved.
 
 ## Verification
 

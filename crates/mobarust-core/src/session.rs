@@ -84,6 +84,18 @@ impl SerialProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JumpHostRecord {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: AuthMethod,
+    #[serde(default)]
+    pub known_hosts_path: Option<String>,
+    #[serde(default)]
+    pub pinned_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: SessionId,
     pub name: String,
@@ -103,6 +115,8 @@ pub struct SessionRecord {
     pub startup_command: Option<String>,
     pub environment: Vec<(String, String)>,
     pub jump_hosts: Vec<String>,
+    #[serde(default)]
+    pub jump_host_profiles: Vec<JumpHostRecord>,
     pub notes: Option<String>,
     #[serde(default)]
     pub serial_profile: Option<SerialProfile>,
@@ -141,6 +155,7 @@ impl SessionRecord {
             startup_command: None,
             environment: Vec::new(),
             jump_hosts: Vec::new(),
+            jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
         }
@@ -200,6 +215,7 @@ mod tests {
             startup_command: None,
             environment: Vec::new(),
             jump_hosts: Vec::new(),
+            jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
         };

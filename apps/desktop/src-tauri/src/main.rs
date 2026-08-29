@@ -6,7 +6,9 @@ mod ssh;
 mod telnet;
 mod terminal;
 
-use mobarust_core::{AppSettings, AuthMethod, Protocol, SerialProfile, SessionId, SessionRecord};
+use mobarust_core::{
+    AppSettings, AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
+};
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore};
 use mobarust_vault::PlatformVault;
@@ -251,7 +253,38 @@ fn session_save_ssh(
         startup_directory: None,
         startup_command: None,
         environment: Vec::new(),
-        jump_hosts: jump_hosts.into_iter().map(|jump| jump.host).collect(),
+        jump_hosts: jump_hosts.iter().map(|jump| jump.host.clone()).collect(),
+        jump_host_profiles: jump_hosts
+            .into_iter()
+            .map(|jump| {
+                let auth = match jump.auth {
+                    SshAuthRequest::Agent => Ok(AuthMethod::Agent),
+                    SshAuthRequest::Password { credential_id }
+                        if !credential_id.trim().is_empty() =>
+                    {
+                        Ok(AuthMethod::Password {
+                            credential_ref: credential_id,
+                        })
+                    }
+                    SshAuthRequest::PrivateKey {
+                        path,
+                        passphrase_credential_id,
+                    } if !path.trim().is_empty() => Ok(AuthMethod::PrivateKey {
+                        key_ref: path,
+                        credential_ref: passphrase_credential_id,
+                    }),
+                    _ => Err("cannot save a jump host with incomplete authentication".to_owned()),
+                }?;
+                Ok(JumpHostRecord {
+                    host: jump.host,
+                    port: jump.port,
+                    username: jump.username,
+                    auth,
+                    known_hosts_path: jump.known_hosts_path,
+                    pinned_fingerprint: jump.pinned_fingerprint,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
         notes: None,
         serial_profile: None,
     };
@@ -285,6 +318,7 @@ fn session_save_serial(
         startup_command: None,
         environment: Vec::new(),
         jump_hosts: Vec::new(),
+        jump_host_profiles: Vec::new(),
         notes: None,
         serial_profile: Some(SerialProfile {
             device: request.device,

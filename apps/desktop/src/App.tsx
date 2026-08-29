@@ -152,11 +152,23 @@ type SavedSession = {
     flow_control: "none" | "software" | "hardware";
     line_ending: "none" | "cr-lf" | "cr" | "lf";
   } | null;
-  auth:
-    | { kind: "none" }
-    | { kind: "agent" }
-    | { kind: "password"; credentialRef: string }
-    | { kind: "privateKey"; keyRef: string; credentialRef?: string | null };
+  jump_host_profiles?: SavedJumpHost[];
+  auth: SavedAuth;
+};
+
+type SavedAuth =
+  | { kind: "none" }
+  | { kind: "agent" }
+  | { kind: "password"; credentialRef: string }
+  | { kind: "privateKey"; keyRef: string; credentialRef?: string | null };
+
+type SavedJumpHost = {
+  host: string;
+  port: number;
+  username: string;
+  known_hosts_path?: string | null;
+  pinned_fingerprint?: string | null;
+  auth: SavedAuth;
 };
 
 type OpenSshImportReport = {
@@ -171,11 +183,16 @@ type SessionImportReport = {
   skipped: string[];
 };
 
+type SshAuthRequest =
+  | { method: "agent" }
+  | { method: "privateKey"; path: string; passphraseCredentialId?: string }
+  | { method: "password"; credentialId: string };
+
 type SshConnectRequest = {
   host: string;
   port: number;
   username: string;
-  auth: { method: "agent" } | { method: "privateKey"; path: string; passphraseCredentialId?: string } | { method: "password"; credentialId: string };
+  auth: SshAuthRequest;
   knownHostsPath?: string;
   pinnedFingerprint?: string;
   jumpHosts?: SshJumpHostRequest[];
@@ -187,7 +204,7 @@ type SshJumpHostRequest = {
   host: string;
   port: number;
   username: string;
-  auth: { method: "agent" };
+  auth: SshAuthRequest;
   knownHostsPath?: string;
   pinnedFingerprint?: string;
 };
@@ -779,17 +796,13 @@ function App() {
       }, false);
       return;
     }
-    if (session.jump_hosts.length > 0) {
-      setConnectionError("This profile uses ProxyJump. Jump-host connections are imported but not implemented yet.");
-      return;
-    }
-    const request = requestFromSavedSession(session);
+    const request = requestFromSavedSession(session, savedSessions);
     if (!request) {
       setConnectionError("This saved session uses an authentication method that is not available yet.");
       return;
     }
     void connectSsh(request, false);
-  }, [connectSerial, connectSsh]);
+  }, [connectSerial, connectSsh, savedSessions]);
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
     if (!remoteSessionId) return;
@@ -1409,17 +1422,72 @@ function App() {
   );
 }
 
-function requestFromSavedSession(session: SavedSession): SshConnectRequest | null {
+function requestFromSavedAuth(auth: SavedAuth): SshConnectRequest["auth"] | null {
+  if (auth.kind === "agent") return { method: "agent" };
+  if (auth.kind === "password" && auth.credentialRef.trim()) {
+    return { method: "password", credentialId: auth.credentialRef };
+  }
+  if (auth.kind === "privateKey" && auth.keyRef.trim()) {
+    return { method: "privateKey", path: auth.keyRef, passphraseCredentialId: auth.credentialRef ?? undefined };
+  }
+  return null;
+}
+
+function findSavedJumpSession(catalog: SavedSession[], alias: string): SavedSession | undefined {
+  const trimmed = alias.trim();
+  const direct = catalog.find((candidate) => candidate.id === trimmed || candidate.name === trimmed);
+  if (direct) return direct;
+  const userless = trimmed.includes("@") ? trimmed.slice(trimmed.lastIndexOf("@") + 1) : trimmed;
+  const bracketedHost = userless.startsWith("[") ? userless.match(/^\[([^\]]+)\](?::(\d+))?$/) : null;
+  const host = bracketedHost?.[1] ?? userless.replace(/:(\d+)$/, "");
+  const portText = bracketedHost?.[2] ?? userless.match(/:(\d+)$/)?.[1];
+  const port = portText ? Number(portText) : undefined;
+  return catalog.find((candidate) => candidate.hostname === host && (!port || candidate.port === port));
+}
+
+function requestFromSavedSession(session: SavedSession, catalog: SavedSession[], visited = new Set<string>()): SshConnectRequest | null {
+  if (session.protocol !== "SSH" || visited.has(session.id)) return null;
   const username = session.username?.trim();
   if (!username || session.port === 0) return null;
-  const auth = session.auth.kind === "agent"
-    ? { method: "agent" as const }
-    : session.auth.kind === "password" && session.auth.credentialRef.trim()
-      ? { method: "password" as const, credentialId: session.auth.credentialRef }
-      : session.auth.kind === "privateKey" && session.auth.keyRef.trim()
-        ? { method: "privateKey" as const, path: session.auth.keyRef, passphraseCredentialId: session.auth.credentialRef ?? undefined }
-        : null;
+  const auth = requestFromSavedAuth(session.auth);
   if (!auth) return null;
+  const nextVisited = new Set(visited);
+  nextVisited.add(session.id);
+  const directJumpHosts = session.jump_host_profiles && session.jump_host_profiles.length > 0
+    ? session.jump_host_profiles.map((jump) => {
+      const jumpAuth = requestFromSavedAuth(jump.auth);
+      if (!jumpAuth || jump.port === 0 || !jump.username.trim() || !jump.host.trim()) return null;
+      return {
+        host: jump.host,
+        port: jump.port,
+        username: jump.username,
+        auth: jumpAuth,
+        knownHostsPath: jump.known_hosts_path ?? undefined,
+        pinnedFingerprint: jump.pinned_fingerprint ?? undefined,
+      };
+    })
+    : undefined;
+  let jumpHosts: SshJumpHostRequest[] = [];
+  if (directJumpHosts) {
+    if (directJumpHosts.some((jump) => jump === null)) return null;
+    jumpHosts = directJumpHosts as SshJumpHostRequest[];
+  } else {
+    for (const alias of session.jump_hosts) {
+      const jumpSession = findSavedJumpSession(catalog, alias);
+      if (!jumpSession) return null;
+      const jumpRequest = requestFromSavedSession(jumpSession, catalog, nextVisited);
+      if (!jumpRequest) return null;
+      jumpHosts.push(...(jumpRequest.jumpHosts ?? []));
+      jumpHosts.push({
+        host: jumpRequest.host,
+        port: jumpRequest.port,
+        username: jumpRequest.username,
+        auth: jumpRequest.auth,
+        knownHostsPath: jumpRequest.knownHostsPath,
+        pinnedFingerprint: jumpRequest.pinnedFingerprint,
+      });
+    }
+  }
   return {
     host: session.hostname,
     port: session.port,
@@ -1427,6 +1495,7 @@ function requestFromSavedSession(session: SavedSession): SshConnectRequest | nul
     auth,
     knownHostsPath: session.known_hosts_path ?? undefined,
     pinnedFingerprint: session.pinned_fingerprint ?? undefined,
+    jumpHosts: jumpHosts.length > 0 ? jumpHosts : undefined,
     cols: 120,
     rows: 32,
   };
