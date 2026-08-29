@@ -6,6 +6,7 @@ mod telnet;
 mod terminal;
 
 use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_store::{OpenSshImportReport, SessionImportReport, SessionStore};
 use mobarust_vault::PlatformVault;
 use serde::Serialize;
@@ -47,6 +48,28 @@ struct ImportOpenSshRequest {
 #[serde(rename_all = "camelCase")]
 struct ImportSessionRequest {
     json: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkResolveRequest {
+    host: String,
+    timeout_ms: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkTcpCheckRequest {
+    host: String,
+    port: u16,
+    timeout_ms: u64,
+}
+
+fn diagnostic_timeout(timeout_ms: u64) -> Result<std::time::Duration, String> {
+    if !(50..=60_000).contains(&timeout_ms) {
+        return Err("diagnostic timeout must be between 50 and 60000 milliseconds".into());
+    }
+    Ok(std::time::Duration::from_millis(timeout_ms))
 }
 
 #[tauri::command]
@@ -198,6 +221,34 @@ fn session_save_ssh(
         .map_err(|_| "session store lock poisoned".to_owned())?
         .save(session)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_resolve_host(request: NetworkResolveRequest) -> Result<Vec<String>, String> {
+    let timeout = diagnostic_timeout(request.timeout_ms)?;
+    resolve_host(request.host, timeout)
+        .await
+        .map(|addresses| {
+            addresses
+                .into_iter()
+                .map(|address| address.to_string())
+                .collect()
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_check_tcp(
+    request: NetworkTcpCheckRequest,
+) -> Result<mobarust_network::TcpCheckResult, String> {
+    let timeout = diagnostic_timeout(request.timeout_ms)?;
+    check_tcp(TcpCheckOptions {
+        host: request.host,
+        port: request.port,
+        timeout,
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 fn default_openssh_config_path() -> PathBuf {
@@ -566,6 +617,8 @@ fn main() {
             session_set_favorite,
             session_save_ssh,
             session_delete,
+            network_resolve_host,
+            network_check_tcp,
             ssh_connect,
             ssh_write,
             ssh_resize,

@@ -54,7 +54,8 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Serial Quick Connect, native session manager, terminal output, and input wiring
 - [ ] Serial device refresh, saved profiles, and hardware interoperability matrix
 - [x] Bounded native TCP check and port-range diagnostic primitive
-- [ ] DNS, ping, traceroute, fingerprint inspection, and diagnostics UI
+- [x] DNS resolution, bounded TCP checks, and explicit diagnostics UI
+- [ ] Port-scan UI, ping, traceroute, and fingerprint inspection
 - [ ] X11 forwarding, monitoring, and portable packaging
 
 Each adapter must have a real lifecycle, failure tests, and an honest platform

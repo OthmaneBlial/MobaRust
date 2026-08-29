@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted and implemented for native TCP checks and bounded port-range scans.
-Desktop command/UI wiring and additional diagnostics remain pending.
+Accepted and implemented for native TCP checks, bounded port-range scans, and
+desktop DNS/TCP command and UI wiring. Port-scan UI and additional diagnostics
+remain pending.
 
 ## Decision
 
@@ -41,4 +42,5 @@ any scan task is scheduled. The highest legal port is tested to ensure range
 arithmetic cannot wrap around and rescan unexpectedly.
 
 No test targets an external host, scans the local network, or invokes a system
-utility. Desktop integration should preserve that explicit-target contract.
+utility. The desktop view preserves the explicit-target contract and does not
+start background discovery or scans automatically.

@@ -38,7 +38,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-type View = "terminal" | "files" | "tunnels";
+type View = "terminal" | "files" | "tunnels" | "diagnostics";
 
 type TerminalOutputEvent = {
   terminalId: string;
@@ -217,6 +217,12 @@ type SshTunnelEvent = {
   connections: number;
   bytesForwarded: number;
   error?: string | null;
+};
+
+type TcpCheckResult = {
+  host: string;
+  port: number;
+  status: "open" | "closed" | "timed-out";
 };
 
 const previewSessions: SessionListItem[] = [
@@ -426,6 +432,13 @@ function App() {
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
   const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
+  const [networkHost, setNetworkHost] = useState("");
+  const [networkPort, setNetworkPort] = useState("22");
+  const [networkTimeout, setNetworkTimeout] = useState("1500");
+  const [networkStatus, setNetworkStatus] = useState<"idle" | "running" | "ready" | "error">("idle");
+  const [networkAddresses, setNetworkAddresses] = useState<string[]>([]);
+  const [networkResult, setNetworkResult] = useState<TcpCheckResult | null>(null);
+  const [networkError, setNetworkError] = useState<string | null>(null);
 
   const startNewTerminal = useCallback(() => {
     setRemoteSessionId(null);
@@ -794,6 +807,74 @@ function App() {
     }
   }, []);
 
+  const resolveNetworkHost = useCallback(async () => {
+    const host = networkHost.trim();
+    const timeoutMs = Number(networkTimeout);
+    if (!host) {
+      setNetworkError("Enter an explicit hostname or IP address.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 50 || timeoutMs > 60_000) {
+      setNetworkError("Timeout must be an integer between 50 and 60000 milliseconds.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!IS_TAURI) {
+      setNetworkError("Network diagnostics require the desktop runtime.");
+      setNetworkStatus("error");
+      return;
+    }
+    setNetworkStatus("running");
+    setNetworkError(null);
+    try {
+      const addresses = await invoke<string[]>("network_resolve_host", { request: { host, timeoutMs } });
+      setNetworkAddresses(addresses);
+      setNetworkStatus("ready");
+    } catch (error) {
+      setNetworkAddresses([]);
+      setNetworkError(String(error));
+      setNetworkStatus("error");
+    }
+  }, [networkHost, networkTimeout]);
+
+  const checkNetworkTcp = useCallback(async () => {
+    const host = networkHost.trim();
+    const port = Number(networkPort);
+    const timeoutMs = Number(networkTimeout);
+    if (!host) {
+      setNetworkError("Enter an explicit hostname or IP address.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      setNetworkError("Port must be an integer between 1 and 65535.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 50 || timeoutMs > 60_000) {
+      setNetworkError("Timeout must be an integer between 50 and 60000 milliseconds.");
+      setNetworkStatus("error");
+      return;
+    }
+    if (!IS_TAURI) {
+      setNetworkError("Network diagnostics require the desktop runtime.");
+      setNetworkStatus("error");
+      return;
+    }
+    setNetworkStatus("running");
+    setNetworkError(null);
+    try {
+      const result = await invoke<TcpCheckResult>("network_check_tcp", { request: { host, port, timeoutMs } });
+      setNetworkResult(result);
+      setNetworkStatus("ready");
+    } catch (error) {
+      setNetworkResult(null);
+      setNetworkError(String(error));
+      setNetworkStatus("error");
+    }
+  }, [networkHost, networkPort, networkTimeout]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
@@ -961,6 +1042,7 @@ function App() {
 
           <div className="sidebar-footer">
             <div className="security-note"><ShieldCheck size={15} /><span><strong>Secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
+            <button className={`nav-item ${activeView === "diagnostics" ? "active" : ""}`} onClick={() => setActiveView("diagnostics")}><Activity size={15} /> Network diagnostics</button>
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
@@ -993,6 +1075,7 @@ function App() {
                 <button className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
                 <button className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
                 <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
+                <button className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
               </div>
 
               {activeView === "terminal" ? (
@@ -1008,6 +1091,8 @@ function App() {
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onCancelTransfer={cancelTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onCancelTunnel={cancelTunnel} />
+              ) : activeView === "diagnostics" ? (
+                <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} error={networkError} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} />
               ) : (
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" ? () => setQuickConnectOpen(true) : undefined} />
               )}
@@ -1158,13 +1243,48 @@ function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onCancelTunnel 
   </section>;
 }
 
+function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result, error, onHostChange, onPortChange, onTimeoutChange, onResolve, onCheckTcp }: {
+  host: string;
+  port: string;
+  timeout: string;
+  status: "idle" | "running" | "ready" | "error";
+  addresses: string[];
+  result: TcpCheckResult | null;
+  error: string | null;
+  onHostChange: (value: string) => void;
+  onPortChange: (value: string) => void;
+  onTimeoutChange: (value: string) => void;
+  onResolve: () => void;
+  onCheckTcp: () => void;
+}) {
+  const statusLabel = status === "running" ? "Running" : status === "ready" ? "Ready" : status === "error" ? "Needs attention" : "Idle";
+  return <section className="diagnostics-view" aria-label="Network diagnostics">
+    <div className="diagnostics-toolbar">
+      <div><span className="eyebrow">NETWORK / DIAGNOSTICS</span><strong>Inspect one explicit target</strong><p>Resolve a hostname or check one TCP port from the desktop runtime. No background discovery or recurring scan is enabled.</p></div>
+      <div className={`diagnostics-status diagnostics-${status}`}><span /> {statusLabel}</div>
+    </div>
+    <div className="diagnostics-target">
+      <label className="diagnostics-host">Target host or IP<input value={host} onChange={(event) => onHostChange(event.target.value)} placeholder="127.0.0.1 or host.example" /></label>
+      <label>TCP port<input inputMode="numeric" pattern="[0-9]+" value={port} onChange={(event) => onPortChange(event.target.value)} /></label>
+      <label>Timeout ms<input inputMode="numeric" pattern="[0-9]+" value={timeout} onChange={(event) => onTimeoutChange(event.target.value)} /></label>
+    </div>
+    <div className="diagnostics-actions"><button className="outline-button" onClick={onResolve} disabled={status === "running"}><Search size={14} /> Resolve DNS</button><button className="primary-button" onClick={onCheckTcp} disabled={status === "running"}><Network size={14} /> Check TCP port</button></div>
+    {error && <div className="connect-error diagnostics-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
+    <div className="diagnostics-results">
+      <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">DNS / ADDRESSES</span><Search size={15} /></div><h3>{addresses.length > 0 ? `${addresses.length} address${addresses.length === 1 ? "" : "es"}` : "No lookup yet"}</h3>{addresses.length > 0 ? <div className="diagnostic-addresses">{addresses.map((address) => <code key={address}>{address}</code>)}</div> : <p>Enter a target and run an explicit lookup. Results are kept in this view only.</p>}</article>
+      <article className="diagnostic-card"><div className="diagnostic-card-heading"><span className="eyebrow">TCP / REACHABILITY</span><Network size={15} /></div>{result ? <><h3>{result.host}:{result.port}</h3><div className={`diagnostic-result diagnostic-result-${result.status}`}><span /> {result.status === "open" ? "Open" : result.status === "closed" ? "Closed" : "Timed out"}</div><p>The result describes TCP reachability only; it does not authenticate or identify the service.</p></> : <><h3>No TCP check yet</h3><p>Choose a port explicitly, then run a bounded connection check.</p></>}</article>
+    </div>
+    <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, port, timeout, and action are explicit. The port scanner primitive remains bounded to 4096 ports and is not launched from this view.</span></div>
+  </section>;
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EmptyProtocolView({ view, onAction }: { view: Exclude<View, "terminal">; onAction?: () => void }) {
+function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels"; onAction?: () => void }) {
   const isFiles = view === "files";
   return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
 }

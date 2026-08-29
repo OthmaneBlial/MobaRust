@@ -2852,6 +2852,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "mobarust-core",
+ "mobarust-network",
  "mobarust-serial",
  "mobarust-ssh",
  "mobarust-store",

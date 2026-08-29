@@ -15,6 +15,7 @@ mobarust-core = { path = "../../../crates/mobarust-core" }
 mobarust-telnet = { path = "../../../crates/mobarust-telnet" }
 mobarust-ssh = { path = "../../../crates/mobarust-ssh" }
 mobarust-serial = { path = "../../../crates/mobarust-serial" }
+mobarust-network = { path = "../../../crates/mobarust-network" }
 mobarust-store = { path = "../../../crates/mobarust-store" }
 mobarust-vault = { path = "../../../crates/mobarust-vault" }
 portable-pty = "0.9"
