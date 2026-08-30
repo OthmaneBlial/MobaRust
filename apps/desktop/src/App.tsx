@@ -1,9 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
+import {
+  experimentalDesktopTargetError,
+} from "./connection-safety";
+import { parseQuickConnectUri } from "./connection-uri";
+import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
+import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
+import { createTerminalHttpLinkProvider } from "./terminal-links";
+import { sanitizeTerminalTitle } from "./terminal-title";
+import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { normalizeDroppedUploadPaths } from "./transfer-input";
+import {
+  preserveRemoteDesktopError,
+  REMOTE_DESKTOP_FALLBACK_ERROR,
+} from "./remote-desktop-errors";
 import {
   Activity,
   ArrowDownToLine,
@@ -147,6 +162,7 @@ type RemoteDesktopConnectRequest = {
   height: number;
   colorDepth: number;
   audioEnabled: boolean;
+  vncQuality: "balanced" | "low-latency" | "low-bandwidth";
 };
 
 type RemoteDesktopConnectResponse = {
@@ -207,6 +223,8 @@ type TerminalViewportProps = {
   onTerminalReady: (workspaceId: string, terminal: Terminal, searchAddon: SearchAddon) => void;
   onTerminalDisposed: (workspaceId: string) => void;
   onSearchResults: (workspaceId: string, resultIndex: number, resultCount: number) => void;
+  onTitleChange: (workspaceId: string, title: string) => void;
+  onBell: (workspaceId: string) => void;
 };
 
 type WorkspaceTerminal = {
@@ -224,8 +242,8 @@ type WorkspaceTerminal = {
 type SplitDirection = "none" | "right" | "down";
 
 type LocalTerminalTarget =
-  | { type: "default" }
-  | { type: "wsl"; distribution: string };
+  | { type: "default"; cwd?: string; environment?: Array<[string, string]>; startupCommand?: string }
+  | { type: "wsl"; distribution: string; cwd?: string; environment?: Array<[string, string]>; startupCommand?: string };
 
 type TerminalLayoutNode =
   | { kind: "pane"; terminalId: string }
@@ -344,6 +362,7 @@ type SavedSession = {
     height: number;
     color_depth: number;
     audio_enabled: boolean;
+    vnc_quality?: "balanced" | "low-latency" | "low-bandwidth";
   } | null;
   auth: SavedAuth;
 };
@@ -511,6 +530,9 @@ type SshConnectRequest = {
     singleConnection: boolean;
   };
   serverAliveInterval?: number;
+  environment?: Array<[string, string]>;
+  startupDirectory?: string;
+  startupCommand?: string;
   cols: number;
   rows: number;
 };
@@ -600,6 +622,7 @@ type RemoteMonitorSnapshot = {
 };
 
 type TransferProtocol = "sftp" | "scp";
+type LocalUploadPickerKind = "files" | "directory";
 type RemoteFileSort = "name" | "type" | "size" | "modified";
 
 type TransferState = "queued" | "preparing" | "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
@@ -719,7 +742,7 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults }: TerminalViewportProps) {
+function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -786,7 +809,15 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
     const searchAddon = new SearchAddon({ highlightLimit: 1000 });
     terminal.loadAddon(searchAddon);
     terminal.open(host);
+    const title = terminal.onTitleChange((value) => onTitleChange(workspaceId, value));
+    const bell = terminal.onBell(() => onBell(workspaceId));
     const searchResults = searchAddon.onDidChangeResults((event) => onSearchResults(workspaceId, event.resultIndex, event.resultCount));
+    const terminalLinks = terminal.registerLinkProvider(createTerminalHttpLinkProvider(
+      (bufferLineNumber) => terminal.buffer.active.getLine(bufferLineNumber)?.translateToString(true) ?? "",
+      (url) => {
+        if (window.confirm(`Open this external URL?\n\n${url}`)) window.open(url, "_blank", "noopener,noreferrer");
+      },
+    ));
     onTerminalReady(workspaceId, terminal, searchAddon);
 
     const fit = () => {
@@ -918,7 +949,10 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
     return () => {
       disposed = true;
       input.dispose();
+      title.dispose();
+      bell.dispose();
       searchResults.dispose();
+      terminalLinks.dispose();
       host.removeEventListener("paste", onPaste, true);
       resizeObserver.disconnect();
       unlistenOutput?.();
@@ -936,7 +970,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       onTerminalDisposed(workspaceId);
       terminal.dispose();
     };
-  }, [instanceKey, localTarget, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, localTarget, onBell, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -1019,7 +1053,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               onStatusChange(workspaceId, "connected");
             }
             if (helperEvent.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
-            if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") setErrorAndFail("The remote desktop helper stopped unexpectedly.");
+            if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") {
+              setError((current) => preserveRemoteDesktopError(current, REMOTE_DESKTOP_FALLBACK_ERROR));
+              onStatusChange(workspaceId, "error");
+            }
             if (helperEvent.payload.state === "stopped") onStatusChange(workspaceId, "closed");
           }
           if (helperEvent.event === "framebuffer") renderFramebuffer(helperEvent.payload.width, helperEvent.payload.height, helperEvent.payload.pixels);
@@ -1075,6 +1112,11 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     }
   };
 
+  const dismissRemoteClipboard = () => {
+    setRemoteClipboard(null);
+    setClipboardCopied(false);
+  };
+
   const toggleFullscreen = async () => {
     const host = hostRef.current;
     if (!host) return;
@@ -1126,7 +1168,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
     <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onWheel={sendWheel} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
-    {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button></div>}
+    {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button><button type="button" className="outline-button" onClick={dismissRemoteClipboard}>Dismiss</button></div>}
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
     <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
@@ -1230,10 +1272,12 @@ function App() {
   const [macroRecording, setMacroRecording] = useState<MacroRecordingState | null>(null);
   const [recordedMacroDraft, setRecordedMacroDraft] = useState<MacroRecord | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const settingsRef = useRef(settings);
+  const zoomPersistTimerRef = useRef<number | null>(null);
   const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
@@ -1247,6 +1291,7 @@ function App() {
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
   const [editingRemoteFile, setEditingRemoteFile] = useState<RemoteTextDocument | null>(null);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [localDropActive, setLocalDropActive] = useState(false);
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
   const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
   const [remoteMonitor, setRemoteMonitor] = useState<RemoteMonitorSnapshot | null>(null);
@@ -1286,13 +1331,23 @@ function App() {
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const terminalAuditStateRef = useRef(new Map<string, TerminalStatus>());
+  const terminalBellAtRef = useRef(new Map<string, number>());
   const transferAuditStateRef = useRef(new Map<string, TransferState>());
   const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement; path: SplitPath } | null>(null);
   terminalTabsRef.current = terminalTabs;
+  settingsRef.current = settings;
   broadcastEnabledRef.current = broadcastEnabled;
   broadcastTargetIdsRef.current = broadcastTargetIds;
   macroRecordingRef.current = macroRecording;
   macroRunRef.current = macroRun;
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 720px)");
+    const syncSidebarToViewport = () => setSidebarOpen(!mediaQuery.matches);
+    syncSidebarToViewport();
+    mediaQuery.addEventListener("change", syncSidebarToViewport);
+    return () => mediaQuery.removeEventListener("change", syncSidebarToViewport);
+  }, []);
 
   useEffect(() => {
     const onPointerMove = (event: MouseEvent) => {
@@ -1336,9 +1391,9 @@ function App() {
     }
   }, [activeTerminal, activeTerminalId, terminalLayout]);
 
-  const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }) => {
+  const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }, label?: string) => {
     const terminal = createWorkspaceTerminal({
-      label: target.type === "wsl" ? `WSL · ${target.distribution}` : "local shell",
+      label: label ?? (target.type === "wsl" ? `WSL · ${target.distribution}` : "local shell"),
       localTarget: target,
     });
     setTerminalTabs((current) => [...current, terminal]);
@@ -1430,6 +1485,21 @@ function App() {
     if (status === "closed") recordAudit("disconnected", protocol);
   }, [recordAudit]);
 
+  const handleTerminalTitle = useCallback((workspaceId: string, title: string) => {
+    const safeTitle = sanitizeTerminalTitle(title);
+    if (!safeTitle) return;
+    setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, label: safeTitle } : terminal));
+  }, []);
+
+  const handleTerminalBell = useCallback((workspaceId: string) => {
+    const now = Date.now();
+    const previous = terminalBellAtRef.current.get(workspaceId) ?? 0;
+    if (now - previous < 1000) return;
+    terminalBellAtRef.current.set(workspaceId, now);
+    const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
+    setSessionNotice(`Terminal bell · ${terminal?.label ?? "terminal"}`);
+  }, []);
+
   const handleNativeTerminalId = useCallback((workspaceId: string, terminalId: string | null) => {
     if (terminalId) nativeTerminalIdsRef.current.set(workspaceId, terminalId);
     else nativeTerminalIdsRef.current.delete(workspaceId);
@@ -1463,6 +1533,7 @@ function App() {
 
   const handleTerminalDisposed = useCallback((workspaceId: string) => {
     terminalInstancesRef.current.delete(workspaceId);
+    terminalBellAtRef.current.delete(workspaceId);
   }, []);
 
   const handleSearchResults = useCallback((workspaceId: string, resultIndex: number, resultCount: number) => {
@@ -1794,6 +1865,34 @@ function App() {
     } catch (error) {
       setConnectionError(`Settings could not be saved: ${String(error)}`);
     }
+  }, []);
+
+  const adjustTerminalFontSize = useCallback((action: "increase" | "decrease" | "reset") => {
+    const current = settingsRef.current;
+    const fontSize = terminalFontSizeAfterZoom(current.appearance.fontSize, action);
+    if (fontSize === current.appearance.fontSize) return;
+    const next = {
+      ...current,
+      appearance: { ...current.appearance, fontSize },
+    };
+    settingsRef.current = next;
+    setSettings(next);
+    if (zoomPersistTimerRef.current !== null) window.clearTimeout(zoomPersistTimerRef.current);
+    zoomPersistTimerRef.current = window.setTimeout(() => {
+      zoomPersistTimerRef.current = null;
+      if (!IS_TAURI) return;
+      void invoke<AppSettings>("settings_save", { settings: settingsRef.current })
+        .then((saved) => {
+          settingsRef.current = saved;
+          setSettings(saved);
+        })
+        .catch((error) => setConnectionError(`Terminal zoom could not be saved: ${String(error)}`));
+    }, 250);
+    setSessionNotice(`Terminal font size: ${fontSize}px.`);
+  }, []);
+
+  useEffect(() => () => {
+    if (zoomPersistTimerRef.current !== null) window.clearTimeout(zoomPersistTimerRef.current);
   }, []);
 
   const resetSettings = useCallback(async () => {
@@ -2158,6 +2257,20 @@ function App() {
       .catch(() => undefined);
   }, [refreshSavedSessions]);
 
+  const openSavedLocalSession = useCallback((session: SavedSession) => {
+    const startupCommand = session.startup_command?.trim();
+    if (startupCommand && !window.confirm(`This saved local profile has a startup command. It will be sent to the newly opened local shell. Continue?`)) return;
+    recordAudit("sessionOpened", "LOCAL", session.id);
+    touchSavedSession(session.id);
+    startNewTerminal({
+      type: "default",
+      cwd: session.startup_directory?.trim() || undefined,
+      environment: session.environment?.length ? session.environment : undefined,
+      startupCommand: startupCommand || undefined,
+    }, session.name);
+    setSessionNotice(`Opened local profile ${session.name}.`);
+  }, [recordAudit, startNewTerminal, touchSavedSession]);
+
   const saveEditedSession = useCallback(async (session: SavedSession) => {
     if (!IS_TAURI) return;
     try {
@@ -2183,6 +2296,10 @@ function App() {
   }, [editingSession?.id, refreshSavedSessions]);
 
   const connectSavedSession = useCallback((session: SavedSession) => {
+    if (session.protocol === "LOCAL") {
+      openSavedLocalSession(session);
+      return;
+    }
     recordAudit("sessionOpened", session.protocol, session.id);
     touchSavedSession(session.id);
     if (session.protocol === "TELNET") {
@@ -2241,6 +2358,7 @@ function App() {
         height: profile.height,
         colorDepth: profile.color_depth,
         audioEnabled: profile.audio_enabled,
+        vncQuality: profile.vnc_quality ?? "balanced",
       }, false);
       return;
     }
@@ -2250,7 +2368,7 @@ function App() {
       return;
     }
     void connectSsh(request, false);
-  }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, recordAudit, savedSessions, touchSavedSession]);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
     const targets = [...new Set(targetIds)].map((workspaceId) => ({
@@ -2464,7 +2582,20 @@ function App() {
 
   const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
-    const localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
+    let localPath: string | null = null;
+    if (IS_TAURI) {
+      try {
+        localPath = await invoke<string | null>("local_pick_download_path", {
+          kind: entry.isDirectory ? "directory" : "file",
+          suggestedName: entry.name,
+        });
+      } catch (error) {
+        setConnectionError(`Local destination picker failed: ${String(error)}`);
+        return;
+      }
+    } else {
+      localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
+    }
     if (!localPath?.trim()) return;
     const overwrite = window.confirm(entry.isDirectory ? "Allow replacing existing files inside this directory?" : "Allow replacing an existing local file?");
     try {
@@ -2478,25 +2609,73 @@ function App() {
     }
   }, [remoteSessionId]);
 
-  const startUpload = useCallback(async (protocol: TransferProtocol) => {
+  const startUpload = useCallback(async (protocol: TransferProtocol, pickerKind: LocalUploadPickerKind = "files", droppedPaths: string[] = []) => {
     if (!remoteSessionId) return;
-    const localPath = window.prompt("Local file or directory to upload", "");
-    if (!localPath?.trim()) return;
-    const fallbackName = localPath.trim().split(/[\\/]/).pop() || "upload.bin";
-    const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
-    const destination = window.prompt("Remote destination path", defaultRemotePath);
-    if (!destination?.trim()) return;
-    const overwrite = window.confirm("Allow replacing an existing remote file?");
-    try {
-      await invoke("ssh_upload", {
-        terminalId: remoteSessionId,
-        request: { remotePath: destination.trim(), localPath: localPath.trim(), protocol, overwrite, recursive: protocol === "sftp" },
-      });
-      setConnectionError(null);
-    } catch (error) {
-      setConnectionError(String(error));
+    let paths = normalizeDroppedUploadPaths(droppedPaths);
+    if (paths.length === 0 && IS_TAURI) {
+      try {
+        paths = await invoke<string[]>("local_pick_upload_paths", { kind: pickerKind });
+      } catch (error) {
+        setConnectionError(`Local file picker failed: ${String(error)}`);
+        return;
+      }
+    }
+    if (paths.length === 0 && !IS_TAURI) {
+      const localPath = window.prompt("Local file or directory to upload", "");
+      paths = localPath?.trim() ? [localPath.trim()] : [];
+    }
+    for (const localPath of paths) {
+      const fallbackName = localPath.split(/[\\/]/).pop() || "upload.bin";
+      const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
+      const destination = window.prompt("Remote destination path", defaultRemotePath);
+      if (!destination?.trim()) break;
+      const overwrite = window.confirm("Allow replacing an existing remote file?");
+      if (!overwrite) continue;
+      try {
+        await invoke("ssh_upload", {
+          terminalId: remoteSessionId,
+          request: { remotePath: destination.trim(), localPath, protocol, overwrite: true, recursive: protocol === "sftp" },
+        });
+        setConnectionError(null);
+      } catch (error) {
+        setConnectionError(String(error));
+      }
     }
   }, [remotePath, remoteSessionId]);
+
+  useEffect(() => {
+    if (!IS_TAURI || activeView !== "files" || !remoteSessionId || remoteProtocol !== "ssh") {
+      setLocalDropActive(false);
+      return;
+    }
+
+    let disposed = false;
+    let unlistenDragDrop: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event: TauriEvent<DragDropEvent>) => {
+      if (disposed) return;
+      if (event.payload.type === "enter") {
+        setLocalDropActive(true);
+      } else if (event.payload.type === "leave") {
+        setLocalDropActive(false);
+      } else if (event.payload.type === "drop") {
+        setLocalDropActive(false);
+        const paths = normalizeDroppedUploadPaths(event.payload.paths);
+        if (paths.length === 0) return;
+        void startUpload("sftp", "files", paths);
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenDragDrop = unlisten;
+    }).catch((error) => {
+      if (!disposed) setConnectionError(`Native file drop is unavailable: ${String(error)}`);
+    });
+
+    return () => {
+      disposed = true;
+      setLocalDropActive(false);
+      unlistenDragDrop?.();
+    };
+  }, [activeView, remoteProtocol, remoteSessionId, startUpload]);
 
   const retryTransfer = useCallback(async (transfer: SshTransferEvent) => {
     if (!IS_TAURI) {
@@ -3118,7 +3297,25 @@ function App() {
         }
         if (event.key === "Escape") return;
       }
-      if (isEditableKeyboardTarget(event.target)) return;
+      const terminalTarget = event.target instanceof HTMLElement && Boolean(event.target.closest(".xterm"));
+      if (isEditableKeyboardTarget(event.target) && !terminalTarget) return;
+      if (terminalTarget && (event.metaKey || event.ctrlKey) && !event.altKey) {
+        if (event.key === "=" || event.key === "+") {
+          event.preventDefault();
+          adjustTerminalFontSize("increase");
+          return;
+        }
+        if (event.key === "-") {
+          event.preventDefault();
+          adjustTerminalFontSize("decrease");
+          return;
+        }
+        if (event.key === "0") {
+          event.preventDefault();
+          adjustTerminalFontSize("reset");
+          return;
+        }
+      }
       if (matchesShortcut(event, settings.keyboard.newTerminal)) {
         event.preventDefault();
         startNewTerminal();
@@ -3170,7 +3367,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -3183,8 +3380,8 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} />;
-  }, [handleNativeTerminalId, handleSearchResults, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
+  }, [handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
@@ -3256,7 +3453,17 @@ function App() {
             <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
-              <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
+              <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                const saved = savedSessions.find((item) => item.id === session.id);
+                if (saved) openSavedLocalSession(saved);
+                else startNewTerminal();
+              }} onEdit={session.id ? () => {
+                const saved = savedSessions.find((item) => item.id === session.id);
+                if (saved) setEditingSession(saved);
+              } : undefined} onDelete={session.id ? () => {
+                const saved = savedSessions.find((item) => item.id === session.id);
+                if (saved) void deleteSavedSession(saved);
+              } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
             {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC")).map(([folder, sessions]) => (
@@ -3334,10 +3541,10 @@ function App() {
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
-                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
+                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback {settings.terminal.scrollbackLines.toLocaleString()}</span><span>{settings.appearance.fontSize}px · Mod +/- zoom</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -3470,6 +3677,9 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
     pinnedFingerprint: session.pinned_fingerprint ?? undefined,
     x11: session.x11_display?.trim() ? { display: session.x11_display, singleConnection: session.x11_single_connection ?? false } : undefined,
     serverAliveInterval: session.server_alive_interval ?? undefined,
+    environment: session.environment ?? [],
+    startupDirectory: session.startup_directory ?? undefined,
+    startupCommand: session.startup_command ?? undefined,
     jumpHosts: jumpHosts.length > 0 ? jumpHosts : undefined,
     cols: 120,
     rows: 32,
@@ -3505,16 +3715,17 @@ function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, on
   return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><div className="session-row-actions">{onEdit && <button className="session-action" onClick={onEdit} aria-label={`Edit ${name}`} title="Edit session"><Pencil size={12} /></button>}{onDelete && <button className="session-action danger" onClick={onDelete} aria-label={`Delete ${name}`} title="Delete session"><Trash2 size={12} /></button>}<button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div></div>;
 }
 
-function RemoteFilesView({ entries, path, status, error, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onSetPermissions, onCopyPath, onEdit, onCancelTransfer, onRetryTransfer }: {
+function RemoteFilesView({ entries, path, status, error, localDropActive, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onSetPermissions, onCopyPath, onEdit, onCancelTransfer, onRetryTransfer }: {
   entries: RemoteEntry[];
   path: string;
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
+  localDropActive: boolean;
   transfers: SshTransferEvent[];
   onOpenTerminal: () => void;
   onNavigate: (path: string) => void;
   onDownload: (entry: RemoteEntry, protocol: TransferProtocol) => void;
-  onUpload: (protocol: TransferProtocol) => void;
+  onUpload: (protocol: TransferProtocol, pickerKind?: LocalUploadPickerKind) => void;
   onCreateDirectory: () => void;
   onRename: (entry: RemoteEntry) => void;
   onDelete: (entry: RemoteEntry) => void;
@@ -3546,11 +3757,13 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
         <label className="transfer-protocol-select">Sort<select aria-label="Sort remote files" value={sort} onChange={(event) => setSort(event.target.value as RemoteFileSort)}><option value="name">Name</option><option value="type">Type</option><option value="size">Size</option><option value="modified">Modified</option></select></label>
         <label className="remote-files-hidden"><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Hidden</label>
         <button className="outline-button" onClick={onCreateDirectory}><FolderPlus size={14} /> New folder</button>
-        <button className="outline-button" onClick={() => onUpload(transferProtocol)}><Upload size={14} /> Upload</button>
+        <button className="outline-button" onClick={() => onUpload(transferProtocol, "files")}><Upload size={14} /> Upload files</button>
+        <button className="outline-button" onClick={() => onUpload("sftp", "directory")}><FolderPlus size={14} /> Upload folder</button>
         <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
       </div>
     </div>
     <div className="remote-files-meta"><span>{status === "ready" ? `${visibleEntries.length}${visibleEntries.length === entries.length ? "" : ` of ${entries.length}`} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded transfers</span></div>
+    {localDropActive && <div className="remote-files-drop-zone" role="status"><Upload size={16} /><strong>Drop files or folders to upload with SFTP</strong><span>The destination and overwrite decision will still be confirmed.</span></div>}
     {error && <div className="remote-files-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
     <div className="remote-files-list">
       <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
@@ -3668,50 +3881,6 @@ function replaceTextMatches(value: string, query: string, replacement: string, m
     offset = match + query.length;
   }
   return offset === 0 ? value : result + value.slice(offset);
-}
-
-type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
-
-function remoteEditorLanguage(path: string): RemoteEditorLanguage {
-  const lower = path.toLocaleLowerCase();
-  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
-  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
-  if (lower.endsWith(".ini") || lower.endsWith(".conf") || lower.endsWith(".cfg")) return "ini";
-  if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh") || lower.endsWith(".fish") || lower.endsWith("/profile") || lower.endsWith("/rc")) return "shell";
-  return "plain";
-}
-
-function escapeRemoteEditorHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-/**
- * Remote content is escaped before the fixed, local token spans are added.
- * This function never treats bytes received from a host as HTML.
- */
-function highlightRemoteCode(value: string, language: RemoteEditorLanguage): string {
-  const escaped = escapeRemoteEditorHtml(value);
-  if (language === "plain") return escaped;
-  if (language === "shell") {
-    return escaped.replace(
-      /\b(?:sudo|docker|kubectl|git|ssh|scp|sftp|cd|ls|cat|grep|systemctl|cargo|npm|pnpm)\b|--[A-Za-z0-9-]+|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/g,
-      (token) => `<span class="remote-editor-token-command">${token}</span>`,
-    );
-  }
-  if (language === "json") {
-    return escaped
-      .replace(/(&quot;[^\n]*?&quot;)(?=\s*:)/g, '<span class="remote-editor-token-key">$1</span>')
-      .replace(/\b(true|false|null)\b/g, '<span class="remote-editor-token-literal">$1</span>')
-      .replace(/\b-?\d+(?:\.\d+)?\b/g, '<span class="remote-editor-token-number">$&</span>');
-  }
-  const separator = language === "yaml" ? ":" : "=";
-  const keyPattern = new RegExp(`(^|\\n)([A-Za-z][A-Za-z0-9_.-]*)(?=\\s*\\${separator})`, "gm");
-  return escaped.replace(keyPattern, '$1<span class="remote-editor-token-key">$2</span>');
 }
 
 function TransferManagerView({ transfers, onCancelTransfer, onRetryTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void; onRetryTransfer: (transfer: SshTransferEvent) => void }) {
@@ -4075,6 +4244,11 @@ function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, 
   const [busy, setBusy] = useState(false);
   const portableReady = portableVaultStatus?.enabled && portableVaultStatus.unlocked;
 
+  const close = () => {
+    setSecret("");
+    onClose();
+  };
+
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!credentialId.trim() || !secret) return;
@@ -4101,15 +4275,15 @@ function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, 
     }
   };
 
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><form className="credential-modal" role="dialog" aria-modal="true" aria-label="Credential vault" onMouseDown={(event) => event.stopPropagation()} onSubmit={save}>
-    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference. Secrets stay inside Rust and are never listed or returned to React.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={onClose}><X size={17} /></button></div>
+  return <div className="palette-backdrop" role="presentation" onMouseDown={close}><form className="credential-modal" role="dialog" aria-modal="true" aria-label="Credential vault" onMouseDown={(event) => event.stopPropagation()} onSubmit={save}>
+    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference. Secrets stay inside Rust and are never listed or returned to React.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={close}><X size={17} /></button></div>
     <div className="credential-modal-body">
       <label>Credential reference<input required autoFocus value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" autoComplete="off" /><small>Letters, numbers, dots, dashes, and underscores only.</small></label>
       <label>Secret<input required type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Enter only for this explicit save" autoComplete="new-password" /><small>The field is cleared after the native operation. It is not persisted in app state.</small></label>
       <label>Storage backend<select value={backend} onChange={(event) => setBackend(event.target.value as VaultBackend)}><option value="platform">Platform secure store</option><option value="portable" disabled={!portableReady}>Encrypted portable vault{portableReady ? "" : " (unlock in Settings)"}</option></select></label>
     </div>
     <div className="credential-modal-note"><KeyRound size={14} /><span>{backend === "portable" ? "Encrypted portable storage uses the explicit unlock passphrase and is kept separate from the platform keyring." : "Uses macOS Keychain, Windows Credential Manager, or Linux Secret Service through Rust."} No vault operation runs until you confirm.</span></div>
-    <div className="session-editor-footer"><button type="button" className="outline-button danger-button" onClick={() => void remove()} disabled={busy || !credentialId.trim() || (backend === "portable" && !portableReady)}><Trash2 size={14} /> Delete reference</button><div><button type="button" className="outline-button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !credentialId.trim() || !secret || (backend === "portable" && !portableReady)}>{busy ? "Saving…" : "Save secret"}</button></div></div>
+    <div className="session-editor-footer"><button type="button" className="outline-button danger-button" onClick={() => void remove()} disabled={busy || !credentialId.trim() || (backend === "portable" && !portableReady)}><Trash2 size={14} /> Delete reference</button><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Cancel</button><button type="submit" className="primary-button" disabled={busy || !credentialId.trim() || !secret || (backend === "portable" && !portableReady)}>{busy ? "Saving…" : "Save secret"}</button></div></div>
   </form></div>;
 }
 
@@ -4285,9 +4459,12 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [tags, setTags] = useState(session.tags.join(", "));
   const [startupDirectory, setStartupDirectory] = useState(session.startup_directory ?? "");
   const [startupCommand, setStartupCommand] = useState(session.startup_command ?? "");
+  const [environmentText, setEnvironmentText] = useState(formatSessionEnvironment(session.environment ?? []));
   const [notes, setNotes] = useState(session.notes ?? "");
   const [favorite, setFavorite] = useState(session.favorite);
   const isSsh = session.protocol === "SSH";
+  const isLocal = session.protocol === "LOCAL";
+  const supportsStartup = isSsh || isLocal;
   const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
     session.auth.kind === "none" ? "agent" : session.auth.kind,
   );
@@ -4304,8 +4481,17 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
     event.preventDefault();
     const normalizedTags = [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))];
     let auth = session.auth;
-    if (isSsh) {
+    let environment = session.environment ?? [];
+    if (supportsStartup) {
       setAuthError(null);
+      try {
+        environment = parseSessionEnvironment(environmentText);
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : "The session environment is invalid.");
+        return;
+      }
+    }
+    if (isSsh) {
       const parsedServerAliveInterval = Number(serverAliveInterval);
       if (!Number.isInteger(parsedServerAliveInterval) || parsedServerAliveInterval < 0 || parsedServerAliveInterval > MAX_SERVER_ALIVE_INTERVAL_SECONDS) {
         setAuthError(`ServerAliveInterval must be between 0 and ${MAX_SERVER_ALIVE_INTERVAL_SECONDS} seconds.`);
@@ -4334,9 +4520,9 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       tags: normalizedTags,
       favorite,
       startup_directory: startupDirectory.trim() || null,
-      startup_command: startupCommand.trim() || null,
+      startup_command: supportsStartup ? startupCommand.trim() || null : session.startup_command,
       notes: notes.trim() || null,
-      environment: session.environment ?? [],
+      environment,
       auth,
       server_alive_interval: isSsh && Number(serverAliveInterval) === 0 ? null : isSsh ? Number(serverAliveInterval) : session.server_alive_interval ?? null,
     });
@@ -4386,6 +4572,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
           <label>
             Startup command <span className="optional">optional</span>
             <input value={startupCommand} onChange={(event) => setStartupCommand(event.target.value)} placeholder="htop" />
+            <small>Runs after this saved SSH or local shell opens, with an explicit confirmation. Use snippets for commands that need manual review.</small>
           </label>
           <label className="quick-connect-wide">
             Notes <span className="optional">optional</span>
@@ -4400,6 +4587,11 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
               ServerAliveInterval <span className="optional">optional · seconds</span>
               <input type="number" min="0" max={MAX_SERVER_ALIVE_INTERVAL_SECONDS} step="1" value={serverAliveInterval} onChange={(event) => setServerAliveInterval(event.target.value)} />
               <small>0 disables SSH keepalives. The bounded value is applied by the native SSH transport.</small>
+            </label>
+            <label className="quick-connect-wide">
+              Remote environment <span className="optional">optional · NAME=value per line</span>
+              <textarea value={environmentText} onChange={(event) => setEnvironmentText(event.target.value)} placeholder={'TERM=xterm-256color\nLANG=C.UTF-8'} rows={4} />
+              <small>Applied only to this SSH shell. These values are session configuration, not vault secrets; do not put passwords or tokens here.</small>
             </label>
             <label className="quick-connect-wide">
               Method
@@ -4449,6 +4641,11 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   const [portablePassphrase, setPortablePassphrase] = useState("");
   const [portableBusy, setPortableBusy] = useState(false);
 
+  const close = () => {
+    setPortablePassphrase("");
+    onClose();
+  };
+
   const runPortableAction = async (action: (passphrase: string) => Promise<void>) => {
     if (!portablePassphrase) return;
     setPortableBusy(true);
@@ -4473,7 +4670,7 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   };
 
   return (
-    <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="palette-backdrop" role="presentation" onMouseDown={close}>
       <form className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()} onSubmit={submit}>
         <div className="session-editor-heading">
           <div>
@@ -4481,7 +4678,7 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
             <h2>Workspace settings</h2>
             <p>Typed, validated preferences. Secrets and credential material are not stored here.</p>
           </div>
-          <button type="button" className="icon-button" aria-label="Close settings" onClick={onClose}><X size={17} /></button>
+          <button type="button" className="icon-button" aria-label="Close settings" onClick={close}><X size={17} /></button>
         </div>
 
         <div className="settings-section">
@@ -4543,68 +4740,17 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
 
         <div className="session-editor-footer">
           <div className="settings-footer-left"><button type="button" className="outline-button" onClick={onReset}>Reset defaults</button><button type="button" className="outline-button" onClick={() => void onImport()}>Import settings</button><button type="button" className="outline-button" onClick={() => void onExport()}>Export settings</button></div>
-          <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save settings</button></div>
+          <div><button type="button" className="outline-button" onClick={close}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save settings</button></div>
         </div>
       </form>
     </div>
   );
 }
 
-type QuickConnectUriProtocol = "ssh" | "telnet" | "rdp" | "vnc";
-
-type QuickConnectUri = {
-  protocol: QuickConnectUriProtocol;
-  host: string;
-  port: number;
-  username: string;
-};
-
-function containsControlCharacter(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || code === 0x7f;
-  });
-}
-
-function parseQuickConnectUri(value: string): QuickConnectUri {
-  const input = value.trim();
-  if (!input) throw new Error("Enter an SSH, Telnet, RDP, or VNC URI.");
-  let parsed: URL;
-  try {
-    parsed = new URL(input);
-  } catch {
-    throw new Error("The URI format is invalid.");
-  }
-  const protocol = parsed.protocol.slice(0, -1) as QuickConnectUriProtocol;
-  if (!["ssh", "telnet", "rdp", "vnc"].includes(protocol)) {
-    throw new Error("Only ssh://, telnet://, rdp://, and vnc:// URIs are supported.");
-  }
-  if (parsed.password) {
-    throw new Error("Passwords in URIs are not accepted. Use a native vault reference.");
-  }
-  if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
-    throw new Error("URI paths and query options are not accepted in Quick Connect.");
-  }
-  let username = "";
-  try {
-    username = decodeURIComponent(parsed.username);
-  } catch {
-    throw new Error("The URI username encoding is invalid.");
-  }
-  const host = parsed.hostname.trim();
-  if (!host || containsControlCharacter(host) || containsControlCharacter(username)) {
-    throw new Error("The URI host or username is invalid.");
-  }
-  const port = parsed.port ? Number(parsed.port) : ({ ssh: 22, telnet: 23, rdp: 3389, vnc: 5900 }[protocol] ?? 0);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("The URI port must be between 1 and 65535.");
-  }
-  return { protocol, host, port, username };
-}
-
 function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onConnectSerial, onConnectRemoteDesktop }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void; onConnectSerial: (request: SerialConnectRequest) => void; onConnectRemoteDesktop: (request: RemoteDesktopConnectRequest) => void }) {
   const [uri, setUri] = useState("");
   const [uriError, setUriError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
@@ -4617,12 +4763,14 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopWidth, setDesktopWidth] = useState("1280");
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
+  const [vncQuality, setVncQuality] = useState<RemoteDesktopConnectRequest["vncQuality"]>("balanced");
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
   const [x11Enabled, setX11Enabled] = useState(false);
   const [x11Display, setX11Display] = useState("");
   const [x11SingleConnection, setX11SingleConnection] = useState(false);
   const [serverAliveInterval, setServerAliveInterval] = useState("0");
+  const [environmentText, setEnvironmentText] = useState("");
   const [jumpHost, setJumpHost] = useState("");
   const [jumpPort, setJumpPort] = useState("22");
   const [jumpUsername, setJumpUsername] = useState("");
@@ -4652,6 +4800,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       setPassphraseCredentialId("");
       setDomain("");
       setUriError(null);
+      setValidationError(null);
     } catch (parseError) {
       setUri("");
       setUriError(parseError instanceof Error ? parseError.message : "The URI could not be applied.");
@@ -4676,6 +4825,12 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const targetError = experimentalDesktopTargetError(protocol, host);
+    if (targetError) {
+      setValidationError(targetError);
+      return;
+    }
+    setValidationError(null);
     if (protocol === "telnet") {
       onConnectTelnet({
         host: host.trim(),
@@ -4711,6 +4866,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         height: Number(desktopHeight),
         colorDepth: Number(desktopColorDepth),
         audioEnabled: false,
+        vncQuality,
       });
       return;
     }
@@ -4727,6 +4883,13 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       setUriError(`ServerAliveInterval must be between 0 and ${MAX_SERVER_ALIVE_INTERVAL_SECONDS} seconds.`);
       return;
     }
+    let environment: Array<[string, string]>;
+    try {
+      environment = parseSessionEnvironment(environmentText);
+    } catch (parseError) {
+      setValidationError(parseError instanceof Error ? parseError.message : "The session environment is invalid.");
+      return;
+    }
     const jumpHosts = jumpHost.trim() && Number.isInteger(parsedJumpPort) && parsedJumpPort > 0 && parsedJumpPort <= 65535
       ? [{ host: jumpHost.trim(), port: parsedJumpPort, username: jumpUsername.trim() || username.trim(), auth: { method: "agent" as const } }]
       : undefined;
@@ -4739,6 +4902,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       pinnedFingerprint: pinnedFingerprint.trim() || undefined,
       x11: x11Enabled ? { display: x11Display.trim(), singleConnection: x11SingleConnection } : undefined,
       serverAliveInterval: parsedServerAliveInterval,
+      environment,
       jumpHosts,
       cols: 120,
       rows: 32,
@@ -4792,6 +4956,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                 const next = event.target.value as "ssh" | "telnet" | "serial" | DesktopProtocol;
                 setProtocol(next);
                 setPort(next === "ssh" ? "22" : next === "telnet" ? "23" : next === "rdp" ? "3389" : next === "vnc" ? "5900" : "0");
+                setValidationError(null);
               }}
             >
               <option value="ssh">SSH</option>
@@ -4862,6 +5027,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
               <label>
                 Host
                 <input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" />
+                {(protocol === "rdp" || protocol === "vnc") && <small>Experimental local fixture only: use 127.0.0.1 or ::1. Real hosts are blocked until transport security is validated.</small>}
               </label>
               <label>
                 Port
@@ -4938,6 +5104,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <input type="number" min="0" max={MAX_SERVER_ALIVE_INTERVAL_SECONDS} step="1" value={serverAliveInterval} onChange={(event) => setServerAliveInterval(event.target.value)} />
                     <small>0 disables SSH keepalives. The value is applied inside the native SSH layer.</small>
                   </label>
+                  <label className="quick-connect-wide">
+                    Remote environment <span className="optional">optional · NAME=value per line</span>
+                    <textarea value={environmentText} onChange={(event) => setEnvironmentText(event.target.value)} placeholder={'TERM=xterm-256color\nLANG=C.UTF-8'} rows={4} />
+                    <small>Applied only to this SSH shell. These values are session configuration, not vault secrets; do not put passwords or tokens here.</small>
+                  </label>
                   <label className="quick-connect-wide quick-connect-check-row">
                     <input type="checkbox" checked={x11Enabled} onChange={(event) => setX11Enabled(event.target.checked)} />
                     <span>Enable SSH X11 forwarding <small>opt-in · external X server</small></span>
@@ -4979,10 +5150,14 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     Height
                     <input required inputMode="numeric" pattern="[0-9]+" value={desktopHeight} onChange={(event) => setDesktopHeight(event.target.value)} />
                   </label>
-                  <label>
+                  {protocol === "rdp" ? <label>
                     Color depth
                     <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="24">24-bit</option><option value="32">32-bit</option></select>
-                  </label>
+                  </label> : <label>
+                    Quality
+                    <select value={vncQuality} onChange={(event) => setVncQuality(event.target.value as RemoteDesktopConnectRequest["vncQuality"])}><option value="balanced">Balanced</option><option value="low-latency">Low latency</option><option value="low-bandwidth">Low bandwidth</option></select>
+                    <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
+                  </label>}
                   {protocol === "rdp" && <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>Audio redirection is not enabled in the current helper yet; the connection will use video and input only.</span></div>}
                   <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; trust-store/pinning policy and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
                 </>
@@ -5004,6 +5179,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
             </>
           )}
         </div>
+
+        {validationError && <div className="connect-error" role="alert"><strong>Connection blocked</strong><span>{validationError}</span></div>}
 
         {error && (
           <div className="connect-error" role="alert">

@@ -17,8 +17,12 @@ pub use r#macro::{
     MacroApprovalPolicy, MacroKey, MacroRecord, MacroValidationError,
 };
 pub use session::{
-    AuthMethod, JumpHostRecord, MAX_SERVER_ALIVE_INTERVAL_SECONDS, Protocol, RemoteDesktopProfile,
-    SerialProfile, SessionId, SessionRecord, SessionValidationError, TelnetProfile,
+    AuthMethod, DEFAULT_VNC_QUALITY, JumpHostRecord, MAX_SERVER_ALIVE_INTERVAL_SECONDS,
+    MAX_SESSION_ENVIRONMENT_ENTRIES, MAX_SESSION_ENVIRONMENT_NAME_BYTES,
+    MAX_SESSION_ENVIRONMENT_TOTAL_BYTES, MAX_SESSION_ENVIRONMENT_VALUE_BYTES,
+    MAX_SESSION_STARTUP_COMMAND_BYTES, MAX_SESSION_STARTUP_DIRECTORY_BYTES, Protocol,
+    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord, SessionValidationError,
+    TelnetProfile, validate_session_environment, validate_session_startup,
 };
 pub use settings::{
     AppSettings, AppearanceSettings, GeneralSettings, KeyboardSettings, NetworkSettings,

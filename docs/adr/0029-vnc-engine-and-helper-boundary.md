@@ -32,6 +32,7 @@ evidence exist.
 - keyboard and pointer control;
 - authentication without secrets in arguments, environment, logs, or React;
 - capability-aware clipboard and resize behavior;
+- bounded client-side quality policies with explicit encoding preferences;
 - bounded cancellation, reconnect, and helper crash handling;
 - Windows, Linux, and macOS packaging/interoperability evidence;
 - dependency and license review.
@@ -46,6 +47,18 @@ Its dependency audit is clean. The pinned
 `vnc-rs 0.5.3` callback API still creates an owned password `String`; the
 helper zeroizes its source copy but this API limitation remains a promotion
 gate until an audited alternative is selected.
+
+The helper also accepts only three bounded quality policies. They change the
+requested supported VNC encoding order and refresh cadence, while the renderer
+continues to receive a normalized RGBA framebuffer. Tight/JPEG is not
+requested until JPEG rectangle rendering is implemented. The policy is
+persisted as session metadata with a compatibility default for older profiles;
+it does not expose a secret or alter the server-side display mode.
+
+The candidate is currently restricted to local fixtures: both the helper and
+the Tauri parent accept only literal loopback IP targets (`127.0.0.1` or `::1`)
+and reject hostnames and other addresses before opening a socket. This fail-
+closed rule remains until an audited transport-security strategy is selected.
 
 Until those checks pass, MobaRust must not advertise VNC as implemented. A
 mock, screenshot, static framebuffer, or external viewer launch alone is not

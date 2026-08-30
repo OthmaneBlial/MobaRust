@@ -40,6 +40,54 @@ use telnet::{TelnetConnectRequest, TelnetManager};
 use terminal::TerminalManager;
 use zeroize::Zeroizing;
 
+const MAX_NATIVE_PICKER_PATHS: usize = 16;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LocalPickerKind {
+    Files,
+    Directory,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LocalDownloadPickerKind {
+    File,
+    Directory,
+}
+
+fn native_picker_paths(paths: Vec<PathBuf>) -> Result<Vec<String>, String> {
+    paths
+        .into_iter()
+        .take(MAX_NATIVE_PICKER_PATHS)
+        .map(|path| {
+            path.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "selected path cannot be represented safely".to_owned())
+        })
+        .collect()
+}
+
+fn native_picker_file_name(suggested_name: &str) -> String {
+    let candidate = suggested_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    let filtered: String = candidate
+        .chars()
+        .filter(|character| {
+            !character.is_control()
+                && !matches!(*character, ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+        .take(128)
+        .collect();
+    if filtered.is_empty() || filtered == "." || filtered == ".." {
+        "download.bin".to_owned()
+    } else {
+        filtered
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSnapshot {
@@ -49,7 +97,7 @@ struct AppSnapshot {
     local_terminal_available: bool,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveSshSessionRequest {
     name: String,
@@ -761,6 +809,9 @@ fn session_save_ssh(
         jump_hosts,
         x11,
         server_alive_interval,
+        environment,
+        startup_directory,
+        startup_command,
         ..
     } = request;
     let auth = match request_auth {
@@ -803,9 +854,9 @@ fn session_save_ssh(
         folder: Some("Remote sessions".into()),
         tags: Vec::new(),
         favorite: false,
-        startup_directory: None,
-        startup_command: None,
-        environment: Vec::new(),
+        startup_directory,
+        startup_command,
+        environment,
         jump_hosts: jump_hosts.iter().map(|jump| jump.host.clone()).collect(),
         jump_host_profiles: jump_hosts
             .into_iter()
@@ -1025,6 +1076,7 @@ fn session_save_remote_desktop(
             height: request.height,
             color_depth: request.color_depth,
             audio_enabled: request.audio_enabled,
+            vnc_quality: request.vnc_quality,
         }),
     };
     store
@@ -1339,6 +1391,53 @@ async fn ssh_upload(
         .map_err(|error| error.to_string())
 }
 
+/// Open an OS destination picker only after an explicit download action.
+///
+/// The selected path is returned as metadata only. The transfer manager owns
+/// all local file creation, temporary files, overwrite policy, and cleanup.
+#[tauri::command]
+fn local_pick_download_path(
+    kind: LocalDownloadPickerKind,
+    suggested_name: String,
+) -> Result<Option<String>, String> {
+    let path = match kind {
+        LocalDownloadPickerKind::File => rfd::FileDialog::new()
+            .set_title("Choose a local download destination")
+            .set_file_name(native_picker_file_name(&suggested_name))
+            .save_file(),
+        LocalDownloadPickerKind::Directory => rfd::FileDialog::new()
+            .set_title("Choose a local folder for the download")
+            .pick_folder(),
+    };
+    path.map(|path| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "selected path cannot be represented safely".to_owned())
+    })
+    .transpose()
+}
+
+/// Open an OS file picker only after an explicit upload action in the UI.
+///
+/// This command returns selected path metadata only. It does not read file
+/// contents; the native transfer manager opens the selected source later and
+/// streams it with its existing validation and cancellation rules.
+#[tauri::command]
+fn local_pick_upload_paths(kind: LocalPickerKind) -> Result<Vec<String>, String> {
+    let paths = match kind {
+        LocalPickerKind::Files => rfd::FileDialog::new()
+            .set_title("Select local files to upload")
+            .pick_files()
+            .unwrap_or_default(),
+        LocalPickerKind::Directory => rfd::FileDialog::new()
+            .set_title("Select a local folder to upload")
+            .pick_folder()
+            .into_iter()
+            .collect(),
+    };
+    native_picker_paths(paths)
+}
+
 #[tauri::command]
 fn ssh_cancel_transfer(
     manager: State<'_, SshManager>,
@@ -1535,7 +1634,7 @@ fn terminal_spawn(
     target: terminal::LocalTerminalTarget,
 ) -> Result<String, String> {
     let target_kind = match &target {
-        terminal::LocalTerminalTarget::Default => "default",
+        terminal::LocalTerminalTarget::Default { .. } => "default",
         terminal::LocalTerminalTarget::Wsl { .. } => "wsl",
     };
     tracing::debug!(
@@ -1734,6 +1833,8 @@ fn main() {
             ssh_set_remote_permissions,
             ssh_download,
             ssh_upload,
+            local_pick_upload_paths,
+            local_pick_download_path,
             ssh_cancel_transfer,
             ssh_start_local_forward,
             ssh_start_dynamic_forward,
@@ -1763,9 +1864,42 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::portable_data_dir_for;
+    use super::{
+        MAX_NATIVE_PICKER_PATHS, native_picker_file_name, native_picker_paths,
+        portable_data_dir_for,
+    };
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn native_picker_paths_are_bounded_without_opening_the_selected_paths() {
+        let selected = (0..MAX_NATIVE_PICKER_PATHS + 4)
+            .map(|index| PathBuf::from(format!("/tmp/mobarust-picker-{index}")))
+            .collect();
+
+        let paths = native_picker_paths(selected).expect("fixture paths are UTF-8");
+
+        assert_eq!(paths.len(), MAX_NATIVE_PICKER_PATHS);
+        assert_eq!(
+            paths.first().map(String::as_str),
+            Some("/tmp/mobarust-picker-0")
+        );
+        assert_eq!(
+            paths.last().map(String::as_str),
+            Some("/tmp/mobarust-picker-15")
+        );
+    }
+
+    #[test]
+    fn native_picker_suggested_name_is_a_bounded_filename_hint_only() {
+        assert_eq!(
+            native_picker_file_name("../../remote:name?.txt"),
+            "remotename.txt"
+        );
+        assert_eq!(native_picker_file_name("\n\0"), "download.bin");
+        assert!(native_picker_file_name(&"x".repeat(256)).len() <= 128);
+    }
 
     #[test]
     fn portable_mode_requires_a_regular_marker_beside_the_executable() {

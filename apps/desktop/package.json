@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --noEmit",
     "lint": "eslint . --max-warnings 0",
+    "test:unit": "node --experimental-strip-types test/remote-editor-security.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

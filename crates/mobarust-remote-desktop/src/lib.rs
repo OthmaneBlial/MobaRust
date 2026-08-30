@@ -67,6 +67,8 @@ pub struct HelperLaunchConfig {
     pub display: DisplaySize,
     pub color_depth: u16,
     pub audio_enabled: bool,
+    /// VNC encoding/refresh profile. Ignored by RDP helpers.
+    pub vnc_quality: String,
     /// Opaque vault identifier. The secret value is never part of this type.
     pub credential_ref: String,
 }
@@ -84,6 +86,7 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("display", &self.display)
             .field("color_depth", &self.color_depth)
             .field("audio_enabled", &self.audio_enabled)
+            .field("vnc_quality", &self.vnc_quality)
             .field("credential_ref", &"<opaque-reference>")
             .finish()
     }
@@ -153,6 +156,14 @@ impl HelperLaunchConfig {
         if self.color_depth == 0 {
             return Err(HelperProtocolError::InvalidColorDepth);
         }
+        if self.protocol == DesktopProtocol::Vnc
+            && !matches!(
+                self.vnc_quality.as_str(),
+                "balanced" | "low-latency" | "low-bandwidth"
+            )
+        {
+            return Err(HelperProtocolError::InvalidVncQuality);
+        }
         self.display.validate()
     }
 
@@ -170,17 +181,20 @@ impl HelperLaunchConfig {
             self.display.width.to_string(),
             "--height".into(),
             self.display.height.to_string(),
-            "--color-depth".into(),
-            self.color_depth.to_string(),
         ];
         if !self.username.trim().is_empty() {
             arguments.extend(["--username".into(), self.username.clone()]);
         }
-        if let Some(domain) = self.domain.as_deref().filter(|value| !value.is_empty()) {
-            arguments.extend(["--domain".into(), domain.into()]);
-        }
-        if self.audio_enabled {
-            arguments.push("--audio".into());
+        if self.protocol == DesktopProtocol::Rdp {
+            arguments.extend(["--color-depth".into(), self.color_depth.to_string()]);
+            if let Some(domain) = self.domain.as_deref().filter(|value| !value.is_empty()) {
+                arguments.extend(["--domain".into(), domain.into()]);
+            }
+            if self.audio_enabled {
+                arguments.push("--audio".into());
+            }
+        } else {
+            arguments.extend(["--quality".into(), self.vnc_quality.clone()]);
         }
         arguments
     }
@@ -497,6 +511,8 @@ pub enum HelperProtocolError {
     EmptyCredentialReference,
     #[error("helper color depth must be non-zero")]
     InvalidColorDepth,
+    #[error("helper VNC quality is invalid")]
+    InvalidVncQuality,
     #[error("invalid display size {width}x{height}")]
     InvalidDisplaySize { width: u16, height: u16 },
     #[error("clipboard payload is too large: {bytes} bytes")]
@@ -851,6 +867,7 @@ mod tests {
             },
             color_depth: 32,
             audio_enabled: false,
+            vnc_quality: "balanced".into(),
             credential_ref: "credential:test-only".into(),
         }
     }
@@ -902,6 +919,36 @@ mod tests {
         let arguments = config.process_arguments();
         assert!(!arguments.contains(&"--username".into()));
         assert!(!arguments.contains(&"credential:test-only".into()));
+    }
+
+    #[test]
+    fn vnc_arguments_exclude_rdp_only_options() {
+        let mut config = launch_config();
+        config.protocol = DesktopProtocol::Vnc;
+        config.domain = Some("SHOULD-NOT-CROSS-PROTOCOLS".into());
+        config.audio_enabled = true;
+
+        let arguments = config.process_arguments();
+        assert!(!arguments.contains(&"--color-depth".into()));
+        assert!(!arguments.contains(&"--domain".into()));
+        assert!(!arguments.contains(&"--audio".into()));
+        assert!(arguments.contains(&"--quality".into()));
+        let quality_index = arguments
+            .iter()
+            .position(|argument| argument == "--quality")
+            .unwrap();
+        assert_eq!(arguments[quality_index + 1], "balanced");
+    }
+
+    #[test]
+    fn vnc_quality_is_validated_before_process_start() {
+        let mut config = launch_config();
+        config.protocol = DesktopProtocol::Vnc;
+        config.vnc_quality = "unbounded".into();
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::InvalidVncQuality)
+        );
     }
 
     #[test]

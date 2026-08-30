@@ -395,6 +395,13 @@ pub struct SshConnectOptions {
     pub keepalive_interval: Option<Duration>,
     pub credentials: SshCredentials,
     pub x11: Option<X11ForwardingOptions>,
+    /// Explicit environment requests applied to the target session shell.
+    /// Values are never included in Debug output or logs.
+    pub environment: Vec<(String, String)>,
+    /// Optional explicit shell startup configuration. Values are never
+    /// included in Debug output or logs.
+    pub startup_directory: Option<String>,
+    pub startup_command: Option<String>,
 }
 
 /// A complete SSH connection description for one hop in a jump chain. The
@@ -429,6 +436,15 @@ impl fmt::Debug for SshConnectOptions {
             .field("keepalive_interval", &self.keepalive_interval)
             .field("credentials", &self.credentials)
             .field("x11", &self.x11.as_ref().map(|_| "enabled"))
+            .field("environment_count", &self.environment.len())
+            .field(
+                "startup_directory_configured",
+                &self.startup_directory.is_some(),
+            )
+            .field(
+                "startup_command_configured",
+                &self.startup_command.is_some(),
+            )
             .finish()
     }
 }
@@ -543,6 +559,9 @@ pub struct SshConnection {
     forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
     x11_channels: AsyncMutex<mpsc::UnboundedReceiver<SshX11Channel>>,
     x11: Option<X11ForwardingOptions>,
+    environment: Vec<(String, String)>,
+    startup_directory: Option<String>,
+    startup_command: Option<String>,
 }
 
 /// Performs a one-shot SSH handshake to observe the server host key, then
@@ -586,6 +605,7 @@ pub async fn inspect_host_key(
 }
 
 const REMOTE_MONITOR_OUTPUT_LIMIT: usize = 64 * 1024;
+const REMOTE_MONITOR_TEXT_LIMIT: usize = 256;
 const REMOTE_MONITOR_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// A best-effort, one-shot snapshot collected with a fixed command. Missing
@@ -866,6 +886,9 @@ impl SshConnection {
         x11_channels: mpsc::UnboundedReceiver<SshX11Channel>,
     ) -> Result<Self, SshError> {
         let x11 = options.x11.clone();
+        let environment = options.environment.clone();
+        let startup_directory = options.startup_directory.clone();
+        let startup_command = options.startup_command.clone();
         let authentication = tokio::time::timeout(
             options.timeout,
             authenticate(&mut handle, options.credentials),
@@ -894,6 +917,9 @@ impl SshConnection {
             forwarded_channels: AsyncMutex::new(forwarded_channels),
             x11_channels: AsyncMutex::new(x11_channels),
             x11,
+            environment,
+            startup_directory,
+            startup_command,
         })
     }
 
@@ -931,11 +957,24 @@ impl SshConnection {
                     .await
                     .map_err(SshError::Channel)?;
             }
+            for (name, value) in &self.environment {
+                channel
+                    .set_env(false, name.clone(), value.clone())
+                    .await
+                    .map_err(SshError::Channel)?;
+            }
             channel
                 .request_shell(true)
                 .await
                 .map_err(SshError::Channel)?;
-            Ok(SshShell { channel })
+            let shell = SshShell { channel };
+            if let Some(startup) = build_startup_input(
+                self.startup_directory.as_deref(),
+                self.startup_command.as_deref(),
+            ) {
+                shell.write(&startup).await?;
+            }
+            Ok(shell)
         })
         .await
         .map_err(|_| SshError::Timeout)?
@@ -1491,10 +1530,51 @@ fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
         || options
             .keepalive_interval
             .is_some_and(|interval| interval.is_zero() || interval > Duration::from_secs(86_400))
+        || mobarust_core::validate_session_environment(&options.environment).is_err()
+        || mobarust_core::validate_session_startup(
+            options.startup_directory.as_deref(),
+            options.startup_command.as_deref(),
+        )
+        .is_err()
     {
         return Err(SshError::InvalidOptions);
     }
     Ok(())
+}
+
+fn build_startup_input(
+    startup_directory: Option<&str>,
+    startup_command: Option<&str>,
+) -> Option<Vec<u8>> {
+    if startup_directory.is_none() && startup_command.is_none() {
+        return None;
+    }
+
+    let mut input = Vec::new();
+    if let Some(directory) = startup_directory {
+        input.extend_from_slice(b"cd -- ");
+        input.push(b'\'');
+        for byte in directory.bytes() {
+            if byte == b'\'' {
+                input.extend_from_slice(b"'\"'\"'");
+            } else {
+                input.push(byte);
+            }
+        }
+        input.push(b'\'');
+        if startup_command.is_some() {
+            input.extend_from_slice(b" && ");
+        } else {
+            input.push(b'\n');
+        }
+    }
+    if let Some(command) = startup_command {
+        input.extend_from_slice(command.as_bytes());
+        if !command.ends_with('\n') && !command.ends_with('\r') {
+            input.push(b'\n');
+        }
+    }
+    Some(input)
 }
 
 fn validate_fingerprint_options(options: &SshFingerprintOptions) -> Result<(), SshError> {
@@ -2056,6 +2136,24 @@ impl SftpConnection {
             }
         }
 
+        // The file may have changed while the complete temporary copy was
+        // being written. Recheck immediately before moving the original so a
+        // slow editor save cannot overwrite a concurrent remote update.
+        let latest = match self
+            .read_text_document_with_encoding(path.clone(), encoding)
+            .await
+        {
+            Ok(document) => document,
+            Err(error) => {
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(error);
+            }
+        };
+        if latest.revision != current.revision {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(SshError::RemoteConflict);
+        }
+
         // Some SFTP servers reject rename-over-existing. Move the original to
         // a unique rollback name first, then promote the complete temporary
         // file. If promotion fails, restore the original before returning.
@@ -2097,7 +2195,7 @@ impl SftpConnection {
             return Err(SshError::RemoteFileTooLarge);
         }
         let path = path.into();
-        let existing = if self.try_exists(path.clone()).await? {
+        let mut existing = if self.try_exists(path.clone()).await? {
             Some(
                 self.read_text_document_with_encoding(path.clone(), encoding)
                     .await?,
@@ -2130,6 +2228,35 @@ impl SftpConnection {
             return Err(error);
         }
 
+        // A target can appear after the initial existence check while the
+        // temporary upload is in progress. Re-evaluate that state before
+        // choosing the no-backup promotion path.
+        if existing.is_none() {
+            let appeared = match self.try_exists(path.clone()).await {
+                Ok(appeared) => appeared,
+                Err(error) => {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(error);
+                }
+            };
+            if appeared {
+                if !overwrite {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(SshError::RemoteTargetExists);
+                }
+                existing = match self
+                    .read_text_document_with_encoding(path.clone(), encoding)
+                    .await
+                {
+                    Ok(document) => Some(document),
+                    Err(error) => {
+                        let _ = self.session.remove_file(&temporary).await;
+                        return Err(error);
+                    }
+                };
+            }
+        }
+
         if let Some(document) = &existing {
             if let Some(permissions) = document.permissions {
                 let mut metadata = russh_sftp::client::fs::Metadata::empty();
@@ -2151,6 +2278,24 @@ impl SftpConnection {
                     let _ = self.session.remove_file(&temporary).await;
                     return Err(error);
                 }
+            }
+
+            let latest = match self
+                .read_text_document_with_encoding(path.clone(), encoding)
+                .await
+            {
+                Ok(document) => document,
+                Err(error) => {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(error);
+                }
+            };
+            if existing
+                .as_ref()
+                .is_some_and(|document| latest.revision != document.revision)
+            {
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(SshError::RemoteConflict);
             }
 
             let backup = format!(
@@ -2479,8 +2624,8 @@ fn parse_remote_monitor_snapshot(stdout: &[u8]) -> Result<RemoteMonitorSnapshot,
             continue;
         }
         match key {
-            "hostname" => hostname = Some(value.to_owned()),
-            "kernel" => kernel = Some(value.to_owned()),
+            "hostname" => hostname = bounded_monitor_text(value),
+            "kernel" => kernel = bounded_monitor_text(value),
             "uptime_seconds" => uptime_seconds = value.parse().ok(),
             "load" => {
                 let values = value
@@ -2558,6 +2703,10 @@ fn parse_remote_monitor_snapshot(stdout: &[u8]) -> Result<RemoteMonitorSnapshot,
     })
 }
 
+fn bounded_monitor_text(value: &str) -> Option<String> {
+    (value.len() <= REMOTE_MONITOR_TEXT_LIMIT).then(|| value.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2596,6 +2745,9 @@ mod tests {
             keepalive_interval: Some(Duration::from_secs(30)),
             credentials: SshCredentials::agent("fixture-user"),
             x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
         };
 
         let parts = connection_parts(&options);
@@ -2631,6 +2783,34 @@ mod tests {
         let debug = format!("{credentials:?}");
         assert!(debug.contains("ops"));
         assert!(!debug.contains("do-not-print-me"));
+    }
+
+    #[test]
+    fn connect_options_debug_redacts_environment_values() {
+        let options = SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 22,
+            host_key_policy: HostKeyPolicy::RejectUnknown,
+            timeout: Duration::from_secs(12),
+            keepalive_interval: None,
+            credentials: SshCredentials::agent("fixture-user"),
+            x11: None,
+            environment: vec![("MOBARUST_FIXTURE".into(), "do-not-print-me".into())],
+            startup_directory: Some("/srv/fixture-secret".into()),
+            startup_command: Some("printf startup-secret".into()),
+        };
+        let debug = format!("{options:?}");
+        assert!(debug.contains("environment_count: 1"));
+        assert!(!debug.contains("do-not-print-me"));
+        assert!(debug.contains("startup_directory_configured: true"));
+        assert!(!debug.contains("startup-secret"));
+    }
+
+    #[test]
+    fn startup_input_quotes_directory_and_requires_no_shell_discovery() {
+        let input = build_startup_input(Some("/srv/O'Reilly"), Some("printf ready")).unwrap();
+        assert_eq!(input, b"cd -- '/srv/O'\"'\"'Reilly' && printf ready\n");
+        assert_eq!(build_startup_input(None, None), None);
     }
 
     #[test]
@@ -2928,6 +3108,18 @@ mod tests {
             parse_remote_monitor_snapshot(b"__MOBARUST__load=not-a-number\n"),
             Err(SshError::RemoteMonitorUnsupported)
         ));
+    }
+
+    #[test]
+    fn remote_monitor_parser_bounds_untrusted_identity_text() {
+        let oversized_hostname = "h".repeat(REMOTE_MONITOR_TEXT_LIMIT + 1);
+        let input =
+            format!("__MOBARUST__hostname={oversized_hostname}\n__MOBARUST__kernel=fixture\n");
+        let snapshot = parse_remote_monitor_snapshot(input.as_bytes()).unwrap();
+
+        assert_eq!(snapshot.hostname, None);
+        assert_eq!(snapshot.kernel.as_deref(), Some("fixture"));
+        assert!(snapshot.supported_metrics.contains(&"kernel".to_owned()));
     }
 
     fn accepted_fingerprint(policy: &HostKeyPolicy, fingerprint: &str) -> Option<bool> {

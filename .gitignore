@@ -3,6 +3,8 @@ base/
 
 # Rust
 target/
+fuzz/artifacts/
+fuzz/corpus/
 # Frontend
 node_modules/
 dist/

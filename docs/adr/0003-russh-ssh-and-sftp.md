@@ -8,6 +8,20 @@ Accepted for the SSH foundation; the UI adapter and jump-host layer remain follo
 
 Use the actively maintained `russh` transport and `russh-sftp` subsystem from a dedicated `mobarust-ssh` crate. Rust owns TCP connection setup, host-key verification, authentication, PTY channel setup, SFTP I/O, lifecycle state, and timeout handling.
 
+SSH session environment is an explicit, bounded list of `NAME=value` entries.
+The native layer validates names, rejects control characters and duplicates,
+and sends the requests with the SSH channel `env` operation before starting
+the shell. Environment values are session configuration rather than vault
+material: they are never included in `Debug` output or logs, and users are
+warned not to place passwords or tokens in this field.
+
+Saved SSH profiles may also define a startup directory and one startup
+command. The native layer bounds both values, quotes the directory as a
+single shell argument, and sends `cd -- <directory> && <command>` only after
+the authenticated PTY shell has been opened. This is an explicit profile
+feature and is visibly documented as automatic execution; snippets remain a
+separate manual-review workflow.
+
 An explicitly supplied host-key policy reads OpenSSH `known_hosts` and rejects unknown keys. A pinned SHA-256 fingerprint is an explicit alternative for a user-confirmed key. With neither option, MobaRust rejects the observed key without reading `~/.ssh/known_hosts`; there is no silent trust-on-first-use path. Unknown keys return the observed fingerprint so the UI can build a deliberate confirmation flow later.
 
 SFTP file movement uses `tokio::io::copy` between async readers and writers. The API never reads a complete remote file into a `Vec<u8>`. Dropping a cancelled future releases the in-flight operation; a transfer manager will add visible cancellation and bounded concurrency above this primitive.

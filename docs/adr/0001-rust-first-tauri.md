@@ -10,6 +10,11 @@ MobaRust uses a Rust workspace for connection/session state, process and PTY own
 
 The UI communicates with the native side through narrow commands and event payloads. Terminal output is emitted in bounded chunks rather than one event per byte. Secrets are never placed in the UI state model or diagnostics.
 
+Saved local profiles may provide a validated working directory, environment, and
+startup command to the native PTY. The UI asks for confirmation before sending a
+saved local startup command; the native side writes it through the PTY after the
+process is created and never builds a shell command string around it.
+
 ## Why
 
 - Rust gives one testable home for lifecycle invariants, cancellation, and I/O ownership.

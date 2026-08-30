@@ -6,8 +6,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use mobarust_ssh::{
-    HostKeyPolicy, RemoteTextEncoding, SshConnectOptions, SshConnection, SshCredentials, SshError,
-    SshFingerprintOptions, SshOutput, X11Display, X11ForwardingOptions, inspect_host_key,
+    HostKeyPolicy, RemoteTextEncoding, SftpConnection, SshConnectOptions, SshConnection,
+    SshCredentials, SshError, SshFingerprintOptions, SshOutput, X11Display, X11ForwardingOptions,
+    inspect_host_key,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,6 +35,9 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 None::<String>,
             ),
             x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
         })
         .await;
         let rejected_fingerprint = match rejection {
@@ -67,6 +71,9 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 None::<String>,
             ),
             x11: None,
+            environment: vec![("MOBARUST_FIXTURE".into(), "loopback-only".into())],
+            startup_directory: Some("/tmp".into()),
+            startup_command: Some("printf 'MOBARUST_STARTUP_OK\\n'".into()),
         })
         .await
         .expect("connect to local sshd");
@@ -86,7 +93,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         let (mut reader, writer) = shell.split();
         writer.resize(120, 40).await.expect("resize SSH PTY");
         writer
-            .write(b"printf 'MOBARUST_SSH_OK\n'; exit\n")
+            .write(b"printf 'MOBARUST_SSH_OK\n'; printf 'MOBARUST_ENV_%s\n' \"$MOBARUST_FIXTURE\"; exit\n")
             .await
             .expect("write shell command");
 
@@ -104,6 +111,8 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         }
 
         assert!(String::from_utf8_lossy(&output).contains("MOBARUST_SSH_OK"));
+        assert!(String::from_utf8_lossy(&output).contains("MOBARUST_ENV_loopback-only"));
+        assert!(String::from_utf8_lossy(&output).contains("MOBARUST_STARTUP_OK"));
         let source = fixture.directory.path().join("source.bin");
         let downloaded = fixture.directory.path().join("downloaded.bin");
         let remote_root = fixture.directory.path().to_string_lossy().into_owned();
@@ -268,11 +277,13 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("atomically save remote text document");
         assert_eq!(saved.content, "after\n");
+        assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         assert!(matches!(
             sftp.save_text_document(&editor_path, &document.revision, "stale\n")
                 .await,
             Err(SshError::RemoteConflict)
         ));
+        assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         let save_as_path = fixture
             .directory
             .path()
@@ -284,6 +295,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("create remote text document through save-as");
         assert_eq!(copied.content, "copy\n");
+        assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         assert!(matches!(
             sftp.save_text_document_as(
                 &save_as_path,
@@ -294,11 +306,13 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await,
             Err(SshError::RemoteTargetExists)
         ));
+        assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         let replaced = sftp
             .save_text_document_as(&save_as_path, "replaced\n", RemoteTextEncoding::Utf8, true)
             .await
             .expect("replace remote save-as target explicitly");
         assert_eq!(replaced.content, "replaced\n");
+        assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         sftp.remove_file(&save_as_path)
             .await
             .expect("remove save-as fixture");
@@ -497,6 +511,9 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                     None::<String>,
                 ),
                 x11: None,
+                environment: Vec::new(),
+                startup_directory: None,
+                startup_command: None,
             },
             vec![SshConnectOptions {
                 host: "127.0.0.1".into(),
@@ -510,6 +527,9 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                     None::<String>,
                 ),
                 x11: None,
+                environment: Vec::new(),
+                startup_directory: None,
+                startup_command: None,
             }],
         )
         .await
@@ -592,6 +612,9 @@ fn forwards_an_explicit_x11_channel_to_a_loopback_display_fixture() {
                 X11Display::parse(&format!("tcp://{display_address}")).unwrap(),
                 true,
             )),
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
         })
         .await
         .expect("connect local SSH X11 fixture");
@@ -636,6 +659,22 @@ exit
             .is_some()
         {}
     });
+}
+
+async fn assert_no_remote_editor_artifacts(sftp: &SftpConnection, remote_root: &str) {
+    let entries = sftp
+        .read_dir(remote_root)
+        .await
+        .expect("list remote fixture directory for editor cleanup assertion");
+    let artifacts = entries
+        .iter()
+        .filter(|entry| entry.name.contains(".mobarust-edit-"))
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        artifacts.is_empty(),
+        "remote editor left temporary artifacts: {artifacts:?}"
+    );
 }
 
 struct LocalSshd {
@@ -696,7 +735,7 @@ impl LocalSshd {
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),

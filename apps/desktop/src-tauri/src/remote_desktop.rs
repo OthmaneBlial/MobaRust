@@ -5,6 +5,7 @@ use mobarust_remote_desktop::{
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,8 @@ pub struct RemoteDesktopConnectRequest {
     pub height: u16,
     #[serde(default = "default_color_depth")]
     pub color_depth: u16,
+    #[serde(default = "default_vnc_quality")]
+    pub vnc_quality: String,
     #[serde(default)]
     pub audio_enabled: bool,
 }
@@ -101,6 +104,7 @@ impl RemoteDesktopManager {
             },
             color_depth: request.color_depth,
             audio_enabled: request.audio_enabled,
+            vnc_quality: request.vnc_quality,
             credential_ref: credential_id,
         };
         let mut supervisor = HelperSupervisor::spawn(&config).map_err(|error| error.to_string())?;
@@ -231,6 +235,15 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     {
         return Err("remote desktop host and port are invalid".into());
     }
+    if matches!(
+        request.protocol,
+        DesktopProtocol::Rdp | DesktopProtocol::Vnc
+    ) && !is_loopback_ip_literal(&request.host)
+    {
+        return Err(
+            "experimental RDP/VNC helpers are restricted to a loopback IP until transport security is validated".into(),
+        );
+    }
     if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
         || request.username.chars().any(char::is_control)
     {
@@ -249,6 +262,12 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     if request.color_depth == 0 {
         return Err("remote desktop color depth is invalid".into());
     }
+    if !matches!(
+        request.vnc_quality.as_str(),
+        "balanced" | "low-latency" | "low-bandwidth"
+    ) {
+        return Err("remote desktop VNC quality is invalid".into());
+    }
     DisplaySize {
         width: request.width,
         height: request.height,
@@ -257,8 +276,19 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     .map_err(|error| error.to_string())
 }
 
+fn is_loopback_ip_literal(value: &str) -> bool {
+    value
+        .parse::<IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false)
+}
+
 fn default_color_depth() -> u16 {
     32
+}
+
+fn default_vnc_quality() -> String {
+    "balanced".into()
 }
 
 fn protocol_name(protocol: DesktopProtocol) -> &'static str {
@@ -415,6 +445,7 @@ mod tests {
             height: 768,
             color_depth: 32,
             audio_enabled: false,
+            vnc_quality: "balanced".into(),
         }
     }
 
@@ -435,5 +466,15 @@ mod tests {
         request.audio_enabled = true;
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("audio"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_experimental_desktop_targets_outside_loopback() {
+        for protocol in [DesktopProtocol::Rdp, DesktopProtocol::Vnc] {
+            let mut request = request(protocol, "fixture-user");
+            request.host = "example.invalid".into();
+            let error = validate_request(&request).unwrap_err();
+            assert!(error.contains("loopback"));
+        }
     }
 }

@@ -15,12 +15,17 @@ editable buffer and provides local search/replace plus a deliberate Save
 action.
 
 On save, Rust rereads the remote file and rejects the operation when its
-revision differs from the token captured at open time. It writes the new
-content to a unique remote temporary file, reapplies the original mode, moves
-the old file to a unique rollback name, promotes the complete temporary file,
-and removes the rollback copy. If promotion fails, Rust attempts to restore
-the original before returning the error. Temporary and rollback paths are
-cleaned on all handled failure paths.
+revision differs from the token captured at open time. After the complete
+temporary upload and mode application, it performs a second revision check
+immediately before promotion so a concurrent update during a slow upload is
+also rejected. It writes the new content to a unique remote temporary file,
+reapplies the original mode, moves the old file to a unique rollback name,
+promotes the complete temporary file, and removes the rollback copy. If
+promotion fails, Rust attempts to restore the original before returning the
+error. Temporary paths are cleaned on handled failure paths. If the final
+rollback-copy cleanup itself fails after a successful promotion, Rust returns a
+distinct save error and deliberately leaves that backup as a recovery artifact
+instead of risking data loss by hiding the cleanup failure.
 
 ## Security and reliability boundary
 

@@ -18,10 +18,12 @@ are validated as single path components before they are joined, preventing a
 server-provided name from escaping the selected local destination.
 
 Each file is committed independently: downloads use a temporary local sibling
-and an atomic rename; uploads use a unique remote temporary path and rename it
-into place only after the stream completes. Existing files require the
-explicit overwrite choice. Cancellation removes the in-flight temporary file
-and leaves no partial destination file presented as complete.
+and a guarded atomic replacement; uploads use a unique remote temporary path
+and rename it into place only after the stream completes. Local destination
+symlinks are refused, and Windows replacement does not delete an existing file
+before the replacement succeeds. Existing files require the explicit overwrite
+choice. Cancellation removes the in-flight temporary file and leaves no
+partial destination file presented as complete.
 
 ## Consequences
 

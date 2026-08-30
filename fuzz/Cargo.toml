@@ -1,0 +1,30 @@
+[package]
+name = "mobarust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+mobarust-core = { path = "../crates/mobarust-core" }
+mobarust-remote-desktop = { path = "../crates/mobarust-remote-desktop" }
+serde_json = "1.0"
+
+[[bin]]
+name = "session-json"
+path = "fuzz_targets/session_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "helper-frame"
+path = "fuzz_targets/helper_frame.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

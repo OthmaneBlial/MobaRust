@@ -13,4 +13,5 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+proptest = "1.7.0"
 serde_json.workspace = true

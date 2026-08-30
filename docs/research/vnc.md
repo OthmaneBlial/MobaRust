@@ -109,3 +109,23 @@ cross-platform and manual interoperability gate. `vnc-rs 0.5.3` still
 requires the authentication callback to return an owned `String`, so that
 upstream API limitation remains a credential-lifetime promotion gate and is
 not hidden by the local wrapper.
+
+Because the candidate does not provide a generally validated encrypted
+transport, the helper and the Tauri parent fail closed for safety: they accept
+only literal loopback IP targets (`127.0.0.1` or `::1`) and reject hostnames or
+other addresses before opening a socket. This is a local-fixture restriction,
+not a claim that VNC is ready for production use.
+
+The VNC adapter requests an RGBA framebuffer and forwards four bytes per pixel
+to the desktop renderer. RDP-only settings such as color-depth selection,
+domain, and audio are not passed to the VNC helper; VNC currently exposes
+local viewport scaling rather than pretending to provide server-side color
+depth control.
+
+The VNC profile now offers three bounded quality policies: `balanced`
+prefers ZRLE, `low-latency` prefers raw rectangles, and `low-bandwidth`
+also prefers ZRLE while reducing refresh frequency. Each policy selects a
+bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms respectively).
+Tight/JPEG is deliberately not requested while JPEG rectangle rendering is
+unsupported. These are client-side encoding preferences; they do not claim to
+change the VNC server resolution or invent transport encryption.

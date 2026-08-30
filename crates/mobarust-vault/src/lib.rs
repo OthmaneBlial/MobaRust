@@ -135,6 +135,8 @@ pub enum VaultError {
     PortableIo { path: PathBuf, source: io::Error },
     #[error("portable vault already exists: {0}")]
     PortableAlreadyExists(PathBuf),
+    #[error("portable vault path is not a regular file: {0}")]
+    PortablePathUnsafe(PathBuf),
     #[error("portable vault state is unavailable: {0}")]
     PortableStateUnavailable(String),
 }
@@ -287,7 +289,7 @@ impl PortableVault {
         passphrase: &SecretMaterial,
     ) -> Result<Self, VaultError> {
         let path = path.into();
-        if path.exists() {
+        if ensure_portable_path_is_safe(&path, true)? {
             return Err(VaultError::PortableAlreadyExists(path));
         }
         let salt = random_bytes::<PORTABLE_SALT_BYTES>()?;
@@ -306,6 +308,7 @@ impl PortableVault {
     /// distinguish a wrong passphrase from tampered ciphertext.
     pub fn open(path: impl Into<PathBuf>, passphrase: &SecretMaterial) -> Result<Self, VaultError> {
         let path = path.into();
+        ensure_portable_path_is_safe(&path, false)?;
         let bytes = fs::read(&path).map_err(|source| VaultError::PortableIo {
             path: path.clone(),
             source,
@@ -496,6 +499,7 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], VaultError> {
 }
 
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
+    ensure_portable_path_is_safe(path, true)?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|source| VaultError::PortableIo {
         path: parent.to_path_buf(),
@@ -521,9 +525,29 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
         temporary.sync_all()?;
         drop(temporary);
         #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(path)?;
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+            };
+
+            let temporary = temporary_path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            let destination = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+            if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(());
         }
+
         fs::rename(&temporary_path, path)
     })();
     if let Err(source) = write_result {
@@ -534,6 +558,25 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
         });
     }
     Ok(())
+}
+
+/// The vault path is application-controlled, but a hostile local process or a
+/// malformed portable directory must not redirect reads/writes through a
+/// symlink or a directory. The final rename remains atomic for regular files.
+fn ensure_portable_path_is_safe(path: &Path, allow_missing: bool) -> Result<bool, VaultError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                return Err(VaultError::PortablePathUnsafe(path.to_path_buf()));
+            }
+            Ok(true)
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound && allow_missing => Ok(false),
+        Err(source) => Err(VaultError::PortableIo {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -621,5 +664,40 @@ mod tests {
             PortableVault::open(&path, &passphrase),
             Err(VaultError::PortableAuthenticationFailed)
         ));
+    }
+
+    #[test]
+    fn portable_vault_rejects_a_directory_path() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("portable-vault.bin");
+        fs::create_dir(&path).unwrap();
+
+        assert!(matches!(
+            PortableVault::create(&path, &SecretMaterial::new("fixture-passphrase")),
+            Err(VaultError::PortablePathUnsafe(rejected)) if rejected == path
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn portable_vault_rejects_symlink_paths_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("target.bin");
+        let path = directory.path().join("portable-vault.bin");
+        let original = b"fixture target must remain unchanged";
+        fs::write(&target, original).unwrap();
+        symlink(&target, &path).unwrap();
+
+        assert!(matches!(
+            PortableVault::create(&path, &SecretMaterial::new("fixture-passphrase")),
+            Err(VaultError::PortablePathUnsafe(rejected)) if rejected == path
+        ));
+        assert!(matches!(
+            PortableVault::open(&path, &SecretMaterial::new("fixture-passphrase")),
+            Err(VaultError::PortablePathUnsafe(rejected)) if rejected == path
+        ));
+        assert_eq!(fs::read(&target).unwrap(), original);
     }
 }

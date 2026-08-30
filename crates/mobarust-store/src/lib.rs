@@ -301,9 +301,7 @@ impl AuditStore {
             .and_then(|name| name.to_str())
             .unwrap_or("audit.json");
         let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut temporary = private_temp_options()
             .open(&temporary_path)
             .map_err(|source| StoreError::AuditWrite {
                 path: temporary_path.clone(),
@@ -405,9 +403,7 @@ impl MacroStore {
             .and_then(|name| name.to_str())
             .unwrap_or("macros.json");
         let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut temporary = private_temp_options()
             .open(&temporary_path)
             .map_err(|source| StoreError::MacroWrite {
                 path: temporary_path.clone(),
@@ -509,9 +505,7 @@ impl SnippetStore {
             .and_then(|name| name.to_str())
             .unwrap_or("snippets.json");
         let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut temporary = private_temp_options()
             .open(&temporary_path)
             .map_err(|source| StoreError::SnippetWrite {
                 path: temporary_path.clone(),
@@ -568,8 +562,12 @@ impl SettingsStore {
 
     pub fn save(&mut self, settings: AppSettings) -> Result<AppSettings, StoreError> {
         settings.validate()?;
+        let previous = self.settings.clone();
         self.settings = settings.clone();
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            self.settings = previous;
+            return Err(error);
+        }
         Ok(settings)
     }
 
@@ -631,9 +629,7 @@ impl SettingsStore {
             .and_then(|name| name.to_str())
             .unwrap_or("settings.json");
         let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut temporary = private_temp_options()
             .open(&temporary_path)
             .map_err(|source| StoreError::SettingsWrite {
                 path: temporary_path.clone(),
@@ -696,31 +692,41 @@ impl SessionStore {
 
     pub fn save(&mut self, session: SessionRecord) -> Result<SessionRecord, StoreError> {
         session.validate()?;
+        let previous = self.sessions.clone();
         if let Some(existing) = self.sessions.iter_mut().find(|item| item.id == session.id) {
             *existing = session.clone();
         } else {
             self.sessions.push(session.clone());
         }
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            self.sessions = previous;
+            return Err(error);
+        }
         Ok(session)
     }
 
     pub fn delete(&mut self, id: SessionId) -> Result<bool, StoreError> {
+        let previous = self.sessions.clone();
         let original_len = self.sessions.len();
         self.sessions.retain(|session| session.id != id);
         let deleted = self.sessions.len() != original_len;
-        if deleted {
-            self.persist()?;
+        if deleted && let Err(error) = self.persist() {
+            self.sessions = previous;
+            return Err(error);
         }
         Ok(deleted)
     }
 
     pub fn set_favorite(&mut self, id: SessionId, favorite: bool) -> Result<bool, StoreError> {
+        let previous = self.sessions.clone();
         let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) else {
             return Ok(false);
         };
         session.favorite = favorite;
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            self.sessions = previous;
+            return Err(error);
+        }
         Ok(true)
     }
 
@@ -774,6 +780,7 @@ impl SessionStore {
         let mut imported_count = 0;
         let mut skipped = Vec::new();
         let mut changed = false;
+        let previous = self.sessions.clone();
         for session in file.sessions {
             if let Err(error) = session.validate() {
                 skipped.push(format!("{}: {error}", session.name));
@@ -787,8 +794,9 @@ impl SessionStore {
             }
             changed = true;
         }
-        if changed {
-            self.persist()?;
+        if changed && let Err(error) = self.persist() {
+            self.sessions = previous;
+            return Err(error);
         }
         Ok(SessionImportReport {
             imported_count,
@@ -900,6 +908,7 @@ impl SessionStore {
             session.validate()?;
         }
         if !imported.is_empty() {
+            let previous = self.sessions.clone();
             for imported_session in &mut imported {
                 if let Some(existing) = self.sessions.iter_mut().find(|existing| {
                     existing.protocol == imported_session.protocol
@@ -911,7 +920,10 @@ impl SessionStore {
                     self.sessions.push(imported_session.clone());
                 }
             }
-            self.persist()?;
+            if let Err(error) = self.persist() {
+                self.sessions = previous;
+                return Err(error);
+            }
         }
         Ok(OpenSshImportReport {
             source: path.to_string_lossy().into_owned(),
@@ -940,9 +952,7 @@ impl SessionStore {
             .and_then(|name| name.to_str())
             .unwrap_or("sessions.json");
         let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut temporary = private_temp_options()
             .open(&temporary_path)
             .map_err(|source| StoreError::Write {
                 path: temporary_path.clone(),
@@ -1049,10 +1059,38 @@ fn strip_quotes(value: &str) -> &str {
 
 fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(windows)]
-    if destination.exists() {
-        fs::remove_file(destination)?;
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        let temporary = temporary
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let destination = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+        if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok(());
     }
+
     fs::rename(temporary, destination)
+}
+
+fn private_temp_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
 }
 
 impl SessionStore {
@@ -1069,6 +1107,23 @@ mod tests {
         RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
     };
     use tempfile::tempdir;
+
+    fn assert_private_file_permissions(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode,
+                0o600,
+                "{} is not owner-only: {mode:o}",
+                path.display()
+            );
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
 
     fn remote_session() -> SessionRecord {
         SessionRecord {
@@ -1109,6 +1164,7 @@ mod tests {
         let mut store = SessionStore::open(&path).unwrap();
         let session = remote_session();
         store.save(session.clone()).unwrap();
+        assert_private_file_permissions(&path);
 
         let json = fs::read_to_string(&path).unwrap();
         assert!(json.contains("session-password"));
@@ -1134,6 +1190,7 @@ mod tests {
             height: 800,
             color_depth: 32,
             audio_enabled: false,
+            vnc_quality: "balanced".into(),
         });
         store.save(session.clone()).unwrap();
 
@@ -1265,6 +1322,39 @@ mod tests {
     }
 
     #[test]
+    fn legacy_remote_desktop_profiles_default_vnc_quality_safely() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut session = remote_session();
+        session.protocol = Protocol::Vnc;
+        session.remote_desktop_profile = Some(RemoteDesktopProfile {
+            domain: None,
+            width: 1280,
+            height: 800,
+            color_depth: 32,
+            audio_enabled: false,
+            vnc_quality: "balanced".into(),
+        });
+        let mut serialized = serde_json::to_value(&session).unwrap();
+        serialized["remote_desktop_profile"]
+            .as_object_mut()
+            .unwrap()
+            .remove("vnc_quality");
+        let file = serde_json::json!({ "schema_version": 1, "sessions": [serialized] });
+        fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(
+            reopened.list()[0]
+                .remote_desktop_profile
+                .as_ref()
+                .unwrap()
+                .vnc_quality,
+            "balanced"
+        );
+    }
+
+    #[test]
     fn credential_references_use_stable_frontend_safe_names() {
         let value = serde_json::to_value(AuthMethod::Password {
             credential_ref: "prod-password".into(),
@@ -1288,6 +1378,44 @@ mod tests {
         assert!(!store.set_favorite(SessionId::new(), true).unwrap());
         let reopened = SessionStore::open(&path).unwrap();
         assert!(reopened.list()[0].favorite);
+    }
+
+    #[test]
+    fn session_mutations_roll_back_when_persistence_fails() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let original = remote_session();
+        store.save(original.clone()).unwrap();
+
+        let blocked_parent = directory.path().join("not-a-directory");
+        fs::write(&blocked_parent, b"fixture blocker").unwrap();
+        store.path = blocked_parent.join("sessions.json");
+
+        let mut replacement = original.clone();
+        replacement.name = "Changed but not durable".into();
+        assert!(store.save(replacement).is_err());
+        assert_eq!(store.list(), std::slice::from_ref(&original));
+
+        assert!(store.set_favorite(original.id, false).is_err());
+        assert!(store.list()[0].favorite);
+
+        assert!(store.delete(original.id).is_err());
+        assert_eq!(store.list(), std::slice::from_ref(&original));
+
+        let mut imported = original.clone();
+        imported.name = "Imported but not durable".into();
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "sessions": [imported],
+        });
+        assert!(store.import_json(&payload.to_string()).is_err());
+        assert_eq!(store.list(), std::slice::from_ref(&original));
+
+        let config = directory.path().join("config");
+        fs::write(&config, "Host fixture\n  HostName 127.0.0.1\n").unwrap();
+        assert!(store.import_openssh_config(&config).is_err());
+        assert_eq!(store.list(), &[original]);
     }
 
     #[test]
@@ -1353,6 +1481,7 @@ mod tests {
         settings.appearance.font_size = 18;
         settings.general.confirm_multiline_paste = false;
         store.save(settings.clone()).unwrap();
+        assert_private_file_permissions(&path);
         assert_eq!(SettingsStore::open(&path).unwrap().get(), &settings);
 
         store.reset().unwrap();
@@ -1360,6 +1489,23 @@ mod tests {
             SettingsStore::open(&path).unwrap().get(),
             &AppSettings::default()
         );
+    }
+
+    #[test]
+    fn settings_save_rolls_back_when_persistence_fails() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let mut store = SettingsStore::open(&path).unwrap();
+        let original = store.get().clone();
+
+        let blocked_parent = directory.path().join("not-a-directory");
+        fs::write(&blocked_parent, b"fixture blocker").unwrap();
+        store.path = blocked_parent.join("settings.json");
+
+        let mut changed = original.clone();
+        changed.appearance.font_size = 18;
+        assert!(store.save(changed).is_err());
+        assert_eq!(store.get(), &original);
     }
 
     #[test]
@@ -1537,6 +1683,7 @@ mod tests {
         snippet.tags = vec!["docker".into(), "debug".into()];
         snippet.variables = vec!["container".into()];
         store.save(snippet.clone()).unwrap();
+        assert_private_file_permissions(&path);
         assert_eq!(
             SnippetStore::open(&path).unwrap().list(),
             &[snippet.clone()]
@@ -1579,6 +1726,7 @@ mod tests {
             MacroAction::Wait { milliseconds: 250 },
         ];
         store.save(record.clone()).unwrap();
+        assert_private_file_permissions(&path);
         assert_eq!(MacroStore::open(&path).unwrap().list(), &[record.clone()]);
         assert!(store.delete(record.id).unwrap());
         assert!(MacroStore::open(&path).unwrap().list().is_empty());
@@ -1614,6 +1762,7 @@ mod tests {
                 )
                 .unwrap();
         }
+        assert_private_file_permissions(&path);
 
         assert_eq!(store.list().len(), MAX_AUDIT_EVENTS);
         assert_eq!(store.list().first().unwrap().timestamp, 1);

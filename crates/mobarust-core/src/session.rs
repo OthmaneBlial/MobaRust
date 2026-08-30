@@ -3,6 +3,17 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const MAX_SERVER_ALIVE_INTERVAL_SECONDS: u64 = 86_400;
+pub const DEFAULT_VNC_QUALITY: &str = "balanced";
+pub const MAX_SESSION_ENVIRONMENT_ENTRIES: usize = 64;
+pub const MAX_SESSION_ENVIRONMENT_NAME_BYTES: usize = 128;
+pub const MAX_SESSION_ENVIRONMENT_VALUE_BYTES: usize = 4096;
+pub const MAX_SESSION_ENVIRONMENT_TOTAL_BYTES: usize = 64 * 1024;
+pub const MAX_SESSION_STARTUP_DIRECTORY_BYTES: usize = 4096;
+pub const MAX_SESSION_STARTUP_COMMAND_BYTES: usize = 16 * 1024;
+
+fn default_vnc_quality() -> String {
+    DEFAULT_VNC_QUALITY.into()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -118,6 +129,8 @@ pub struct RemoteDesktopProfile {
     pub height: u16,
     pub color_depth: u16,
     pub audio_enabled: bool,
+    #[serde(default = "default_vnc_quality")]
+    pub vnc_quality: String,
 }
 
 impl RemoteDesktopProfile {
@@ -125,6 +138,10 @@ impl RemoteDesktopProfile {
         if !(320..=16_384).contains(&self.width)
             || !(200..=16_384).contains(&self.height)
             || self.color_depth == 0
+            || !matches!(
+                self.vnc_quality.as_str(),
+                "balanced" | "low-latency" | "low-bandwidth"
+            )
             || self
                 .domain
                 .as_deref()
@@ -152,7 +169,7 @@ pub struct JumpHostRecord {
     pub server_alive_interval: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: SessionId,
     pub name: String,
@@ -179,8 +196,11 @@ pub struct SessionRecord {
     pub folder: Option<String>,
     pub tags: Vec<String>,
     pub favorite: bool,
+    #[serde(default)]
     pub startup_directory: Option<String>,
+    #[serde(default)]
     pub startup_command: Option<String>,
+    #[serde(default)]
     pub environment: Vec<(String, String)>,
     pub jump_hosts: Vec<String>,
     #[serde(default)]
@@ -218,6 +238,57 @@ pub enum SessionValidationError {
     InvalidX11Display,
     #[error("SSH server-alive interval is invalid")]
     InvalidServerAliveInterval,
+    #[error("session environment contains too many variables")]
+    TooManyEnvironmentVariables,
+    #[error("session environment variable name is invalid")]
+    InvalidEnvironmentName,
+    #[error("session environment variable value is invalid")]
+    InvalidEnvironmentValue,
+    #[error("session environment is too large")]
+    EnvironmentTooLarge,
+    #[error("session startup directory is invalid")]
+    InvalidStartupDirectory,
+    #[error("session startup command is invalid")]
+    InvalidStartupCommand,
+}
+
+impl std::fmt::Debug for SessionRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionRecord")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("protocol", &self.protocol)
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth", &self.auth)
+            .field("last_used_at", &self.last_used_at)
+            .field("known_hosts_path", &self.known_hosts_path)
+            .field("pinned_fingerprint", &self.pinned_fingerprint)
+            .field("x11_display", &self.x11_display)
+            .field("x11_single_connection", &self.x11_single_connection)
+            .field("server_alive_interval", &self.server_alive_interval)
+            .field("folder", &self.folder)
+            .field("tags", &self.tags)
+            .field("favorite", &self.favorite)
+            .field(
+                "startup_directory_configured",
+                &self.startup_directory.is_some(),
+            )
+            .field(
+                "startup_command_configured",
+                &self.startup_command.is_some(),
+            )
+            .field("environment_count", &self.environment.len())
+            .field("jump_hosts", &self.jump_hosts)
+            .field("jump_host_profiles", &self.jump_host_profiles)
+            .field("notes_present", &self.notes.is_some())
+            .field("serial_profile", &self.serial_profile)
+            .field("telnet_profile", &self.telnet_profile)
+            .field("remote_desktop_profile", &self.remote_desktop_profile)
+            .finish()
+    }
 }
 
 impl SessionRecord {
@@ -264,6 +335,11 @@ impl SessionRecord {
         if self.tags.iter().any(|tag| tag.trim().is_empty()) {
             return Err(SessionValidationError::EmptyTag);
         }
+        validate_session_startup(
+            self.startup_directory.as_deref(),
+            self.startup_command.as_deref(),
+        )?;
+        validate_session_environment(&self.environment)?;
         validate_auth_method(&self.auth)?;
         for jump_host in &self.jump_host_profiles {
             validate_auth_method(&jump_host.auth)?;
@@ -302,6 +378,74 @@ impl SessionRecord {
         }
         Ok(())
     }
+}
+
+/// Validate the explicit startup actions attached to a saved SSH session.
+/// These values are configuration, not snippets or credential storage.
+pub fn validate_session_startup(
+    startup_directory: Option<&str>,
+    startup_command: Option<&str>,
+) -> Result<(), SessionValidationError> {
+    if startup_directory.is_some_and(|value| {
+        value.trim().is_empty()
+            || value.len() > MAX_SESSION_STARTUP_DIRECTORY_BYTES
+            || value.chars().any(char::is_control)
+    }) {
+        return Err(SessionValidationError::InvalidStartupDirectory);
+    }
+    if startup_command.is_some_and(|value| {
+        value.trim().is_empty()
+            || value.len() > MAX_SESSION_STARTUP_COMMAND_BYTES
+            || value.chars().any(char::is_control)
+    }) {
+        return Err(SessionValidationError::InvalidStartupCommand);
+    }
+    Ok(())
+}
+
+/// Validate the bounded, explicit environment sent with an SSH session.
+/// Values are configuration, not credential storage; callers must never log
+/// them or use them as a substitute for the vault.
+pub fn validate_session_environment(
+    environment: &[(String, String)],
+) -> Result<(), SessionValidationError> {
+    if environment.len() > MAX_SESSION_ENVIRONMENT_ENTRIES {
+        return Err(SessionValidationError::TooManyEnvironmentVariables);
+    }
+
+    let mut total_bytes = 0usize;
+    for (index, (name, value)) in environment.iter().enumerate() {
+        let valid_name = name
+            .bytes()
+            .enumerate()
+            .all(|(position, byte)| match position {
+                0 => byte == b'_' || byte.is_ascii_alphabetic(),
+                _ => byte == b'_' || byte.is_ascii_alphanumeric(),
+            });
+        if name.is_empty()
+            || name.len() > MAX_SESSION_ENVIRONMENT_NAME_BYTES
+            || !valid_name
+            || environment[..index]
+                .iter()
+                .any(|(existing, _)| existing == name)
+        {
+            return Err(SessionValidationError::InvalidEnvironmentName);
+        }
+        if value.len() > MAX_SESSION_ENVIRONMENT_VALUE_BYTES
+            || value.contains('\0')
+            || value.chars().any(char::is_control)
+        {
+            return Err(SessionValidationError::InvalidEnvironmentValue);
+        }
+        total_bytes = total_bytes
+            .checked_add(name.len())
+            .and_then(|total| total.checked_add(value.len()))
+            .ok_or(SessionValidationError::EnvironmentTooLarge)?;
+        if total_bytes > MAX_SESSION_ENVIRONMENT_TOTAL_BYTES {
+            return Err(SessionValidationError::EnvironmentTooLarge);
+        }
+    }
+    Ok(())
 }
 
 fn validate_auth_method(auth: &AuthMethod) -> Result<(), SessionValidationError> {
@@ -455,15 +599,21 @@ mod tests {
             height: 800,
             color_depth: 32,
             audio_enabled: false,
+            vnc_quality: "balanced".into(),
         };
         profile.validate().unwrap();
 
-        let invalid = RemoteDesktopProfile {
-            width: 319,
-            ..profile
-        };
+        let mut invalid = profile.clone();
+        invalid.width = 319;
         assert_eq!(
             invalid.validate(),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+
+        let mut invalid_quality = profile;
+        invalid_quality.vnc_quality = "unbounded".into();
+        assert_eq!(
+            invalid_quality.validate(),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
     }
@@ -494,6 +644,32 @@ mod tests {
         assert_eq!(
             session.validate(),
             Err(SessionValidationError::InvalidKeyReference)
+        );
+    }
+
+    #[test]
+    fn session_environment_is_bounded_and_never_debug_printed() {
+        let mut session = SessionRecord::local_terminal("environment validation");
+        session.environment = vec![(
+            "MOBARUST_FIXTURE".into(),
+            "fixture-environment-secret".into(),
+        )];
+        session.validate().unwrap();
+
+        let debug = format!("{session:?}");
+        assert!(debug.contains("environment_count: 1"));
+        assert!(!debug.contains("fixture-environment-secret"));
+
+        session.environment = vec![("bad-name".into(), "value".into())];
+        assert_eq!(
+            session.validate(),
+            Err(SessionValidationError::InvalidEnvironmentName)
+        );
+
+        session.environment = vec![("VALID_NAME".into(), "line\nvalue".into())];
+        assert_eq!(
+            session.validate(),
+            Err(SessionValidationError::InvalidEnvironmentValue)
         );
     }
 }

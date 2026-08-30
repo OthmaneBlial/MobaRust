@@ -8,6 +8,8 @@
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use mobarust_remote_desktop::{
@@ -26,16 +28,18 @@ use vnc::{
 use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
-const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+const VNC_TARGET_UNSUPPORTED: &str =
+    "VNC experiment is restricted to a loopback IP until transport security is available";
 
 #[derive(Debug)]
 struct Arguments {
     host: String,
     port: u16,
     display: DisplaySize,
+    quality: String,
 }
 
 #[derive(Debug)]
@@ -67,6 +71,11 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     let mut stdout = tokio::io::stdout();
     write_event_frame(&mut stdout, &HelperEvent::Hello { version: 1 }).await?;
     write_state(&mut stdout, HelperState::Starting).await?;
+    if loopback_socket_address(&arguments.host, arguments.port).is_err() {
+        send_error(&mut stdout, VNC_TARGET_UNSUPPORTED).await?;
+        write_state(&mut stdout, HelperState::Failed).await?;
+        return Ok(());
+    }
 
     let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
     let command_task = tokio::spawn(read_commands(tokio::io::stdin(), incoming_tx));
@@ -161,7 +170,15 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
         let mut canvas = Canvas::new(display)?;
         write_state(stdout, HelperState::Ready).await?;
 
-        match run_connected_vnc_session(&client, &mut canvas, stdout, incoming_rx).await? {
+        match run_connected_vnc_session(
+            &client,
+            &mut canvas,
+            stdout,
+            incoming_rx,
+            quality_refresh_interval(&arguments.quality),
+        )
+        .await?
+        {
             ConnectedOutcome::Stopped => return Ok(()),
             ConnectedOutcome::Fatal => return Ok(()),
             ConnectedOutcome::Lost(message) => {
@@ -264,7 +281,8 @@ async fn connect_vnc_client(
     arguments: &Arguments,
     credential: &HelperCredential,
 ) -> Result<VncClient, &'static str> {
-    let address = format!("{}:{}", arguments.host, arguments.port);
+    let address = loopback_socket_address(&arguments.host, arguments.port)
+        .map_err(|_| VNC_TARGET_UNSUPPORTED)?;
     let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
         Ok(Ok(stream)) => stream,
         Ok(Err(error)) => return Err(connection_error_message(&error)),
@@ -276,15 +294,16 @@ async fn connect_vnc_client(
     // callback lifetime; the upstream API remains a promotion gate until
     // it can accept a zeroizing/borrowed credential type directly.
     let password = Zeroizing::new(credential.password().to_owned());
-    let connector = VncConnector::new(stream)
+    let encodings =
+        quality_encodings(&arguments.quality).ok_or("VNC quality profile is invalid")?;
+    let mut connector = VncConnector::new(stream)
         .set_auth_method(async move { Ok::<String, VncError>(password.to_string()) })
-        .add_encoding(VncEncoding::Zrle)
-        .add_encoding(VncEncoding::CopyRect)
-        .add_encoding(VncEncoding::Raw)
-        .add_encoding(VncEncoding::CursorPseudo)
-        .add_encoding(VncEncoding::DesktopSizePseudo)
         .allow_shared(true)
-        .set_pixel_format(PixelFormat::rgba())
+        .set_pixel_format(PixelFormat::rgba());
+    for &encoding in encodings {
+        connector = connector.add_encoding(encoding);
+    }
+    let connector = connector
         .build()
         .map_err(|_| "VNC client configuration failed")?;
     let state = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
@@ -328,6 +347,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
     canvas: &mut Canvas,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
+    refresh_interval: Duration,
 ) -> Result<ConnectedOutcome, Box<dyn Error>> {
     let mut active_sent = false;
     let mut last_refresh = Instant::now();
@@ -391,7 +411,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                 if let Some(reason) = connection_loss {
                     return Ok(ConnectedOutcome::Lost(reason));
                 }
-                if last_refresh.elapsed() >= REFRESH_INTERVAL {
+                if last_refresh.elapsed() >= refresh_interval {
                     if client.input(X11Event::Refresh).await.is_err() {
                         return Ok(ConnectedOutcome::Lost("VNC refresh failed"));
                     }
@@ -664,6 +684,7 @@ where
     let mut username = None;
     let mut width = 1280_u16;
     let mut height = 720_u16;
+    let mut quality = "balanced".to_owned();
     let mut iterator = arguments.into_iter();
 
     while let Some(argument) = iterator.next() {
@@ -690,6 +711,7 @@ where
             }
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
             "--height" => height = parse_u16("height", &next_argument(&mut iterator, "--height")?)?,
+            "--quality" => quality = parse_quality(&next_argument(&mut iterator, "--quality")?)?,
             _ => return Err(ArgumentError("unknown helper argument".into())),
         }
     }
@@ -699,12 +721,61 @@ where
         host: host.ok_or_else(|| ArgumentError("missing host".into()))?,
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         display: DisplaySize { width, height },
+        quality,
     };
     arguments
         .display
         .validate()
         .map_err(|error| ArgumentError(error.to_string()))?;
     Ok(arguments)
+}
+
+fn parse_quality(value: &str) -> Result<String, ArgumentError> {
+    match value {
+        "balanced" | "low-latency" | "low-bandwidth" => Ok(value.to_owned()),
+        _ => Err(ArgumentError("invalid VNC quality".into())),
+    }
+}
+
+const LOW_LATENCY_ENCODINGS: &[VncEncoding] = &[
+    VncEncoding::Raw,
+    VncEncoding::CopyRect,
+    VncEncoding::Zrle,
+    VncEncoding::CursorPseudo,
+    VncEncoding::DesktopSizePseudo,
+];
+
+const BALANCED_ENCODINGS: &[VncEncoding] = &[
+    VncEncoding::Zrle,
+    VncEncoding::CopyRect,
+    VncEncoding::Raw,
+    VncEncoding::CursorPseudo,
+    VncEncoding::DesktopSizePseudo,
+];
+
+const LOW_BANDWIDTH_ENCODINGS: &[VncEncoding] = &[
+    VncEncoding::Zrle,
+    VncEncoding::CopyRect,
+    VncEncoding::Raw,
+    VncEncoding::CursorPseudo,
+    VncEncoding::DesktopSizePseudo,
+];
+
+fn quality_encodings(value: &str) -> Option<&'static [VncEncoding]> {
+    match value {
+        "balanced" => Some(BALANCED_ENCODINGS),
+        "low-latency" => Some(LOW_LATENCY_ENCODINGS),
+        "low-bandwidth" => Some(LOW_BANDWIDTH_ENCODINGS),
+        _ => None,
+    }
+}
+
+fn quality_refresh_interval(value: &str) -> Duration {
+    match value {
+        "low-latency" => Duration::from_millis(50),
+        "low-bandwidth" => Duration::from_millis(250),
+        _ => Duration::from_millis(100),
+    }
 }
 
 fn next_argument<I>(iterator: &mut I, name: &str) -> Result<String, ArgumentError>
@@ -736,6 +807,14 @@ fn validated_text(name: &str, value: &str) -> Result<String, ArgumentError> {
     Ok(value.to_owned())
 }
 
+fn loopback_socket_address(host: &str, port: u16) -> Result<SocketAddr, &'static str> {
+    let address = host.parse::<IpAddr>().map_err(|_| VNC_TARGET_UNSUPPORTED)?;
+    if !address.is_loopback() || port == 0 {
+        return Err(VNC_TARGET_UNSUPPORTED);
+    }
+    Ok(SocketAddr::new(address, port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,6 +838,56 @@ mod tests {
         .unwrap();
         assert_eq!(arguments.host, "127.0.0.1");
         assert_eq!(arguments.port, 5900);
+        assert_eq!(arguments.quality, "balanced");
+    }
+
+    #[test]
+    fn parser_accepts_bounded_quality_profiles() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5900",
+                "--quality",
+                "low-bandwidth",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(arguments.quality, "low-bandwidth");
+        assert_eq!(
+            quality_encodings(&arguments.quality).unwrap()[0],
+            VncEncoding::Zrle
+        );
+        assert_eq!(
+            quality_refresh_interval(&arguments.quality),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn parser_rejects_unknown_quality_without_echoing_input() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5900",
+                "--quality",
+                "secret-quality-value",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid VNC quality");
+        assert!(!error.to_string().contains("secret-quality-value"));
     }
 
     #[test]
@@ -766,6 +895,30 @@ mod tests {
         let error = parse_arguments(["--password=fixture-secret".to_owned()]).unwrap_err();
         assert_eq!(error.to_string(), "unknown helper argument");
         assert!(!error.to_string().contains("fixture-secret"));
+    }
+
+    #[test]
+    fn insecure_vnc_candidate_is_restricted_to_loopback_ip_literals() {
+        assert!(loopback_socket_address("127.0.0.1", 5900).is_ok());
+        assert!(loopback_socket_address("::1", 5900).is_ok());
+        assert!(loopback_socket_address("localhost", 5900).is_err());
+        assert!(loopback_socket_address("example.invalid", 5900).is_err());
+        assert!(loopback_socket_address("192.0.2.10", 5900).is_err());
+    }
+
+    #[test]
+    fn loopback_socket_address_formats_ipv4_and_ipv6_without_ambiguity() {
+        assert_eq!(
+            loopback_socket_address("127.0.0.1", 5900)
+                .unwrap()
+                .to_string(),
+            "127.0.0.1:5900"
+        );
+        assert_eq!(
+            loopback_socket_address("::1", 5900).unwrap().to_string(),
+            "[::1]:5900"
+        );
+        assert!(loopback_socket_address("localhost", 5900).is_err());
     }
 
     #[test]

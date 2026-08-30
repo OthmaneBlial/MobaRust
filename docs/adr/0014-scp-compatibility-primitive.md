@@ -21,10 +21,12 @@ versions whose default `scp` mode is SFTP. The path validator rejects control
 characters and empty paths; it does not turn this API into general remote
 command execution.
 
-SCP downloads commit through a local temporary file and rename. SCP uploads
-stream to a uniquely named remote temporary file and commit through the
-existing native SFTP rename operation, preserving the destination on failed or
-cancelled jobs. This requires the remote SFTP subsystem for the SCP manager
+SCP downloads commit through a local temporary file and a guarded atomic
+replacement. The destination must not be a symlink, and Windows uses the OS
+replace-existing move without deleting the old file first. SCP uploads stream
+to a uniquely named remote temporary file and commit through the existing
+native SFTP rename operation, preserving the destination on failed or cancelled
+jobs. This requires the remote SFTP subsystem for the SCP manager
 path; hosts that expose only legacy SCP must use a future compatibility mode
 with a clearly weaker atomicity guarantee.
 

@@ -22,10 +22,12 @@ signal between bounded reads/writes, and the transfer removes its temporary
 destination before reporting cancellation.
 
 Downloads stream into a uniquely named local sibling `.mobarust.part` file,
-sync it, and rename it into place only after the complete remote byte count has
-been copied. Uploads stream into a uniquely named remote sibling `.part` file
-and rename it to the requested path only after completion. Replacing an
-existing destination requires an explicit `overwrite` flag.
+sync it, and replace the destination only after the complete remote byte count
+has been copied. Uploads stream into a uniquely named remote sibling `.part`
+file and rename it to the requested path only after completion. Replacing an
+existing destination requires an explicit `overwrite` flag. Local commits
+refuse symlink destinations; Windows uses the OS replace-existing move with
+write-through semantics instead of deleting an existing file first.
 
 The frontend never receives an SSH connection, SFTP object, credential, or
 secret. It receives only paths, byte counters, lifecycle state, and sanitized
@@ -63,8 +65,18 @@ trusting a frontend-provided file type; deleting the remote root is rejected.
 - one unbounded task per user click;
 - silently overwriting local or remote files;
 - exposing a generic filesystem or shell command to the frontend;
-- claiming recursive transfer, pause/resume, drag-and-drop, or remote editing
-  before their cancellation and conflict semantics are implemented.
+- claiming recursive transfer, pause/resume, or remote editing before their
+  cancellation and conflict semantics are implemented.
+
+The desktop SFTP view accepts an explicit native Tauri file-drop gesture for
+uploads and has separate file and folder picker actions. Each action receives
+only the paths selected by that user gesture, deduplicates and caps them at 16
+entries, defaults folder transfers to SFTP, and still asks for a remote
+destination and overwrite confirmation. The picker command returns path
+metadata only; it does not read file contents. MobaRust does not watch
+directories or scan the local filesystem. Downloads likewise use an explicit
+native file-save or folder picker before the Rust transfer manager creates any
+local temporary file.
 
 The browser now exposes server-provided mode, UID/GID, and owner/group metadata
 when available. A chmod action accepts only a validated octal mode and requires
@@ -79,6 +91,5 @@ confirmation again.
 ## Follow-ups
 
 - recursive jobs with per-item conflict decisions;
-- native file/directory picker integration;
 - pause/resume where the protocol and remote semantics support it;
 - remote editing with modification detection and atomic upload.

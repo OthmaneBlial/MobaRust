@@ -12,7 +12,10 @@ versioned `settings.json` beside, but separately from, the session catalog.
 The file contains no credential values or credential references.
 
 Settings are validated before replacement and written through a durable
-temporary-file-plus-rename path. Unknown top-level fields and unsupported
+temporary-file-plus-rename path. Newly created settings files use owner-only
+mode `0600` on Unix. On Windows, replacement uses the OS
+replace-existing move primitive rather than deleting the destination first.
+Unknown top-level fields and unsupported
 schema versions fail loudly so an upgrade cannot silently discard or replace
 configuration. Reset is an explicit command that writes the documented safe
 defaults.

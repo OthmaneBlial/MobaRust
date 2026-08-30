@@ -23,6 +23,11 @@ credential vault.
 | Open macros | `Mod+Shift+M` |
 | Disable broadcast | `Escape` |
 
+While a terminal has focus, standard zoom keys remain available even though
+xterm uses an internal editable element: `Mod+=` or `Mod++` increases the font,
+`Mod+-` decreases it, and `Mod+0` resets it to 13 px. The value is bounded to
+8–32 px and persisted as an ordinary non-secret appearance setting.
+
 `Mod` means Command on macOS and Control on Windows/Linux. The other tokens
 are explicit: `Ctrl`, `Alt`, `Shift`, `Tab`, `Escape`, `Enter`, `Backspace`,
 `Delete`, `Space`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, or one

@@ -22,15 +22,17 @@ This document describes the security boundary for the first vertical slice and t
 | --- | --- |
 | Plaintext password exposure | Session records contain credential references only. Password acquisition stays native and is not serialized in diagnostics. |
 | Private-key exposure | Keys are referenced by path and never copied into session metadata. Passphrases use the native vault; loaded key-memory hygiene remains a release-review gate. |
+| Session environment exposure | Environment entries are bounded, validated, and treated as potentially sensitive configuration. They are applied natively to the SSH channel, excluded from `Debug` output/logs, and the UI warns that passwords/tokens belong in the vault instead. |
 | Malicious local process | Documented as an OS limitation; minimize plaintext lifetime and never claim protection from a process with equivalent user privileges. |
 | Compromised application database | The current session store contains metadata and opaque references only. Platform vault entries are separate; portable credentials use a separate encrypted vault file and remain unavailable while locked. |
 | Logs and crash dumps | Native `tracing` is structured, defaults to `WARN`, writes to stderr only, and uses redacted fields for credential boundaries. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. The optional audit file is a separate bounded lifecycle journal, not a terminal transcript. |
 | Clipboard exposure | Paste is explicit; MobaRust intercepts multiline terminal paste and asks for confirmation before sending it. Remote clipboard support will be opt-in per protocol. |
 | Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. Settings export is a separate non-secret schema and cannot include sessions or vault material. |
-| Portable mode | Portable mode is marker-gated by `portable.flag`; credentials use a separate Argon2id + AES-256-GCM vault file, atomic private writes, and explicit native unlock/lock. It is not a plaintext JSON exception. |
+| Portable mode | Portable mode is marker-gated by `portable.flag`; credentials use a separate Argon2id + AES-256-GCM vault file, atomic private writes, and explicit native unlock/lock. The vault path must be a regular file and symlinks/directories are rejected. It is not a plaintext JSON exception. |
 | Application backups | Document that backups can contain session metadata; provide a safe export format and migration versioning. |
 | Host impersonation | SSH adapters must verify known_hosts/fingerprints and must never silently accept unknown keys. |
-| Remote content execution | Terminal output is rendered as terminal text only; URLs need explicit user action and are not automatic HTML. |
+| Remote content execution | Terminal output and PTY titles are rendered as bounded terminal/display text only; URL detection accepts bounded HTTP(S) links without embedded credentials, and opening one requires explicit user confirmation. No remote text becomes HTML or an automatic navigation. |
+| Saved startup command execution | Startup commands are optional, bounded session configuration, validated natively, and documented as shell input on SSH connect or after explicit confirmation for a saved local profile. They are not silently derived from remote content or snippets. |
 | Webview script injection | The Tauri CSP disallows `unsafe-eval`, objects, and framing; remote output is escaped before any non-terminal rendering. |
 | IPC abuse | Use typed, narrow commands with validation. Do not expose `execute_anything(command: String)`. |
 | X11 display/cookie exposure | X11 is opt-in and requires an explicit TCP/Unix display target. Rust generates the temporary forwarding cookie, keeps display bytes native, caps channels, and never reads or exposes `DISPLAY`/`.Xauthority` automatically. |

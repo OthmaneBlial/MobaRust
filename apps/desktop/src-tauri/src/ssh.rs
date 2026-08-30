@@ -31,7 +31,7 @@ const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
 const SSH_RECONNECT_ATTEMPTS: u8 = 3;
 const X11_CHANNEL_LIMIT: usize = 8;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectRequest {
     pub host: String,
@@ -49,6 +49,14 @@ pub struct SshConnectRequest {
     /// OpenSSH `ServerAliveInterval` value in seconds. Zero disables it.
     #[serde(default)]
     pub server_alive_interval: Option<u64>,
+    /// Explicit environment entries for the target shell. Values are
+    /// validated and applied only inside the native SSH transport.
+    #[serde(default)]
+    pub environment: Vec<(String, String)>,
+    #[serde(default)]
+    pub startup_directory: Option<String>,
+    #[serde(default)]
+    pub startup_command: Option<String>,
     #[serde(default = "default_terminal_cols")]
     pub cols: u32,
     #[serde(default = "default_terminal_rows")]
@@ -1272,6 +1280,13 @@ async fn connect_transport(
     vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
 ) -> Result<SshConnection, SshManagerError> {
+    mobarust_core::validate_session_environment(&request.environment)
+        .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?;
+    mobarust_core::validate_session_startup(
+        request.startup_directory.as_deref(),
+        request.startup_command.as_deref(),
+    )
+    .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?;
     let keepalive_interval = server_alive_interval_duration(request.server_alive_interval)?;
     let x11 = request
         .x11
@@ -1289,6 +1304,9 @@ async fn connect_transport(
         keepalive_interval,
         credentials,
         x11,
+        environment: request.environment.clone(),
+        startup_directory: request.startup_directory.clone(),
+        startup_command: request.startup_command.clone(),
     };
     let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
     for jump in &request.jump_hosts {
@@ -1305,6 +1323,9 @@ async fn connect_transport(
             keepalive_interval: server_alive_interval_duration(jump.server_alive_interval)?,
             credentials,
             x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
         });
     }
     if jump_options.is_empty() {
@@ -3290,13 +3311,52 @@ fn commit_local_file(
     destination: &Path,
     overwrite: bool,
 ) -> Result<(), SshError> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SshError::Sftp(
+                "download destination cannot be a symlink".into(),
+            ));
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(SshError::Sftp("download destination is a directory".into()));
+        }
+        Ok(_) if !overwrite => {
+            return Err(SshError::Sftp("download destination already exists".into()));
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(SshError::LocalIo(error));
+        }
+        _ => {}
+    }
+
     #[cfg(windows)]
-    if overwrite && destination.exists() {
-        std::fs::remove_file(destination).map_err(SshError::LocalIo)?;
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        let temporary = temporary
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let destination = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let flags = if overwrite {
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        } else {
+            MOVEFILE_WRITE_THROUGH
+        };
+        if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
+            return Err(SshError::LocalIo(std::io::Error::last_os_error()));
+        }
+        return Ok(());
     }
-    if !overwrite && destination.exists() {
-        return Err(SshError::Sftp("download destination already exists".into()));
-    }
+
     std::fs::rename(temporary, destination).map_err(SshError::LocalIo)
 }
 
@@ -3372,11 +3432,13 @@ fn default_terminal_rows() -> u32 {
 mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshTransferRequest,
-        TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, reconnect_with_backoff,
-        remote_child_path, server_alive_interval_duration, should_emit_transfer_progress,
-        transfer_metrics, validate_transfer_component,
+        TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
+        reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
+        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
     };
+    use std::fs;
     use std::time::{Duration, Instant};
+    use tempfile::tempdir;
     use tokio::sync::{oneshot, watch};
 
     #[test]
@@ -3408,6 +3470,51 @@ mod tests {
             );
         }
         assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
+
+    #[test]
+    fn local_download_commit_replaces_only_after_a_complete_temporary_file_exists() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("download.txt");
+        let temporary = directory.path().join(".download.txt.mobarust.part");
+        fs::write(&destination, b"old complete file").unwrap();
+        fs::write(&temporary, b"new complete file").unwrap();
+
+        commit_local_file(&temporary, &destination, true).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"new complete file");
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn local_download_commit_refuses_existing_destination_without_overwrite() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("download.txt");
+        let temporary = directory.path().join(".download.txt.mobarust.part");
+        fs::write(&destination, b"original").unwrap();
+        fs::write(&temporary, b"replacement").unwrap();
+
+        assert!(commit_local_file(&temporary, &destination, false).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
+        assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_download_commit_refuses_symlink_destination_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("target.txt");
+        let destination = directory.path().join("download.txt");
+        let temporary = directory.path().join(".download.txt.mobarust.part");
+        fs::write(&target, b"target remains unchanged").unwrap();
+        symlink(&target, &destination).unwrap();
+        fs::write(&temporary, b"replacement").unwrap();
+
+        assert!(commit_local_file(&temporary, &destination, true).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"target remains unchanged");
+        assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
     }
 
     #[test]

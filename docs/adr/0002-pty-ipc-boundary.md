@@ -10,6 +10,16 @@ The Rust PTY reader writes into a bounded synchronous channel. A second native w
 
 Input, resize, and close are separate typed Tauri commands. No command accepts an arbitrary shell string for native execution; the only shell process started by this slice is the user's discovered local shell.
 
+xterm also receives a small local HTTP(S)-only link provider. It parses each
+rendered buffer line with a 16-link and 2 KiB-per-link bound, refuses URLs with
+embedded user information, and asks for explicit confirmation before opening
+an external page. Remote output remains terminal text and is never inserted as
+HTML.
+
+PTY title-change events are normalized to bounded display-only tab text, and
+bell events are surfaced as a rate-limited UI notice. Neither event becomes
+HTML, a command, or an unbounded stream of frontend work.
+
 ## Consequences
 
 - A noisy process cannot create an unbounded IPC queue.

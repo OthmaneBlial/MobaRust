@@ -1,4 +1,4 @@
-use mobarust_core::OutputBatcher;
+use mobarust_core::{OutputBatcher, validate_session_environment, validate_session_startup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -26,6 +26,12 @@ pub enum TerminalError {
     UnsupportedTarget,
     #[error("WSL distribution name is invalid")]
     InvalidWslDistribution,
+    #[error("local terminal working directory is invalid")]
+    InvalidWorkingDirectory,
+    #[error("local terminal environment is invalid")]
+    InvalidEnvironment,
+    #[error("local terminal startup command is invalid")]
+    InvalidStartupCommand,
     #[cfg(target_os = "windows")]
     #[error("WSL distribution discovery timed out")]
     WslDiscoveryTimeout,
@@ -41,9 +47,47 @@ pub enum TerminalError {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LocalTerminalTarget {
     #[serde(rename = "default")]
-    Default,
+    Default {
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        environment: Vec<(String, String)>,
+        #[serde(default)]
+        startup_command: Option<String>,
+    },
     #[serde(rename = "wsl")]
-    Wsl { distribution: String },
+    Wsl {
+        distribution: String,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        environment: Vec<(String, String)>,
+        #[serde(default)]
+        startup_command: Option<String>,
+    },
+}
+
+impl LocalTerminalTarget {
+    fn validate(&self) -> Result<(), TerminalError> {
+        let (cwd, environment, startup_command) = match self {
+            Self::Default {
+                cwd,
+                environment,
+                startup_command,
+            }
+            | Self::Wsl {
+                cwd,
+                environment,
+                startup_command,
+                ..
+            } => (cwd, environment, startup_command),
+        };
+        validate_session_startup(cwd.as_deref(), None)
+            .map_err(|_| TerminalError::InvalidWorkingDirectory)?;
+        validate_session_startup(None, startup_command.as_deref())
+            .map_err(|_| TerminalError::InvalidStartupCommand)?;
+        validate_session_environment(environment).map_err(|_| TerminalError::InvalidEnvironment)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +122,7 @@ impl TerminalManager {
         rows: u16,
         target: LocalTerminalTarget,
     ) -> Result<String, TerminalError> {
+        target.validate()?;
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
@@ -88,16 +133,32 @@ impl TerminalManager {
             })
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
 
-        let mut command = match target {
-            LocalTerminalTarget::Default => {
+        let (mut command, startup_command) = match target {
+            LocalTerminalTarget::Default {
+                cwd,
+                environment,
+                startup_command,
+            } => {
                 let shell = default_shell();
-                portable_pty::CommandBuilder::new(&shell)
+                let mut command = portable_pty::CommandBuilder::new(&shell);
+                if let Some(cwd) = cwd {
+                    command.cwd(cwd);
+                }
+                for (name, value) in environment {
+                    command.env(name, value);
+                }
+                (command, startup_command)
             }
-            LocalTerminalTarget::Wsl { distribution } => {
+            LocalTerminalTarget::Wsl {
+                distribution,
+                cwd,
+                environment,
+                startup_command,
+            } => {
                 let distribution = validate_wsl_distribution(&distribution)?;
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = distribution;
+                    let _ = (distribution, cwd, environment, startup_command);
                     return Err(TerminalError::UnsupportedTarget);
                 }
                 #[cfg(target_os = "windows")]
@@ -105,14 +166,21 @@ impl TerminalManager {
                     let mut command = portable_pty::CommandBuilder::new("wsl.exe");
                     command.arg("--distribution");
                     command.arg(distribution);
-                    command
+                    if let Some(cwd) = cwd {
+                        command.arg("--cd");
+                        command.arg(cwd);
+                    }
+                    for (name, value) in environment {
+                        command.env(name, value);
+                    }
+                    (command, startup_command)
                 }
             }
         };
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(command)
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
@@ -120,10 +188,20 @@ impl TerminalManager {
             .master
             .try_clone_reader()
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
-        let writer = pair
+        let mut writer = pair
             .master
             .take_writer()
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+        if let Some(startup_command) = startup_command {
+            let startup_result = writer
+                .write_all(startup_command.as_bytes())
+                .and_then(|()| writer.write_all(b"\r"))
+                .and_then(|()| writer.flush());
+            if let Err(error) = startup_result {
+                let _ = child.kill();
+                return Err(TerminalError::Io(error));
+            }
+        }
         let id = Uuid::new_v4().to_string();
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
@@ -457,6 +535,53 @@ mod tests {
         assert!(validate_wsl_distribution("Ubuntu\n").is_err());
         assert!(validate_wsl_distribution("--root").is_err());
         assert_eq!(validate_wsl_distribution(" Ubuntu ").unwrap(), "Ubuntu");
+    }
+
+    #[test]
+    fn local_target_defaults_keep_legacy_deserialization_compatible() {
+        let target: LocalTerminalTarget =
+            serde_json::from_str(r#"{"type":"default"}"#).expect("deserialize legacy local target");
+        assert_eq!(
+            target,
+            LocalTerminalTarget::Default {
+                cwd: None,
+                environment: Vec::new(),
+                startup_command: None,
+            }
+        );
+    }
+
+    #[test]
+    fn local_target_rejects_invalid_startup_configuration_without_touching_paths() {
+        let target = LocalTerminalTarget::Default {
+            cwd: Some("/tmp/mobarust\nfixture".into()),
+            environment: vec![("SAFE_NAME".into(), "safe".into())],
+            startup_command: None,
+        };
+        assert!(matches!(
+            target.validate(),
+            Err(TerminalError::InvalidWorkingDirectory)
+        ));
+
+        let target = LocalTerminalTarget::Default {
+            cwd: None,
+            environment: vec![("BAD-NAME".into(), "value".into())],
+            startup_command: None,
+        };
+        assert!(matches!(
+            target.validate(),
+            Err(TerminalError::InvalidEnvironment)
+        ));
+
+        let target = LocalTerminalTarget::Default {
+            cwd: None,
+            environment: Vec::new(),
+            startup_command: Some("printf\nunsafe".into()),
+        };
+        assert!(matches!(
+            target.validate(),
+            Err(TerminalError::InvalidStartupCommand)
+        ));
     }
 
     #[cfg(not(target_os = "windows"))]
