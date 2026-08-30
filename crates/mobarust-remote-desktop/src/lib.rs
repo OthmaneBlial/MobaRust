@@ -718,6 +718,26 @@ impl HelperSupervisor {
         self.child.stdout.as_mut()
     }
 
+    /// Transfers the native stdin pipe to a dedicated writer task. The child
+    /// process remains owned by this supervisor, so `stop` can still perform
+    /// bounded graceful shutdown and forced reaping.
+    pub fn take_stdin(&mut self) -> Result<ChildStdin, HelperProcessError> {
+        self.child
+            .stdin
+            .take()
+            .ok_or(HelperProcessError::StdinUnavailable)
+    }
+
+    /// Transfers the native stdout pipe to a dedicated reader task. Keeping
+    /// the pipe separate from the child handle lets input and framebuffer
+    /// events flow concurrently without a mutex held across a blocking read.
+    pub fn take_stdout(&mut self) -> Result<ChildStdout, HelperProcessError> {
+        self.child
+            .stdout
+            .take()
+            .ok_or(HelperProcessError::StdoutUnavailable)
+    }
+
     pub fn try_exit_status(&mut self) -> Result<Option<ExitStatus>, HelperProcessError> {
         self.child.try_wait().map_err(HelperProcessError::Wait)
     }

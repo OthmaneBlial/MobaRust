@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+mod remote_desktop;
 mod serial;
 mod ssh;
 mod telnet;
@@ -10,6 +11,7 @@ use mobarust_core::{
     AppSettings, AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
+use mobarust_remote_desktop::HelperCommand;
 use mobarust_ssh::{SshFingerprintOptions, inspect_host_key};
 use mobarust_store::{
     MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
@@ -18,6 +20,9 @@ use mobarust_vault::{
     CredentialId, CredentialLookup, PlatformVault, PortableVault, SecretMaterial, VaultError,
 };
 use network::{NetworkManager, NetworkScanRequest};
+use remote_desktop::{
+    RemoteDesktopConnectRequest, RemoteDesktopConnectResponse, RemoteDesktopManager, helper_program,
+};
 use serde::Serialize;
 use serial::{SerialConnectRequest, SerialManager};
 use ssh::{
@@ -124,6 +129,13 @@ struct PortableVaultPutRequest {
     secret: Zeroizing<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteDesktopClipboardRequest {
+    session_id: String,
+    text: Zeroizing<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableVaultStatus {
@@ -167,6 +179,80 @@ fn diagnostic_timeout(timeout_ms: u64) -> Result<std::time::Duration, String> {
         return Err("diagnostic timeout must be between 50 and 60000 milliseconds".into());
     }
     Ok(std::time::Duration::from_millis(timeout_ms))
+}
+
+#[tauri::command]
+async fn remote_desktop_start(
+    app: tauri::AppHandle,
+    manager: State<'_, RemoteDesktopManager>,
+    resolver: State<'_, CredentialResolver>,
+    request: RemoteDesktopConnectRequest,
+) -> Result<RemoteDesktopConnectResponse, String> {
+    let program = helper_program(&app, request.protocol)?;
+    manager.start(app, program, &*resolver, request).await
+}
+
+#[tauri::command]
+async fn remote_desktop_key(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+    scancode: u32,
+    pressed: bool,
+) -> Result<(), String> {
+    manager
+        .send(&session_id, HelperCommand::Key { scancode, pressed })
+        .await
+}
+
+#[tauri::command]
+async fn remote_desktop_pointer(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+    x: u16,
+    y: u16,
+    buttons: u8,
+) -> Result<(), String> {
+    manager
+        .send(&session_id, HelperCommand::Pointer { x, y, buttons })
+        .await
+}
+
+#[tauri::command]
+async fn remote_desktop_resize(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+    width: u16,
+    height: u16,
+) -> Result<(), String> {
+    manager
+        .send(
+            &session_id,
+            HelperCommand::Resize {
+                display: mobarust_remote_desktop::DisplaySize { width, height },
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+async fn remote_desktop_clipboard(
+    manager: State<'_, RemoteDesktopManager>,
+    payload: RemoteDesktopClipboardRequest,
+) -> Result<(), String> {
+    manager
+        .send(
+            &payload.session_id,
+            HelperCommand::Clipboard { text: payload.text },
+        )
+        .await
+}
+
+#[tauri::command]
+async fn remote_desktop_stop(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+) -> Result<(), String> {
+    manager.stop(&session_id).await
 }
 
 #[tauri::command]
@@ -1211,6 +1297,7 @@ fn main() {
             app.manage(Mutex::new(settings));
             app.manage(Mutex::new(snippets));
             app.manage(Mutex::new(macros));
+            app.manage(RemoteDesktopManager::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1250,6 +1337,12 @@ fn main() {
             network_diagnostic_cancel,
             network_scan_start,
             network_scan_cancel,
+            remote_desktop_start,
+            remote_desktop_key,
+            remote_desktop_pointer,
+            remote_desktop_resize,
+            remote_desktop_clipboard,
+            remote_desktop_stop,
             ssh_connect,
             ssh_write,
             ssh_resize,

@@ -2853,6 +2853,7 @@ dependencies = [
  "anyhow",
  "mobarust-core",
  "mobarust-network",
+ "mobarust-remote-desktop",
  "mobarust-serial",
  "mobarust-ssh",
  "mobarust-store",
