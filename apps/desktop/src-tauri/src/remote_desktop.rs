@@ -87,6 +87,21 @@ struct HelperCapabilityRequirements {
     color_depth: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionCommandPolicy {
+    protocol: DesktopProtocol,
+    clipboard_enabled: bool,
+}
+
+impl From<HelperCapabilityRequirements> for SessionCommandPolicy {
+    fn from(requirements: HelperCapabilityRequirements) -> Self {
+        Self {
+            protocol: requirements.protocol,
+            clipboard_enabled: requirements.clipboard,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct HelperEventProgress {
     hello_seen: bool,
@@ -110,6 +125,7 @@ struct ManagedSession {
     commands: mpsc::Sender<HelperCommand>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
     stop_requested: Arc<AtomicBool>,
+    command_policy: SessionCommandPolicy,
 }
 
 #[derive(Clone, Default)]
@@ -230,6 +246,7 @@ impl RemoteDesktopManager {
                 commands: command_tx,
                 supervisor: Arc::clone(&supervisor),
                 stop_requested: Arc::clone(&stop_requested),
+                command_policy: capability_requirements.into(),
             },
         );
         let sessions = Arc::clone(&self.sessions);
@@ -273,6 +290,7 @@ impl RemoteDesktopManager {
             .get(session_id)
             .cloned()
             .ok_or_else(|| "remote desktop session was not found".to_owned())?;
+        validate_command_for_session(session.command_policy, &command)?;
         session
             .commands
             .send(command)
@@ -710,6 +728,21 @@ fn validate_helper_capabilities(
     Ok(())
 }
 
+fn validate_command_for_session(
+    policy: SessionCommandPolicy,
+    command: &HelperCommand,
+) -> Result<(), String> {
+    match command {
+        HelperCommand::Resize { .. } if policy.protocol != DesktopProtocol::Rdp => {
+            Err("remote desktop server resize is unavailable for this protocol".into())
+        }
+        HelperCommand::Clipboard { .. } if !policy.clipboard_enabled => {
+            Err("remote desktop clipboard input is disabled for this session".into())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
     let _ = app.emit(
         "remote-desktop://event",
@@ -730,14 +763,15 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 mod tests {
     use super::{
         HelperCapabilityRequirements, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
-        MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest,
-        claim_unexpected_helper_exit, helper_input_failure_message, validate_helper_capabilities,
-        validate_helper_event, validate_helper_resource, validate_request,
+        MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, SessionCommandPolicy,
+        claim_unexpected_helper_exit, helper_input_failure_message, validate_command_for_session,
+        validate_helper_capabilities, validate_helper_event, validate_helper_resource,
+        validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
-        HelperEvent, HelperProtocolError, HelperState, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
-        WIRE_VERSION,
+        HelperCommand, HelperEvent, HelperProtocolError, HelperState,
+        MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, WIRE_VERSION,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -905,6 +939,67 @@ mod tests {
             reconnect_enabled: true,
             reconnect_attempts: DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
         }
+    }
+
+    #[test]
+    fn session_command_policy_blocks_protocol_unsupported_operations() {
+        let vnc_policy = SessionCommandPolicy {
+            protocol: DesktopProtocol::Vnc,
+            clipboard_enabled: false,
+        };
+        let resize_error = validate_command_for_session(
+            vnc_policy,
+            &HelperCommand::Resize {
+                display: mobarust_remote_desktop::DisplaySize {
+                    width: 1024,
+                    height: 768,
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(resize_error.contains("unavailable"));
+
+        let clipboard_error = validate_command_for_session(
+            vnc_policy,
+            &HelperCommand::Clipboard {
+                text: String::from("must stay blocked").into(),
+            },
+        )
+        .unwrap_err();
+        assert!(clipboard_error.contains("disabled"));
+    }
+
+    #[test]
+    fn session_command_policy_allows_enabled_rdp_input() {
+        let policy = SessionCommandPolicy {
+            protocol: DesktopProtocol::Rdp,
+            clipboard_enabled: true,
+        };
+        validate_command_for_session(
+            policy,
+            &HelperCommand::Resize {
+                display: mobarust_remote_desktop::DisplaySize {
+                    width: 1280,
+                    height: 720,
+                },
+            },
+        )
+        .unwrap();
+        validate_command_for_session(
+            policy,
+            &HelperCommand::Clipboard {
+                text: String::from("approved by the session policy").into(),
+            },
+        )
+        .unwrap();
+        validate_command_for_session(
+            policy,
+            &HelperCommand::Key {
+                scancode: 30,
+                pressed: true,
+            },
+        )
+        .unwrap();
     }
 
     #[test]

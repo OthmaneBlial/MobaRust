@@ -41,6 +41,10 @@ messages before a process is started:
   silently discarding data;
 - the parent requires `Hello` as the first event and rejects duplicate
   handshakes or active data that arrives before a validated capability report;
+- the parent stores the requested protocol policy with each live session and
+  rejects protocol-unsupported commands before they enter the helper queue;
+  VNC server resize is rejected, and clipboard input requires explicit session
+  opt-in;
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and
