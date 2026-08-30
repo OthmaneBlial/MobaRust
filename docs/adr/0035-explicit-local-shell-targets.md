@@ -28,7 +28,9 @@ The frontend exposes only the shell choices supported by the detected desktop
 platform. It never accepts an arbitrary executable path for this feature and
 never constructs a shell command string. Working directory, environment, and
 startup-command validation remain unchanged and are applied before a PTY is
-opened.
+opened. The frontend's `startupCommand` field is explicitly mapped to the
+native `startup_command` field at the serde boundary, so saved local profiles
+keep the same typed payload contract as newly created terminals.
 
 An explicitly unsupported choice returns a stable platform error before any
 process or filesystem discovery. A missing Unix shell is allowed to fail at
@@ -42,9 +44,9 @@ macOS/Linux users explicit bash/zsh/fish entry points while preserving the
 configured default shell. It keeps the launch contract auditable and avoids
 turning shell selection into an unrestricted process-execution API.
 
-The local tests prove legacy JSON compatibility, fixed executable mapping, and
-fail-closed behavior for a platform-incompatible choice. Real Windows
+The local tests prove legacy JSON compatibility, the camelCase startup-command
+payload, fixed executable mapping, and fail-closed behavior for a
+platform-incompatible choice. Real Windows
 PowerShell/cmd, WSL, Linux shell, and installed-shell behavior still require
 target-runtime validation and must be recorded separately from macOS fixture
 evidence.
-

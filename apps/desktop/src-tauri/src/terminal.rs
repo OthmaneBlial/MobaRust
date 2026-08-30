@@ -62,6 +62,7 @@ pub enum LocalTerminalTarget {
         #[serde(default)]
         environment: Vec<(String, String)>,
         #[serde(default)]
+        #[serde(rename = "startupCommand")]
         startup_command: Option<String>,
     },
     #[serde(rename = "wsl")]
@@ -72,6 +73,7 @@ pub enum LocalTerminalTarget {
         #[serde(default)]
         environment: Vec<(String, String)>,
         #[serde(default)]
+        #[serde(rename = "startupCommand")]
         startup_command: Option<String>,
     },
 }
@@ -692,16 +694,17 @@ mod tests {
 
     #[test]
     fn explicit_shell_choices_deserialize_without_accepting_an_executable_path() {
-        let target: LocalTerminalTarget =
-            serde_json::from_str(r#"{"type":"default","shell":"powershell"}"#)
-                .expect("deserialize typed shell target");
+        let target: LocalTerminalTarget = serde_json::from_str(
+            r#"{"type":"default","shell":"powershell","startupCommand":"printf ok"}"#,
+        )
+        .expect("deserialize typed shell target");
         assert_eq!(
             target,
             LocalTerminalTarget::Default {
                 shell: LocalShell::PowerShell,
                 cwd: None,
                 environment: Vec::new(),
-                startup_command: None,
+                startup_command: Some("printf ok".into()),
             }
         );
 
@@ -713,7 +716,7 @@ mod tests {
     #[test]
     fn local_terminal_target_rejects_unknown_nested_fields() {
         let default_target: Result<LocalTerminalTarget, _> = serde_json::from_str(
-            r#"{"type":"default","cwd":null,"environment":[],"startupCommand":null,"unknown":true}"#,
+            r#"{"type":"default","cwd":null,"environment":[],"unknown":true}"#,
         );
         assert!(default_target.is_err());
 
