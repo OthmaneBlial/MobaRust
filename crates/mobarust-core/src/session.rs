@@ -393,6 +393,21 @@ mod tests {
             session.validate(),
             Err(SessionValidationError::InvalidServerAliveInterval)
         );
+
+        let mut jump_session = SessionRecord::local_terminal("local");
+        jump_session.jump_host_profiles = vec![JumpHostRecord {
+            host: "127.0.0.1".into(),
+            port: 22,
+            username: "fixture".into(),
+            auth: AuthMethod::Agent,
+            known_hosts_path: None,
+            pinned_fingerprint: None,
+            server_alive_interval: Some(MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1),
+        }];
+        assert_eq!(
+            jump_session.validate(),
+            Err(SessionValidationError::InvalidServerAliveInterval)
+        );
     }
 
     #[test]
