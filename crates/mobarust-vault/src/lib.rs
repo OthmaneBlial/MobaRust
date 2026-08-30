@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::consts::U12;
@@ -327,13 +327,7 @@ impl PortableVault {
     pub fn open(path: impl Into<PathBuf>, passphrase: &SecretMaterial) -> Result<Self, VaultError> {
         let path = path.into();
         ensure_portable_path_is_safe(&path, false)?;
-        let bytes = fs::read(&path).map_err(|source| VaultError::PortableIo {
-            path: path.clone(),
-            source,
-        })?;
-        if bytes.len() > PORTABLE_MAX_FILE_BYTES {
-            return Err(VaultError::PortableFileTooLarge);
-        }
+        let bytes = read_portable_file(&path)?;
         if bytes.len() < PORTABLE_HEADER_BYTES {
             return Err(VaultError::PortableFormat("header is truncated".into()));
         }
@@ -529,6 +523,39 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], VaultError> {
     Ok(bytes)
 }
 
+/// Read an application-controlled vault through a bounded file handle. The
+/// size check must happen before allocating a buffer from an untrusted file's
+/// reported length; otherwise a hostile portable file can turn an input limit
+/// into an allocation-after-read denial of service.
+fn read_portable_file(path: &Path) -> Result<Vec<u8>, VaultError> {
+    let file = fs::File::open(path).map_err(|source| VaultError::PortableIo {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| VaultError::PortableIo {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(VaultError::PortablePathUnsafe(path.to_path_buf()));
+    }
+    if metadata.len() > PORTABLE_MAX_FILE_BYTES as u64 {
+        return Err(VaultError::PortableFileTooLarge);
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(PORTABLE_MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| VaultError::PortableIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if bytes.len() > PORTABLE_MAX_FILE_BYTES {
+        return Err(VaultError::PortableFileTooLarge);
+    }
+    Ok(bytes)
+}
+
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     ensure_portable_path_is_safe(path, true)?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -662,6 +689,24 @@ mod tests {
             Err(VaultError::SecretTooLarge)
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn portable_vault_rejects_an_oversized_file_before_reading_it() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("portable-vault.bin");
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(super::PORTABLE_MAX_FILE_BYTES as u64 + 1)
+            .unwrap();
+
+        assert!(matches!(
+            PortableVault::open(&path, &SecretMaterial::new("fixture-passphrase")),
+            Err(VaultError::PortableFileTooLarge)
+        ));
     }
 
     #[test]
