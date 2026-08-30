@@ -20,7 +20,7 @@ use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential,
     HelperCredentialKind, HelperEvent, HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES,
     MAX_FRAME_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame,
-    decode_credential_frame, write_event_frame,
+    decode_credential_frame, vnc_keysym_is_supported, write_event_frame,
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -535,6 +535,10 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Key { scancode, pressed } => {
+            if !vnc_keysym_is_supported(scancode) {
+                send_error(stdout, "VNC keyboard keysym is outside the supported range").await?;
+                return Ok(false);
+            }
             send_vnc_input(
                 client.input(X11Event::KeyEvent((scancode, pressed).into())),
                 "VNC keyboard input failed",
@@ -1482,6 +1486,14 @@ mod tests {
         };
         assert_eq!(bounded_vnc_point(0, 0, display), (0, 0));
         assert_eq!(bounded_vnc_point(65_535, 65_535, display), (1279, 719));
+    }
+
+    #[test]
+    fn keyboard_keysyms_are_bounded_before_rfb_forwarding() {
+        assert!(vnc_keysym_is_supported(0x61));
+        assert!(vnc_keysym_is_supported(0x0101_f600));
+        assert!(!vnc_keysym_is_supported(0));
+        assert!(!vnc_keysym_is_supported(u32::MAX));
     }
 
     #[tokio::test]

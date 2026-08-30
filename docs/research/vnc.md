@@ -95,7 +95,9 @@ RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
 pointer, bounded Latin-1 clipboard input, and Tight/JPEG rectangles through a
 bounded native decoder. Client-requested server-side resize is reported rather
 than simulated; a server-announced `DesktopSize` change is applied to the
-bounded canvas.
+bounded canvas. Browser text input maps printable Unicode characters to X11
+keysyms (including the `0x01000000 | code point` form), while the helper
+rejects zero and out-of-range keysyms before they reach the RFB engine.
 
 `tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
 password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated

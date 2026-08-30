@@ -72,6 +72,18 @@ const VNC_SPECIAL_CODES: Readonly<Record<string, number>> = {
   F1: 0xffbe, F2: 0xffbf, F3: 0xffc0, F4: 0xffc1, F5: 0xffc2, F6: 0xffc3, F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9,
 };
 
+const VNC_UNICODE_KEYSYM_PREFIX = 0x01000000;
+
+/** Encode one browser character as an X11/VNC keysym without truncation. */
+export function vncKeysymForText(key: string): number | null {
+  const characters = Array.from(key);
+  if (characters.length !== 1) return null;
+  const codePoint = characters[0]?.codePointAt(0);
+  if (codePoint === undefined || codePoint < 0x20 || codePoint === 0x7f || codePoint > 0x10ffff) return null;
+  if (codePoint <= 0x7e || (codePoint >= 0xa0 && codePoint <= 0xff)) return codePoint;
+  return VNC_UNICODE_KEYSYM_PREFIX | codePoint;
+}
+
 /** Map a browser keyboard event to the protocol-specific remote key value. */
 export function remoteDesktopKeyCode(
   protocol: RemoteDesktopProtocol,
@@ -79,7 +91,7 @@ export function remoteDesktopKeyCode(
   key: string,
 ): number | null {
   if (protocol === "rdp") return RDP_SCAN_CODES[code] ?? null;
-  return VNC_SPECIAL_CODES[code] ?? VNC_SPECIAL_KEYS[key] ?? (key.length === 1 ? key.codePointAt(0) ?? null : null);
+  return VNC_SPECIAL_CODES[code] ?? VNC_SPECIAL_KEYS[key] ?? vncKeysymForText(key);
 }
 
 function positiveFinite(value: number): boolean {

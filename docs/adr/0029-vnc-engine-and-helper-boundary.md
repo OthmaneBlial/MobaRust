@@ -80,6 +80,10 @@ inside the helper. This protects delayed input events that arrive after a
 server-announced resize and keeps protocol coordinates within the negotiated
 surface.
 
+Printable browser Unicode is encoded as an X11 keysym before the VNC command
+crosses the native boundary. The helper bounds the resulting keysym and rejects
+zero or out-of-range values instead of forwarding malformed keyboard input.
+
 Until those checks pass, MobaRust must not advertise VNC as implemented. A
 mock, screenshot, static framebuffer, or external viewer launch alone is not
 evidence of an embedded VNC client.

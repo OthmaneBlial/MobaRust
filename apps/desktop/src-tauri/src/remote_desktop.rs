@@ -5,7 +5,7 @@ use mobarust_remote_desktop::{
     MAX_DOMAIN_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES,
     MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy, decode_event_frame,
     encode_command_frame, read_frame, validate_gateway_endpoint, validate_rdp_color_depth,
-    write_frame_with_timeout,
+    vnc_keysym_is_supported, write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -925,6 +925,11 @@ fn validate_command_for_session(
         HelperCommand::Clipboard { .. } if capabilities.is_some_and(|value| !value.clipboard) => {
             Err("remote desktop helper does not support clipboard input for this session".into())
         }
+        HelperCommand::Key { scancode, .. }
+            if policy.protocol == DesktopProtocol::Vnc && !vnc_keysym_is_supported(*scancode) =>
+        {
+            Err("VNC keyboard keysym is outside the supported range".into())
+        }
         _ => Ok(()),
     }
 }
@@ -1432,6 +1437,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(clipboard_error.contains("disabled"));
+
+        let keysym_error = validate_command_for_session(
+            vnc_policy,
+            None,
+            HelperSessionPhase::Active,
+            &HelperCommand::Key {
+                scancode: u32::MAX,
+                pressed: true,
+            },
+        )
+        .unwrap_err();
+        assert!(keysym_error.contains("keysym"));
     }
 
     #[test]

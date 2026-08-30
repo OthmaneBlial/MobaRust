@@ -30,6 +30,7 @@ import {
   remoteDesktopKeyState,
   remoteDesktopPointerPoint,
   remoteDesktopSizeChanged,
+  vncKeysymForText,
 } from "../src/remote-desktop-input.ts";
 import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
@@ -45,6 +46,11 @@ assert.equal(remoteDesktopKeyCode("rdp", "Pause", "Pause"), null);
 assert.equal(remoteDesktopKeyCode("vnc", "F1", "F1"), 0xffbe);
 assert.equal(remoteDesktopKeyCode("vnc", "Numpad7", "7"), 0xffb7);
 assert.equal(remoteDesktopKeyCode("vnc", "KeyA", "a"), 0x61);
+assert.equal(vncKeysymForText("é"), 0xe9);
+assert.equal(vncKeysymForText("€"), 0x010020ac);
+assert.equal(vncKeysymForText("😀"), 0x0101f600);
+assert.equal(vncKeysymForText("ab"), null);
+assert.equal(vncKeysymForText("\u0001"), null);
 
 const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>&lt;already-encoded&gt;';
 for (const language of ["plain", "shell", "json", "yaml", "ini"]) {

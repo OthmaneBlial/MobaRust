@@ -37,6 +37,13 @@ pub const HELPER_PIPE_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// the shared contract prevents the frontend from sending browser/evdev-style
 /// values that the RDP engine would interpret as a different key.
 pub const RDP_EXTENDED_SCANCODE_MASK: u32 = 0x100;
+pub const VNC_UNICODE_KEYSYM_PREFIX: u32 = 0x0100_0000;
+pub const MAX_VNC_KEYSYM: u32 = 0x01ff_ffff;
+
+/// Accept only bounded X11 keysyms at the native VNC boundary.
+pub fn vnc_keysym_is_supported(keysym: u32) -> bool {
+    keysym != 0 && keysym <= MAX_VNC_KEYSYM
+}
 
 pub fn rdp_scancode_parts(scancode: u32) -> Option<(u8, bool)> {
     if scancode & !0x17f != 0 {
