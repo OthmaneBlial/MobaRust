@@ -180,8 +180,18 @@ impl X11Display {
                     .map(X11Stream::Unix)
             }
         };
-        result.map_err(|error| SshError::X11Transport(error.to_string()))
+        result.map_err(map_x11_io_error)
     }
+}
+
+fn map_x11_io_error(error: std::io::Error) -> SshError {
+    let message = match error.kind() {
+        std::io::ErrorKind::NotFound => "X11 display socket was not found",
+        std::io::ErrorKind::ConnectionRefused => "X11 display connection was refused",
+        std::io::ErrorKind::TimedOut => "X11 display connection timed out",
+        _ => "X11 display transport failed",
+    };
+    SshError::X11Transport(message.into())
 }
 
 /// Opt-in X11 forwarding configuration. The authentication cookie is
@@ -1289,7 +1299,7 @@ impl SshConnection {
         let mut remote = channel.into_stream();
         copy_bidirectional(&mut remote, &mut local)
             .await
-            .map_err(|error| SshError::X11Transport(error.to_string()))?;
+            .map_err(map_x11_io_error)?;
         Ok(())
     }
 }
@@ -2718,6 +2728,21 @@ mod tests {
             assert_eq!(&response, b"MOBARUST_X11_OK");
             server.await.unwrap();
         });
+    }
+
+    #[test]
+    fn x11_transport_errors_are_categorized_without_raw_socket_details() {
+        let error = map_x11_io_error(std::io::Error::other("private-display-path"));
+        assert_eq!(
+            error.to_string(),
+            "X11 display connection failed: X11 display transport failed"
+        );
+        assert!(!error.to_string().contains("private-display-path"));
+        assert_eq!(
+            map_x11_io_error(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+                .to_string(),
+            "X11 display connection failed: X11 display connection was refused"
+        );
     }
 
     #[test]

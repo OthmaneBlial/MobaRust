@@ -14,6 +14,8 @@ SFTP file movement uses `tokio::io::copy` between async readers and writers. The
 
 Connection setup maps common transport causes into typed, redacted errors: DNS failure, refusal, unreachable host, timeout, generic network failure, or handshake failure. Raw hostnames, socket details, and library error text are not propagated to the user-facing error by default; host-key rejection remains a separate, explicit result with only the observed fingerprint.
 
+The opt-in X11 bridge applies the same boundary to local-display I/O. It accepts only the configured loopback TCP or absolute Unix-socket target and reports categorized display errors without returning raw socket paths or operating-system error text.
+
 ## Rejected alternatives
 
 - shelling out to the system `ssh` client: it would make lifecycle, PTY, host-key UX, and transfer cancellation harder to own consistently;
