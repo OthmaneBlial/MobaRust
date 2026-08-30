@@ -173,6 +173,14 @@ or emits an unexpected termination error before the helper chooses `Lost` or
 starts a reconnect. This remains local lifecycle evidence, not proof of a real
 RDP server or cross-platform runtime.
 
+The real-process fixture now also sends `Start`, the session credential, and the
+role-tagged Gateway credential in sequence, then verifies that the helper
+reaches `Ready` without treating the second frame as invalid input. A closed
+loopback Gateway endpoint ends the candidate cleanly and the test asserts that
+neither fixture secret appears in diagnostics. This proves ordering and
+redaction at the native process boundary; it does not prove Gateway protocol
+interoperability.
+
 The helper also revalidates every dynamic resize at the final native command
 handler before enqueueing it into IronRDP. Invalid dimensions therefore cannot
 mutate the remembered display size or reach the engine even if a future caller

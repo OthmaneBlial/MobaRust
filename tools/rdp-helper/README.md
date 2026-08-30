@@ -104,3 +104,10 @@ outcome plus clean process exit against a disposable loopback socket that
 closes immediately. It proves the
 helper-process boundary and cancellation/exit behavior; it does not prove
 compatibility with a real RDP server.
+
+The same fixture suite sends the session credential and the role-tagged Gateway
+credential as two ordered native frames. The helper waits for both before
+starting the candidate transport, and the closed loopback Gateway outcome
+proves that the second frame is not mistaken for invalid input. Both fixture
+secrets are checked against diagnostics; this is ordering/redaction evidence,
+not Gateway interoperability evidence.
