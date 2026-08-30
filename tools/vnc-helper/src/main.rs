@@ -562,8 +562,10 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             if let Err(message) = validate_clipboard_input(&text, clipboard_enabled) {
                 send_error(stdout, message).await?;
             } else {
+                let mut text = text;
+                let native_text = std::mem::take(&mut *text);
                 send_vnc_input(
-                    client.input(X11Event::CopyText(text.to_string())),
+                    client.input(X11Event::CopyText(native_text)),
                     "VNC clipboard input failed",
                     "VNC clipboard input timed out",
                 )
