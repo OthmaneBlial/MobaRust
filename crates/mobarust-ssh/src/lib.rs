@@ -134,6 +134,7 @@ pub enum SshError {
 /// user-visible tunnel event.
 pub fn validate_forward_host(value: &str) -> Result<(), SshError> {
     if value.trim().is_empty()
+        || value != value.trim()
         || value.len() > MAX_FORWARD_HOST_BYTES
         || value.chars().any(char::is_control)
     {
@@ -2834,6 +2835,7 @@ mod tests {
         assert!(validate_forward_host("db.internal").is_ok());
         assert!(validate_forward_host("[::1]").is_ok());
         assert!(validate_forward_host("").is_err());
+        assert!(validate_forward_host(" db.internal ").is_err());
         assert!(validate_forward_host("db\ninternal").is_err());
         assert!(validate_forward_host(&"h".repeat(MAX_FORWARD_HOST_BYTES + 1)).is_err());
     }

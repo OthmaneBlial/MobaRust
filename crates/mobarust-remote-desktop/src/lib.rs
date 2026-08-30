@@ -362,6 +362,9 @@ fn validate_metadata(
     if value.chars().any(char::is_control) {
         return Err(HelperProtocolError::MetadataContainsControl { field });
     }
+    if value != value.trim() {
+        return Err(HelperProtocolError::MetadataHasOuterWhitespace { field });
+    }
     Ok(())
 }
 
@@ -864,6 +867,8 @@ pub enum HelperProtocolError {
     MetadataTooLarge { field: &'static str, bytes: usize },
     #[error("helper {field} contains control characters")]
     MetadataContainsControl { field: &'static str },
+    #[error("helper {field} has leading or trailing whitespace")]
+    MetadataHasOuterWhitespace { field: &'static str },
     #[error("RDP gateway settings are supported only for RDP")]
     GatewayOnlyForRdp,
     #[error("RDP gateway settings require an endpoint, username, and credential reference")]
@@ -1501,6 +1506,13 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(HelperProtocolError::MetadataContainsControl { field: "domain" })
+        ));
+
+        let mut config = launch_config();
+        config.username = " fixture-user".into();
+        assert!(matches!(
+            config.validate(),
+            Err(HelperProtocolError::MetadataHasOuterWhitespace { field: "username" })
         ));
 
         let mut config = launch_config();

@@ -39,6 +39,9 @@ messages before a process is started:
 - envelopes and every deserialized payload reject unknown fields, so a
   malformed or newer-incompatible helper message fails closed instead of
   silently discarding data;
+- connection metadata is bounded and rejects control characters and leading or
+  trailing whitespace before it reaches a helper, listener, or protocol
+  channel;
 - the parent requires `Hello` as the first event, `Ready` before each
   capability report, and rejects duplicate handshakes or active data that
   arrives before a validated capability report;

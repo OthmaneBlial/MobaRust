@@ -105,6 +105,8 @@ MobaRust is designed for operators who cannot afford an accidental production ac
 - broadcast input requires explicit target selection and has an emergency disable path;
 - pasted multiline shell commands are not automatically executed;
 - network work uses operation-specific timeouts, cancellation, and bounded retries;
+- connection metadata is bounded and rejects control characters and accidental
+  leading/trailing whitespace before native channels or helpers are opened;
 - local protocol fixtures use disposable state and loopback networking.
 
 Read the [threat model](docs/security/threat-model.md) and [safe testing policy](docs/security/safe-testing.md) before contributing protocol or credential code.

@@ -1079,7 +1079,11 @@ fn parse_u8(name: &str, value: &str) -> Result<u8, ArgumentError> {
 }
 
 fn validated_text(name: &str, value: &str, max_bytes: usize) -> Result<String, ArgumentError> {
-    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+    if value.trim().is_empty()
+        || value != value.trim()
+        || value.len() > max_bytes
+        || value.chars().any(char::is_control)
+    {
         return Err(ArgumentError(format!("invalid {name}")));
     }
     Ok(value.to_owned())
@@ -1307,6 +1311,26 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "invalid host");
         assert!(!error.to_string().contains(invalid_host));
+    }
+
+    #[test]
+    fn parser_rejects_outer_whitespace_in_connection_metadata() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user ",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid username");
     }
 
     #[test]

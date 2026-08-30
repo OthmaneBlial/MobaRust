@@ -415,6 +415,7 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
         );
     }
     if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
+        || request.username != request.username.trim()
         || request.username.len() > MAX_USERNAME_BYTES
         || request.username.chars().any(char::is_control)
     {
@@ -505,7 +506,7 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
 }
 
 fn validate_metadata(value: &str, max_bytes: usize, message: &str) -> Result<(), String> {
-    if value.len() > max_bytes || value.chars().any(char::is_control) {
+    if value != value.trim() || value.len() > max_bytes || value.chars().any(char::is_control) {
         return Err(message.into());
     }
     Ok(())
@@ -1690,6 +1691,30 @@ mod tests {
         assert_eq!(
             validate_request(&credential_request).unwrap_err(),
             "remote desktop credential reference is invalid"
+        );
+    }
+
+    #[test]
+    fn parent_boundary_rejects_outer_whitespace_before_helper_launch() {
+        let mut host_request = request(DesktopProtocol::Vnc, "fixture-user");
+        host_request.host = " 127.0.0.1".into();
+        assert_eq!(
+            validate_request(&host_request).unwrap_err(),
+            "remote desktop host is invalid"
+        );
+
+        let mut username_request = request(DesktopProtocol::Rdp, "fixture-user");
+        username_request.username.push(' ');
+        assert_eq!(
+            validate_request(&username_request).unwrap_err(),
+            "remote desktop username is invalid"
+        );
+
+        let mut domain_request = request(DesktopProtocol::Rdp, "fixture-user");
+        domain_request.domain = Some("FIXTURE ".into());
+        assert_eq!(
+            validate_request(&domain_request).unwrap_err(),
+            "remote desktop domain is invalid"
         );
     }
 
