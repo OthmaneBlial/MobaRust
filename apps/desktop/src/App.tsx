@@ -64,6 +64,21 @@ type AppSettings = {
     scrollbackLines: number;
     cursorBlink: boolean;
   };
+  keyboard: {
+    newTerminal: string;
+    quickConnect: string;
+    commandPalette: string;
+    closeTab: string;
+    nextTab: string;
+    previousTab: string;
+    splitRight: string;
+    splitDown: string;
+    focusPane: string;
+    searchTerminal: string;
+    toggleSidebar: string;
+    openMacros: string;
+    emergencyBroadcastDisable: string;
+  };
   ssh: {
     reconnectEnabled: boolean;
     reconnectAttempts: number;
@@ -88,6 +103,21 @@ const defaultSettings: AppSettings = {
   general: { theme: "dark", confirmMultilinePaste: true },
   appearance: { fontSize: 13 },
   terminal: { scrollbackLines: 5000, cursorBlink: true },
+  keyboard: {
+    newTerminal: "Mod+N",
+    quickConnect: "Mod+K",
+    commandPalette: "Mod+Shift+P",
+    closeTab: "Mod+W",
+    nextTab: "Ctrl+Tab",
+    previousTab: "Ctrl+Shift+Tab",
+    splitRight: "Mod+Shift+ArrowRight",
+    splitDown: "Mod+Shift+ArrowDown",
+    focusPane: "Mod+1",
+    searchTerminal: "Mod+F",
+    toggleSidebar: "Mod+Shift+B",
+    openMacros: "Mod+Shift+M",
+    emergencyBroadcastDisable: "Escape",
+  },
   ssh: { reconnectEnabled: true, reconnectAttempts: 3, connectTimeoutMs: 12000 },
   network: { diagnosticTimeoutMs: 1500, scanConcurrency: 32 },
 };
@@ -387,6 +417,34 @@ const MAX_RECORDED_MACRO_ACTIONS = 64;
 const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
 const MAX_SERVER_ALIVE_INTERVAL_SECONDS = 86_400;
 
+function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  const parts = shortcut.split("+");
+  const key = parts[parts.length - 1];
+  const usesMod = parts.includes("Mod");
+  const hasCtrl = parts.includes("Ctrl");
+  if (usesMod ? !(event.metaKey || event.ctrlKey) : event.metaKey || event.ctrlKey !== hasCtrl) return false;
+  if (event.altKey !== parts.includes("Alt") || event.shiftKey !== parts.includes("Shift")) return false;
+  const expectedKey = key === "Space" ? " " : key;
+  return event.key.toLowerCase() === expectedKey.toLowerCase();
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function formatShortcut(shortcut: string): string {
+  const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+  return shortcut.split("+").map((part) => {
+    if (part === "Mod") return isMac ? "⌘" : "Ctrl";
+    if (part === "Ctrl") return isMac ? "⌃" : "Ctrl";
+    if (part === "Alt") return isMac ? "⌥" : "Alt";
+    if (part === "Shift") return isMac ? "⇧" : "Shift";
+    if (part === "Escape") return "Esc";
+    return part;
+  }).join(" ");
+}
+
 function normalizeMacroRecord(record: MacroRecord): MacroRecord {
   return { ...record, approval: record.approval ?? "beforeRun" };
 }
@@ -638,18 +696,21 @@ const previewSessions: SessionListItem[] = [
   { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"], lastUsedAt: 1 },
 ];
 
-const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
-  { label: "New local terminal", hint: "⌘ N", icon: TerminalIcon },
-  { label: "New WSL terminal", hint: "", icon: TerminalIcon },
-  { label: "Quick connect", hint: "⌘ K", icon: Network },
-  { label: "Open SFTP", hint: "⌘ ⇧ F", icon: Folder },
-  { label: "Settings", hint: "", icon: Settings2 },
-  { label: "Credential vault", hint: "", icon: KeyRound },
-  { label: "Snippets", hint: "", icon: BookOpen },
-  { label: "Macros", hint: "", icon: Play },
-  { label: "Audit history", hint: "", icon: History },
-  { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
-];
+function quickActions(keyboard: AppSettings["keyboard"]): Array<{ label: string; hint: string; icon: LucideIcon }> {
+  return [
+    { label: "New local terminal", hint: formatShortcut(keyboard.newTerminal), icon: TerminalIcon },
+    { label: "New WSL terminal", hint: "", icon: TerminalIcon },
+    { label: "Quick connect", hint: formatShortcut(keyboard.quickConnect), icon: Network },
+    { label: "Open SFTP", hint: "", icon: Folder },
+    { label: "Focus pane", hint: formatShortcut(keyboard.focusPane), icon: PanelRight },
+    { label: "Settings", hint: "", icon: Settings2 },
+    { label: "Credential vault", hint: "", icon: KeyRound },
+    { label: "Snippets", hint: "", icon: BookOpen },
+    { label: "Macros", hint: formatShortcut(keyboard.openMacros), icon: Play },
+    { label: "Audit history", hint: "", icon: History },
+    { label: "Command palette", hint: formatShortcut(keyboard.commandPalette), icon: Command },
+  ];
+}
 
 function auditProtocol(protocol: string | null | undefined): AuditProtocol | null {
   const normalized = protocol?.toUpperCase();
@@ -1557,6 +1618,11 @@ function App() {
     setTerminalLayout({ kind: "pane", terminalId: terminalTabs[nextIndex].id });
     setActiveView("terminal");
   }, [selectedTerminalId, terminalTabs]);
+
+  const focusPane = useCallback(() => {
+    setActiveView("terminal");
+    terminalInstancesRef.current.get(selectedTerminalIdRef.current)?.terminal.focus();
+  }, []);
 
   const openSplit = useCallback((direction: Exclude<SplitDirection, "none">) => {
     const firstId = selectedTerminalId;
@@ -3039,32 +3105,8 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const command = event.metaKey || event.ctrlKey;
-      if (command && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        startNewTerminal();
-      }
-      if (command && event.key.toLowerCase() === "w") {
-        event.preventDefault();
-        closeTerminal(selectedTerminalId);
-      }
-      if (event.ctrlKey && event.key === "Tab") {
-        event.preventDefault();
-        cycleTerminal(event.shiftKey ? -1 : 1);
-      }
-      if (command && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setQuickConnectOpen(true);
-      }
-      if (command && event.shiftKey && event.key.toLowerCase() === "p") {
-        event.preventDefault();
-        setPaletteOpen((open) => !open);
-      }
-      if (command && event.shiftKey && event.key.toLowerCase() === "m") {
-        event.preventDefault();
-        setMacrosOpen(true);
-      }
-      if (event.key === "Escape") {
+      const emergencyDisable = event.key === "Escape" || matchesShortcut(event, settings.keyboard.emergencyBroadcastDisable);
+      if (emergencyDisable) {
         if (terminalSearchOpen) closeTerminalSearch();
         setPaletteOpen(false);
         if (macroRun) cancelMacro();
@@ -3074,11 +3116,61 @@ function App() {
           setBroadcastOpen(false);
           setSessionNotice("Broadcast mode disabled. No further input will fan out.");
         }
+        if (event.key === "Escape") return;
+      }
+      if (isEditableKeyboardTarget(event.target)) return;
+      if (matchesShortcut(event, settings.keyboard.newTerminal)) {
+        event.preventDefault();
+        startNewTerminal();
+      }
+      if (matchesShortcut(event, settings.keyboard.closeTab)) {
+        event.preventDefault();
+        closeTerminal(selectedTerminalId);
+      }
+      if (matchesShortcut(event, settings.keyboard.nextTab)) {
+        event.preventDefault();
+        cycleTerminal(1);
+      }
+      if (matchesShortcut(event, settings.keyboard.previousTab)) {
+        event.preventDefault();
+        cycleTerminal(-1);
+      }
+      if (matchesShortcut(event, settings.keyboard.quickConnect)) {
+        event.preventDefault();
+        setQuickConnectOpen(true);
+      }
+      if (matchesShortcut(event, settings.keyboard.commandPalette)) {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+      if (matchesShortcut(event, settings.keyboard.openMacros)) {
+        event.preventDefault();
+        setMacrosOpen(true);
+      }
+      if (matchesShortcut(event, settings.keyboard.toggleSidebar)) {
+        event.preventDefault();
+        setSidebarOpen((open) => !open);
+      }
+      if (matchesShortcut(event, settings.keyboard.splitRight)) {
+        event.preventDefault();
+        openSplit("right");
+      }
+      if (matchesShortcut(event, settings.keyboard.splitDown)) {
+        event.preventDefault();
+        openSplit("down");
+      }
+      if (matchesShortcut(event, settings.keyboard.focusPane)) {
+        event.preventDefault();
+        focusPane();
+      }
+      if (matchesShortcut(event, settings.keyboard.searchTerminal)) {
+        event.preventDefault();
+        setTerminalSearchOpen(true);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, macroRecording, macroRun, selectedTerminalId, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -3140,7 +3232,7 @@ function App() {
             <button className="new-button" onClick={() => startNewTerminal()}>
               <Plus size={15} strokeWidth={2.4} />
               <span>New terminal</span>
-              <span className="shortcut">⌘ N</span>
+              <span className="shortcut">{formatShortcut(settings.keyboard.newTerminal)}</span>
             </button>
             <button className="icon-button new-terminal-menu-button" onClick={openWslTerminalPicker} aria-label="New WSL terminal" title="New WSL terminal">
               <MoreHorizontal size={15} />
@@ -3150,7 +3242,7 @@ function App() {
           <label className="search-box">
             <Search size={15} />
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sessions" />
-            <span className="search-key">⌘ K</span>
+            <span className="search-key">{formatShortcut(settings.keyboard.quickConnect)}</span>
           </label>
 
           <nav className="sidebar-nav" aria-label="Workspace navigation">
@@ -3206,9 +3298,9 @@ function App() {
               <p className="workspace-subtitle">{remoteProtocol === "ssh" ? "Interactive SSH shell with native host-key verification." : remoteProtocol === "telnet" ? "Legacy Telnet terminal. Traffic is unencrypted." : remoteProtocol === "serial" ? "Serial terminal with explicit device parameters." : remoteProtocol === "rdp" ? "Remote desktop through a controlled native helper." : remoteProtocol === "vnc" ? "VNC desktop through a controlled native helper." : "A quiet command surface for the machine in front of you."}</p>
             </div>
             <div className="heading-actions">
-              <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
-              <button className="outline-button" onClick={() => setMacrosOpen(true)}><Play size={15} /> Macros <span>⌘ ⇧ M</span></button>
-              <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>⌘ K</span></button>
+              <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>{formatShortcut(settings.keyboard.commandPalette)}</span></button>
+              <button className="outline-button" onClick={() => setMacrosOpen(true)}><Play size={15} /> Macros <span>{formatShortcut(settings.keyboard.openMacros)}</span></button>
+              <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>{formatShortcut(settings.keyboard.quickConnect)}</span></button>
               <button className="primary-button" onClick={() => startNewTerminal()}><Plus size={15} /> New terminal</button>
             </div>
           </div>
@@ -3242,7 +3334,7 @@ function App() {
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
-                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>⌘K for quick connect</span></div>
+                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
@@ -3283,8 +3375,8 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
-      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+      {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
+      {helpOpen && <HelpModal keyboard={settings.keyboard} onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
@@ -3852,7 +3944,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function HelpModal({ onClose }: { onClose: () => void }) {
+function HelpModal({ keyboard, onClose }: { keyboard: AppSettings["keyboard"]; onClose: () => void }) {
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
     <section className="help-modal" role="dialog" aria-modal="true" aria-label="MobaRust help" onMouseDown={(event) => event.stopPropagation()}>
       <div className="session-editor-heading">
@@ -3860,7 +3952,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <button type="button" className="icon-button" aria-label="Close help" onClick={onClose}><X size={17} /></button>
       </div>
       <div className="help-grid">
-        <section className="help-section"><span className="settings-section-label">Shortcuts</span><div className="help-shortcut"><span>Quick connect</span><kbd>⌘ K</kbd></div><div className="help-shortcut"><span>Command palette</span><kbd>⌘ ⇧ P</kbd></div><div className="help-shortcut"><span>New local terminal</span><kbd>⌘ N</kbd></div><div className="help-shortcut"><span>Emergency broadcast disable</span><kbd>Esc</kbd></div></section>
+        <section className="help-section"><span className="settings-section-label">Shortcuts</span><div className="help-shortcut"><span>Quick connect</span><kbd>{formatShortcut(keyboard.quickConnect)}</kbd></div><div className="help-shortcut"><span>Command palette</span><kbd>{formatShortcut(keyboard.commandPalette)}</kbd></div><div className="help-shortcut"><span>New local terminal</span><kbd>{formatShortcut(keyboard.newTerminal)}</kbd></div><div className="help-shortcut"><span>Close tab</span><kbd>{formatShortcut(keyboard.closeTab)}</kbd></div><div className="help-shortcut"><span>Focus pane</span><kbd>{formatShortcut(keyboard.focusPane)}</kbd></div><div className="help-shortcut"><span>Split right / down</span><kbd>{formatShortcut(keyboard.splitRight)} / {formatShortcut(keyboard.splitDown)}</kbd></div><div className="help-shortcut"><span>Emergency broadcast disable</span><kbd>{formatShortcut(keyboard.emergencyBroadcastDisable)} / Esc</kbd></div></section>
         <section className="help-section"><span className="settings-section-label">Security boundary</span><p>Credential references may appear in session configuration, but passwords, passphrases, private-key bytes, and agent material stay in the Rust/native layer.</p><p>Remote terminal output is treated as untrusted text. Pasted multiline commands require confirmation by default.</p></section>
         <section className="help-section"><span className="settings-section-label">Protocol posture</span><p>SSH provides host-key verification, native PTY, SFTP, forwarding, bounded reconnect, and cancellation. Telnet and serial are clearly marked as unencrypted transports.</p><p>RDP and VNC run behind controlled native helper boundaries; packaging and cross-platform interoperability remain explicit release gates.</p></section>
         <section className="help-section"><span className="settings-section-label">Safe testing</span><p>Local validation uses temporary fixtures, synthetic credentials, and loopback services only. It does not inspect personal SSH directories, GitHub keys, your SSH agent, keychains, real hosts, or attached serial devices.</p></section>
@@ -3870,11 +3962,11 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   </div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onNewWslTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onNewWslTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ keyboard, onClose, onNewTerminal, onNewWslTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar, onFocusPane }: { keyboard: AppSettings["keyboard"]; onClose: () => void; onNewTerminal: () => void; onNewWslTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void; onFocusPane: () => void }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const commands = [
-    ...quickActions
+    ...quickActions(keyboard)
       .filter((action) => action.label !== "Command palette")
       .map((action) => ({
         ...action,
@@ -3889,7 +3981,8 @@ function CommandPalette({ onClose, onNewTerminal, onNewWslTerminal, onQuickConne
                       : action.label === "Audit history" ? onOpenAudit
                       : onClose,
       })),
-    { label: "Toggle sidebar", hint: "⌘ B", icon: PanelLeftClose, run: onToggleSidebar },
+    { label: "Toggle sidebar", hint: formatShortcut(keyboard.toggleSidebar), icon: PanelLeftClose, run: onToggleSidebar },
+    { label: "Focus pane", hint: formatShortcut(keyboard.focusPane), icon: PanelRight, run: onFocusPane },
   ].filter((action) => action.label.toLowerCase().includes(query.trim().toLowerCase()));
 
   useEffect(() => setActiveIndex(0), [query]);
@@ -4347,6 +4440,7 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
   const [scrollbackLines, setScrollbackLines] = useState(String(settings.terminal.scrollbackLines));
   const [cursorBlink, setCursorBlink] = useState(settings.terminal.cursorBlink);
+  const [keyboard, setKeyboard] = useState(settings.keyboard);
   const [reconnectEnabled, setReconnectEnabled] = useState(settings.ssh.reconnectEnabled);
   const [reconnectAttempts, setReconnectAttempts] = useState(String(settings.ssh.reconnectAttempts));
   const [connectTimeoutMs, setConnectTimeoutMs] = useState(String(settings.ssh.connectTimeoutMs));
@@ -4372,6 +4466,7 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
       general: { theme, confirmMultilinePaste },
       appearance: { fontSize: Number(fontSize) },
       terminal: { scrollbackLines: Number(scrollbackLines), cursorBlink },
+      keyboard,
       ssh: { reconnectEnabled, reconnectAttempts: Number(reconnectAttempts), connectTimeoutMs: Number(connectTimeoutMs) },
       network: { diagnosticTimeoutMs: Number(diagnosticTimeoutMs), scanConcurrency: Number(scanConcurrency) },
     });
@@ -4387,6 +4482,26 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
             <p>Typed, validated preferences. Secrets and credential material are not stored here.</p>
           </div>
           <button type="button" className="icon-button" aria-label="Close settings" onClick={onClose}><X size={17} /></button>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">Keyboard shortcuts</span>
+          <div className="settings-grid">
+            <label>New terminal<input value={keyboard.newTerminal} onChange={(event) => setKeyboard((current) => ({ ...current, newTerminal: event.target.value }))} placeholder="Mod+N" /><small>Use `Mod` for Cmd on macOS or Ctrl elsewhere.</small></label>
+            <label>Quick connect<input value={keyboard.quickConnect} onChange={(event) => setKeyboard((current) => ({ ...current, quickConnect: event.target.value }))} placeholder="Mod+K" /></label>
+            <label>Command palette<input value={keyboard.commandPalette} onChange={(event) => setKeyboard((current) => ({ ...current, commandPalette: event.target.value }))} placeholder="Mod+Shift+P" /></label>
+            <label>Close tab<input value={keyboard.closeTab} onChange={(event) => setKeyboard((current) => ({ ...current, closeTab: event.target.value }))} placeholder="Mod+W" /></label>
+            <label>Next tab<input value={keyboard.nextTab} onChange={(event) => setKeyboard((current) => ({ ...current, nextTab: event.target.value }))} placeholder="Ctrl+Tab" /></label>
+            <label>Previous tab<input value={keyboard.previousTab} onChange={(event) => setKeyboard((current) => ({ ...current, previousTab: event.target.value }))} placeholder="Ctrl+Shift+Tab" /></label>
+            <label>Split right<input value={keyboard.splitRight} onChange={(event) => setKeyboard((current) => ({ ...current, splitRight: event.target.value }))} placeholder="Mod+Shift+ArrowRight" /></label>
+            <label>Split down<input value={keyboard.splitDown} onChange={(event) => setKeyboard((current) => ({ ...current, splitDown: event.target.value }))} placeholder="Mod+Shift+ArrowDown" /></label>
+            <label>Focus pane<input value={keyboard.focusPane} onChange={(event) => setKeyboard((current) => ({ ...current, focusPane: event.target.value }))} placeholder="Mod+1" /></label>
+            <label>Search terminal<input value={keyboard.searchTerminal} onChange={(event) => setKeyboard((current) => ({ ...current, searchTerminal: event.target.value }))} placeholder="Mod+F" /></label>
+            <label>Toggle sidebar<input value={keyboard.toggleSidebar} onChange={(event) => setKeyboard((current) => ({ ...current, toggleSidebar: event.target.value }))} placeholder="Mod+Shift+B" /></label>
+            <label>Open macros<input value={keyboard.openMacros} onChange={(event) => setKeyboard((current) => ({ ...current, openMacros: event.target.value }))} placeholder="Mod+Shift+M" /></label>
+            <label>Disable broadcast<input value={keyboard.emergencyBroadcastDisable} onChange={(event) => setKeyboard((current) => ({ ...current, emergencyBroadcastDisable: event.target.value }))} placeholder="Escape" /><small>Escape remains a universal safety cancel.</small></label>
+          </div>
+          <small className="settings-section-note">Shortcuts use `+`-separated tokens: `Mod`, `Ctrl`, `Alt`, `Shift`, letters, `Tab`, arrows, and other named navigation keys. Collisions are rejected.</small>
         </div>
 
         <div className="settings-section">

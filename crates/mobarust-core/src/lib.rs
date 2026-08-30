@@ -21,8 +21,8 @@ pub use session::{
     SerialProfile, SessionId, SessionRecord, SessionValidationError, TelnetProfile,
 };
 pub use settings::{
-    AppSettings, AppearanceSettings, GeneralSettings, NetworkSettings, SettingsValidationError,
-    SshSettings, TerminalSettings, ThemePreference,
+    AppSettings, AppearanceSettings, GeneralSettings, KeyboardSettings, NetworkSettings,
+    SettingsValidationError, SshSettings, TerminalSettings, ThemePreference,
 };
 pub use snippet::{SnippetRecord, SnippetValidationError};
 pub use terminal::{OutputBatcher, OutputChunk};

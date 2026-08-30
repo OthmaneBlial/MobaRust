@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -50,6 +52,57 @@ pub struct TerminalSettings {
     pub scrollback_lines: u32,
     #[serde(default = "default_true")]
     pub cursor_blink: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardSettings {
+    #[serde(default = "default_shortcut_new_terminal")]
+    pub new_terminal: String,
+    #[serde(default = "default_shortcut_quick_connect")]
+    pub quick_connect: String,
+    #[serde(default = "default_shortcut_command_palette")]
+    pub command_palette: String,
+    #[serde(default = "default_shortcut_close_tab")]
+    pub close_tab: String,
+    #[serde(default = "default_shortcut_next_tab")]
+    pub next_tab: String,
+    #[serde(default = "default_shortcut_previous_tab")]
+    pub previous_tab: String,
+    #[serde(default = "default_shortcut_split_right")]
+    pub split_right: String,
+    #[serde(default = "default_shortcut_split_down")]
+    pub split_down: String,
+    #[serde(default = "default_shortcut_focus_pane")]
+    pub focus_pane: String,
+    #[serde(default = "default_shortcut_search_terminal")]
+    pub search_terminal: String,
+    #[serde(default = "default_shortcut_toggle_sidebar")]
+    pub toggle_sidebar: String,
+    #[serde(default = "default_shortcut_open_macros")]
+    pub open_macros: String,
+    #[serde(default = "default_shortcut_emergency_broadcast_disable")]
+    pub emergency_broadcast_disable: String,
+}
+
+impl Default for KeyboardSettings {
+    fn default() -> Self {
+        Self {
+            new_terminal: default_shortcut_new_terminal(),
+            quick_connect: default_shortcut_quick_connect(),
+            command_palette: default_shortcut_command_palette(),
+            close_tab: default_shortcut_close_tab(),
+            next_tab: default_shortcut_next_tab(),
+            previous_tab: default_shortcut_previous_tab(),
+            split_right: default_shortcut_split_right(),
+            split_down: default_shortcut_split_down(),
+            focus_pane: default_shortcut_focus_pane(),
+            search_terminal: default_shortcut_search_terminal(),
+            toggle_sidebar: default_shortcut_toggle_sidebar(),
+            open_macros: default_shortcut_open_macros(),
+            emergency_broadcast_disable: default_shortcut_emergency_broadcast_disable(),
+        }
+    }
 }
 
 impl Default for TerminalSettings {
@@ -110,6 +163,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub terminal: TerminalSettings,
     #[serde(default)]
+    pub keyboard: KeyboardSettings,
+    #[serde(default)]
     pub ssh: SshSettings,
     #[serde(default)]
     pub network: NetworkSettings,
@@ -129,6 +184,10 @@ pub enum SettingsValidationError {
     InvalidDiagnosticTimeout,
     #[error("scan concurrency must be between 1 and 128")]
     InvalidScanConcurrency,
+    #[error("keyboard shortcut is invalid")]
+    InvalidShortcut,
+    #[error("keyboard shortcuts must not collide")]
+    DuplicateShortcut,
 }
 
 impl AppSettings {
@@ -150,6 +209,30 @@ impl AppSettings {
         }
         if !(1..=128).contains(&self.network.scan_concurrency) {
             return Err(SettingsValidationError::InvalidScanConcurrency);
+        }
+        let shortcuts = [
+            &self.keyboard.new_terminal,
+            &self.keyboard.quick_connect,
+            &self.keyboard.command_palette,
+            &self.keyboard.close_tab,
+            &self.keyboard.next_tab,
+            &self.keyboard.previous_tab,
+            &self.keyboard.split_right,
+            &self.keyboard.split_down,
+            &self.keyboard.focus_pane,
+            &self.keyboard.search_terminal,
+            &self.keyboard.toggle_sidebar,
+            &self.keyboard.open_macros,
+            &self.keyboard.emergency_broadcast_disable,
+        ];
+        let mut signatures = HashSet::new();
+        for shortcut in shortcuts {
+            if !valid_shortcut(shortcut) {
+                return Err(SettingsValidationError::InvalidShortcut);
+            }
+            if !signatures.insert(shortcut_signature(shortcut)) {
+                return Err(SettingsValidationError::DuplicateShortcut);
+            }
         }
         Ok(())
     }
@@ -183,6 +266,107 @@ fn default_scan_concurrency() -> u16 {
     32
 }
 
+fn valid_shortcut(shortcut: &str) -> bool {
+    let parts = shortcut.split('+').collect::<Vec<_>>();
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|part| part.trim() != *part || part.is_empty())
+    {
+        return false;
+    }
+    let mut modifiers = HashSet::new();
+    let mut key = None;
+    for part in parts {
+        match part {
+            "Mod" | "Ctrl" | "Alt" | "Shift" => {
+                if !modifiers.insert(part) {
+                    return false;
+                }
+            }
+            "Tab" | "Escape" | "Enter" | "Backspace" | "Delete" | "Space" | "ArrowUp"
+            | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
+                if key.replace(part).is_some() {
+                    return false;
+                }
+            }
+            value if value.len() == 1 && value.as_bytes()[0].is_ascii_alphanumeric() => {
+                if key.replace(value).is_some() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    key.is_some() && !(modifiers.contains("Mod") && modifiers.contains("Ctrl"))
+}
+
+fn shortcut_signature(shortcut: &str) -> String {
+    let parts = shortcut.split('+').collect::<Vec<_>>();
+    let mut signature = String::new();
+    for modifier in ["Mod", "Ctrl", "Alt", "Shift"] {
+        if parts.contains(&modifier) {
+            signature.push_str(modifier);
+            signature.push('+');
+        }
+    }
+    let key = parts.last().expect("validated shortcuts always have a key");
+    signature.push_str(&key.to_ascii_lowercase());
+    signature
+}
+
+fn default_shortcut_new_terminal() -> String {
+    "Mod+N".into()
+}
+
+fn default_shortcut_quick_connect() -> String {
+    "Mod+K".into()
+}
+
+fn default_shortcut_command_palette() -> String {
+    "Mod+Shift+P".into()
+}
+
+fn default_shortcut_close_tab() -> String {
+    "Mod+W".into()
+}
+
+fn default_shortcut_next_tab() -> String {
+    "Ctrl+Tab".into()
+}
+
+fn default_shortcut_previous_tab() -> String {
+    "Ctrl+Shift+Tab".into()
+}
+
+fn default_shortcut_split_right() -> String {
+    "Mod+Shift+ArrowRight".into()
+}
+
+fn default_shortcut_split_down() -> String {
+    "Mod+Shift+ArrowDown".into()
+}
+
+fn default_shortcut_focus_pane() -> String {
+    "Mod+1".into()
+}
+
+fn default_shortcut_search_terminal() -> String {
+    "Mod+F".into()
+}
+
+fn default_shortcut_toggle_sidebar() -> String {
+    "Mod+Shift+B".into()
+}
+
+fn default_shortcut_open_macros() -> String {
+    "Mod+Shift+M".into()
+}
+
+fn default_shortcut_emergency_broadcast_disable() -> String {
+    "Escape".into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, SettingsValidationError};
@@ -193,6 +377,7 @@ mod tests {
         settings.validate().unwrap();
         assert!(settings.general.confirm_multiline_paste);
         assert_eq!(settings.terminal.scrollback_lines, 5_000);
+        assert_eq!(settings.keyboard.command_palette, "Mod+Shift+P");
     }
 
     #[test]
@@ -208,6 +393,33 @@ mod tests {
         assert_eq!(
             settings.validate(),
             Err(SettingsValidationError::InvalidScanConcurrency)
+        );
+        settings = AppSettings::default();
+        settings.keyboard.quick_connect = "Mod+Shift+Unknown".into();
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::InvalidShortcut)
+        );
+        settings.keyboard.quick_connect = settings.keyboard.new_terminal.clone();
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::DuplicateShortcut)
+        );
+        settings.keyboard.quick_connect = "Mod+Mod+K".into();
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::InvalidShortcut)
+        );
+        settings.keyboard.quick_connect = "Mod+Ctrl+K".into();
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::InvalidShortcut)
+        );
+        settings.keyboard.quick_connect = "Shift+Mod+k".into();
+        settings.keyboard.new_terminal = "Mod+Shift+K".into();
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::DuplicateShortcut)
         );
     }
 }
