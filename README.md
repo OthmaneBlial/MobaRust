@@ -1,124 +1,125 @@
-# MobaRust
+# MobaRust — the free, open-source MobaXterm alternative
 
 <p align="center">
-  <img src="apps/desktop/src-tauri/icons/icon.svg" alt="MobaRust logo" width="104" />
-</p>
-
-<h3 align="center">The free, open-source MobaXterm alternative for people who operate machines.</h3>
-
-<p align="center">
-  One focused desktop workspace for SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust.
+  <img src="apps/desktop/src-tauri/icons/icon.svg" alt="MobaRust logo" width="112" />
 </p>
 
 <p align="center">
-  <a href="https://othmaneblial.github.io/MobaRust/">Project website</a> ·
+  <strong>One focused desktop workspace for every machine you operate.</strong><br />
+  SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust.
+</p>
+
+<p align="center">
+  <a href="https://othmaneblial.github.io/MobaRust/">Website</a> ·
   <a href="https://othmaneblial.github.io/MobaRust/docs.html">Documentation</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
-  <a href="https://github.com/OthmaneBlial/MobaRust/issues">Issues and feedback</a>
+  <a href="https://github.com/OthmaneBlial/MobaRust/issues">Feedback</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE"><img src="https://img.shields.io/github/license/OthmaneBlial/MobaRust?style=flat-square&label=license" alt="Apache 2.0 license" /></a>
-  <a href="https://github.com/OthmaneBlial/MobaRust"><img src="https://img.shields.io/github/repo-size/OthmaneBlial/MobaRust?style=flat-square&label=source" alt="Repository size" /></a>
+  <a href="https://github.com/OthmaneBlial/MobaRust/stargazers"><img src="https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&label=stars" alt="GitHub stars" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
+  <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
 </p>
 
-> **One window for the machines you operate.** No subscription required. No opaque session database required. No “send everything to the cloud” workflow required.
+> MobaRust is a free, open-source MobaXterm alternative for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users who want their remote-work toolbox to be transparent, local-first, and built for real operations.
 
-MobaRust is a free and open-source **MobaXterm alternative**, SSH client, SFTP/SCP file-transfer tool, terminal workspace, and remote-operations console for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users.
-
-It is an independent project and is not affiliated with Mobatek or MobaXterm.
+MobaRust is an independent project and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
 
 ## Why MobaRust?
 
-Remote work gets messy when the terminal lives in one app, file transfer in another, tunnels in a third, and connection profiles in a database you cannot inspect. MobaRust brings those daily workflows together in one keyboard-friendly desktop application while keeping the important boundaries visible.
+Remote work should not require one app for SSH, another for file transfer, another for tunnels, and a fourth place for session notes. MobaRust brings the daily operator loop into one keyboard-friendly desktop application:
 
-- **Free and open source** — Apache-2.0 licensed, inspectable, forkable, and built for contribution.
-- **A real operator workspace** — terminals, remote files, tunnels, diagnostics, snippets, monitoring, and session context in one place.
-- **Rust at the safety boundary** — networking, PTYs, transfer pipelines, persistence, cancellation, and sensitive operations stay native where possible.
-- **Credentials treated as credentials** — saved sessions reference vault entries; passwords and private-key material are not copied into React state, logs, exports, or process arguments.
-- **Built for practical platforms** — Windows-first attention, with macOS and Linux architecture kept in the design from the beginning.
-- **Honest by default** — experimental protocol work is labelled as experimental until real interoperability and platform evidence exist.
+**Connect. Inspect. Transfer. Automate carefully. Disconnect cleanly.**
 
-## What you can use today
+- **Free and open source** — Apache-2.0 licensed, inspectable, forkable, and built in public.
+- **One operator workspace** — Keep terminals, remote files, tunnels, diagnostics, snippets, and session context together.
+- **Rust at the native boundary** — Networking, PTYs, transfers, persistence, cancellation, and sensitive operations stay native where possible.
+- **Credentials treated as secrets** — Sessions reference vault entries instead of duplicating passwords or private-key material throughout the app.
+- **No account required for the local app** — The project is designed around local state, not a mandatory cloud account or subscription.
+- **Honest capability labels** — Experimental RDP/VNC work is clearly separated from the mature SSH foundation and release evidence still in progress.
 
-The current baseline is implemented in the repository and covered by local unit, integration, property, fixture, and packaging checks. The table below separates working foundations from features that still need target-platform or real-server validation.
+## What is MobaRust?
 
-| Workflow | Current state |
+MobaRust is a Rust/Tauri desktop SSH client and remote-operations workspace with a React and TypeScript interface. It is designed as an open-source alternative to MobaXterm, while also taking inspiration from the best parts of terminal workspaces, SFTP clients, and lightweight administration tools.
+
+If you are looking for a MobaXterm alternative, these are the workflows MobaRust is designed to bring together:
+
+- cross-platform SSH client foundations for Windows, macOS, and Linux
+- SFTP and SCP file transfers
+- local terminals and native PTY sessions
+- SSH tunnels and bounded SOCKS5 diagnostics
+- session profiles, folders, tags, favorites, and fast search
+- snippets, visible macros, and explicit multi-terminal broadcast
+- Telnet and serial support for legacy equipment
+- experimental RDP and VNC integration paths
+- remote file editing, network diagnostics, and optional system monitoring
+
+## Capability map
+
+The table below makes the current boundary explicit. “Implemented” means repository code and local validation exist. Platform, real-server, hardware, signing, or interoperability gates are called out instead of being hidden behind a marketing claim.
+
+| Area | Current status |
 | --- | --- |
-| **SSH terminal** | Native SSH, host-key verification, password/key references, SSH agent path, keyboard-interactive authentication, PTY resize, keepalives, cancellation, reconnect, and actionable errors |
-| **SFTP and SCP** | Remote browser, recursive transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, and native SCP compatibility |
+| **SSH terminal** | Native SSH, host-key verification, password/key references, SSH-agent path, keyboard-interactive authentication, PTY resize, keepalives, cancellation, reconnect, and actionable errors |
+| **SFTP / SCP** | Remote browser, recursive transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, and native SCP compatibility |
 | **Session manager** | Saved profiles, folders, tags, favorites, recents, fast search, OpenSSH config import, jump-host chains, typed settings, and secret-free export |
-| **Tunnels** | Local forwarding, remote forwarding, bounded dynamic SOCKS5, explicit lifecycle state, stop controls, and cancellable clients |
+| **SSH tunnels** | Local forwarding, remote forwarding, bounded dynamic SOCKS5, explicit lifecycle state, stop controls, and cancellable clients |
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, and WSL foundations |
-| **Operator tools** | Snippets with preview, visible macros, explicit multi-exec/broadcast targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
-| **Legacy equipment** | Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
-| **RDP** | Isolated native candidate with framebuffer/input/lifecycle code and loopback-safe local experiments; mature-engine selection, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
-| **VNC** | Real native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, cancellation, and pipe-independent process shutdown; cross-platform interoperability remains open |
-| **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server is a separate research and packaging decision |
+| **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
+| **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
+| **RDP** | Isolated native candidate with framebuffer/input/lifecycle work and local process tests; mature-engine integration, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
+| **VNC** | Native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, cancellation, and clean shutdown; broader interoperability remains open |
+| **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server remains a separate research and packaging decision |
 
-This is a serious foundation for a MobaXterm replacement — not a screenshot, a mock terminal, or a shell command wrapped in a web page.
+This is a serious foundation — not a screenshot, a static placeholder, or a shell command wrapped in a web page.
 
 ## The MobaRust difference
 
-### One workspace, less context switching
+### One window for the remote workday
 
-Open an SSH session, browse its files over SFTP, start a tunnel, inspect a port, run a saved snippet, and keep the connection searchable without rebuilding the workflow in five different tools.
+Open an SSH session, browse its files over SFTP, start a tunnel, check a port, run a saved snippet, and keep the connection searchable without rebuilding the same context in several tools.
 
-### Native operations, focused UI
+### Native power with a focused interface
 
-React and TypeScript provide the fast, approachable desktop interface. Rust and Tauri own the native boundary: sockets, PTYs, helper processes, file operations, vault access, cancellation, and typed IPC. The frontend is an interaction layer, not a credential store or an unrestricted shell bridge.
+React and TypeScript make the desktop UI fast to iterate and easy to use. Rust and Tauri own the native boundary: sockets, PTYs, helper processes, file operations, vault access, cancellation, and typed IPC. The frontend is an interaction layer — not a credential store and not an unrestricted shell bridge.
 
-### Safety that is visible in the product
+### Safety that is visible
 
-MobaRust is designed for administrators who cannot afford a “nearly sent that to production” moment:
+MobaRust is designed for operators who cannot afford an accidental production action:
 
 - host-key verification is explicit;
-- credentials are separated from session configuration;
-- helper processes are isolated and receive secrets through a native channel;
-- logs and debug formatting redact secrets and sensitive payloads;
+- session configuration is separated from secret material;
+- credentials are resolved inside the native boundary when possible;
+- helper processes receive secrets through native channels, never command-line arguments;
+- passwords, private keys, tokens, and sensitive environment values are redacted from logs;
 - broadcast input requires explicit target selection and has an emergency disable path;
 - pasted multiline shell commands are not automatically executed;
-- network operations have operation-specific timeout and cancellation paths;
-- local protocol fixtures run on loopback and do not need personal SSH files.
+- network work uses operation-specific timeouts, cancellation, and bounded retries;
+- local protocol fixtures use disposable state and loopback networking.
 
-Read the [threat model](docs/security/threat-model.md) and [safe testing policy](docs/security/safe-testing.md) for the boundaries in detail.
-
-## MobaRust vs. a closed-source remote toolbox
-
-MobaRust is for users who want the convenience of an all-in-one remote-work application with the transparency of an open-source project. It does not ask you to trust a hidden session database, and it does not require an account or subscription for the local application.
-
-| | MobaRust | A closed-source remote toolbox |
-| --- | --- | --- |
-| License | Apache-2.0 open source | Depends on the product and edition |
-| Session model | Inspectable profiles that reference secrets | Product-specific storage and export rules |
-| Native boundary | Rust/Tauri with typed commands | Product-specific |
-| Automation safety | Visible, bounded, approval-aware actions | Product-specific |
-| Development model | Public roadmap, issues, source, and fixtures | Vendor-controlled roadmap |
-
-The goal is not to imitate every screen. The goal is to give operators a trustworthy, extensible tool they can understand and improve.
+Read the [threat model](docs/security/threat-model.md) and [safe testing policy](docs/security/safe-testing.md) before contributing protocol or credential code.
 
 ## Honest project status
 
-The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. This is a progress measure for verified repository work, not a claim of complete MobaXterm parity.
+The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
 
-The local implementation layer is further along than the release matrix. The macOS PTY path, isolated RDP candidate, real VNC helper with loopback fixtures, target-aware unsigned package layout, and explicit PTY child reaping are implemented and checked locally.
+The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; real Windows/Linux interoperability, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
 
-The next validation gates are deliberately visible:
+The next gates are visible in the [roadmap](ROADMAP.md):
 
 - mature-engine RDP integration with real Windows interoperability;
 - broader VNC interoperability beyond local fixtures;
 - Windows, Linux, macOS, WSL, clipboard, serial-hardware, DPI, and multi-monitor evidence;
-- an integrated/external X-server strategy across supported desktops;
+- a practical integrated or external X-server strategy;
 - signed, notarized, portable packages and clean-install verification.
 
-RDP and VNC are clearly marked experiments until those gates are proven. That honesty is part of the product quality bar.
+RDP and VNC are labelled experiments until those gates are proven. That honesty is part of the product quality bar.
 
-See the complete [roadmap](ROADMAP.md), [RDP research](docs/research/rdp.md), [VNC research](docs/research/vnc.md), [X11 strategy](docs/research/x11.md), and [release matrix](docs/release/packaging.md).
+## Quick start
 
-## Quick start for contributors
-
-MobaRust is currently source-first. The commands below build and validate the local desktop application on macOS; target-specific runtime and signed-release checks belong in their respective Windows/Linux environments later.
+MobaRust is currently source-first. The commands below build and validate the local desktop application on macOS; target-specific runtime and signed-release checks belong in their respective Windows/Linux environments.
 
 ### Requirements
 
@@ -151,9 +152,7 @@ The validation path uses isolated home/XDG directories, repository-owned or disp
 
 `package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. They do not claim notarization, cross-platform release support, or RDP/VNC interoperability.
 
-The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first; this does not make RDP production-ready, bypass its separate dependency audit, or provide Windows/Linux interoperability evidence.
-
-The helper also has a local process smoke test: it starts the real compiled binary, sends `Start` and the credential through native pipes, checks a bounded terminal outcome against a disposable loopback socket that closes immediately, and verifies process exit without exposing the fixture secret. This validates helper integration, not a real RDP server or cross-platform interoperability.
+The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first. This does not make RDP production-ready, bypass its dependency audit, or provide Windows/Linux interoperability evidence.
 
 ## Architecture at a glance
 
@@ -168,7 +167,7 @@ Rust desktop boundary
   └─ isolated RDP / VNC helper experiments
 ```
 
-Session configuration and secret material are separate by design. A session stores an opaque credential reference; the secret is resolved only inside the native boundary when a protocol needs it. Helper processes receive credentials through a dedicated native pipe, never through command-line arguments.
+Session configuration and secret material are separate by design. A session stores an opaque credential reference; the secret is resolved only inside the native boundary when a protocol needs it. Helpers receive credentials through a dedicated native pipe, never through process arguments.
 
 ## Documentation
 
@@ -186,15 +185,17 @@ Session configuration and secret material are separate by design. A session stor
 - [Release and packaging notes](docs/release/packaging.md)
 - [Reddit launch draft](docs/marketing/reddit-launch.md)
 
-## Help shape the open-source alternative
+## Contributing
 
-The most useful contributions are concrete:
+The most useful contributions are concrete and reproducible:
 
 1. Try the SSH, SFTP/SCP, terminal, tunnel, and session workflows.
-2. Report the exact platform, environment, and reproducible steps.
+2. Report the exact operating system, environment, and steps to reproduce.
 3. Tell us which MobaXterm, PuTTY, Remmina, Tabby, or terminal workflow you would need before switching.
 4. Contribute tests, protocol fixtures, platform evidence, documentation, or focused code.
 
 Please do not include passwords, private keys, host inventories, real connection logs, or personal configuration exports in issues or pull requests.
+
+If you are building an open-source MobaXterm alternative, SSH client, SFTP tool, terminal workspace, or remote administration tool, MobaRust is open to focused collaboration.
 
 MobaRust is released under the [Apache License 2.0](LICENSE).
