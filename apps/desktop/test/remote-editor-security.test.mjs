@@ -17,6 +17,7 @@ import {
   parseSessionEnvironment,
 } from "../src/session-environment.ts";
 import { findTerminalHttpUrls } from "../src/terminal-links.ts";
+import { isMultilineTerminalPaste, shouldConfirmTerminalPaste } from "../src/terminal-paste.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
 import { terminalFontSizeAfterZoom } from "../src/terminal-zoom.ts";
 import {
@@ -50,6 +51,12 @@ assert.equal(vncKeysymForText("é"), 0xe9);
 assert.equal(vncKeysymForText("€"), 0x010020ac);
 assert.equal(vncKeysymForText("😀"), 0x0101f600);
 assert.equal(vncKeysymForText("ab"), null);
+assert.equal(isMultilineTerminalPaste("single line"), false);
+assert.equal(isMultilineTerminalPaste("first\nsecond"), true);
+assert.equal(isMultilineTerminalPaste("first\rsecond"), true);
+assert.equal(shouldConfirmTerminalPaste("first\nsecond", true), true);
+assert.equal(shouldConfirmTerminalPaste("single line", true), false);
+assert.equal(shouldConfirmTerminalPaste("first\nsecond", false), false);
 assert.equal(vncKeysymForText("\u0001"), null);
 
 const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>&lt;already-encoded&gt;';

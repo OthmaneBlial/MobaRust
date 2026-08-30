@@ -19,6 +19,7 @@ import {
 } from "./remote-desktop-profile";
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
+import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
@@ -900,7 +901,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
 
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData?.getData("text/plain") ?? "";
-      if (!confirmMultilinePasteRef.current || (!data.includes("\n") && !data.includes("\r"))) return;
+      if (!shouldConfirmTerminalPaste(data, confirmMultilinePasteRef.current)) return;
       event.preventDefault();
       event.stopPropagation();
       const accepted = window.confirm("This paste contains multiple lines. Send it to the terminal? Nothing will be executed automatically by MobaRust.");

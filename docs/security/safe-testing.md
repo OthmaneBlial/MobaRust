@@ -123,8 +123,10 @@ pnpm run test:unit
 ```
 
 It checks that hostile remote editor content remains escaped before the
-fixed syntax-highlighting spans are inserted. It does not open a browser,
-invoke Tauri, or contact a remote host.
+fixed syntax-highlighting spans are inserted, and that the terminal paste
+policy distinguishes single-line input from CR/LF multiline input while
+requiring confirmation by default. It does not open a browser, invoke Tauri,
+or contact a remote host.
 
 The native logger writes no log file by default. Test and development output is
 kept on the child process stderr, with credential fields represented only by a
