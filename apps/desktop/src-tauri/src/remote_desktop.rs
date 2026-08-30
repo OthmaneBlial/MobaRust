@@ -87,6 +87,12 @@ struct HelperCapabilityRequirements {
     color_depth: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HelperEventProgress {
+    hello_seen: bool,
+    capabilities_seen: bool,
+}
+
 fn required_helper_capabilities(
     request: &RemoteDesktopConnectRequest,
 ) -> HelperCapabilityRequirements {
@@ -544,7 +550,7 @@ async fn read_helper_events(
     supervisor: Arc<Mutex<HelperSupervisor>>,
     capability_requirements: HelperCapabilityRequirements,
 ) {
-    let mut capabilities_seen = false;
+    let mut progress = HelperEventProgress::default();
     loop {
         let frame = match read_frame(&mut stdout).await {
             Ok(Some(frame)) => frame,
@@ -604,8 +610,8 @@ async fn read_helper_events(
                 break;
             }
         };
-        match validate_helper_event(&event, capability_requirements, capabilities_seen) {
-            Ok(seen) => capabilities_seen = seen,
+        match validate_helper_event(&event, capability_requirements, progress) {
+            Ok(next_progress) => progress = next_progress,
             Err(message) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
                     emit_helper_event(
@@ -651,21 +657,32 @@ async fn read_helper_events(
 fn validate_helper_event(
     event: &HelperEvent,
     requirements: HelperCapabilityRequirements,
-    capabilities_seen: bool,
-) -> Result<bool, &'static str> {
+    mut progress: HelperEventProgress,
+) -> Result<HelperEventProgress, &'static str> {
+    if !progress.hello_seen && !matches!(event, HelperEvent::Hello { .. }) {
+        return Err("remote desktop helper sent an event before its handshake");
+    }
     match event {
+        HelperEvent::Hello { .. } if progress.hello_seen => {
+            Err("remote desktop helper sent a duplicate handshake")
+        }
+        HelperEvent::Hello { .. } => {
+            progress.hello_seen = true;
+            Ok(progress)
+        }
         HelperEvent::Capabilities { capabilities } => {
             validate_helper_capabilities(capabilities, requirements)?;
-            Ok(true)
+            progress.capabilities_seen = true;
+            Ok(progress)
         }
         HelperEvent::Framebuffer { .. }
         | HelperEvent::Clipboard { .. }
         | HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Active,
-        } if !capabilities_seen => {
+        } if !progress.capabilities_seen => {
             Err("remote desktop helper sent active data before reporting capabilities")
         }
-        _ => Ok(capabilities_seen),
+        _ => Ok(progress),
     }
 }
 
@@ -720,6 +737,7 @@ mod tests {
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
         HelperEvent, HelperProtocolError, HelperState, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+        WIRE_VERSION,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -762,10 +780,21 @@ mod tests {
             gateway: false,
             color_depth: Some(32),
         };
-        assert_eq!(
-            validate_helper_event(&rdp_capabilities, rdp_requirements, false),
-            Ok(true)
+        assert!(
+            validate_helper_event(&rdp_capabilities, rdp_requirements, Default::default()).is_err()
         );
+        let handshake = validate_helper_event(
+            &HelperEvent::Hello {
+                version: WIRE_VERSION,
+            },
+            rdp_requirements,
+            Default::default(),
+        )
+        .unwrap();
+        assert!(handshake.hello_seen);
+        let rdp_progress =
+            validate_helper_event(&rdp_capabilities, rdp_requirements, handshake).unwrap();
+        assert!(rdp_progress.capabilities_seen);
         assert!(
             validate_helper_event(
                 &rdp_capabilities,
@@ -773,7 +802,7 @@ mod tests {
                     protocol: DesktopProtocol::Vnc,
                     ..rdp_requirements
                 },
-                false,
+                handshake,
             )
             .is_err()
         );
@@ -793,7 +822,7 @@ mod tests {
                     gateway: false,
                     color_depth: None,
                 },
-                false,
+                handshake,
             )
             .is_ok()
         );
@@ -816,7 +845,7 @@ mod tests {
                     state: HelperState::Ready,
                 },
                 rdp_requirements,
-                false,
+                handshake,
             )
             .is_ok()
         );
@@ -826,7 +855,7 @@ mod tests {
                     state: HelperState::Active,
                 },
                 rdp_requirements,
-                false,
+                handshake,
             )
             .is_err()
         );
@@ -836,9 +865,19 @@ mod tests {
                     state: HelperState::Active,
                 },
                 rdp_requirements,
-                true,
+                rdp_progress,
             ),
-            Ok(true)
+            Ok(rdp_progress)
+        );
+        assert!(
+            validate_helper_event(
+                &HelperEvent::Hello {
+                    version: WIRE_VERSION,
+                },
+                rdp_requirements,
+                handshake,
+            )
+            .is_err()
         );
     }
 

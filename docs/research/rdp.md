@@ -118,7 +118,8 @@ platform backend and disable unsupported clipboard actions before a user
 attempts them. A mismatched report fails the session locally and is never
 treated as proof of a different protocol or feature. The parent also refuses
 active framebuffer, clipboard, or `Active` state events until a valid report
-has arrived.
+has arrived, and requires the versioned `Hello` event to be the first helper
+message.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed

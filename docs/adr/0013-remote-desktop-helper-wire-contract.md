@@ -39,6 +39,8 @@ messages before a process is started:
 - envelopes and every deserialized payload reject unknown fields, so a
   malformed or newer-incompatible helper message fails closed instead of
   silently discarding data;
+- the parent requires `Hello` as the first event and rejects duplicate
+  handshakes or active data that arrives before a validated capability report;
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and
