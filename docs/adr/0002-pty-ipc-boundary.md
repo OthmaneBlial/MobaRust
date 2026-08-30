@@ -8,7 +8,11 @@ Accepted for the local terminal slice.
 
 The Rust PTY reader writes into a bounded synchronous channel. A second native worker coalesces reads for up to 8 ms and emits chunks capped at 32 KiB through the `terminal://output` event. The React side writes those chunks directly to xterm.js.
 
-Input, resize, and close are separate typed Tauri commands. No command accepts an arbitrary shell string for native execution; the only shell process started by this slice is the user's discovered local shell.
+Input, resize, and close are separate typed Tauri commands. The local PTY
+target is a strict tagged payload: unknown fields are rejected at the nested
+target boundary instead of being silently discarded. No command accepts an
+arbitrary shell string for native execution; the only shell process started by
+this slice is the user's discovered local shell.
 
 xterm also receives a small local HTTP(S)-only link provider. It parses each
 rendered buffer line with a 16-link and 2 KiB-per-link bound, refuses URLs with

@@ -49,7 +49,7 @@ pub enum TerminalError {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum LocalTerminalTarget {
     #[serde(rename = "default")]
     Default {
@@ -567,6 +567,18 @@ mod tests {
                 startup_command: None,
             }
         );
+    }
+
+    #[test]
+    fn local_terminal_target_rejects_unknown_nested_fields() {
+        let default_target: Result<LocalTerminalTarget, _> = serde_json::from_str(
+            r#"{"type":"default","cwd":null,"environment":[],"startupCommand":null,"unknown":true}"#,
+        );
+        assert!(default_target.is_err());
+
+        let wsl_target: Result<LocalTerminalTarget, _> =
+            serde_json::from_str(r#"{"type":"wsl","distribution":"Ubuntu","unknown":true}"#);
+        assert!(wsl_target.is_err());
     }
 
     #[test]
