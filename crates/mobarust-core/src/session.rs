@@ -248,9 +248,6 @@ impl RemoteDesktopProfile {
         if protocol == Protocol::Vnc && self.gateway.is_some() {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
-        if protocol == Protocol::Vnc && self.clipboard_enabled {
-            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
-        }
         Ok(())
     }
 }
@@ -735,12 +732,10 @@ mod tests {
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
 
-        let mut invalid_vnc_clipboard = profile.clone();
-        invalid_vnc_clipboard.clipboard_enabled = true;
-        assert_eq!(
-            invalid_vnc_clipboard.validate_for_protocol(Protocol::Vnc),
-            Err(SessionValidationError::InvalidRemoteDesktopProfile)
-        );
+        let mut vnc_clipboard = profile.clone();
+        vnc_clipboard.domain = None;
+        vnc_clipboard.clipboard_enabled = true;
+        vnc_clipboard.validate_for_protocol(Protocol::Vnc).unwrap();
 
         let mut invalid_audio = profile.clone();
         invalid_audio.audio_enabled = true;

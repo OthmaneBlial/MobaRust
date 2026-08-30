@@ -210,6 +210,11 @@ input, decoded dimensions, pixel format, and RGBA output size. These are
 client-side encoding preferences; they do not claim to change the VNC server
 resolution or invent transport encryption.
 
+Saved VNC profiles preserve this clipboard opt-in after validation. RDP
+clipboard remains separately gated by the reviewed native Windows backend;
+this distinction prevents a VNC capability from being accidentally rejected by
+the generic remote-desktop profile schema.
+
 The connected-session loop also puts a dedicated two-second deadline on each
 keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
 the VNC engine. This prevents a full internal input queue from making a helper
