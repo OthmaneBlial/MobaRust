@@ -1,7 +1,10 @@
 use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use sha2::{Digest, Sha256};
 
 fn main() {
     let command = std::env::args().nth(1).unwrap_or_else(|| "help".to_owned());
@@ -153,7 +156,159 @@ fn verify_current_platform_bundle() -> Result<(), String> {
             bundle_root.display()
         );
     }
+
+    let artifact_root = if cfg!(target_os = "macos") {
+        bundle_root.join("macos/MobaRust.app")
+    } else {
+        bundle_root.clone()
+    };
+    let manifest_path = bundle_root.join("MobaRust.sha256");
+    write_checksum_manifest(&bundle_root, &artifact_root, &manifest_path)?;
+    verify_checksum_manifest(&bundle_root, &artifact_root, &manifest_path)?;
+    println!(
+        "wrote and verified artifact checksum manifest: {}",
+        manifest_path.display()
+    );
     Ok(())
+}
+
+/// Write a standard sha256sum-compatible manifest for the current artifact.
+/// The manifest is kept beside the generated bundle, not inside the app, so it
+/// cannot accidentally become part of the runtime resource set. Symlinks are
+/// rejected to keep the checksum scope deterministic and prevent an artifact
+/// entry from escaping the bundle root.
+fn write_checksum_manifest(
+    bundle_root: &Path,
+    artifact_root: &Path,
+    manifest_path: &Path,
+) -> Result<(), String> {
+    let contents = checksum_manifest_contents(bundle_root, artifact_root, manifest_path)?;
+    fs::write(manifest_path, contents)
+        .map_err(|error| format!("could not write checksum manifest: {error}"))
+}
+
+fn verify_checksum_manifest(
+    bundle_root: &Path,
+    artifact_root: &Path,
+    manifest_path: &Path,
+) -> Result<(), String> {
+    let expected = checksum_manifest_contents(bundle_root, artifact_root, manifest_path)?;
+    let actual = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("could not read checksum manifest: {error}"))?;
+    if actual != expected {
+        return Err(format!(
+            "checksum manifest changed during verification: {}",
+            manifest_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn checksum_manifest_contents(
+    bundle_root: &Path,
+    artifact_root: &Path,
+    manifest_path: &Path,
+) -> Result<String, String> {
+    let mut files = Vec::new();
+    collect_artifact_files(artifact_root, manifest_path, &mut files)?;
+    files.sort();
+
+    let mut manifest = String::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(bundle_root)
+            .map_err(|error| {
+                format!(
+                    "artifact file {} is outside bundle root {}: {error}",
+                    path.display(),
+                    bundle_root.display()
+                )
+            })?
+            .to_str()
+            .ok_or_else(|| format!("artifact path is not valid UTF-8: {}", path.display()))?
+            .replace('\\', "/");
+        let digest = sha256_file(&path)?;
+        // Two spaces keep the manifest readable by both sha256sum and macOS
+        // shasum without relying on a platform-specific binary marker.
+        manifest.push_str(&format!("{digest}  {relative}\n"));
+    }
+    Ok(manifest)
+}
+
+fn collect_artifact_files(
+    directory: &Path,
+    manifest_path: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(directory).map_err(|error| {
+        format!(
+            "could not inspect artifact path {}: {error}",
+            directory.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "artifact root is not a directory: {}",
+            directory.display()
+        ));
+    }
+
+    let mut children = fs::read_dir(directory)
+        .map_err(|error| format!("could not enumerate artifact directory: {error}"))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("could not read artifact directory entry: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    children.sort();
+
+    for path in children {
+        if path == manifest_path {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "could not inspect artifact entry {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "artifact contains unsupported symlink: {}",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            collect_artifact_files(&path, manifest_path, files)?;
+        } else if metadata.is_file() {
+            files.push(path);
+        } else {
+            return Err(format!(
+                "artifact contains unsupported file type: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("could not open artifact file {}: {error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("could not hash artifact file {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn verify_bundled_helper(bundle: &std::path::Path, helper: &str) -> Result<(), String> {
@@ -393,4 +548,36 @@ fn create_sanitized_test_home() -> Result<PathBuf, String> {
         }
     }
     Ok(test_home)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checksum_manifest_is_deterministic_and_excludes_itself() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-checksum-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("artifact/nested")).expect("create test artifact");
+        fs::write(root.join("artifact/z.txt"), b"z").expect("write z");
+        fs::write(root.join("artifact/nested/a.txt"), b"a").expect("write a");
+        let manifest = root.join("MobaRust.sha256");
+
+        write_checksum_manifest(&root, &root.join("artifact"), &manifest).expect("write manifest");
+        verify_checksum_manifest(&root, &root.join("artifact"), &manifest)
+            .expect("verify manifest");
+        let contents = fs::read_to_string(&manifest).expect("read manifest");
+        let lines = contents.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with("artifact/nested/a.txt"));
+        assert!(lines[1].ends_with("artifact/z.txt"));
+
+        fs::remove_dir_all(root).expect("remove test artifact");
+    }
 }

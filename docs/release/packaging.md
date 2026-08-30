@@ -28,7 +28,10 @@ turn the application into portable mode.
 `cargo xtask package-check` builds an unsigned current-platform debug app
 bundle and verifies that the Tauri resource step completes. On macOS it also
 checks the app executable and both native helper resources are regular files
-inside the bundle. It is a packaging smoke test, not code-signing,
+inside the bundle. It writes a `MobaRust.sha256` manifest beside the generated
+bundle and verifies it immediately; the manifest uses the portable two-space
+SHA-256 format accepted by both `sha256sum` and macOS `shasum`, and covers every
+regular file in the artifact scope. It is a packaging smoke test, not code-signing,
 notarization, or interoperability evidence.
 
 On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
@@ -54,3 +57,10 @@ Packaging is not a claim that RDP/VNC interoperability is complete. Real
 server tests, platform-specific input/clipboard/display behavior, dependency
 licenses, signed artifacts, checksums, and clean-install verification remain
 release gates. No signing keys or certificates belong in this repository.
+
+The checksum manifest is integrity evidence for an assembled artifact, not an
+authenticity guarantee. Release automation must sign the manifest (or an
+equivalent release metadata file) with the project-approved signing system,
+publish it next to the exact package, and verify it from a clean install
+environment. No generated manifest or signature is committed by the local
+`package-check` command.

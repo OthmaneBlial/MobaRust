@@ -3,3 +3,6 @@ name = "xtask"
 version.workspace = true
 edition.workspace = true
 publish = false
+
+[dependencies]
+sha2.workspace = true
