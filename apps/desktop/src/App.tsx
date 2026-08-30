@@ -4838,7 +4838,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="24">24-bit</option><option value="32">32-bit</option></select>
                   </label>
                   {protocol === "rdp" && <label className="quick-connect-check"><input type="checkbox" checked={desktopAudio} onChange={(event) => setDesktopAudio(event.target.checked)} /> Request audio</label>}
-                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; certificate validation and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
+                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; trust-store/pinning policy and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
                 </>
               ) : (
                 <>

@@ -21,9 +21,11 @@ dependency chain includes `rsa 0.10.0-rc.18` (`RUSTSEC-2023-0071`). It must
 pass a fresh audit before packaging or production claims.
 
 Connector failures are emitted as redacted categories rather than forwarding
-IronRDP's internal context or server text. The current rustls backend still
-does not validate the server certificate, so this helper remains an isolated
-candidate and must not be treated as a production RDP client.
+IronRDP's internal context or server text. The helper selects IronRDP's
+`native-tls` backend, so certificate chains and hostnames are checked through
+the operating-system trust store. Explicit self-signed acceptance or pinning
+policy is not wired yet; this remains an isolated candidate and must not be
+treated as a production RDP client.
 
 The helper applies a 15-second startup timeout to a stalled RDP handshake and
 then uses a separate bounded graceful-stop window before forcing termination.

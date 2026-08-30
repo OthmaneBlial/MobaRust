@@ -21,7 +21,7 @@ events. This is an engineering evaluation, not a claim of interoperability.
 
 Keep the IronRDP adapter in the separate Cargo workspace at
 `tools/rdp-helper`. It uses `ironrdp-client 0.1.0`, `ironrdp-pdu 0.9.0`, and
-the `rustls`/`clipboard` features. The helper:
+the `native-tls`/`clipboard` features. The helper:
 
 - accepts only host metadata in process arguments;
 - receives the password through the versioned zeroizing native-pipe frame;
@@ -38,17 +38,24 @@ the `rustls`/`clipboard` features. The helper:
 
 The vault crypto was not changed to accommodate the RDP experiment. Passwords
 must arrive through a protected native channel, never as process arguments,
-environment variables, logs, or frontend state. Certificate policy, reconnect,
-clipboard, audio, gateway support, packaging, and Windows interoperability are
-still release gates. The current helper deliberately reports clipboard input as
-unsupported rather than silently bridging the local clipboard.
+environment variables, logs, or frontend state. Trust/pinning policy,
+reconnect, clipboard, audio, gateway support, packaging, and Windows
+interoperability are still release gates. The current helper deliberately
+reports clipboard input as unsupported rather than silently bridging the local
+clipboard.
 
-The pinned `ironrdp-tls 0.2.2` rustls backend currently installs an explicit
-no-op certificate verifier. The helper therefore does not claim certificate
-validation and cannot be promoted or packaged until the engine exposes a
-maintained verification policy (or the architecture moves to a vetted
-FreeRDP/native path). Categorizing this failure surface improves diagnostics;
-it does not remove that security gate.
+The selected `ironrdp-tls 0.2.2` native-tls backend delegates certificate-chain
+and hostname validation to the platform connector and trust store. The helper
+does not yet expose a deliberate self-signed acceptance or certificate-pinning
+policy, so this trust-policy UX remains a promotion gate. The dependency audit,
+reconnect, audio, gateway, packaging, and real Windows interoperability gates
+also remain open.
+
+This choice trades the intentionally disabled verifier in the rustls path for
+platform TLS dependencies: Schannel on Windows, Security Framework on macOS,
+and the native-tls/OpenSSL path on Linux. The eventual distribution matrix must
+package and audit those runtime requirements; the candidate remains excluded
+from normal bundles until that work and the existing RSA advisory are resolved.
 
 ## Verification and next gate
 

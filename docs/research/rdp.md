@@ -48,18 +48,23 @@ can be placed behind the helper boundary with a reusable `RdpClient`, typed
 image output, keyboard/mouse/resize input, TLS/CredSSP configuration, and a
 zeroizing native credential frame. Its clipboard command is intentionally
 rejected until a user-controlled OS clipboard backend is wired. This is still
-not a production selection: certificate policy, reconnect, audio, gateway
-behavior, packaging, and real Windows interoperability remain open gates. No
-global package, personal credential, or remote server was used during the
-local validation.
+not a production selection: certificate trust/pinning policy, reconnect,
+audio, gateway behavior, packaging, and real Windows interoperability remain
+open gates. No global package, personal credential, or remote server was used
+during the local validation.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
-data, and TLS/certificate-or-transport validation. This is diagnostic
-hardening only: the pinned IronRDP rustls backend still uses a no-op
-certificate verifier, so certificate validation remains a promotion blocker.
-The helper also refuses an inherited `SSLKEYLOGFILE` variable; the TLS backend's
-key-log facility must not write session key material during local experiments.
+data, and TLS/certificate-or-transport validation. The candidate now selects
+IronRDP's `native-tls` backend, whose platform connector performs normal
+certificate-chain and hostname validation using the operating-system trust
+store. A deliberate self-signed acceptance/pinning policy is not exposed yet,
+so trust-policy UX and deterministic certificate fixtures remain promotion
+work. This backend also adds platform TLS packaging surface (Schannel on
+Windows, Security Framework on macOS, and OpenSSL/native-tls on Linux), which
+must be included in the future distribution matrix. The helper also refuses an
+inherited `SSLKEYLOGFILE` variable; no TLS key-log output is allowed during
+local experiments.
 The helper owns a 15-second startup deadline around the candidate's network
 handshake. When it expires, it requests a cooperative close and waits only a
 separate bounded grace period before forcing task termination. A stalled
