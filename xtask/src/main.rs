@@ -185,8 +185,8 @@ fn portable_check() -> Result<(), String> {
     .map_err(|error| format!("could not write portable package notice: {error}"))?;
 
     let package_manifest = package_directory.join("MobaRust.sha256");
-    write_checksum_manifest(&portable_root, &package_directory, &package_manifest)?;
-    verify_checksum_manifest(&portable_root, &package_directory, &package_manifest)?;
+    write_checksum_manifest(&package_directory, &package_directory, &package_manifest)?;
+    verify_checksum_manifest(&package_directory, &package_directory, &package_manifest)?;
     create_portable_archive(&portable_root, &package_name, &archive)?;
     verify_portable_archive(&portable_root, &package_name, &archive)?;
     write_archive_checksum_manifest(&portable_root, &archive, &archive_manifest)?;
@@ -358,7 +358,43 @@ fn verify_portable_archive(
         ));
     }
     let listing = String::from_utf8_lossy(&output.stdout);
-    validate_portable_archive_listing(&listing, package_name)
+    validate_portable_archive_listing(&listing, package_name)?;
+
+    let extraction_root = portable_root.join(format!("{package_name}-extracted"));
+    remove_generated_path(&extraction_root)?;
+    fs::create_dir_all(&extraction_root)
+        .map_err(|error| format!("could not create archive extraction directory: {error}"))?;
+    let extraction_path = extraction_root.to_str().ok_or_else(|| {
+        format!(
+            "portable archive extraction path is not valid UTF-8: {}",
+            extraction_root.display()
+        )
+    })?;
+    let extraction = run_sanitized_output(
+        "tar",
+        &["-xzf", archive_name, "-C", extraction_path],
+        portable_root,
+    )?;
+    if !extraction.status.success() {
+        return Err(format!(
+            "tar could not extract portable archive {} with {}",
+            archive.display(),
+            extraction.status
+        ));
+    }
+
+    let extracted_package = extraction_root.join(package_name);
+    let extracted_manifest = extracted_package.join("MobaRust.sha256");
+    let verification = verify_checksum_command(vec![
+        extracted_package.display().to_string(),
+        extracted_manifest.display().to_string(),
+    ]);
+    let cleanup = remove_generated_path(&extraction_root);
+    match (verification, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 fn validate_portable_archive_listing(listing: &str, package_name: &str) -> Result<(), String> {

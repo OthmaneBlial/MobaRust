@@ -63,8 +63,10 @@ repository-owned artifact tree. The package contains:
 * MobaRust.sha256, covering the extracted package contents
 
 The archive is inspected with tar for required entries and path traversal,
-then receives a separate archive SHA-256 manifest. All generated output stays
-under ignored target/debug/portable/; no package is committed or uploaded.
+extracted into a temporary generated directory, and checked again with the
+package manifest before that directory is removed. It then receives a
+separate archive SHA-256 manifest. All generated output stays under ignored
+target/debug/portable/; no package is committed or uploaded.
 This proves a local macOS packaging path only. It does not prove signing,
 notarization, clean installation, Windows/Linux support, or protocol
 interoperability.
