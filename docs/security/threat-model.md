@@ -31,6 +31,7 @@ This document describes the security boundary for the first vertical slice and t
 | Application backups | Document that backups can contain session metadata; provide a safe export format and migration versioning. |
 | Host impersonation | SSH adapters must verify known_hosts/fingerprints and must never silently accept unknown keys. |
 | Remote content execution | Terminal output is rendered as terminal text only; URLs need explicit user action and are not automatic HTML. |
+| Webview script injection | The Tauri CSP disallows `unsafe-eval`, objects, and framing; remote output is escaped before any non-terminal rendering. |
 | IPC abuse | Use typed, narrow commands with validation. Do not expose `execute_anything(command: String)`. |
 
 ## Non-goals
