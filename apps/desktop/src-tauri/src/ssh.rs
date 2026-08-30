@@ -26,6 +26,7 @@ const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
+const SSH_RECONNECT_ATTEMPTS: u8 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -288,7 +289,6 @@ enum SshCommand {
     StartTransfer {
         job: TransferJob,
     },
-    Close,
 }
 
 enum SshFileOperation {
@@ -335,6 +335,7 @@ impl Default for SshManager {
 
 struct SessionState {
     sender: mpsc::Sender<SshCommand>,
+    close: watch::Sender<bool>,
     attached: bool,
     pending_output: Vec<String>,
 }
@@ -345,6 +346,7 @@ struct RemoteSessionContext {
     terminal_id: String,
     request: SshConnectRequest,
     vault: Arc<dyn CredentialLookup>,
+    close: watch::Receiver<bool>,
 }
 
 struct TransferControl {
@@ -516,6 +518,7 @@ impl SshManager {
         let (reader, writer) = shell.split();
         let terminal_id = Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
+        let (close, close_receiver) = watch::channel(false);
         self.sessions
             .lock()
             .map_err(|_| SshManagerError::Closed)?
@@ -523,6 +526,7 @@ impl SshManager {
                 terminal_id.clone(),
                 SessionState {
                     sender,
+                    close,
                     attached: false,
                     pending_output: Vec::new(),
                 },
@@ -537,6 +541,7 @@ impl SshManager {
             terminal_id: id_for_task,
             request,
             vault: reconnect_vault,
+            close: close_receiver,
         };
         tauri::async_runtime::spawn(async move {
             run_remote_session(context, connection, reader, writer, receiver).await;
@@ -565,10 +570,14 @@ impl SshManager {
     }
 
     pub async fn close(&self, terminal_id: &str) -> Result<(), SshManagerError> {
-        self.sender(terminal_id)?
-            .send(SshCommand::Close)
-            .await
-            .map_err(|_| SshManagerError::Closed)
+        let close = self
+            .sessions
+            .lock()
+            .map_err(|_| SshManagerError::Closed)?
+            .get(terminal_id)
+            .map(|state| state.close.clone())
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        close.send(true).map_err(|_| SshManagerError::Closed)
     }
 
     pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SshManagerError> {
@@ -1341,6 +1350,66 @@ fn expand_user_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+enum ReconnectOutcome<T> {
+    Connected { value: T, attempt: u8 },
+    Cancelled,
+    Failed { attempts: u8, last_error: String },
+}
+
+async fn reconnect_with_backoff<T, Before, Attempt, AttemptFuture, Delay>(
+    close: &mut watch::Receiver<bool>,
+    initial_error: String,
+    mut before_attempt: Before,
+    mut attempt: Attempt,
+    delay_for: Delay,
+) -> ReconnectOutcome<T>
+where
+    Before: FnMut(u8, &str),
+    Attempt: FnMut(u8) -> AttemptFuture,
+    AttemptFuture: std::future::Future<Output = Result<T, String>>,
+    Delay: Fn(u8) -> Duration,
+{
+    let mut last_error = initial_error;
+    for attempt_number in 1..=SSH_RECONNECT_ATTEMPTS {
+        if *close.borrow() {
+            return ReconnectOutcome::Cancelled;
+        }
+        before_attempt(attempt_number, &last_error);
+        tokio::select! {
+            changed = close.changed() => {
+                if changed.is_err() || *close.borrow() {
+                    return ReconnectOutcome::Cancelled;
+                }
+                continue;
+            }
+            _ = tokio::time::sleep(delay_for(attempt_number)) => {}
+        }
+
+        let result = tokio::select! {
+            changed = close.changed() => {
+                if changed.is_err() || *close.borrow() {
+                    return ReconnectOutcome::Cancelled;
+                }
+                continue;
+            }
+            result = attempt(attempt_number) => result,
+        };
+        match result {
+            Ok(value) => {
+                return ReconnectOutcome::Connected {
+                    value,
+                    attempt: attempt_number,
+                };
+            }
+            Err(error) => last_error = error,
+        }
+    }
+    ReconnectOutcome::Failed {
+        attempts: SSH_RECONNECT_ATTEMPTS,
+        last_error,
+    }
+}
+
 async fn run_remote_session(
     context: RemoteSessionContext,
     mut connection: Arc<SshConnection>,
@@ -1354,6 +1423,7 @@ async fn run_remote_session(
         terminal_id,
         request,
         vault,
+        mut close,
     } = context;
     let mut should_report_error = None;
     let mut connection_is_live = true;
@@ -1367,62 +1437,76 @@ async fn run_remote_session(
             &mut reader,
             &writer,
             &mut commands,
+            &mut close,
         )
         .await
         {
             ShellRunResult::Closed => break 'session,
             ShellRunResult::Lost(error) => {
-                should_report_error = Some(error.clone());
                 connection_is_live = false;
                 let _ = connection.disconnect().await;
-                let mut last_error = error;
-                let mut reconnected = false;
-                for attempt in 1..=3 {
-                    manager.emit_session_state(
-                        &app,
-                        &terminal_id,
-                        SshSessionState::Reconnecting,
+                let outcome = reconnect_with_backoff(
+                    &mut close,
+                    error,
+                    |attempt, last_error| {
+                        manager.emit_session_state(
+                            &app,
+                            &terminal_id,
+                            SshSessionState::Reconnecting,
+                            attempt,
+                            Some(last_error.to_owned()),
+                        );
+                    },
+                    |_attempt| async {
+                        let new_connection = connect_transport(vault.as_ref(), &request)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let shell = new_connection
+                            .open_shell(request.cols, request.rows)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        Ok((new_connection, shell.split()))
+                    },
+                    |attempt| Duration::from_secs(1_u64 << (attempt - 1)),
+                )
+                .await;
+                match outcome {
+                    ReconnectOutcome::Connected {
+                        value: (new_connection, (new_reader, new_writer)),
                         attempt,
-                        Some(last_error.clone()),
-                    );
-                    tokio::time::sleep(Duration::from_secs(1_u64 << (attempt - 1))).await;
-                    match connect_transport(vault.as_ref(), &request).await {
-                        Ok(new_connection) => {
-                            match new_connection.open_shell(request.cols, request.rows).await {
-                                Ok(shell) => {
-                                    let (new_reader, new_writer) = shell.split();
-                                    connection = Arc::new(new_connection);
-                                    reader = new_reader;
-                                    writer = new_writer;
-                                    connection_is_live = true;
-                                    manager.emit_session_state(
-                                        &app,
-                                        &terminal_id,
-                                        SshSessionState::Connected,
-                                        attempt,
-                                        None,
-                                    );
-                                    should_report_error = None;
-                                    reconnected = true;
-                                    break;
-                                }
-                                Err(error) => last_error = error.to_string(),
-                            }
-                        }
-                        Err(error) => last_error = error.to_string(),
+                    } => {
+                        connection = Arc::new(new_connection);
+                        reader = new_reader;
+                        writer = new_writer;
+                        connection_is_live = true;
+                        manager.emit_session_state(
+                            &app,
+                            &terminal_id,
+                            SshSessionState::Connected,
+                            attempt,
+                            None,
+                        );
+                        should_report_error = None;
                     }
-                }
-                if !reconnected {
-                    manager.emit_session_state(
-                        &app,
-                        &terminal_id,
-                        SshSessionState::Failed,
-                        3,
-                        Some(last_error.clone()),
-                    );
-                    should_report_error =
-                        Some(format!("connection lost; reconnect failed: {last_error}"));
-                    break 'session;
+                    ReconnectOutcome::Cancelled => {
+                        should_report_error = None;
+                        break 'session;
+                    }
+                    ReconnectOutcome::Failed {
+                        attempts,
+                        last_error,
+                    } => {
+                        manager.emit_session_state(
+                            &app,
+                            &terminal_id,
+                            SshSessionState::Failed,
+                            attempts,
+                            Some(last_error.clone()),
+                        );
+                        should_report_error =
+                            Some(format!("connection lost; reconnect failed: {last_error}"));
+                        break 'session;
+                    }
                 }
             }
         }
@@ -1453,6 +1537,7 @@ enum ShellRunResult {
     Lost(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_shell_once(
     app: &AppHandle,
     manager: &SshManager,
@@ -1461,6 +1546,7 @@ async fn run_shell_once(
     reader: &mut mobarust_ssh::SshShellReader,
     writer: &mobarust_ssh::SshShellWriter,
     commands: &mut mpsc::Receiver<SshCommand>,
+    close: &mut watch::Receiver<bool>,
 ) -> ShellRunResult {
     loop {
         tokio::select! {
@@ -1585,10 +1671,16 @@ async fn run_shell_once(
                             run_transfer(transfer_app, transfer_manager, transfer_connection, job).await;
                         });
                     }
-                    Some(SshCommand::Close) | None => {
+                    None => {
                         let _ = writer.close().await;
                         return ShellRunResult::Closed;
                     }
+                }
+            }
+            changed = close.changed() => {
+                if changed.is_err() || *close.borrow() {
+                    let _ = writer.close().await;
+                    return ShellRunResult::Closed;
                 }
             }
         }
@@ -3118,10 +3210,12 @@ fn default_terminal_rows() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, remote_child_path,
-        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
+        ReconnectOutcome, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol,
+        reconnect_with_backoff, remote_child_path, should_emit_transfer_progress, transfer_metrics,
+        validate_transfer_component,
     };
     use std::time::{Duration, Instant};
+    use tokio::sync::{oneshot, watch};
 
     #[test]
     fn recursive_remote_paths_keep_root_boundaries() {
@@ -3208,5 +3302,98 @@ mod tests {
             &mut last_at,
             &mut last_bytes,
         ));
+    }
+
+    #[tokio::test]
+    async fn reconnect_policy_reports_bounded_failure_and_last_error() {
+        let (_close_sender, mut close) = watch::channel(false);
+        let mut attempts = Vec::new();
+        let result = reconnect_with_backoff(
+            &mut close,
+            "shell channel closed".to_owned(),
+            |attempt, error| attempts.push((attempt, error.to_owned())),
+            |attempt| async move { Err::<(), String>(format!("fixture failure {attempt}")) },
+            |_| Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(
+            attempts,
+            vec![
+                (1, "shell channel closed".to_owned()),
+                (2, "fixture failure 1".to_owned()),
+                (3, "fixture failure 2".to_owned()),
+            ]
+        );
+        assert!(matches!(
+            result,
+            ReconnectOutcome::Failed {
+                attempts: 3,
+                last_error
+            } if last_error == "fixture failure 3"
+        ));
+    }
+
+    #[tokio::test]
+    async fn reconnect_policy_returns_on_first_success_after_a_failure() {
+        let (_close_sender, mut close) = watch::channel(false);
+        let result = reconnect_with_backoff(
+            &mut close,
+            "shell channel closed".to_owned(),
+            |_attempt, _error| {},
+            |attempt| async move {
+                if attempt == 2 {
+                    Ok::<_, String>("fixture reconnected")
+                } else {
+                    Err(format!("fixture failure {attempt}"))
+                }
+            },
+            |_| Duration::ZERO,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            ReconnectOutcome::Connected {
+                value: "fixture reconnected",
+                attempt: 2
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn reconnect_policy_cancels_an_inflight_attempt() {
+        let (close_sender, mut close) = watch::channel(false);
+        let (started_sender, started_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut started_sender = Some(started_sender);
+            reconnect_with_backoff(
+                &mut close,
+                "shell channel closed".to_owned(),
+                move |_attempt, _error| {
+                    if let Some(sender) = started_sender.take() {
+                        let _ = sender.send(());
+                    }
+                },
+                |_attempt| async {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    Ok::<_, String>(())
+                },
+                |_| Duration::ZERO,
+            )
+            .await
+        });
+
+        started_receiver
+            .await
+            .expect("reconnect attempt should start");
+        close_sender
+            .send(true)
+            .expect("reconnect cancellation receiver should remain alive");
+        let result = tokio::time::timeout(Duration::from_millis(500), task)
+            .await
+            .expect("reconnect cancellation should be prompt")
+            .expect("reconnect task should not panic");
+        assert!(matches!(result, ReconnectOutcome::Cancelled));
     }
 }
