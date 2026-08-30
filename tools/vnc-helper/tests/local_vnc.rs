@@ -10,6 +10,7 @@ use mobarust_remote_desktop::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 const FIXTURE_SIZE: DisplaySize = DisplaySize {
@@ -87,8 +88,10 @@ async fn helper_reports_server_disconnect_during_negotiation() {
 async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (accepted_tx, accepted_rx) = oneshot::channel();
     let server_task = tokio::spawn(async move {
         let (_stream, _) = listener.accept().await.unwrap();
+        let _ = accepted_tx.send(());
         tokio::time::sleep(Duration::from_secs(5)).await;
     });
     let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
@@ -102,6 +105,10 @@ async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
     .await;
     write_credential_frame(&mut stdin, &HelperCredential::new("fixture-secret"))
         .await
+        .unwrap();
+    timeout(Duration::from_secs(2), accepted_rx)
+        .await
+        .unwrap()
         .unwrap();
     send_command(&mut stdin, HelperCommand::Stop).await;
 

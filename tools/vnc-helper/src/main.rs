@@ -147,7 +147,8 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     let connect_future = async move {
         let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
             Ok(Ok(stream)) => stream,
-            Ok(Err(_)) | Err(_) => return Err("VNC connection failed"),
+            Ok(Err(error)) => return Err(connection_error_message(&error)),
+            Err(_) => return Err("VNC connection timed out"),
         };
 
         // vnc-rs 0.5.3 currently requires its auth callback to return an owned
@@ -168,7 +169,8 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
             .map_err(|_| "VNC client configuration failed")?;
         let state = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
             Ok(Ok(state)) => state,
-            Ok(Err(_)) | Err(_) => return Err("VNC authentication or negotiation failed"),
+            Ok(Err(error)) => return Err(negotiation_error_message(&error)),
+            Err(_) => return Err("VNC negotiation timed out"),
         };
         state
             .finish()
@@ -482,6 +484,30 @@ async fn send_error<W: AsyncWrite + Unpin>(
     .await
 }
 
+fn connection_error_message(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "VNC host could not be resolved",
+        std::io::ErrorKind::ConnectionRefused => "VNC connection was refused",
+        std::io::ErrorKind::TimedOut => "VNC connection timed out",
+        std::io::ErrorKind::AddrNotAvailable => "VNC address is unavailable",
+        _ => "VNC connection failed",
+    }
+}
+
+fn negotiation_error_message(error: &VncError) -> &'static str {
+    match error {
+        VncError::NoPassword => "VNC server requires a password",
+        VncError::WrongPassword => "VNC authentication was rejected",
+        VncError::InvalidSecurityTyep(_) => "VNC server offered an unsupported security type",
+        VncError::WrongPixelFormat | VncError::InvalidImageData => {
+            "VNC server sent invalid framebuffer data"
+        }
+        VncError::WrongServerMessage => "VNC server sent an unsupported message",
+        VncError::IoError(error) => connection_error_message(error),
+        _ => "VNC protocol negotiation failed",
+    }
+}
+
 fn parse_arguments<I>(arguments: I) -> Result<Arguments, ArgumentError>
 where
     I: IntoIterator<Item = String>,
@@ -593,6 +619,30 @@ mod tests {
         let error = parse_arguments(["--password=fixture-secret".to_owned()]).unwrap_err();
         assert_eq!(error.to_string(), "unknown helper argument");
         assert!(!error.to_string().contains("fixture-secret"));
+    }
+
+    #[test]
+    fn connection_errors_are_actionable_without_raw_host_details() {
+        assert_eq!(
+            connection_error_message(&std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+            "VNC connection was refused"
+        );
+        assert_eq!(
+            connection_error_message(&std::io::Error::from(std::io::ErrorKind::NotFound)),
+            "VNC host could not be resolved"
+        );
+    }
+
+    #[test]
+    fn negotiation_errors_are_categorized_without_server_text() {
+        assert_eq!(
+            negotiation_error_message(&VncError::WrongPassword),
+            "VNC authentication was rejected"
+        );
+        assert_eq!(
+            negotiation_error_message(&VncError::General("secret server detail".into())),
+            "VNC protocol negotiation failed"
+        );
     }
 
     #[test]
