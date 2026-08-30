@@ -33,6 +33,7 @@ The first working slice provides:
 - explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
 - real SSH jump-host chaining through native `direct-tcpip` streams, with saved hop descriptors and imported `ProxyJump` alias resolution when matching profiles exist;
 - bounded SSH shell reconnection with explicit reconnecting/failed state events and preserved terminal identity;
+- opt-in SSH X11 forwarding through an explicitly configured local TCP/Unix display, with native-only cookie handling, bounded channels, and no DISPLAY/Xauthority discovery;
 - native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
 - native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
 - bounded recursive SFTP upload/download with streaming file bodies, progress, cancellation, symlink refusal, and atomic per-file commits;

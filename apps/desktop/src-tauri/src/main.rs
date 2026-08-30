@@ -721,6 +721,10 @@ fn session_save_ssh(
     payload: SaveSshSessionRequest,
 ) -> Result<SessionRecord, String> {
     let SaveSshSessionRequest { name, request } = payload;
+    if let Some(x11) = &request.x11 {
+        mobarust_ssh::X11ForwardingOptions::parse(&x11.display, x11.single_connection)
+            .map_err(|error| format!("invalid X11 configuration: {error}"))?;
+    }
     let SshConnectRequest {
         host,
         port,
@@ -729,6 +733,7 @@ fn session_save_ssh(
         known_hosts_path,
         pinned_fingerprint,
         jump_hosts,
+        x11,
         ..
     } = request;
     let auth = match request_auth {
@@ -765,6 +770,8 @@ fn session_save_ssh(
         last_used_at: None,
         known_hosts_path,
         pinned_fingerprint,
+        x11_display: x11.as_ref().map(|value| value.display.clone()),
+        x11_single_connection: x11.as_ref().is_some_and(|value| value.single_connection),
         folder: Some("Remote sessions".into()),
         tags: Vec::new(),
         favorite: false,
@@ -838,6 +845,8 @@ fn session_save_serial(
         last_used_at: None,
         known_hosts_path: None,
         pinned_fingerprint: None,
+        x11_display: None,
+        x11_single_connection: false,
         folder: Some("Serial devices".into()),
         tags: vec!["serial".into()],
         favorite: false,
@@ -907,6 +916,8 @@ fn session_save_remote_desktop(
         last_used_at: None,
         known_hosts_path: None,
         pinned_fingerprint: None,
+        x11_display: None,
+        x11_single_connection: false,
         folder: Some("Remote desktops".into()),
         tags: vec![protocol_tag.into()],
         favorite: false,

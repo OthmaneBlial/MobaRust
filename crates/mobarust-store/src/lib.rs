@@ -874,6 +874,8 @@ impl SessionStore {
                 last_used_at: None,
                 known_hosts_path: None,
                 pinned_fingerprint: None,
+                x11_display: None,
+                x11_single_connection: false,
                 folder: Some("Imported / OpenSSH".into()),
                 tags: vec!["imported".into(), "openssh".into()],
                 favorite: false,
@@ -1076,6 +1078,8 @@ mod tests {
             last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
+            x11_display: None,
+            x11_single_connection: false,
             folder: Some("Production".into()),
             tags: vec!["prod".into()],
             favorite: true,
@@ -1173,6 +1177,24 @@ mod tests {
         let json = fs::read_to_string(&path).unwrap();
         assert!(json.contains("bastion-password"));
         assert!(!json.contains("super-secret"));
+    }
+
+    #[test]
+    fn x11_display_profile_round_trip_remains_explicit_and_secret_free() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let mut session = remote_session();
+        session.x11_display = Some("tcp://127.0.0.1:6000".into());
+        session.x11_single_connection = true;
+        store.save(session.clone()).unwrap();
+
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(reopened.list(), &[session]);
+        let json = fs::read_to_string(path).unwrap();
+        assert!(json.contains("tcp://127.0.0.1:6000"));
+        assert!(json.contains("session-password"));
+        assert!(!json.contains("plaintext-secret"));
     }
 
     #[test]

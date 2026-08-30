@@ -3,7 +3,9 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,12 +13,16 @@ use encoding_rs::WINDOWS_1252;
 use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
+use russh::{
+    Channel, ChannelMsg, ChannelOpenFailure, ChannelReadHalf, ChannelWriteHalf, Disconnect,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
+use uuid::Uuid;
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
@@ -86,6 +92,163 @@ pub enum SshError {
     Cancelled,
     #[error("SSH credential material is unavailable")]
     MissingCredentials,
+    #[error("invalid X11 display target: {0}")]
+    X11Display(#[from] X11DisplayError),
+    #[error("X11 display connection failed: {0}")]
+    X11Transport(String),
+}
+
+/// An explicitly selected local X11 display. No environment variables or
+/// Xauthority files are consulted to construct this value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum X11Display {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum X11DisplayError {
+    #[error("display target is required")]
+    Empty,
+    #[error("display target contains a control character")]
+    ControlCharacter,
+    #[error("TCP display must be an explicit socket address such as tcp://127.0.0.1:6000")]
+    InvalidTcpAddress,
+    #[error("TCP display port must be between 1 and 65535")]
+    InvalidTcpPort,
+    #[error("TCP display must use a loopback address")]
+    NonLocalTcpAddress,
+    #[error("Unix display path must be absolute")]
+    UnixPathNotAbsolute,
+    #[error("Unix display path is empty or invalid")]
+    InvalidUnixPath,
+}
+
+impl X11Display {
+    /// Parses only explicit TCP or Unix targets. In particular, `:0`,
+    /// `$DISPLAY`, and host-name discovery are rejected so a connection can
+    /// never silently select a developer's local display.
+    pub fn parse(input: &str) -> Result<Self, X11DisplayError> {
+        let input = input.trim();
+        if input.is_empty() {
+            return Err(X11DisplayError::Empty);
+        }
+        if input.contains('\0') || input.chars().any(char::is_control) {
+            return Err(X11DisplayError::ControlCharacter);
+        }
+
+        if let Some(path) = input.strip_prefix("unix://") {
+            let path = PathBuf::from(path);
+            if path.as_os_str().is_empty() {
+                return Err(X11DisplayError::InvalidUnixPath);
+            }
+            if !path.is_absolute() {
+                return Err(X11DisplayError::UnixPathNotAbsolute);
+            }
+            return Ok(Self::Unix(path));
+        }
+
+        let address = input.strip_prefix("tcp://").unwrap_or(input);
+        let address =
+            SocketAddr::from_str(address).map_err(|_| X11DisplayError::InvalidTcpAddress)?;
+        if address.port() == 0 {
+            return Err(X11DisplayError::InvalidTcpPort);
+        }
+        if !address.ip().is_loopback() {
+            return Err(X11DisplayError::NonLocalTcpAddress);
+        }
+        Ok(Self::Tcp(address))
+    }
+
+    async fn connect(&self) -> Result<X11Stream, SshError> {
+        let result = match self {
+            Self::Tcp(address) => {
+                tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(address))
+                    .await
+                    .map_err(|_| SshError::X11Transport("display connection timed out".into()))?
+                    .map(X11Stream::Tcp)
+            }
+            Self::Unix(path) => {
+                tokio::time::timeout(Duration::from_secs(5), UnixStream::connect(path))
+                    .await
+                    .map_err(|_| SshError::X11Transport("display connection timed out".into()))?
+                    .map(X11Stream::Unix)
+            }
+        };
+        result.map_err(|error| SshError::X11Transport(error.to_string()))
+    }
+}
+
+/// Opt-in X11 forwarding configuration. The authentication cookie is
+/// generated inside Rust when the shell is opened and is never serialized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X11ForwardingOptions {
+    pub display: X11Display,
+    pub single_connection: bool,
+}
+
+impl X11ForwardingOptions {
+    pub fn new(display: X11Display, single_connection: bool) -> Self {
+        Self {
+            display,
+            single_connection,
+        }
+    }
+
+    pub fn parse(display: &str, single_connection: bool) -> Result<Self, X11DisplayError> {
+        Ok(Self::new(X11Display::parse(display)?, single_connection))
+    }
+}
+
+enum X11Stream {
+    Tcp(TcpStream),
+    Unix(UnixStream),
+}
+
+impl AsyncRead for X11Stream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => std::pin::Pin::new(stream).poll_read(cx, buffer),
+            Self::Unix(stream) => std::pin::Pin::new(stream).poll_read(cx, buffer),
+        }
+    }
+}
+
+impl AsyncWrite for X11Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => std::pin::Pin::new(stream).poll_write(cx, bytes),
+            Self::Unix(stream) => std::pin::Pin::new(stream).poll_write(cx, bytes),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+            Self::Unix(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+            Self::Unix(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+        }
+    }
 }
 
 /// A password is intentionally not serializable or cloneable. The value is
@@ -201,6 +364,7 @@ pub struct SshConnectOptions {
     pub host_key_policy: HostKeyPolicy,
     pub timeout: Duration,
     pub credentials: SshCredentials,
+    pub x11: Option<X11ForwardingOptions>,
 }
 
 /// A complete SSH connection description for one hop in a jump chain. The
@@ -233,6 +397,7 @@ impl fmt::Debug for SshConnectOptions {
             .field("host_key_policy", &self.host_key_policy)
             .field("timeout", &self.timeout)
             .field("credentials", &self.credentials)
+            .field("x11", &self.x11.as_ref().map(|_| "enabled"))
             .finish()
     }
 }
@@ -244,6 +409,8 @@ struct ClientHandler {
     inspection_only: bool,
     observed_fingerprint: Arc<Mutex<Option<String>>>,
     forwarded_channels: mpsc::UnboundedSender<SshForwardedChannel>,
+    x11_channels: mpsc::UnboundedSender<SshX11Channel>,
+    x11_enabled: bool,
 }
 
 struct ConnectionParts {
@@ -251,6 +418,7 @@ struct ConnectionParts {
     handler: ClientHandler,
     config: Arc<client::Config>,
     forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
+    x11_channels: mpsc::UnboundedReceiver<SshX11Channel>,
 }
 
 impl client::Handler for ClientHandler {
@@ -306,6 +474,34 @@ impl client::Handler for ClientHandler {
             Ok(())
         }
     }
+
+    fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<client::Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let x11_channels = self.x11_channels.clone();
+        let originator_address = originator_address.to_owned();
+        let x11_enabled = self.x11_enabled;
+        async move {
+            if !x11_enabled {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+                return Ok(());
+            }
+            reply.accept().await;
+            let _ = x11_channels.send(SshX11Channel {
+                channel,
+                originator_address,
+                originator_port,
+            });
+            Ok(())
+        }
+    }
 }
 
 pub struct SshConnection {
@@ -313,6 +509,8 @@ pub struct SshConnection {
     lifecycle: Mutex<ConnectionLifecycle>,
     parent: Option<Arc<SshConnection>>,
     forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
+    x11_channels: AsyncMutex<mpsc::UnboundedReceiver<SshX11Channel>>,
+    x11: Option<X11ForwardingOptions>,
 }
 
 /// Performs a one-shot SSH handshake to observe the server host key, then
@@ -401,6 +599,20 @@ pub struct SshForwardedChannel {
 }
 
 impl SshForwardedChannel {
+    pub fn into_stream(self) -> russh::ChannelStream<client::Msg> {
+        self.channel.into_stream()
+    }
+}
+
+/// A server-initiated X11 channel. The caller owns the local display bridge
+/// and its cancellation policy; no display bytes cross the frontend boundary.
+pub struct SshX11Channel {
+    channel: Channel<client::Msg>,
+    pub originator_address: String,
+    pub originator_port: u32,
+}
+
+impl SshX11Channel {
     pub fn into_stream(self) -> russh::ChannelStream<client::Msg> {
         self.channel.into_stream()
     }
@@ -552,6 +764,7 @@ impl SshConnection {
             handler,
             config,
             forwarded_channels,
+            x11_channels,
         } = connection_parts(&options);
         let connect = tokio::time::timeout(
             options.timeout,
@@ -559,7 +772,7 @@ impl SshConnection {
         )
         .await;
         let handle = map_connect_result(connect, observed_fingerprint)?;
-        Self::finish_authenticated(options, handle, None, forwarded_channels).await
+        Self::finish_authenticated(options, handle, None, forwarded_channels, x11_channels).await
     }
 
     /// Connects through one or more already described jump hosts. Every hop
@@ -595,6 +808,7 @@ impl SshConnection {
             handler,
             config,
             forwarded_channels,
+            x11_channels,
         } = connection_parts(&options);
         let connect = tokio::time::timeout(
             options.timeout,
@@ -602,7 +816,14 @@ impl SshConnection {
         )
         .await;
         let handle = map_connect_result(connect, observed_fingerprint)?;
-        Self::finish_authenticated(options, handle, Some(upstream), forwarded_channels).await
+        Self::finish_authenticated(
+            options,
+            handle,
+            Some(upstream),
+            forwarded_channels,
+            x11_channels,
+        )
+        .await
     }
 
     async fn finish_authenticated(
@@ -610,7 +831,9 @@ impl SshConnection {
         mut handle: client::Handle<ClientHandler>,
         parent: Option<Arc<SshConnection>>,
         forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
+        x11_channels: mpsc::UnboundedReceiver<SshX11Channel>,
     ) -> Result<Self, SshError> {
+        let x11 = options.x11.clone();
         let authentication = tokio::time::timeout(
             options.timeout,
             authenticate(&mut handle, options.credentials),
@@ -637,6 +860,8 @@ impl SshConnection {
             lifecycle: Mutex::new(lifecycle),
             parent,
             forwarded_channels: AsyncMutex::new(forwarded_channels),
+            x11_channels: AsyncMutex::new(x11_channels),
+            x11,
         })
     }
 
@@ -658,6 +883,22 @@ impl SshConnection {
                 .request_pty(false, "xterm-256color", cols.max(1), rows.max(1), 0, 0, &[])
                 .await
                 .map_err(SshError::Channel)?;
+            if let Some(options) = &self.x11 {
+                // RFC 4254 carries a temporary cookie in the request. The
+                // value is generated natively and is intentionally absent
+                // from all serde/debug/frontend-facing models.
+                let cookie = Uuid::new_v4().simple().to_string();
+                channel
+                    .request_x11(
+                        true,
+                        options.single_connection,
+                        "MIT-MAGIC-COOKIE-1",
+                        cookie,
+                        0,
+                    )
+                    .await
+                    .map_err(SshError::Channel)?;
+            }
             channel
                 .request_shell(true)
                 .await
@@ -1021,6 +1262,30 @@ impl SshConnection {
     pub async fn next_forwarded_channel(&self) -> Option<SshForwardedChannel> {
         self.forwarded_channels.lock().await.recv().await
     }
+
+    pub fn x11_display(&self) -> Option<X11Display> {
+        self.x11.as_ref().map(|options| options.display.clone())
+    }
+
+    pub async fn next_x11_channel(&self) -> Option<SshX11Channel> {
+        self.x11_channels.lock().await.recv().await
+    }
+
+    /// Bridges one accepted X11 channel to the explicitly configured local
+    /// display. Dropping the future cancels both sides of the copy.
+    pub async fn bridge_x11_channel(&self, channel: SshX11Channel) -> Result<(), SshError> {
+        let Some(options) = &self.x11 else {
+            return Err(SshError::X11Transport(
+                "X11 forwarding is not enabled for this connection".into(),
+            ));
+        };
+        let mut local = options.display.connect().await?;
+        let mut remote = channel.into_stream();
+        copy_bidirectional(&mut remote, &mut local)
+            .await
+            .map_err(|error| SshError::X11Transport(error.to_string()))?;
+        Ok(())
+    }
 }
 
 struct ScpChannel {
@@ -1216,6 +1481,7 @@ fn connection_parts(options: &SshConnectOptions) -> ConnectionParts {
         options.host_key_policy.clone(),
         false,
         options.timeout,
+        options.x11.is_some(),
     )
 }
 
@@ -1229,6 +1495,7 @@ fn inspection_connection_parts(options: &SshFingerprintOptions) -> ConnectionPar
         HostKeyPolicy::PinnedFingerprint(String::new()),
         true,
         options.timeout,
+        false,
     )
 }
 
@@ -1238,9 +1505,11 @@ fn connection_parts_for(
     policy: HostKeyPolicy,
     inspection_only: bool,
     timeout: Duration,
+    x11_enabled: bool,
 ) -> ConnectionParts {
     let observed_fingerprint = Arc::new(Mutex::new(None));
     let (forwarded_sender, forwarded_receiver) = mpsc::unbounded_channel();
+    let (x11_sender, x11_receiver) = mpsc::unbounded_channel();
     let handler = ClientHandler {
         host: host.to_owned(),
         port,
@@ -1248,6 +1517,8 @@ fn connection_parts_for(
         inspection_only,
         observed_fingerprint: Arc::clone(&observed_fingerprint),
         forwarded_channels: forwarded_sender,
+        x11_channels: x11_sender,
+        x11_enabled,
     };
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(timeout),
@@ -1258,6 +1529,7 @@ fn connection_parts_for(
         handler,
         config,
         forwarded_channels: forwarded_receiver,
+        x11_channels: x11_receiver,
     }
 }
 
@@ -2302,6 +2574,61 @@ mod tests {
         assert!(debug.contains("keyboard-interactive"));
         assert!(debug.contains("ops"));
         assert!(!debug.contains("one-time-secret"));
+    }
+
+    #[test]
+    fn x11_display_requires_an_explicit_local_target() {
+        let tcp = X11Display::parse("tcp://127.0.0.1:6000").unwrap();
+        assert_eq!(
+            tcp,
+            X11Display::Tcp("127.0.0.1:6000".parse::<SocketAddr>().unwrap())
+        );
+
+        let unix = X11Display::parse("unix:///tmp/mobarust-x11.sock").unwrap();
+        assert_eq!(
+            unix,
+            X11Display::Unix(PathBuf::from("/tmp/mobarust-x11.sock"))
+        );
+
+        for invalid in [
+            "",
+            ":0",
+            "$DISPLAY",
+            "localhost:6000",
+            "192.0.2.1:6000",
+            "unix://relative.sock",
+        ] {
+            assert!(X11Display::parse(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn x11_display_bridge_uses_only_the_configured_loopback_socket() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let target = X11Display::parse(&format!("tcp://{address}")).unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, peer) = listener.accept().await.unwrap();
+                assert_eq!(
+                    peer.ip(),
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+                );
+                let mut payload = [0_u8; 15];
+                stream.read_exact(&mut payload).await.unwrap();
+                stream.write_all(&payload).await.unwrap();
+            });
+
+            let mut client = target.connect().await.unwrap();
+            client.write_all(b"MOBARUST_X11_OK").await.unwrap();
+            let mut response = [0_u8; 15];
+            client.read_exact(&mut response).await.unwrap();
+            assert_eq!(&response, b"MOBARUST_X11_OK");
+            server.await.unwrap();
+        });
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use mobarust_core::{TransferEvent, TransferLifecycle, TransferState};
 use mobarust_ssh::{
     HostKeyPolicy, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials, SshError,
-    SshOutput, negotiate_socks5, send_socks5_reply,
+    SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
 };
 use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,7 @@ const PENDING_OUTPUT_CHUNKS: usize = 32;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
 const SSH_RECONNECT_ATTEMPTS: u8 = 3;
+const X11_CHANNEL_LIMIT: usize = 8;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,10 +42,22 @@ pub struct SshConnectRequest {
     pub pinned_fingerprint: Option<String>,
     #[serde(default)]
     pub jump_hosts: Vec<SshJumpHostRequest>,
+    #[serde(default)]
+    pub x11: Option<SshX11Request>,
     #[serde(default = "default_terminal_cols")]
     pub cols: u32,
     #[serde(default = "default_terminal_rows")]
     pub rows: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshX11Request {
+    /// Explicit local display target, for example tcp://127.0.0.1:6000 or
+    /// unix:///tmp/.X11-unix/X0. It is never inferred from the environment.
+    pub display: String,
+    #[serde(default)]
+    pub single_connection: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -239,6 +252,21 @@ struct SshOutputEvent {
 struct SshClosedEvent {
     terminal_id: String,
     reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SshX11State {
+    Failed,
+    Disconnected,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshX11Event {
+    terminal_id: String,
+    state: SshX11State,
+    error: Option<String>,
 }
 
 enum SshCommand {
@@ -531,6 +559,13 @@ impl SshManager {
                     pending_output: Vec::new(),
                 },
             );
+
+        self.start_x11_bridge(
+            Arc::clone(&connection),
+            close_receiver.clone(),
+            app.clone(),
+            terminal_id.clone(),
+        );
 
         let manager = self.clone();
         let id_for_task = terminal_id.clone();
@@ -1228,6 +1263,12 @@ async fn connect_transport(
     vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
 ) -> Result<SshConnection, SshManagerError> {
+    let x11 = request
+        .x11
+        .as_ref()
+        .map(|x11| X11ForwardingOptions::parse(&x11.display, x11.single_connection))
+        .transpose()
+        .map_err(|error| SshManagerError::InvalidRequest(format!("X11: {error}")))?;
     let credentials = credentials_from_request(vault, request)?;
     let host_key_policy = host_key_policy(request)?;
     let options = SshConnectOptions {
@@ -1236,6 +1277,7 @@ async fn connect_transport(
         host_key_policy,
         timeout: Duration::from_secs(12),
         credentials,
+        x11,
     };
     let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
     for jump in &request.jump_hosts {
@@ -1250,6 +1292,7 @@ async fn connect_transport(
             host_key_policy,
             timeout: Duration::from_secs(12),
             credentials,
+            x11: None,
         });
     }
     if jump_options.is_empty() {
@@ -1478,6 +1521,12 @@ async fn run_remote_session(
                         connection = Arc::new(new_connection);
                         reader = new_reader;
                         writer = new_writer;
+                        manager.start_x11_bridge(
+                            Arc::clone(&connection),
+                            close.clone(),
+                            app.clone(),
+                            terminal_id.clone(),
+                        );
                         connection_is_live = true;
                         manager.emit_session_state(
                             &app,
@@ -1530,6 +1579,90 @@ async fn run_remote_session(
             reason: should_report_error.unwrap_or_else(|| "closed".into()),
         },
     );
+}
+
+impl SshManager {
+    fn start_x11_bridge(
+        &self,
+        connection: Arc<SshConnection>,
+        close: watch::Receiver<bool>,
+        app: AppHandle,
+        terminal_id: String,
+    ) {
+        if connection.x11_display().is_none() {
+            return;
+        }
+        tauri::async_runtime::spawn(async move {
+            run_x11_bridge(connection, close, app, terminal_id).await;
+        });
+    }
+}
+
+async fn run_x11_bridge(
+    connection: Arc<SshConnection>,
+    mut close: watch::Receiver<bool>,
+    app: AppHandle,
+    terminal_id: String,
+) {
+    let slots = Arc::new(Semaphore::new(X11_CHANNEL_LIMIT));
+    let mut workers = JoinSet::new();
+
+    loop {
+        tokio::select! {
+            changed = close.changed() => {
+                if changed.is_err() || *close.borrow() {
+                    break;
+                }
+            }
+            channel = connection.next_x11_channel() => {
+                let Some(channel) = channel else { break; };
+                let Ok(slot) = Arc::clone(&slots).try_acquire_owned() else {
+                    // Do not let a remote peer create unbounded local display
+                    // connections. The accepted channel is dropped and the
+                    // SSH transport closes it through russh's RAII wrapper.
+                    continue;
+                };
+                let worker_connection = Arc::clone(&connection);
+                let mut worker_close = close.clone();
+                let worker_app = app.clone();
+                let worker_terminal_id = terminal_id.clone();
+                workers.spawn(async move {
+                    let _slot = slot;
+                    tokio::select! {
+                        result = worker_connection.bridge_x11_channel(channel) => {
+                            if let Err(error) = result {
+                                let _ = worker_app.emit(
+                                    "ssh://x11",
+                                    SshX11Event {
+                                        terminal_id: worker_terminal_id,
+                                        state: SshX11State::Failed,
+                                        error: Some(error.to_string()),
+                                    },
+                                );
+                            }
+                        }
+                        changed = worker_close.changed() => {
+                            if changed.is_err() || *worker_close.borrow() {
+                                let _ = worker_app.emit(
+                                    "ssh://x11",
+                                    SshX11Event {
+                                        terminal_id: worker_terminal_id,
+                                        state: SshX11State::Disconnected,
+                                        error: None,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        while workers.try_join_next().is_some() {}
+    }
+
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
 }
 
 enum ShellRunResult {

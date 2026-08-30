@@ -142,6 +142,12 @@ type SshSessionEvent = {
   error?: string | null;
 };
 
+type SshX11Event = {
+  terminalId: string;
+  state: "failed" | "disconnected";
+  error?: string | null;
+};
+
 type TelnetSessionEvent = {
   terminalId: string;
   state: "connected" | "disconnected" | "failed";
@@ -268,6 +274,8 @@ type SavedSession = {
   last_used_at?: number | null;
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
+  x11_display?: string | null;
+  x11_single_connection?: boolean;
   folder: string | null;
   jump_hosts: string[];
   tags: string[];
@@ -424,6 +432,10 @@ type SshConnectRequest = {
   knownHostsPath?: string;
   pinnedFingerprint?: string;
   jumpHosts?: SshJumpHostRequest[];
+  x11?: {
+    display: string;
+    singleConnection: boolean;
+  };
   cols: number;
   rows: number;
 };
@@ -654,6 +666,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
     let unlistenOutput: UnlistenFn | undefined;
     let unlistenClosed: UnlistenFn | undefined;
     let unlistenState: UnlistenFn | undefined;
+    let unlistenX11: UnlistenFn | undefined;
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
@@ -762,6 +775,12 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
             else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
             else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
           });
+          unlistenX11 = await listen<SshX11Event>("ssh://x11", (event) => {
+            if (event.payload.terminalId !== terminalIdRef.current) return;
+            if (event.payload.state === "failed") {
+              terminal.writeln(`\r\n\x1b[38;5;203mX11 forwarding stopped: ${event.payload.error ?? "display unavailable"}\x1b[0m`);
+            }
+          });
         }
         if (remoteProtocol === "telnet") {
           unlistenState = await listen<TelnetSessionEvent>("telnet://state", (event) => {
@@ -822,6 +841,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       unlistenOutput?.();
       unlistenClosed?.();
       unlistenState?.();
+      unlistenX11?.();
       const terminalId = terminalIdRef.current;
       onNativeTerminalId(workspaceId, null);
       if (IS_TAURI && terminalId) {
@@ -3249,6 +3269,7 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
     auth,
     knownHostsPath: session.known_hosts_path ?? undefined,
     pinnedFingerprint: session.pinned_fingerprint ?? undefined,
+    x11: session.x11_display?.trim() ? { display: session.x11_display, singleConnection: session.x11_single_connection ?? false } : undefined,
     jumpHosts: jumpHosts.length > 0 ? jumpHosts : undefined,
     cols: 120,
     rows: 32,
@@ -4304,6 +4325,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopAudio, setDesktopAudio] = useState(false);
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
+  const [x11Enabled, setX11Enabled] = useState(false);
+  const [x11Display, setX11Display] = useState("");
+  const [x11SingleConnection, setX11SingleConnection] = useState(false);
   const [jumpHost, setJumpHost] = useState("");
   const [jumpPort, setJumpPort] = useState("22");
   const [jumpUsername, setJumpUsername] = useState("");
@@ -4413,6 +4437,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       auth,
       knownHostsPath: knownHostsPath.trim() || undefined,
       pinnedFingerprint: pinnedFingerprint.trim() || undefined,
+      x11: x11Enabled ? { display: x11Display.trim(), singleConnection: x11SingleConnection } : undefined,
       jumpHosts,
       cols: 120,
       rows: 32,
@@ -4606,6 +4631,23 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     Pinned SHA-256 fingerprint <span className="optional">optional</span>
                     <input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" />
                   </label>
+                  <label className="quick-connect-wide quick-connect-check-row">
+                    <input type="checkbox" checked={x11Enabled} onChange={(event) => setX11Enabled(event.target.checked)} />
+                    <span>Enable SSH X11 forwarding <small>opt-in · external X server</small></span>
+                  </label>
+                  {x11Enabled && (
+                    <>
+                      <label className="quick-connect-wide">
+                        Local X11 display target
+                        <input required value={x11Display} onChange={(event) => setX11Display(event.target.value)} placeholder="tcp://127.0.0.1:6000 or unix:///tmp/.X11-unix/X0" />
+                        <small>Explicit target only. MobaRust does not read DISPLAY, Xauthority, firewall rules, or start an X server.</small>
+                      </label>
+                      <label className="quick-connect-wide quick-connect-check-row">
+                        <input type="checkbox" checked={x11SingleConnection} onChange={(event) => setX11SingleConnection(event.target.checked)} />
+                        <span>Allow one X11 connection only</span>
+                      </label>
+                    </>
+                  )}
                 </>
               ) : protocol === "rdp" || protocol === "vnc" ? (
                 <>

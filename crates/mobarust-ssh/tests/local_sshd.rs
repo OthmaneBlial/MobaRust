@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use mobarust_ssh::{
     HostKeyPolicy, RemoteTextEncoding, SshConnectOptions, SshConnection, SshCredentials, SshError,
-    SshFingerprintOptions, SshOutput, inspect_host_key,
+    SshFingerprintOptions, SshOutput, X11Display, X11ForwardingOptions, inspect_host_key,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
@@ -32,6 +32,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 fixture.client_key.clone(),
                 None::<String>,
             ),
+            x11: None,
         })
         .await;
         let rejected_fingerprint = match rejection {
@@ -63,6 +64,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 fixture.client_key.clone(),
                 None::<String>,
             ),
+            x11: None,
         })
         .await
         .expect("connect to local sshd");
@@ -462,6 +464,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                     fixture.client_key.clone(),
                     None::<String>,
                 ),
+                x11: None,
             },
             vec![SshConnectOptions {
                 host: "127.0.0.1".into(),
@@ -473,6 +476,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                     fixture.client_key.clone(),
                     None::<String>,
                 ),
+                x11: None,
             }],
         )
         .await
@@ -515,6 +519,91 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
     });
 }
 
+#[test]
+fn forwards_an_explicit_x11_channel_to_a_loopback_display_fixture() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH X11 test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start_with_x11().expect("start local sshd X11 fixture");
+        wait_for_port(fixture.port).await;
+        let display = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind loopback X11 display fixture");
+        let display_address = display.local_addr().expect("read X11 fixture address");
+        let display_task = tokio::spawn(async move {
+            let (mut stream, peer) = display.accept().await.expect("accept X11 display client");
+            assert_eq!(peer.ip(), std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            let mut payload = [0_u8; 15];
+            stream
+                .read_exact(&mut payload)
+                .await
+                .expect("read X11 fixture payload");
+            assert_eq!(&payload, b"MOBARUST_X11_OK");
+            stream
+                .write_all(&payload)
+                .await
+                .expect("write X11 fixture response");
+        });
+
+        let connection = SshConnection::connect(SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: fixture.port,
+            host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
+            timeout: Duration::from_secs(5),
+            credentials: SshCredentials::private_key(
+                fixture.username.clone(),
+                fixture.client_key.clone(),
+                None::<String>,
+            ),
+            x11: Some(X11ForwardingOptions::new(
+                X11Display::parse(&format!("tcp://{display_address}")).unwrap(),
+                true,
+            )),
+        })
+        .await
+        .expect("connect local SSH X11 fixture");
+        let shell = connection.open_shell(100, 30).await.expect("open X11 shell");
+        let (mut reader, writer) = shell.split();
+        writer
+            .write(
+                br#"python3 -c 'import os,socket; d=os.environ["DISPLAY"]; h,rest=d.rsplit(":",1); p=int(rest.split(".",1)[0])+6000; s=socket.create_connection((h,p),5); s.sendall(b"MOBARUST_X11_OK"); s.shutdown(socket.SHUT_WR); s.close()'
+exit
+"#,
+            )
+            .await
+            .expect("request remote X11 client fixture");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut shell_output = Vec::new();
+        let channel = loop {
+            tokio::select! {
+                channel = connection.next_x11_channel() => {
+                    break channel.expect("SSH X11 channel was not opened");
+                }
+                output = reader.next_output() => {
+                    if let Some(Ok(SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes))) = output {
+                        shell_output.extend(bytes);
+                    }
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    panic!("wait for SSH X11 channel: {}", String::from_utf8_lossy(&shell_output));
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), connection.bridge_x11_channel(channel))
+            .await
+            .expect("bridge X11 channel timeout")
+            .expect("bridge X11 channel");
+        display_task.await.expect("join X11 display fixture");
+
+        while tokio::time::timeout(Duration::from_millis(250), reader.next_output())
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {}
+    });
+}
+
 struct LocalSshd {
     child: Child,
     directory: tempfile::TempDir,
@@ -526,6 +615,14 @@ struct LocalSshd {
 
 impl LocalSshd {
     fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_internal(false)
+    }
+
+    fn start_with_x11() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_internal(true)
+    }
+
+    fn start_internal(x11: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let host_key = directory.path().join("host_key");
         let client_key = directory.path().join("client_key");
@@ -549,12 +646,23 @@ impl LocalSshd {
             format!("[127.0.0.1]:{port} {host_key_material}\n"),
         )?;
 
+        let x11_config = if x11 {
+            let xauth =
+                find_command("xauth").ok_or("X11 fixture requires a local xauth executable")?;
+            format!(
+                "X11Forwarding yes\nX11UseLocalhost yes\nXAuthLocation {}\n",
+                xauth.display()
+            )
+        } else {
+            "X11Forwarding no\n".to_owned()
+        };
+
         let username = std::env::var("USER")?;
         let config = directory.path().join("sshd_config");
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),
@@ -581,6 +689,13 @@ impl LocalSshd {
             known_hosts,
         })
     }
+}
+
+fn find_command(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 impl Drop for LocalSshd {

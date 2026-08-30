@@ -138,6 +138,12 @@ pub struct SessionRecord {
     pub known_hosts_path: Option<String>,
     #[serde(default)]
     pub pinned_fingerprint: Option<String>,
+    /// Explicit local X11 display target. The native SSH layer validates and
+    /// uses it; it is never inferred from DISPLAY or Xauthority.
+    #[serde(default)]
+    pub x11_display: Option<String>,
+    #[serde(default)]
+    pub x11_single_connection: bool,
     pub folder: Option<String>,
     pub tags: Vec<String>,
     pub favorite: bool,
@@ -172,6 +178,8 @@ pub enum SessionValidationError {
     InvalidSerialProfile,
     #[error("remote desktop profile is invalid")]
     InvalidRemoteDesktopProfile,
+    #[error("X11 display target is invalid")]
+    InvalidX11Display,
 }
 
 impl SessionRecord {
@@ -187,6 +195,8 @@ impl SessionRecord {
             last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
+            x11_display: None,
+            x11_single_connection: false,
             folder: Some("Local terminals".into()),
             tags: vec!["local".into()],
             favorite: true,
@@ -226,6 +236,11 @@ impl SessionRecord {
         }
         if let Some(profile) = &self.remote_desktop_profile {
             profile.validate()?
+        }
+        if self.x11_display.as_deref().is_some_and(|display| {
+            display.trim().is_empty() || display.chars().any(char::is_control)
+        }) {
+            return Err(SessionValidationError::InvalidX11Display);
         }
         Ok(())
     }
@@ -291,6 +306,8 @@ mod tests {
             last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
+            x11_display: None,
+            x11_single_connection: false,
             folder: None,
             tags: vec!["production".into()],
             favorite: false,
