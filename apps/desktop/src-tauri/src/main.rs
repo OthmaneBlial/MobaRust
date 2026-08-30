@@ -98,6 +98,19 @@ struct AppSnapshot {
     local_terminal_available: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticExport {
+    schema_version: u32,
+    product: &'static str,
+    version: &'static str,
+    platform: &'static str,
+    architecture: &'static str,
+    build_profile: &'static str,
+    native_boundary: bool,
+    local_terminal_available: bool,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveSshSessionRequest {
@@ -361,6 +374,28 @@ fn app_snapshot() -> AppSnapshot {
         platform: std::env::consts::OS,
         local_terminal_available: true,
     }
+}
+
+/// Return an explicit, sanitized diagnostic snapshot. This command has no
+/// inputs and deliberately does not read sessions, environment variables,
+/// logs, paths, terminal output, or credential stores.
+#[tauri::command]
+fn diagnostic_export() -> Result<String, String> {
+    serde_json::to_string_pretty(&DiagnosticExport {
+        schema_version: 1,
+        product: "MobaRust",
+        version: env!("CARGO_PKG_VERSION"),
+        platform: std::env::consts::OS,
+        architecture: std::env::consts::ARCH,
+        build_profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+        native_boundary: true,
+        local_terminal_available: true,
+    })
+    .map_err(|_| "could not create sanitized diagnostic export".to_owned())
 }
 
 #[tauri::command]
@@ -1784,6 +1819,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
+            diagnostic_export,
             session_list,
             session_save,
             session_import_openssh,
@@ -1882,7 +1918,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_NATIVE_PICKER_PATHS, native_picker_file_name, native_picker_paths,
+        MAX_NATIVE_PICKER_PATHS, diagnostic_export, native_picker_file_name, native_picker_paths,
         portable_data_dir_for,
     };
     use std::fs;
@@ -1906,6 +1942,31 @@ mod tests {
             paths.last().map(String::as_str),
             Some("/tmp/mobarust-picker-15")
         );
+    }
+
+    #[test]
+    fn diagnostic_export_contains_only_sanitized_runtime_metadata() {
+        let report = diagnostic_export().expect("diagnostic export should serialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&report).expect("diagnostic export should be valid JSON");
+
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["product"], "MobaRust");
+        assert_eq!(value["platform"], std::env::consts::OS);
+        assert_eq!(value["architecture"], std::env::consts::ARCH);
+        for forbidden in [
+            "password",
+            "private-key",
+            "sessions.json",
+            "/Users/",
+            "HOME",
+            "terminal output",
+        ] {
+            assert!(
+                !report.contains(forbidden),
+                "diagnostic export leaked forbidden value: {forbidden}"
+            );
+        }
     }
 
     #[test]

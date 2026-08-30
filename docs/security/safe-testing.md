@@ -132,6 +132,13 @@ The native logger writes no log file by default. Test and development output is
 kept on the child process stderr, with credential fields represented only by a
 redacted marker.
 
+The desktop Settings view also provides an explicit sanitized diagnostic
+export. It is generated from fixed runtime metadata (product version, target
+platform, architecture, build profile, and native-boundary availability) and
+downloads through the renderer only after the user clicks the action. It does
+not read or include sessions, connection targets, commands, paths, environment
+values, terminal output, logs, or credential material.
+
 The dependency audit is also local and read-only when run with the cached
 advisory database:
 

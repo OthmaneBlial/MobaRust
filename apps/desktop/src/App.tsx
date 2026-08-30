@@ -336,6 +336,17 @@ function createWorkspaceTerminal(config: Partial<Omit<WorkspaceTerminal, "id" | 
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+function downloadDiagnosticReport(report: string) {
+  const blob = new Blob([report], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mobarust-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 type SessionListItem = {
   id?: string;
   name: string;
@@ -2077,6 +2088,18 @@ function App() {
     }
   }, []);
 
+  const exportDiagnostics = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const report = await invoke<string>("diagnostic_export");
+      downloadDiagnosticReport(report);
+      setSessionNotice("Sanitized diagnostics downloaded. No sessions, hosts, commands, logs, paths, or credentials were included.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Diagnostic export failed: ${String(error)}`);
+    }
+  }, []);
+
   const importSettings = useCallback(async () => {
     if (!IS_TAURI) return;
     const json = window.prompt("Paste a secret-free MobaRust settings export JSON");
@@ -3749,7 +3772,7 @@ function App() {
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
-      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
+      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
@@ -4891,7 +4914,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   );
 }
 
-function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onExport, onImport, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onExport: () => Promise<void>; onImport: () => Promise<void>; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
+function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onExport, onImport, onExportDiagnostics, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onExport: () => Promise<void>; onImport: () => Promise<void>; onExportDiagnostics: () => Promise<void>; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
   const [theme, setTheme] = useState(settings.general.theme);
   const [confirmMultilinePaste, setConfirmMultilinePaste] = useState(settings.general.confirmMultilinePaste);
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
@@ -5001,6 +5024,12 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
             <label>Unlock passphrase<input type="password" value={portablePassphrase} onChange={(event) => setPortablePassphrase(event.target.value)} autoComplete="new-password" placeholder="Required for explicit vault action" /><small>Cleared after the native operation; never returned to React.</small></label>
             <div className="settings-vault-actions">{portableVaultStatus?.enabled && !portableVaultStatus.unlocked && portableVaultStatus.exists ? <button type="button" className="outline-button" onClick={() => void runPortableAction(onPortableUnlock)} disabled={portableBusy || !portablePassphrase}>Unlock</button> : null}{portableVaultStatus?.enabled && !portableVaultStatus.unlocked && !portableVaultStatus.exists ? <button type="button" className="outline-button" onClick={() => void runPortableAction(onPortableCreate)} disabled={portableBusy || !portablePassphrase}>Create encrypted vault</button> : null}{portableVaultStatus?.unlocked && <button type="button" className="outline-button danger-button" onClick={() => void onPortableLock()} disabled={portableBusy}>Lock vault</button>}</div>
           </div>
+        </div>
+
+        <div className="settings-section settings-diagnostics-export">
+          <span className="settings-section-label">Support diagnostics</span>
+          <p className="settings-section-note">Download runtime metadata for troubleshooting. The report excludes sessions, hosts, commands, logs, local paths, environment values, and credentials.</p>
+          <button type="button" className="outline-button" onClick={() => void onExportDiagnostics()}><Download size={14} /> Export sanitized diagnostics</button>
         </div>
 
         <div className="session-editor-footer">
