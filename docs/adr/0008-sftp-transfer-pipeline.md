@@ -32,8 +32,8 @@ secret. It receives only paths, byte counters, lifecycle state, and sanitized
 operation errors. The native layer owns local file handles, SFTP channels,
 cleanup, and cancellation.
 
-Directory listing and the first remote mutations (create directory, rename,
-delete) use separate native SFTP jobs as well. They are spawned from the SSH
+Directory listing and remote mutations (create directory, rename, delete, and
+bounded POSIX permission changes) use separate native SFTP jobs as well. They are spawned from the SSH
 session loop, so a slow directory operation cannot stop the shell reader from
 forwarding terminal output. Delete inspects remote metadata in Rust instead of
 trusting a frontend-provided file type; deleting the remote root is rejected.
@@ -64,5 +64,9 @@ trusting a frontend-provided file type; deleting the remote root is rejected.
 - native file/directory picker integration;
 - retry policy with preserved transfer identity;
 - pause/resume where the protocol and remote semantics support it;
-- permissions/owner display and chmod actions;
 - remote editing with modification detection and atomic upload.
+
+The browser now exposes server-provided mode, UID/GID, and owner/group metadata
+when available. A chmod action accepts only a validated octal mode and requires
+an explicit confirmation before sending a typed native SFTP metadata request;
+it never builds a shell command.

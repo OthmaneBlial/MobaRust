@@ -1136,6 +1136,19 @@ async fn ssh_create_remote_directory(
 }
 
 #[tauri::command]
+async fn ssh_set_remote_permissions(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+    permissions: u32,
+) -> Result<(), String> {
+    manager
+        .set_remote_permissions(&terminal_id, path, permissions)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_download(
     app: tauri::AppHandle,
     manager: State<'_, SshManager>,
@@ -1485,6 +1498,7 @@ fn main() {
             ssh_rename_remote,
             ssh_delete_remote,
             ssh_create_remote_directory,
+            ssh_set_remote_permissions,
             ssh_download,
             ssh_upload,
             ssh_cancel_transfer,

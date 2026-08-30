@@ -2202,6 +2202,41 @@ function App() {
     }
   }, [loadRemoteDirectory, remotePath, remoteSessionId]);
 
+  const setRemotePermissions = useCallback(async (entry: RemoteEntry) => {
+    if (!remoteSessionId) return;
+    const current = entry.permissions == null ? "644" : (entry.permissions & 0o7777).toString(8).padStart(3, "0");
+    const value = window.prompt(`Set POSIX mode for ${entry.name} (octal 0000–7777)`, current);
+    if (value === null) return;
+    const normalized = value.trim();
+    if (!/^[0-7]{3,4}$/.test(normalized)) {
+      setConnectionError("Permissions must be an octal mode with 3 or 4 digits, for example 640.");
+      return;
+    }
+    if (!window.confirm(`Apply mode ${normalized} to ${entry.path}?`)) return;
+    try {
+      await invoke("ssh_set_remote_permissions", {
+        terminalId: remoteSessionId,
+        path: entry.path,
+        permissions: Number.parseInt(normalized, 8),
+      });
+      setConnectionError(null);
+      setSessionNotice(`Updated permissions for ${entry.name} to ${normalized}.`);
+      await loadRemoteDirectory(remotePath);
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+
+  const copyRemotePath = useCallback(async (entry: RemoteEntry) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(entry.path);
+      else window.prompt("Copy remote path", entry.path);
+      setSessionNotice(`Copied remote path ${entry.path}.`);
+    } catch (error) {
+      setConnectionError(`Remote path could not be copied: ${String(error)}`);
+    }
+  }, []);
+
   const cancelTransfer = useCallback(async (transferId: string) => {
     try {
       await invoke("ssh_cancel_transfer", { transferId });
@@ -2894,7 +2929,7 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -3051,7 +3086,7 @@ function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, on
   return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><div className="session-row-actions">{onEdit && <button className="session-action" onClick={onEdit} aria-label={`Edit ${name}`} title="Edit session"><Pencil size={12} /></button>}{onDelete && <button className="session-action danger" onClick={onDelete} aria-label={`Delete ${name}`} title="Delete session"><Trash2 size={12} /></button>}<button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div></div>;
 }
 
-function RemoteFilesView({ entries, path, status, error, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onEdit, onCancelTransfer }: {
+function RemoteFilesView({ entries, path, status, error, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onSetPermissions, onCopyPath, onEdit, onCancelTransfer }: {
   entries: RemoteEntry[];
   path: string;
   status: "idle" | "loading" | "ready" | "error";
@@ -3064,6 +3099,8 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
   onCreateDirectory: () => void;
   onRename: (entry: RemoteEntry) => void;
   onDelete: (entry: RemoteEntry) => void;
+  onSetPermissions: (entry: RemoteEntry) => void;
+  onCopyPath: (entry: RemoteEntry) => void;
   onEdit: (entry: RemoteEntry) => void;
   onCancelTransfer: (transferId: string) => void;
 }) {
@@ -3103,6 +3140,8 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
         {!entry.isDirectory && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
+        <button className="remote-file-action" onClick={() => onCopyPath(entry)} title={`Copy path for ${entry.name}`} aria-label={`Copy path for ${entry.name}`}><Copy size={14} /></button>
+        <button className="remote-file-action" onClick={() => onSetPermissions(entry)} title={`Change permissions for ${entry.name}`} aria-label={`Change permissions for ${entry.name}`}><Settings2 size={14} /></button>
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
         <button className="remote-file-action danger" onClick={() => onDelete(entry)} title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}><Trash2 size={14} /></button>
       </div>)}

@@ -1528,6 +1528,27 @@ impl SftpConnection {
         Ok((metadata.len(), metadata.is_dir()))
     }
 
+    /// Change only the permission bits of a remote path. The caller validates
+    /// the path and the bounded POSIX mode before this operation reaches the
+    /// SFTP server; no shell command is involved.
+    pub async fn set_permissions(
+        &self,
+        path: impl Into<String>,
+        permissions: u32,
+    ) -> Result<(), SshError> {
+        if permissions > 0o7777 {
+            return Err(SshError::Sftp(
+                "remote permissions must be an octal mode between 0000 and 7777".into(),
+            ));
+        }
+        let mut metadata = russh_sftp::client::fs::Metadata::empty();
+        metadata.permissions = Some(permissions);
+        self.session
+            .set_metadata(path, metadata)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))
+    }
+
     /// Read a bounded UTF-8 document together with a byte revision. The bound
     /// keeps the editor path from becoming an accidental large-file transfer
     /// mechanism.

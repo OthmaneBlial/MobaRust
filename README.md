@@ -13,7 +13,7 @@ The first working slice provides:
 - password, private-key, agent, and bounded keyboard-interactive SSH authentication, with credential references resolved only in Rust;
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
 - an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
-- SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, and modification metadata;
+- SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, modification/ownership metadata, explicit remote-path copy, and confirmed POSIX permission changes;
 - a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
 - a global transfer-manager view that aggregates SFTP/SCP jobs across SSH sessions, exposes source/destination paths and progress, and keeps cancellation explicit;
 - a native Telnet transport and Quick Connect path with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, resize support, and a local TCP fixture; Telnet is clearly unencrypted;

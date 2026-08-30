@@ -125,6 +125,21 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         assert!(uploaded_entry.permissions.is_some());
         assert!(uploaded_entry.uid.is_some() || uploaded_entry.owner.is_some());
         assert!(uploaded_entry.gid.is_some() || uploaded_entry.group.is_some());
+        sftp.set_permissions(&remote_path, 0o640)
+            .await
+            .expect("change remote fixture permissions");
+        let updated_entries = sftp
+            .read_dir("/tmp")
+            .await
+            .expect("list remote directory after chmod");
+        let updated_entry = updated_entries
+            .iter()
+            .find(|entry| entry.path == remote_path)
+            .expect("find chmod fixture file");
+        assert_eq!(
+            updated_entry.permissions.map(|mode| mode & 0o7777),
+            Some(0o640)
+        );
         assert!(
             sftp.try_exists(&remote_path)
                 .await

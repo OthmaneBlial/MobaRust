@@ -290,6 +290,7 @@ enum SshFileOperation {
     Rename { from: String, to: String },
     Delete { path: String },
     CreateDirectory { path: String },
+    SetPermissions { path: String, permissions: u32 },
 }
 
 #[derive(Debug, Error)]
@@ -714,6 +715,25 @@ impl SshManager {
         let path = validate_remote_mutation_path(&path)?;
         self.run_file_operation(terminal_id, SshFileOperation::CreateDirectory { path })
             .await
+    }
+
+    pub async fn set_remote_permissions(
+        &self,
+        terminal_id: &str,
+        path: String,
+        permissions: u32,
+    ) -> Result<(), SshManagerError> {
+        let path = validate_remote_mutation_path(&path)?;
+        if permissions > 0o7777 {
+            return Err(SshManagerError::InvalidRequest(
+                "remote permissions must be an octal mode between 0000 and 7777".into(),
+            ));
+        }
+        self.run_file_operation(
+            terminal_id,
+            SshFileOperation::SetPermissions { path, permissions },
+        )
+        .await
     }
 
     async fn run_file_operation(
@@ -1640,6 +1660,10 @@ async fn run_file_operation(
             .map_err(|error| error.to_string()),
         SshFileOperation::CreateDirectory { path } => sftp
             .create_dir(path)
+            .await
+            .map_err(|error| error.to_string()),
+        SshFileOperation::SetPermissions { path, permissions } => sftp
+            .set_permissions(path, permissions)
             .await
             .map_err(|error| error.to_string()),
         SshFileOperation::Delete { path } => {
