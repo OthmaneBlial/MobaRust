@@ -160,6 +160,9 @@ impl RemoteDesktopProfile {
         if protocol == Protocol::Rdp && !matches!(self.color_depth, 16 | 32) {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
+        if protocol == Protocol::Rdp && self.audio_enabled {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
         Ok(())
     }
 }
@@ -631,6 +634,13 @@ mod tests {
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
         invalid_depth.validate_for_protocol(Protocol::Vnc).unwrap();
+
+        let mut invalid_audio = profile.clone();
+        invalid_audio.audio_enabled = true;
+        assert_eq!(
+            invalid_audio.validate_for_protocol(Protocol::Rdp),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
 
         let mut invalid_quality = profile;
         invalid_quality.vnc_quality = "unbounded".into();

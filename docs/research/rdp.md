@@ -169,6 +169,11 @@ value such as 24-bit therefore fails locally with an actionable error before a
 process starts; this is capability validation, not evidence of production RDP
 interoperability.
 
+The same protocol-aware validation keeps saved RDP profiles from persisting an
+audio request while the current helper has no audio backend. The field remains
+available in the model for a future reviewed backend, but it is rejected before
+launch rather than being silently ignored.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a
