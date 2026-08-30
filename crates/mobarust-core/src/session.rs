@@ -87,6 +87,29 @@ impl SerialProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelnetProfile {
+    pub terminal: String,
+    pub encoding: String,
+    pub columns: u16,
+    pub rows: u16,
+}
+
+impl TelnetProfile {
+    pub fn validate(&self) -> Result<(), SessionValidationError> {
+        if self.terminal.trim().is_empty()
+            || self.terminal.len() > 128
+            || self.terminal.chars().any(char::is_control)
+            || !matches!(self.encoding.as_str(), "utf-8" | "windows-1252")
+            || self.columns == 0
+            || self.rows == 0
+        {
+            return Err(SessionValidationError::InvalidTelnetProfile);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteDesktopProfile {
     pub domain: Option<String>,
     pub width: u16,
@@ -157,6 +180,8 @@ pub struct SessionRecord {
     #[serde(default)]
     pub serial_profile: Option<SerialProfile>,
     #[serde(default)]
+    pub telnet_profile: Option<TelnetProfile>,
+    #[serde(default)]
     pub remote_desktop_profile: Option<RemoteDesktopProfile>,
 }
 
@@ -176,6 +201,8 @@ pub enum SessionValidationError {
     InvalidKeyReference,
     #[error("serial profile is invalid")]
     InvalidSerialProfile,
+    #[error("Telnet profile is invalid")]
+    InvalidTelnetProfile,
     #[error("remote desktop profile is invalid")]
     InvalidRemoteDesktopProfile,
     #[error("X11 display target is invalid")]
@@ -207,6 +234,7 @@ impl SessionRecord {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            telnet_profile: None,
             remote_desktop_profile: None,
         }
     }
@@ -231,6 +259,12 @@ impl SessionRecord {
         match (self.protocol, &self.serial_profile) {
             (Protocol::Serial, Some(profile)) => profile.validate()?,
             (Protocol::Serial, None) => return Err(SessionValidationError::InvalidSerialProfile),
+            (_, Some(profile)) => profile.validate()?,
+            (_, None) => {}
+        }
+        match (self.protocol, &self.telnet_profile) {
+            (Protocol::Telnet, Some(profile)) => profile.validate()?,
+            (Protocol::Telnet, None) => return Err(SessionValidationError::InvalidTelnetProfile),
             (_, Some(profile)) => profile.validate()?,
             (_, None) => {}
         }
@@ -318,6 +352,7 @@ mod tests {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            telnet_profile: None,
             remote_desktop_profile: None,
         };
 
@@ -341,6 +376,23 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(SessionValidationError::InvalidSerialProfile)
+        );
+    }
+
+    #[test]
+    fn telnet_profile_accepts_only_bounded_wire_choices() {
+        let profile = TelnetProfile {
+            terminal: "xterm-256color".into(),
+            encoding: "utf-8".into(),
+            columns: 120,
+            rows: 32,
+        };
+        profile.validate().unwrap();
+        let mut invalid = profile;
+        invalid.encoding = "shell-command".into();
+        assert_eq!(
+            invalid.validate(),
+            Err(SessionValidationError::InvalidTelnetProfile)
         );
     }
 

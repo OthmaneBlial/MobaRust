@@ -10,7 +10,7 @@ mod terminal;
 
 use mobarust_core::{
     AppSettings, AuditEvent, AuditEventKind, AuthMethod, JumpHostRecord, Protocol,
-    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord,
+    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord, TelnetProfile,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_remote_desktop::HelperCommand;
@@ -61,6 +61,13 @@ struct SaveSshSessionRequest {
 struct SaveSerialSessionRequest {
     name: String,
     request: SerialConnectRequest,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTelnetSessionRequest {
+    name: String,
+    request: TelnetConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -825,6 +832,7 @@ fn session_save_ssh(
             .collect::<Result<Vec<_>, String>>()?,
         notes: None,
         serial_profile: None,
+        telnet_profile: None,
         remote_desktop_profile: None,
     };
     store
@@ -876,6 +884,63 @@ fn session_save_serial(
                 mobarust_serial::LineEnding::Lf => "lf",
             }
             .into(),
+        }),
+        telnet_profile: None,
+        remote_desktop_profile: None,
+    };
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .save(session)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_save_telnet(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: SaveTelnetSessionRequest,
+) -> Result<SessionRecord, String> {
+    let SaveTelnetSessionRequest { name, request } = payload;
+    let TelnetConnectRequest {
+        host,
+        port,
+        terminal,
+        encoding,
+        columns,
+        rows,
+    } = request;
+    let encoding = match encoding {
+        mobarust_telnet::TelnetEncoding::Utf8 => "utf-8",
+        mobarust_telnet::TelnetEncoding::Windows1252 => "windows-1252",
+    };
+    let session = SessionRecord {
+        id: SessionId::new(),
+        name,
+        protocol: Protocol::Telnet,
+        hostname: host,
+        port,
+        username: None,
+        auth: AuthMethod::None,
+        last_used_at: None,
+        known_hosts_path: None,
+        pinned_fingerprint: None,
+        x11_display: None,
+        x11_single_connection: false,
+        folder: Some("Telnet sessions".into()),
+        tags: vec!["telnet".into(), "plaintext".into()],
+        favorite: false,
+        startup_directory: None,
+        startup_command: None,
+        environment: Vec::new(),
+        jump_hosts: Vec::new(),
+        jump_host_profiles: Vec::new(),
+        notes: Some("Telnet is an unencrypted legacy protocol.".into()),
+        serial_profile: None,
+        telnet_profile: Some(TelnetProfile {
+            terminal,
+            encoding: encoding.into(),
+            columns,
+            rows,
         }),
         remote_desktop_profile: None,
     };
@@ -934,6 +999,7 @@ fn session_save_remote_desktop(
         jump_host_profiles: Vec::new(),
         notes: None,
         serial_profile: None,
+        telnet_profile: None,
         remote_desktop_profile: Some(RemoteDesktopProfile {
             domain: request.domain,
             width: request.width,
@@ -1587,6 +1653,7 @@ fn main() {
             macro_delete,
             session_save_ssh,
             session_save_serial,
+            session_save_telnet,
             session_save_remote_desktop,
             session_delete,
             network_resolve_host,

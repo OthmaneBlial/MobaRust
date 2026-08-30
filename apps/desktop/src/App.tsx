@@ -300,6 +300,12 @@ type SavedSession = {
     flow_control: "none" | "software" | "hardware";
     line_ending: "none" | "cr-lf" | "cr" | "lf";
   } | null;
+  telnet_profile?: {
+    terminal: string;
+    encoding: "utf-8" | "windows-1252";
+    columns: number;
+    rows: number;
+  } | null;
   jump_host_profiles?: SavedJumpHost[];
   remote_desktop_profile?: {
     domain?: string | null;
@@ -1865,7 +1871,7 @@ function App() {
     }
   }, [recordAudit, refreshSavedSessions]);
 
-  const connectTelnet = useCallback(async (request: TelnetConnectRequest) => {
+  const connectTelnet = useCallback(async (request: TelnetConnectRequest, offerSave = true) => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
@@ -1887,11 +1893,23 @@ function App() {
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
+      if (offerSave) {
+        const suggestedName = `Telnet · ${response.host}`;
+        const name = window.prompt("Save this Telnet session as", suggestedName);
+        if (name?.trim()) {
+          try {
+            await invoke("session_save_telnet", { payload: { name: name.trim(), request } });
+            refreshSavedSessions();
+          } catch (error) {
+            setConnectionError(`Connected, but the Telnet session could not be saved: ${String(error)}`);
+          }
+        }
+      }
     } catch (error) {
       recordAudit("connectionFailed", "TELNET");
       setConnectionError(String(error));
     }
-  }, [recordAudit]);
+  }, [recordAudit, refreshSavedSessions]);
 
   const connectSerial = useCallback(async (request: SerialConnectRequest, offerSave = true) => {
     setConnectionError(null);
@@ -2057,6 +2075,22 @@ function App() {
   const connectSavedSession = useCallback((session: SavedSession) => {
     recordAudit("sessionOpened", session.protocol, session.id);
     touchSavedSession(session.id);
+    if (session.protocol === "TELNET") {
+      const profile = session.telnet_profile;
+      if (!profile || session.port === 0) {
+        setConnectionError("This Telnet profile has no saved terminal parameters.");
+        return;
+      }
+      void connectTelnet({
+        host: session.hostname,
+        port: session.port,
+        terminal: profile.terminal,
+        encoding: profile.encoding,
+        columns: profile.columns,
+        rows: profile.rows,
+      }, false);
+      return;
+    }
     if (session.protocol === "SERIAL") {
       const profile = session.serial_profile;
       if (!profile) {
@@ -2106,7 +2140,7 @@ function App() {
       return;
     }
     void connectSsh(request, false);
-  }, [connectRemoteDesktop, connectSerial, connectSsh, recordAudit, savedSessions, touchSavedSession]);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, recordAudit, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
     const targets = [...new Set(targetIds)].map((workspaceId) => ({
@@ -3309,6 +3343,10 @@ function toSessionListItem(session: SavedSession): SessionListItem {
   }
   if (session.protocol === "SERIAL" && session.serial_profile) {
     return { id: session.id, name: session.name, detail: `${session.serial_profile.device} · ${session.serial_profile.baud_rate}`, type: session.protocol, folder: session.folder ?? "Serial devices", active: false, favorite: session.favorite, tags: session.tags, lastUsedAt: session.last_used_at };
+  }
+  if (session.protocol === "TELNET") {
+    const port = session.port && session.port !== 23 ? `:${session.port}` : "";
+    return { id: session.id, name: session.name, detail: `${session.hostname}${port} · unencrypted`, type: session.protocol, folder: session.folder ?? "Telnet sessions", active: false, favorite: session.favorite, tags: session.tags, lastUsedAt: session.last_used_at };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";

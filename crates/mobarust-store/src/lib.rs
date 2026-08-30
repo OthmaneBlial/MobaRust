@@ -886,6 +886,7 @@ impl SessionStore {
                 jump_host_profiles: Vec::new(),
                 notes,
                 serial_profile: None,
+                telnet_profile: None,
                 remote_desktop_profile: None,
             });
         }
@@ -1060,7 +1061,7 @@ mod tests {
     use super::*;
     use mobarust_core::{
         AuthMethod, JumpHostRecord, MacroAction, MacroKey, MacroRecord, Protocol,
-        RemoteDesktopProfile, SessionRecord, SnippetRecord,
+        RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
     };
     use tempfile::tempdir;
 
@@ -1090,6 +1091,7 @@ mod tests {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            telnet_profile: None,
             remote_desktop_profile: None,
         }
     }
@@ -1133,6 +1135,32 @@ mod tests {
         assert!(json.contains("remote_desktop_profile"));
         assert!(json.contains("vnc-password-ref"));
         assert!(!json.contains("super-secret"));
+        assert_eq!(SessionStore::open(&path).unwrap().list(), &[session]);
+    }
+
+    #[test]
+    fn telnet_profiles_round_trip_without_authentication_material() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let mut session = remote_session();
+        session.protocol = Protocol::Telnet;
+        session.port = 23;
+        session.username = None;
+        session.auth = AuthMethod::None;
+        session.folder = Some("Telnet sessions".into());
+        session.telnet_profile = Some(TelnetProfile {
+            terminal: "xterm-256color".into(),
+            encoding: "utf-8".into(),
+            columns: 120,
+            rows: 32,
+        });
+        store.save(session.clone()).unwrap();
+
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("telnet_profile"));
+        assert!(json.contains("xterm-256color"));
+        assert!(!json.contains("password"));
         assert_eq!(SessionStore::open(&path).unwrap().list(), &[session]);
     }
 

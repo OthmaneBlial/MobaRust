@@ -2,24 +2,25 @@
 
 ## Status
 
-Accepted and implemented for the native single-connection transport and the
-desktop Quick Connect/session-manager path. Saved-profile wiring remains
-pending.
+Accepted and implemented for the native single-connection transport, desktop
+Quick Connect, and secret-free saved-session path.
 
 ## Decision
 
 Telnet is implemented in a dedicated `mobarust-telnet` crate instead of being
 treated as an SSH variant. Rust owns TCP connection setup, incremental IAC
 framing, the small supported option set, terminal encoding, lifecycle state,
-timeouts, reconnect attempts, and cancellation. The future desktop manager
-will expose only typed requests and terminal events to React.
+timeouts, reconnect attempts, and cancellation. The desktop manager exposes
+only typed requests and terminal events to React.
 
 The adapter supports UTF-8 and Windows-1252 text decoding, terminal type,
 NAWS dimensions, suppress-go-ahead, and server echo negotiation. Unknown
 options are refused explicitly. Subnegotiation frames are bounded to 4 KiB and
 terminal reads use a bounded raw buffer. The desktop manager exposes typed
 `telnet://output`, `telnet://state`, and `telnet://closed` events and keeps
-output pending until the renderer explicitly attaches.
+output pending until the renderer explicitly attaches. A saved Telnet profile
+contains only host, port, terminal, encoding, and bounded dimensions; it never
+contains credentials.
 
 Telnet is always presented as unencrypted. The adapter must not reuse SSH
 security copy or imply host-key verification, credential confidentiality, or
