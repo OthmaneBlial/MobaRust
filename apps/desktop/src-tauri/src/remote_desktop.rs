@@ -778,15 +778,16 @@ async fn read_helper_events(
                 | mobarust_remote_desktop::HelperState::Crashed => HelperSessionPhase::Terminal,
             };
         }
-        emit_helper_event(&app, &session_id, event.clone());
-        if matches!(
-            event,
+        let terminal_event = matches!(
+            &event,
             HelperEvent::State {
                 state: mobarust_remote_desktop::HelperState::Stopped
                     | mobarust_remote_desktop::HelperState::Failed
                     | mobarust_remote_desktop::HelperState::Crashed
             }
-        ) {
+        );
+        emit_helper_event(&app, &session_id, event);
+        if terminal_event {
             stop_requested.store(true, Ordering::Release);
             break;
         }
