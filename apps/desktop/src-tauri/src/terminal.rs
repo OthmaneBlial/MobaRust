@@ -17,15 +17,15 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum TerminalError {
-    #[error("failed to create pseudo-terminal: {0}")]
+    #[error("failed to create pseudo-terminal")]
     Open(#[source] anyhow::Error),
-    #[error("terminal session not found: {0}")]
+    #[error("terminal session not found")]
     Missing(String),
-    #[error("terminal I/O failed: {0}")]
+    #[error("terminal I/O failed")]
     Io(#[source] std::io::Error),
-    #[error("terminal resize failed: {0}")]
+    #[error("terminal resize failed")]
     Resize(#[source] anyhow::Error),
-    #[error("terminal process cleanup failed: {0}")]
+    #[error("terminal process cleanup failed")]
     Wait(#[source] std::io::Error),
     #[error("local terminal target is not available on this platform")]
     UnsupportedTarget,
@@ -43,11 +43,11 @@ pub enum TerminalError {
     #[error("WSL distribution discovery timed out")]
     WslDiscoveryTimeout,
     #[cfg(target_os = "windows")]
-    #[error("WSL distribution discovery failed: {0}")]
+    #[error("WSL distribution discovery failed")]
     WslDiscovery(#[source] std::io::Error),
     #[cfg(target_os = "windows")]
-    #[error("WSL distribution discovery returned an error: {0}")]
-    WslDiscoveryStatus(String),
+    #[error("WSL distribution discovery returned a non-zero status")]
+    WslDiscoveryStatus,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -398,12 +398,7 @@ pub async fn list_wsl_distributions() -> Result<Vec<String>, TerminalError> {
         .map_err(TerminalError::WslDiscovery)?;
 
         if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            return Err(TerminalError::WslDiscoveryStatus(if detail.is_empty() {
-                format!("process exited with {}", output.status)
-            } else {
-                detail
-            }));
+            return Err(TerminalError::WslDiscoveryStatus);
         }
         Ok(parse_wsl_distributions(&output.stdout))
     }
@@ -622,6 +617,34 @@ mod tests {
             error,
             TerminalError::Input(TerminalInputError::TooLarge)
         ));
+    }
+
+    #[test]
+    fn terminal_errors_do_not_echo_paths_or_process_details() {
+        let private_path = "/Users/example/.ssh/private-key";
+        let errors = [
+            TerminalError::Open(anyhow::anyhow!("could not open {private_path}")),
+            TerminalError::Missing(private_path.into()),
+            TerminalError::Io(std::io::Error::other(format!(
+                "write failed at {private_path}"
+            ))),
+            TerminalError::Resize(anyhow::anyhow!("resize failed at {private_path}")),
+            TerminalError::Wait(std::io::Error::other(format!(
+                "wait failed at {private_path}"
+            ))),
+        ];
+
+        for error in errors {
+            let display = error.to_string();
+            assert!(
+                !display.contains(private_path),
+                "leaked terminal detail: {display}"
+            );
+            assert!(
+                !display.contains("private-key"),
+                "leaked terminal detail: {display}"
+            );
+        }
     }
 
     fn fixture_command() -> CommandBuilder {
