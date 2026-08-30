@@ -7,7 +7,7 @@ pub const MAX_MACRO_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_MACRO_WAIT_MILLISECONDS: u64 = 300_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MacroRecord {
     pub id: Uuid,
     pub title: String,
@@ -27,7 +27,7 @@ pub enum MacroApprovalPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum MacroAction {
     SendText { text: String },
     Wait { milliseconds: u64 },

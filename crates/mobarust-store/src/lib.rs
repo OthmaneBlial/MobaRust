@@ -1958,4 +1958,103 @@ mod tests {
             r#"{"schema_version":1,"events":[],"unknown":true}"#
         );
     }
+
+    #[test]
+    fn nested_unknown_fields_are_rejected_in_each_persisted_store() {
+        let directory = tempdir().unwrap();
+
+        let session_path = directory.path().join("nested-sessions.json");
+        let mut session = serde_json::to_value(remote_session()).unwrap();
+        session["auth"]["unknown"] = serde_json::json!(true);
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "sessions": [session]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            SessionStore::open(&session_path),
+            Err(StoreError::Decode { .. })
+        ));
+
+        let settings_path = directory.path().join("nested-settings.json");
+        fs::write(
+            &settings_path,
+            br#"{"schema_version":1,"settings":{"terminal":{"scrollbackLines":5000,"unknown":true}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            SettingsStore::open(&settings_path),
+            Err(StoreError::SettingsDecode { .. })
+        ));
+
+        let snippet_path = directory.path().join("nested-snippets.json");
+        fs::write(
+            &snippet_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "snippets": [{
+                    "id": uuid::Uuid::nil(),
+                    "title": "Fixture",
+                    "description": "",
+                    "command": "printf ready",
+                    "tags": [],
+                    "variables": [],
+                    "unknown": true
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            SnippetStore::open(&snippet_path),
+            Err(StoreError::SnippetDecode { .. })
+        ));
+
+        let macro_path = directory.path().join("nested-macros.json");
+        fs::write(
+            &macro_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "macros": [{
+                    "id": uuid::Uuid::nil(),
+                    "title": "Fixture",
+                    "description": "",
+                    "tags": [],
+                    "actions": [{"kind": "sendKey", "key": "enter", "unknown": true}]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            MacroStore::open(&macro_path),
+            Err(StoreError::MacroDecode { .. })
+        ));
+
+        let audit_path = directory.path().join("nested-audit.json");
+        fs::write(
+            &audit_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "events": [{
+                    "id": uuid::Uuid::nil(),
+                    "timestamp": 42,
+                    "kind": "sessionOpened",
+                    "sessionId": null,
+                    "protocol": "LOCAL",
+                    "unknown": true
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            AuditStore::open(&audit_path),
+            Err(StoreError::AuditDecode { .. })
+        ));
+    }
 }

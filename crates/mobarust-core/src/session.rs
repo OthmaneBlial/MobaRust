@@ -29,7 +29,7 @@ pub enum Protocol {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AuthMethod {
     None,
     Password {
@@ -71,6 +71,7 @@ impl std::fmt::Display for SessionId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SerialProfile {
     pub device: String,
     pub baud_rate: u32,
@@ -100,6 +101,7 @@ impl SerialProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelnetProfile {
     pub terminal: String,
     pub encoding: String,
@@ -123,6 +125,7 @@ impl TelnetProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteDesktopProfile {
     pub domain: Option<String>,
     pub width: u16,
@@ -154,6 +157,7 @@ impl RemoteDesktopProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JumpHostRecord {
     pub host: String,
     pub port: u16,
@@ -170,6 +174,7 @@ pub struct JumpHostRecord {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionRecord {
     pub id: SessionId,
     pub name: String,

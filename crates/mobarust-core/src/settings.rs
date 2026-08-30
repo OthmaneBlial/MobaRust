@@ -13,7 +13,7 @@ pub enum ThemePreference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GeneralSettings {
     #[serde(default)]
     pub theme: ThemePreference,
@@ -31,7 +31,7 @@ impl Default for GeneralSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceSettings {
     #[serde(default = "default_font_size")]
     pub font_size: u16,
@@ -46,7 +46,7 @@ impl Default for AppearanceSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalSettings {
     #[serde(default = "default_scrollback")]
     pub scrollback_lines: u32,
@@ -55,7 +55,7 @@ pub struct TerminalSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KeyboardSettings {
     #[serde(default = "default_shortcut_new_terminal")]
     pub new_terminal: String,
@@ -115,7 +115,7 @@ impl Default for TerminalSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshSettings {
     #[serde(default = "default_true")]
     pub reconnect_enabled: bool,
@@ -136,7 +136,7 @@ impl Default for SshSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkSettings {
     #[serde(default = "default_diagnostic_timeout")]
     pub diagnostic_timeout_ms: u64,
@@ -154,7 +154,7 @@ impl Default for NetworkSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppSettings {
     #[serde(default)]
     pub general: GeneralSettings,

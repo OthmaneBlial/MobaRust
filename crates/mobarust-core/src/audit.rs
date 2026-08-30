@@ -25,7 +25,7 @@ pub enum AuditEventKind {
 
 /// A deliberately narrow, secret-free audit record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditEvent {
     pub id: Uuid,
     pub timestamp: u64,
