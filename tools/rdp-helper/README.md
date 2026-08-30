@@ -73,3 +73,11 @@ cargo run --manifest-path tools/rdp-helper/Cargo.toml -- \
 
 The EOF smoke test never opens a network connection. A real interoperability
 test must use a disposable local fixture or a separately approved test host.
+
+The `local_process` integration test starts the real helper binary, sends the
+typed `Start` command and zeroizing credential frame through native pipes,
+checks `Hello`/`Starting`/`Ready`, and verifies a redacted bounded terminal
+outcome plus clean process exit against a disposable loopback socket that
+closes immediately. It proves the
+helper-process boundary and cancellation/exit behavior; it does not prove
+compatibility with a real RDP server.

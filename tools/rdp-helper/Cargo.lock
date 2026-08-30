@@ -1783,6 +1783,7 @@ dependencies = [
  "mobarust-remote-desktop",
  "smallvec",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

@@ -174,6 +174,13 @@ audio request while the current helper has no audio backend. The field remains
 available in the model for a future reviewed backend, but it is rejected before
 launch rather than being silently ignored.
 
+The real compiled helper process now has an integration smoke test. It sends a
+typed `Start` frame and a zeroizing credential frame over native pipes, checks
+the `Hello`/`Starting`/`Ready` lifecycle, exercises a refused disposable
+loopback socket that closes immediately, verifies that the diagnostic does not contain the fixture
+secret, and confirms clean process exit. This closes a helper-process lifecycle
+gap without pretending that a refused port is RDP interoperability evidence.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

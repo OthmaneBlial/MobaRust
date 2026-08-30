@@ -153,6 +153,8 @@ The validation path uses isolated home/XDG directories, repository-owned or disp
 
 The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first; this does not make RDP production-ready, bypass its separate dependency audit, or provide Windows/Linux interoperability evidence.
 
+The helper also has a local process smoke test: it starts the real compiled binary, sends `Start` and the credential through native pipes, checks a bounded terminal outcome against a disposable loopback socket that closes immediately, and verifies process exit without exposing the fixture secret. This validates helper integration, not a real RDP server or cross-platform interoperability.
+
 ## Architecture at a glance
 
 ```text
