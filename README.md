@@ -91,6 +91,7 @@ cargo xtask check
 cargo xtask package-check
 cargo xtask portable-check
 cargo xtask package-layout-check
+cargo xtask verify-platform-layout macos target/debug/bundle/macos/MobaRust.app
 cargo xtask pre-push-check
 ```
 

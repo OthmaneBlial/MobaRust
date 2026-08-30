@@ -70,6 +70,19 @@ them, or replace the required cross-platform release matrix. The existing
 `package-check` and `portable-check` commands remain the macOS artifact smoke
 checks until dedicated target environments are available.
 
+After a target-specific build exists, the same verifier can inspect one
+explicit unpacked app root without scanning elsewhere:
+
+```text
+cargo xtask verify-platform-layout macos target/debug/bundle/macos/MobaRust.app
+cargo xtask verify-platform-layout windows <unpacked-windows-app>
+cargo xtask verify-platform-layout linux <unpacked-linux-app>
+```
+
+The command is intentionally explicit about both the target and the artifact
+root. It never discovers packages or follows a user-selected directory tree
+automatically.
+
 ## Portable local smoke package
 
 cargo xtask portable-check first runs the bundle smoke check, then copies the

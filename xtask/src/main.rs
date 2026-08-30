@@ -17,6 +17,7 @@ fn main() {
         "benchmark" => benchmark(),
         "package-check" => package_check(),
         "package-layout-check" => package_layout_check(),
+        "verify-platform-layout" => verify_platform_layout_command(arguments.collect()),
         "portable-check" => portable_check(),
         "stage-helpers" => stage_helpers(),
         "pre-push-check" => pre_push_check(),
@@ -32,6 +33,9 @@ fn main() {
             );
             println!(
                 "cargo xtask package-layout-check    Validate the macOS, Windows, and Linux runtime package contract"
+            );
+            println!(
+                "cargo xtask verify-platform-layout <macos|windows|linux> <app-root>    Verify an explicit unpacked app layout"
             );
             println!(
                 "cargo xtask portable-check    Assemble and inspect an unsigned current-platform portable archive"
@@ -161,6 +165,17 @@ enum PackagePlatform {
 }
 
 impl PackagePlatform {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "macos" => Ok(Self::Macos),
+            "windows" => Ok(Self::Windows),
+            "linux" => Ok(Self::Linux),
+            _ => Err(format!(
+                "unknown package platform {value}; expected macos, windows, or linux"
+            )),
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Macos => "macOS",
@@ -297,6 +312,23 @@ fn package_layout_check() -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn verify_platform_layout_command(arguments: Vec<String>) -> Result<(), String> {
+    if arguments.len() != 2 {
+        return Err(
+            "usage: cargo xtask verify-platform-layout <macos|windows|linux> <app-root>".to_owned(),
+        );
+    }
+    let platform = PackagePlatform::parse(&arguments[0])?;
+    let package_root = PathBuf::from(&arguments[1]);
+    verify_platform_package_layout(&package_root, platform)?;
+    println!(
+        "verified {} runtime package layout: {}",
+        platform.label(),
+        package_root.display()
+    );
+    Ok(())
 }
 
 fn portable_check() -> Result<(), String> {
@@ -1534,6 +1566,18 @@ mod tests {
         }
 
         fs::remove_dir_all(root).expect("remove platform layout fixture");
+    }
+
+    #[test]
+    fn package_platform_parser_requires_an_explicit_supported_target() {
+        assert_eq!(PackagePlatform::parse("macos"), Ok(PackagePlatform::Macos));
+        assert_eq!(
+            PackagePlatform::parse("windows"),
+            Ok(PackagePlatform::Windows)
+        );
+        assert_eq!(PackagePlatform::parse("linux"), Ok(PackagePlatform::Linux));
+        let error = PackagePlatform::parse("current").expect_err("target must be explicit");
+        assert!(error.contains("expected macos, windows, or linux"));
     }
 
     #[cfg(unix)]
