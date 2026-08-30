@@ -1196,7 +1196,7 @@ mod tests {
     use super::*;
     use mobarust_core::{
         AuthMethod, JumpHostRecord, MacroAction, MacroKey, MacroRecord, Protocol,
-        RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
+        RdpGatewayProfile, RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
     };
     use tempfile::tempdir;
 
@@ -1293,6 +1293,42 @@ mod tests {
         assert!(json.contains("remote_desktop_profile"));
         assert!(json.contains("vnc-password-ref"));
         assert!(!json.contains("super-secret"));
+        assert_eq!(SessionStore::open(&path).unwrap().list(), &[session]);
+    }
+
+    #[test]
+    fn rdp_gateway_profiles_round_trip_without_plaintext_credentials() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let mut session = remote_session();
+        session.protocol = Protocol::Rdp;
+        session.auth = AuthMethod::Password {
+            credential_ref: "rdp-session-password-ref".into(),
+        };
+        session.remote_desktop_profile = Some(RemoteDesktopProfile {
+            domain: Some("LAB".into()),
+            gateway: Some(RdpGatewayProfile {
+                endpoint: "gateway.invalid:443".into(),
+                username: "gateway-user".into(),
+                credential_ref: "rdp-gateway-password-ref".into(),
+            }),
+            width: 1280,
+            height: 800,
+            color_depth: 32,
+            audio_enabled: false,
+            vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
+        });
+        store.save(session.clone()).unwrap();
+
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("gateway.invalid:443"));
+        assert!(json.contains("rdp-session-password-ref"));
+        assert!(json.contains("rdp-gateway-password-ref"));
+        assert!(!json.contains("session-plaintext-secret"));
+        assert!(!json.contains("gateway-plaintext-secret"));
         assert_eq!(SessionStore::open(&path).unwrap().list(), &[session]);
     }
 
