@@ -22,6 +22,10 @@ It is not a claim that MobaRust currently supports RDP.
   discoverable FreeRDP `pkg-config` package. No global dependency installation
   was attempted; the first experiment therefore remains process-contract and
   lifecycle work inside the repository.
+- The same host has no `cmake` executable available for a repository-local
+  FreeRDP configure/build probe. The ignored `base/FreeRDP` research corpus was
+  kept read-only; no build directory, dependency download, or system install
+  was started.
 - An isolated disposable Cargo probe successfully compiled and instantiated
   `ironrdp-client 0.1.0` with synthetic configuration, without opening a
   socket. Adding it directly to the main workspace was deliberately reverted:
