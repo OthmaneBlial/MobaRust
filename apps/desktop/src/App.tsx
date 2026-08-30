@@ -4102,7 +4102,61 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   );
 }
 
+type QuickConnectUriProtocol = "ssh" | "telnet" | "rdp" | "vnc";
+
+type QuickConnectUri = {
+  protocol: QuickConnectUriProtocol;
+  host: string;
+  port: number;
+  username: string;
+};
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
+function parseQuickConnectUri(value: string): QuickConnectUri {
+  const input = value.trim();
+  if (!input) throw new Error("Enter an SSH, Telnet, RDP, or VNC URI.");
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw new Error("The URI format is invalid.");
+  }
+  const protocol = parsed.protocol.slice(0, -1) as QuickConnectUriProtocol;
+  if (!["ssh", "telnet", "rdp", "vnc"].includes(protocol)) {
+    throw new Error("Only ssh://, telnet://, rdp://, and vnc:// URIs are supported.");
+  }
+  if (parsed.password) {
+    throw new Error("Passwords in URIs are not accepted. Use a native vault reference.");
+  }
+  if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
+    throw new Error("URI paths and query options are not accepted in Quick Connect.");
+  }
+  let username = "";
+  try {
+    username = decodeURIComponent(parsed.username);
+  } catch {
+    throw new Error("The URI username encoding is invalid.");
+  }
+  const host = parsed.hostname.trim();
+  if (!host || containsControlCharacter(host) || containsControlCharacter(username)) {
+    throw new Error("The URI host or username is invalid.");
+  }
+  const port = parsed.port ? Number(parsed.port) : ({ ssh: 22, telnet: 23, rdp: 3389, vnc: 5900 }[protocol] ?? 0);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("The URI port must be between 1 and 65535.");
+  }
+  return { protocol, host, port, username };
+}
+
 function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onConnectSerial, onConnectRemoteDesktop }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void; onConnectSerial: (request: SerialConnectRequest) => void; onConnectRemoteDesktop: (request: RemoteDesktopConnectRequest) => void }) {
+  const [uri, setUri] = useState("");
+  const [uriError, setUriError] = useState<string | null>(null);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
@@ -4133,6 +4187,25 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [parity, setParity] = useState<SerialConnectRequest["parity"]>("none");
   const [flowControl, setFlowControl] = useState<SerialConnectRequest["flowControl"]>("none");
   const [lineEnding, setLineEnding] = useState<SerialConnectRequest["lineEnding"]>("cr-lf");
+
+  const applyUri = () => {
+    try {
+      const parsed = parseQuickConnectUri(uri);
+      setProtocol(parsed.protocol);
+      setHost(parsed.host);
+      setPort(String(parsed.port));
+      setUsername(parsed.username);
+      setMethod("agent");
+      setCredentialId("");
+      setKeyPath("");
+      setPassphraseCredentialId("");
+      setDomain("");
+      setUriError(null);
+    } catch (parseError) {
+      setUri("");
+      setUriError(parseError instanceof Error ? parseError.message : "The URI could not be applied.");
+    }
+  };
 
   const refreshSerialDevices = async () => {
     if (!IS_TAURI) {
@@ -4243,6 +4316,13 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
           <button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}>
             <X size={17} />
           </button>
+        </div>
+
+        <div className="quick-connect-uri">
+          <label htmlFor="quick-connect-uri-input">Paste a connection URI <span className="optional">optional</span></label>
+          <div className="quick-connect-uri-row"><input id="quick-connect-uri-input" value={uri} onChange={(event) => { setUri(event.target.value); setUriError(null); }} placeholder="ssh://ops@example.com:22" autoComplete="off" /><button type="button" className="outline-button" onClick={applyUri} disabled={!uri.trim()}>Apply</button></div>
+          <small>Supported: ssh://, telnet://, rdp://, and vnc://. Passwords and query options are never accepted in a URI.</small>
+          {uriError && <small className="connect-error-inline" role="alert">{uriError}</small>}
         </div>
 
         <div className="quick-connect-grid">
