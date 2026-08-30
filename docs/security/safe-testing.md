@@ -58,10 +58,13 @@ The default local quality command is repository-scoped:
 cargo xtask check
 ```
 
-Its test subprocesses also remove ambient SSH-agent, askpass, and Git SSH
-configuration variables. The check deliberately keeps the normal Cargo/rustup
-cache environment, so this is an application-level safety boundary rather than
-an operating-system sandbox.
+All of its validation subprocesses also remove ambient SSH-agent, askpass, Git
+SSH configuration, Cargo Git transport, `NETRC`, `SSLKEYLOGFILE`, and TLS
+certificate override variables (`SSL_CERT_FILE`/`SSL_CERT_DIR`).
+The check deliberately keeps the normal Cargo/rustup/package cache environment,
+but redirects each child process's home and XDG configuration/data/cache
+directories to a unique temporary directory. This is an application-level
+safety boundary rather than an operating-system sandbox.
 
 The isolated RDP helper check is also repository-scoped:
 
@@ -75,6 +78,13 @@ The isolated VNC helper check is repository-scoped:
 cargo xtask check-vnc-helper
 ```
 
+The isolated fuzz package can be format- and compile-checked without running
+the fuzzers or contacting a protocol server:
+
+```text
+cargo xtask check-fuzz
+```
+
 The synthetic benchmark probe is repository-scoped as well:
 
 ```text
@@ -83,6 +93,23 @@ cargo xtask benchmark
 
 It uses in-memory fixtures only; it does not open sockets or inspect local
 configuration, credentials, SSH directories, or attached devices.
+
+The browser-preview responsive smoke check is also local-only. It uses the
+Vite server on `127.0.0.1` with synthetic preview sessions and does not invoke
+native protocol commands or inspect browser profiles, cookies, or clipboard
+contents. Its evidence and limitations are recorded in
+`docs/testing/responsive-ui.md`.
+
+The dependency-free frontend security regression is repository-scoped too:
+
+```text
+cd apps/desktop
+pnpm run test:unit
+```
+
+It checks that hostile remote editor content remains escaped before the
+fixed syntax-highlighting spans are inserted. It does not open a browser,
+invoke Tauri, or contact a remote host.
 
 The native logger writes no log file by default. Test and development output is
 kept on the child process stderr, with credential fields represented only by a
@@ -118,19 +145,25 @@ cargo run --manifest-path tools/rdp-helper/Cargo.toml -- \
   --username fixture-user < /dev/null
 ```
 
-`cargo xtask check` also gives each test subprocess an ephemeral `HOME` and
+`cargo xtask check` gives every validation subprocess, including formatters,
+linters, frontend commands, helper builds, and tests, an ephemeral `HOME` and
 isolated XDG configuration/data/cache directories (and the corresponding
-Windows profile variables). The normal Cargo and rustup caches remain available
-for build performance, but application tests cannot resolve a personal home
-configuration through the subprocess environment. The temporary directory is
-created with a unique process/time name and removed after each child exits.
+Windows profile variables). The normal Cargo, rustup, and package caches remain
+available for build performance, but validation commands cannot resolve a
+personal home configuration through the subprocess environment. The temporary
+directory is created with a unique process/time name and removed after each
+child exits.
+On Unix, the test shell is forced to `/bin/sh`; shell and interpreter startup
+variables such as `ZDOTDIR`, `BASH_ENV`, `ENV`, and `PYTHONSTARTUP` are removed
+so a personal startup file cannot be loaded indirectly.
 
 The `xtask` build, helper-staging, packaging, and test subprocesses also remove
-ambient SSH agent, askpass, Git SSH, and Git global/system configuration
+ambient SSH agent, askpass, Git SSH, Git global/system configuration, package
+registry authentication, compiler-wrapper, and dynamic-loader injection
 variables. This prevents a dependency or build hook from selecting a personal
-SSH transport while still allowing the ordinary compiler and package caches to
-be reused. It is an application-level boundary, not a replacement for an OS
-sandbox.
+SSH transport, private package registry, compiler wrapper, or injected library
+while still allowing the ordinary compiler and package caches to be reused. It
+is an application-level boundary, not a replacement for an OS sandbox.
 
 These guarantees cover MobaRust's test behavior. They cannot protect secrets
 from a fully compromised operating system, a malicious process with the same
