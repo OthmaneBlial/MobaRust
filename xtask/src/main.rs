@@ -55,7 +55,9 @@ fn stage_helpers() -> Result<(), String> {
 
     for (manifest, binary) in helpers {
         let manifest_path = repository_root.join(manifest);
-        let status = Command::new("cargo")
+        let mut command = Command::new("cargo");
+        sanitize_process_environment(&mut command);
+        let status = command
             .args(["build", "--locked", "--release", "--manifest-path"])
             .arg(&manifest_path)
             .current_dir(&repository_root)
@@ -454,6 +456,7 @@ fn run<const N: usize>(
     directory: Option<&str>,
 ) -> Result<(), String> {
     let mut command = Command::new(program);
+    sanitize_process_environment(&mut command);
     command.args(args);
     if let Some(directory) = directory {
         command.current_dir(directory);
@@ -477,6 +480,7 @@ fn run_sanitized_test<const N: usize>(
 ) -> Result<(), String> {
     let test_home = create_sanitized_test_home()?;
     let mut command = Command::new(program);
+    sanitize_process_environment(&mut command);
     command.args(args);
     if let Some(directory) = directory {
         command.current_dir(directory);
@@ -492,24 +496,6 @@ fn run_sanitized_test<const N: usize>(
         command.env("LOCALAPPDATA", test_home.join("cache"));
     }
 
-    for variable in [
-        "SSH_AUTH_SOCK",
-        "SSH_AGENT_PID",
-        "GIT_SSH_COMMAND",
-        "GIT_SSH",
-        "GIT_ASKPASS",
-        "SSH_ASKPASS",
-    ] {
-        command.env_remove(variable);
-    }
-    command.env_remove("GIT_CONFIG_GLOBAL");
-    command.env_remove("GIT_CONFIG_SYSTEM");
-    command.env("GIT_CONFIG_NOSYSTEM", "1");
-    command.env(
-        "GIT_CONFIG_GLOBAL",
-        if cfg!(windows) { "NUL" } else { "/dev/null" },
-    );
-
     let status = command
         .status()
         .map_err(|error| format!("could not start {program}: {error}"));
@@ -522,6 +508,33 @@ fn run_sanitized_test<const N: usize>(
     } else {
         Err(format!("{program} exited with {status}"))
     }
+}
+
+/// Keep build, packaging, and tests from inheriting ambient SSH credentials or
+/// user-selected Git transports. This does not replace the OS sandbox and it
+/// deliberately leaves compiler/package caches available for reproducibility.
+fn sanitize_process_environment(command: &mut Command) {
+    for variable in [
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GIT_SSH_COMMAND",
+        "GIT_SSH",
+        "GIT_SSH_VARIANT",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    ] {
+        command.env_remove(variable);
+    }
+    for (variable, _) in std::env::vars_os() {
+        if variable.to_string_lossy().starts_with("GIT_CONFIG_") {
+            command.env_remove(variable);
+        }
+    }
+    command.env("GIT_CONFIG_NOSYSTEM", "1");
+    command.env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
 }
 
 fn create_sanitized_test_home() -> Result<PathBuf, String> {

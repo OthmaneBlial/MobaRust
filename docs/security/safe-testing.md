@@ -125,6 +125,13 @@ for build performance, but application tests cannot resolve a personal home
 configuration through the subprocess environment. The temporary directory is
 created with a unique process/time name and removed after each child exits.
 
+The `xtask` build, helper-staging, packaging, and test subprocesses also remove
+ambient SSH agent, askpass, Git SSH, and Git global/system configuration
+variables. This prevents a dependency or build hook from selecting a personal
+SSH transport while still allowing the ordinary compiler and package caches to
+be reused. It is an application-level boundary, not a replacement for an OS
+sandbox.
+
 These guarantees cover MobaRust's test behavior. They cannot protect secrets
 from a fully compromised operating system, a malicious process with the same
 user privileges, or an operator who explicitly exports or pastes a secret.
