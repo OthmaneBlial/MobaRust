@@ -85,11 +85,13 @@ zeroizing native credential frame. Its clipboard command is intentionally
 rejected until a user-controlled OS clipboard backend is wired. Audio requests
 are rejected at both the desktop boundary and helper boundary rather than
 silently ignored. This is still
-not a production selection: cross-platform certificate fixture coverage, reconnect
-interoperability, audio, gateway behavior, packaging, and real Windows
-interoperability remain open gates. The helper now rebuilds a native RDP client
-after an active-session loss with three bounded exponential-backoff attempts;
-it keeps the credential inside the helper and honors Stop during the delay.
+not a production selection: cross-platform certificate fixture coverage,
+reconnect interoperability, audio, gateway behavior, packaging, and real
+Windows interoperability remain open gates. The helper now rebuilds a native
+RDP client after an active-session loss with a user-configurable, bounded
+0–10-attempt exponential-backoff policy; it keeps the credential inside the
+helper and honors Stop during the delay. Legacy profiles default to three
+enabled attempts, while users can disable reconnect or set zero attempts.
 No global package, personal credential, or remote server was used during the
 local validation.
 

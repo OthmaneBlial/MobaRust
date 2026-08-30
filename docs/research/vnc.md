@@ -140,12 +140,14 @@ The helper now also reports a server disconnect during negotiation and can
 cooperatively cancel a stalled RFB negotiation as soon as `Stop` arrives,
 rather than waiting for the connection timeout. Its helper-owned source copy of
 the credential is zeroizing. A connected-session loss now emits `Reconnecting`,
-retries with three bounded attempts and exponential backoff, honors `Stop`
-during both the delay and handshake, and emits `Failed` after the final
-refused/failed attempt. The loopback fixture verifies recovery to a second real
-framebuffer and bounded failure when the fixture disappears. This is
-helper-level evidence only; the Tauri parent still requires the full
-cross-platform and manual interoperability gate. `vnc-rs 0.5.3` still
+retries with a user-configurable, bounded 0–10-attempt policy and exponential
+backoff, honors `Stop` during both the delay and handshake, and emits `Failed`
+after the final refused/failed attempt. The default remains three enabled
+attempts, and users can disable reconnect or set zero attempts. The loopback
+fixture verifies recovery to a second real framebuffer and bounded failure
+when the fixture disappears. This is helper-level evidence only; the Tauri
+parent still requires the full cross-platform and manual interoperability
+gate. `vnc-rs 0.5.3` still
 requires the authentication callback to return an owned `String`, so that
 upstream API limitation remains a credential-lifetime promotion gate and is
 not hidden by the local wrapper. The helper moves its zeroizing source buffer

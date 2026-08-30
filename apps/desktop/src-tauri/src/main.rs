@@ -1077,6 +1077,8 @@ fn session_save_remote_desktop(
             color_depth: request.color_depth,
             audio_enabled: request.audio_enabled,
             vnc_quality: request.vnc_quality,
+            reconnect_enabled: request.reconnect_enabled,
+            reconnect_attempts: request.reconnect_attempts,
         }),
     };
     store

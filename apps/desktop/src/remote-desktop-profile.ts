@@ -9,6 +9,8 @@ export type RemoteDesktopProfileValue = {
   color_depth: number;
   audio_enabled: false;
   vnc_quality: VncQuality;
+  reconnect_enabled: boolean;
+  reconnect_attempts: number;
 };
 
 export type RemoteDesktopProfileDraft = {
@@ -17,6 +19,8 @@ export type RemoteDesktopProfileDraft = {
   height: string;
   colorDepth: string;
   vncQuality: string | undefined;
+  reconnectEnabled: boolean;
+  reconnectAttempts: string;
 };
 
 export type RemoteDesktopProfileParseResult =
@@ -28,6 +32,7 @@ const MAX_WIDTH = 16_384;
 const MIN_HEIGHT = 200;
 const MAX_HEIGHT = 16_384;
 const MAX_COLOR_DEPTH = 65_535;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 function containsControlCharacter(value: string): boolean {
   return [...value].some((character) => {
@@ -45,6 +50,7 @@ export function parseRemoteDesktopProfile(
   const colorDepth = Number(draft.colorDepth);
   const domain = draft.domain.trim() || null;
   const vncQuality = draft.vncQuality ?? "balanced";
+  const reconnectAttempts = Number(draft.reconnectAttempts ?? 3);
 
   if (
     !Number.isInteger(width) ||
@@ -76,6 +82,10 @@ export function parseRemoteDesktopProfile(
     return { ok: false, error: "RDP domain must not contain control characters." };
   }
 
+  if (!Number.isInteger(reconnectAttempts) || reconnectAttempts < 0 || reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    return { ok: false, error: "Reconnect attempts must be between 0 and 10." };
+  }
+
   if (!(["balanced", "low-latency", "low-bandwidth"] as string[]).includes(vncQuality)) {
     return { ok: false, error: "VNC quality must be Balanced, Low latency, or Low bandwidth." };
   }
@@ -89,6 +99,8 @@ export function parseRemoteDesktopProfile(
       color_depth: colorDepth,
       audio_enabled: false,
       vnc_quality: vncQuality as VncQuality,
+      reconnect_enabled: draft.reconnectEnabled ?? true,
+      reconnect_attempts: reconnectAttempts,
     },
   };
 }

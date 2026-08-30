@@ -26,6 +26,9 @@ pub const MAX_HOST_BYTES: usize = 255;
 pub const MAX_USERNAME_BYTES: usize = 256;
 pub const MAX_DOMAIN_BYTES: usize = 255;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
+pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED: bool = true;
+pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 3;
+pub const MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 10;
 pub const HELPER_PIPE_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Bit used by the typed key command to mark an RDP extended scan code.
 ///
@@ -76,6 +79,41 @@ pub struct DisplaySize {
     pub height: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReconnectPolicy {
+    pub enabled: bool,
+    pub attempts: u8,
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
+            attempts: DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+        }
+    }
+}
+
+impl ReconnectPolicy {
+    pub fn validate(self) -> Result<(), HelperProtocolError> {
+        if self.attempts > MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS {
+            return Err(HelperProtocolError::InvalidReconnectAttempts {
+                attempts: self.attempts,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn default_remote_desktop_reconnect_enabled() -> bool {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED
+}
+
+fn default_remote_desktop_reconnect_attempts() -> u8 {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS
+}
+
 impl DisplaySize {
     pub fn validate(self) -> Result<(), HelperProtocolError> {
         if !(320..=16_384).contains(&self.width) || !(200..=16_384).contains(&self.height) {
@@ -111,6 +149,10 @@ pub struct HelperLaunchConfig {
     pub vnc_quality: String,
     /// Opaque vault identifier. The secret value is never part of this type.
     pub credential_ref: String,
+    #[serde(default = "default_remote_desktop_reconnect_enabled")]
+    pub reconnect_enabled: bool,
+    #[serde(default = "default_remote_desktop_reconnect_attempts")]
+    pub reconnect_attempts: u8,
 }
 
 impl fmt::Debug for HelperLaunchConfig {
@@ -128,6 +170,8 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("audio_enabled", &self.audio_enabled)
             .field("vnc_quality", &self.vnc_quality)
             .field("credential_ref", &"<opaque-reference>")
+            .field("reconnect_enabled", &self.reconnect_enabled)
+            .field("reconnect_attempts", &self.reconnect_attempts)
             .finish()
     }
 }
@@ -249,6 +293,11 @@ impl HelperLaunchConfig {
         {
             return Err(HelperProtocolError::InvalidVncQuality);
         }
+        ReconnectPolicy {
+            enabled: self.reconnect_enabled,
+            attempts: self.reconnect_attempts,
+        }
+        .validate()?;
         self.display.validate()
     }
 
@@ -266,6 +315,13 @@ impl HelperLaunchConfig {
             self.display.width.to_string(),
             "--height".into(),
             self.display.height.to_string(),
+            if self.reconnect_enabled {
+                "--reconnect-enabled".into()
+            } else {
+                "--reconnect-disabled".into()
+            },
+            "--reconnect-attempts".into(),
+            self.reconnect_attempts.to_string(),
         ];
         if !self.username.trim().is_empty() {
             arguments.extend(["--username".into(), self.username.clone()]);
@@ -614,6 +670,8 @@ pub enum HelperProtocolError {
     UnsupportedRdpColorDepth { depth: u16 },
     #[error("helper VNC quality is invalid")]
     InvalidVncQuality,
+    #[error("helper reconnect attempts {attempts} exceed the safety limit")]
+    InvalidReconnectAttempts { attempts: u8 },
     #[error("invalid display size {width}x{height}")]
     InvalidDisplaySize { width: u16, height: u16 },
     #[error("clipboard payload is too large: {bytes} bytes")]
@@ -984,6 +1042,8 @@ mod tests {
             audio_enabled: false,
             vnc_quality: "balanced".into(),
             credential_ref: "credential:test-only".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         }
     }
 
@@ -1079,6 +1139,26 @@ mod tests {
             config.color_depth = depth;
             config.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn reconnect_policy_is_explicit_bounded_and_non_secret() {
+        let config = launch_config();
+        let arguments = config.process_arguments();
+        assert!(arguments.contains(&"--reconnect-enabled".into()));
+        assert!(arguments.contains(&"--reconnect-attempts".into()));
+        let attempts_index = arguments
+            .iter()
+            .position(|argument| argument == "--reconnect-attempts")
+            .unwrap();
+        assert_eq!(arguments[attempts_index + 1], "3");
+
+        let mut invalid = config;
+        invalid.reconnect_attempts = MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS + 1;
+        assert!(matches!(
+            invalid.validate(),
+            Err(HelperProtocolError::InvalidReconnectAttempts { attempts: 11 })
+        ));
     }
 
     #[test]

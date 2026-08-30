@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, write_event_frame,
+    MAX_USERNAME_BYTES, ReconnectPolicy, DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED, decode_command_frame, decode_credential_frame,
+    write_event_frame,
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -32,7 +34,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const VNC_INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const VNC_EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
-const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const VNC_TARGET_UNSUPPORTED: &str =
     "VNC experiment is restricted to a loopback IP until transport security is available";
@@ -43,6 +44,8 @@ struct Arguments {
     port: u16,
     display: DisplaySize,
     quality: String,
+    reconnect_enabled: bool,
+    reconnect_attempts: u8,
 }
 
 #[derive(Debug)]
@@ -195,6 +198,10 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     incoming_rx: &mut mpsc::Receiver<Incoming>,
 ) -> Result<(), Box<dyn Error>> {
     display.validate()?;
+    let reconnect_policy = ReconnectPolicy {
+        enabled: arguments.reconnect_enabled,
+        attempts: arguments.reconnect_attempts,
+    };
     let client = match wait_for_vnc_connection(arguments, &credential, stdout, incoming_rx).await? {
         ConnectionOutcome::Connected(client) => client,
         ConnectionOutcome::Failed(message) => {
@@ -223,11 +230,17 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
             ConnectedOutcome::Fatal => return Ok(()),
             ConnectedOutcome::Lost(message) => {
                 close_vnc_client(&client).await;
+                if !reconnect_policy.enabled || reconnect_policy.attempts == 0 {
+                    send_error(stdout, message).await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(());
+                }
                 write_state(stdout, HelperState::Reconnecting).await?;
                 client = match reconnect_vnc_client(
                     arguments,
                     &credential,
                     message,
+                    reconnect_policy,
                     stdout,
                     incoming_rx,
                 )
@@ -292,11 +305,12 @@ async fn reconnect_vnc_client<W: AsyncWrite + Unpin>(
     arguments: &Arguments,
     credential: &HelperCredential,
     initial_reason: &'static str,
+    reconnect_policy: ReconnectPolicy,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
 ) -> Result<Option<VncClient>, Box<dyn Error>> {
     let mut last_reason = initial_reason;
-    for attempt in 0..MAX_RECONNECT_ATTEMPTS {
+    for attempt in 0..reconnect_policy.attempts {
         let backoff = RECONNECT_INITIAL_BACKOFF.saturating_mul(1_u32 << attempt);
         if !wait_reconnect_backoff(backoff, stdout, incoming_rx).await? {
             return Ok(None);
@@ -305,7 +319,7 @@ async fn reconnect_vnc_client<W: AsyncWrite + Unpin>(
             ConnectionOutcome::Connected(client) => return Ok(Some(client)),
             ConnectionOutcome::Failed(message) => {
                 last_reason = message;
-                if attempt + 1 < MAX_RECONNECT_ATTEMPTS {
+                if attempt + 1 < reconnect_policy.attempts {
                     send_error(stdout, last_reason).await?;
                 }
             }
@@ -777,6 +791,8 @@ where
     let mut width = 1280_u16;
     let mut height = 720_u16;
     let mut quality = "balanced".to_owned();
+    let mut reconnect_enabled = DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED;
+    let mut reconnect_attempts = DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS;
     let mut iterator = arguments.into_iter();
 
     while let Some(argument) = iterator.next() {
@@ -806,6 +822,14 @@ where
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
             "--height" => height = parse_u16("height", &next_argument(&mut iterator, "--height")?)?,
             "--quality" => quality = parse_quality(&next_argument(&mut iterator, "--quality")?)?,
+            "--reconnect-enabled" => reconnect_enabled = true,
+            "--reconnect-disabled" => reconnect_enabled = false,
+            "--reconnect-attempts" => {
+                reconnect_attempts = parse_u8(
+                    "reconnect attempts",
+                    &next_argument(&mut iterator, "--reconnect-attempts")?,
+                )?
+            }
             _ => return Err(ArgumentError("unknown helper argument".into())),
         }
     }
@@ -816,11 +840,19 @@ where
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         display: DisplaySize { width, height },
         quality,
+        reconnect_enabled,
+        reconnect_attempts,
     };
     arguments
         .display
         .validate()
         .map_err(|error| ArgumentError(error.to_string()))?;
+    ReconnectPolicy {
+        enabled: arguments.reconnect_enabled,
+        attempts: arguments.reconnect_attempts,
+    }
+    .validate()
+    .map_err(|_| ArgumentError("invalid reconnect policy".into()))?;
     Ok(arguments)
 }
 
@@ -894,6 +926,12 @@ fn parse_u16(name: &str, value: &str) -> Result<u16, ArgumentError> {
         })
 }
 
+fn parse_u8(name: &str, value: &str) -> Result<u8, ArgumentError> {
+    value
+        .parse::<u8>()
+        .map_err(|_| ArgumentError(format!("invalid {name}")))
+}
+
 fn validated_text(name: &str, value: &str, max_bytes: usize) -> Result<String, ArgumentError> {
     if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         return Err(ArgumentError(format!("invalid {name}")));
@@ -933,6 +971,52 @@ mod tests {
         assert_eq!(arguments.host, "127.0.0.1");
         assert_eq!(arguments.port, 5900);
         assert_eq!(arguments.quality, "balanced");
+        assert!(arguments.reconnect_enabled);
+        assert_eq!(arguments.reconnect_attempts, 3);
+    }
+
+    #[test]
+    fn parser_accepts_explicit_bounded_reconnect_policy() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5900",
+                "--reconnect-disabled",
+                "--reconnect-attempts",
+                "10",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+
+        assert!(!arguments.reconnect_enabled);
+        assert_eq!(arguments.reconnect_attempts, 10);
+    }
+
+    #[test]
+    fn parser_rejects_unbounded_reconnect_policy_without_echoing_value() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5900",
+                "--reconnect-attempts",
+                "11",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid reconnect policy");
+        assert!(!error.to_string().contains("11"));
     }
 
     #[test]

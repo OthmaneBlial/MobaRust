@@ -1,8 +1,10 @@
 use mobarust_remote_desktop::{
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
     HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
-    MAX_HOST_BYTES, MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
-    validate_rdp_color_depth, write_frame_with_timeout,
+    MAX_HOST_BYTES, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy,
+    decode_event_frame, encode_command_frame, read_frame, validate_rdp_color_depth,
+    write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,18 @@ pub struct RemoteDesktopConnectRequest {
     pub vnc_quality: String,
     #[serde(default)]
     pub audio_enabled: bool,
+    #[serde(default = "default_reconnect_enabled")]
+    pub reconnect_enabled: bool,
+    #[serde(default = "default_reconnect_attempts")]
+    pub reconnect_attempts: u8,
+}
+
+fn default_reconnect_enabled() -> bool {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED
+}
+
+fn default_reconnect_attempts() -> u8 {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +121,8 @@ impl RemoteDesktopManager {
             audio_enabled: request.audio_enabled,
             vnc_quality: request.vnc_quality,
             credential_ref: credential_id,
+            reconnect_enabled: request.reconnect_enabled,
+            reconnect_attempts: request.reconnect_attempts,
         };
         let mut supervisor = HelperSupervisor::spawn(&config).map_err(|error| error.to_string())?;
         if let Err(error) = supervisor
@@ -302,6 +318,17 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     ) {
         return Err("remote desktop VNC quality is invalid".into());
     }
+    ReconnectPolicy {
+        enabled: request.reconnect_enabled,
+        attempts: request.reconnect_attempts,
+    }
+    .validate()
+    .map_err(|_| {
+        format!(
+            "remote desktop reconnect attempts exceed the safety limit of {}",
+            MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS
+        )
+    })?;
     DisplaySize {
         width: request.width,
         height: request.height,
@@ -516,7 +543,10 @@ mod tests {
         RemoteDesktopConnectRequest, claim_unexpected_helper_exit, helper_input_failure_message,
         validate_helper_resource, validate_request,
     };
-    use mobarust_remote_desktop::{DesktopProtocol, HelperProtocolError};
+    use mobarust_remote_desktop::{
+        DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperProtocolError,
+        MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
@@ -563,6 +593,8 @@ mod tests {
             color_depth: 32,
             audio_enabled: false,
             vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
         }
     }
 
@@ -591,6 +623,15 @@ mod tests {
         request.color_depth = 24;
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("16 or 32"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_unbounded_reconnect_attempts_without_echoing_value() {
+        let mut request = request(DesktopProtocol::Rdp, "Administrator");
+        request.reconnect_attempts = MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS + 1;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("safety limit"));
+        assert!(!error.contains("11"));
     }
 
     #[test]

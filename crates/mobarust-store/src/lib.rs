@@ -1283,6 +1283,8 @@ mod tests {
             color_depth: 32,
             audio_enabled: false,
             vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         });
         store.save(session.clone()).unwrap();
 
@@ -1444,6 +1446,8 @@ mod tests {
             color_depth: 32,
             audio_enabled: false,
             vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         });
         let mut serialized = serde_json::to_value(&session).unwrap();
         serialized["remote_desktop_profile"]

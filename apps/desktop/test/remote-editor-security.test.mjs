@@ -88,6 +88,8 @@ assert.deepEqual(
       color_depth: 32,
       audio_enabled: false,
       vnc_quality: "balanced",
+      reconnect_enabled: true,
+      reconnect_attempts: 3,
     },
   },
 );
@@ -108,6 +110,8 @@ assert.deepEqual(
       color_depth: 24,
       audio_enabled: false,
       vnc_quality: "low-latency",
+      reconnect_enabled: true,
+      reconnect_attempts: 3,
     },
   },
 );
@@ -126,6 +130,31 @@ assert.match(
 assert.match(
   parseRemoteDesktopProfile("VNC", { domain: "", width: "1280", height: "720", colorDepth: "24", vncQuality: "unsupported" }).error,
   /quality/,
+);
+assert.deepEqual(
+  parseRemoteDesktopProfile("RDP", {
+    domain: "",
+    width: "1280",
+    height: "720",
+    colorDepth: "32",
+    vncQuality: "balanced",
+    reconnectEnabled: false,
+    reconnectAttempts: "10",
+  }).profile,
+  {
+    domain: null,
+    width: 1280,
+    height: 720,
+    color_depth: 32,
+    audio_enabled: false,
+    vnc_quality: "balanced",
+    reconnect_enabled: false,
+    reconnect_attempts: 10,
+  },
+);
+assert.match(
+  parseRemoteDesktopProfile("VNC", { domain: "", width: "1280", height: "720", colorDepth: "24", vncQuality: "balanced", reconnectAttempts: "11" }).error,
+  /Reconnect attempts/,
 );
 
 assert.deepEqual(parseQuickConnectUri("rdp://fixture@[::1]:3389"), {

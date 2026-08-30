@@ -4,6 +4,9 @@ use uuid::Uuid;
 
 pub const MAX_SERVER_ALIVE_INTERVAL_SECONDS: u64 = 86_400;
 pub const DEFAULT_VNC_QUALITY: &str = "balanced";
+pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED: bool = true;
+pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 3;
+pub const MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 10;
 pub const MAX_SESSION_ENVIRONMENT_ENTRIES: usize = 64;
 pub const MAX_SESSION_ENVIRONMENT_NAME_BYTES: usize = 128;
 pub const MAX_SESSION_ENVIRONMENT_VALUE_BYTES: usize = 4096;
@@ -13,6 +16,14 @@ pub const MAX_SESSION_STARTUP_COMMAND_BYTES: usize = 16 * 1024;
 
 fn default_vnc_quality() -> String {
     DEFAULT_VNC_QUALITY.into()
+}
+
+fn default_remote_desktop_reconnect_enabled() -> bool {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED
+}
+
+fn default_remote_desktop_reconnect_attempts() -> u8 {
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +145,10 @@ pub struct RemoteDesktopProfile {
     pub audio_enabled: bool,
     #[serde(default = "default_vnc_quality")]
     pub vnc_quality: String,
+    #[serde(default = "default_remote_desktop_reconnect_enabled")]
+    pub reconnect_enabled: bool,
+    #[serde(default = "default_remote_desktop_reconnect_attempts")]
+    pub reconnect_attempts: u8,
 }
 
 impl RemoteDesktopProfile {
@@ -149,6 +164,7 @@ impl RemoteDesktopProfile {
                 .domain
                 .as_deref()
                 .is_some_and(|domain| domain.chars().any(char::is_control))
+            || self.reconnect_attempts > MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS
         {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
@@ -622,6 +638,8 @@ mod tests {
             color_depth: 32,
             audio_enabled: false,
             vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         };
         profile.validate().unwrap();
 

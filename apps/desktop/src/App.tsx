@@ -165,6 +165,8 @@ type RemoteDesktopConnectRequest = {
   colorDepth: number;
   audioEnabled: boolean;
   vncQuality: "balanced" | "low-latency" | "low-bandwidth";
+  reconnectEnabled: boolean;
+  reconnectAttempts: number;
 };
 
 type RemoteDesktopConnectResponse = {
@@ -368,6 +370,8 @@ type SavedSession = {
     color_depth: number;
     audio_enabled: boolean;
     vnc_quality?: "balanced" | "low-latency" | "low-bandwidth";
+    reconnect_enabled?: boolean;
+    reconnect_attempts?: number;
   } | null;
   auth: SavedAuth;
 };
@@ -2445,6 +2449,8 @@ function App() {
         colorDepth: profile.color_depth,
         audioEnabled: profile.audio_enabled,
         vncQuality: profile.vnc_quality ?? "balanced",
+        reconnectEnabled: profile.reconnect_enabled ?? true,
+        reconnectAttempts: profile.reconnect_attempts ?? 3,
       }, false);
       return;
     }
@@ -4557,6 +4563,8 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [desktopHeight, setDesktopHeight] = useState(String(session.remote_desktop_profile?.height ?? 720));
   const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
   const [vncQuality, setVncQuality] = useState<NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"]>(session.remote_desktop_profile?.vnc_quality ?? "balanced");
+  const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(session.remote_desktop_profile?.reconnect_enabled ?? true);
+  const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState(String(session.remote_desktop_profile?.reconnect_attempts ?? 3));
   const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
     session.auth.kind === "none" ? "agent" : session.auth.kind,
   );
@@ -4613,6 +4621,8 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         height: desktopHeight,
         colorDepth: desktopColorDepth,
         vncQuality,
+        reconnectEnabled: desktopReconnectEnabled,
+        reconnectAttempts: desktopReconnectAttempts,
       });
       if (!parsedProfile.ok) {
         setAuthError(parsedProfile.error);
@@ -4721,6 +4731,15 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
               </select>
               <small>Controls client-side encoding preference and refresh cadence.</small>
             </label>}
+            <label className="quick-connect-wide quick-connect-check-row">
+              <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />
+              <span>Reconnect after connection loss <small>bounded and cancellable</small></span>
+            </label>
+            <label>
+              Reconnect attempts
+              <input type="number" min="0" max="10" step="1" value={desktopReconnectAttempts} onChange={(event) => setDesktopReconnectAttempts(event.target.value)} />
+              <small>0–10 retries after an active connection is lost.</small>
+            </label>
           </div>
           <div className="credential-modal-note"><ShieldCheck size={14} /><span>{session.protocol === "RDP" ? "RDP audio redirection remains disabled until a reviewed native backend exists." : "VNC keeps server-side resize and transport security capability-dependent; unsupported behavior is reported."}</span></div>
           {authError && <div className="connect-error-inline" role="alert">{authError}</div>}
@@ -4910,6 +4929,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
   const [vncQuality, setVncQuality] = useState<RemoteDesktopConnectRequest["vncQuality"]>("balanced");
+  const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(true);
+  const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState("3");
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
   const [x11Enabled, setX11Enabled] = useState(false);
@@ -4945,6 +4966,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       setKeyPath("");
       setPassphraseCredentialId("");
       setDomain("");
+      setDesktopReconnectEnabled(true);
+      setDesktopReconnectAttempts("3");
       setUriError(null);
       setValidationError(null);
     } catch (parseError) {
@@ -5001,6 +5024,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       return;
     }
     if (protocol === "rdp" || protocol === "vnc") {
+      const parsedReconnectAttempts = Number(desktopReconnectAttempts);
+      if (!Number.isInteger(parsedReconnectAttempts) || parsedReconnectAttempts < 0 || parsedReconnectAttempts > 10) {
+        setValidationError("Reconnect attempts must be between 0 and 10.");
+        return;
+      }
       onConnectRemoteDesktop({
         protocol,
         host: host.trim(),
@@ -5013,6 +5041,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         colorDepth: Number(desktopColorDepth),
         audioEnabled: false,
         vncQuality,
+        reconnectEnabled: desktopReconnectEnabled,
+        reconnectAttempts: parsedReconnectAttempts,
       });
       return;
     }
@@ -5305,6 +5335,15 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <select value={vncQuality} onChange={(event) => setVncQuality(event.target.value as RemoteDesktopConnectRequest["vncQuality"])}><option value="balanced">Balanced</option><option value="low-latency">Low latency</option><option value="low-bandwidth">Low bandwidth</option></select>
                     <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
                   </label>}
+                  <label className="quick-connect-wide quick-connect-check-row">
+                    <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />
+                    <span>Reconnect after connection loss <small>bounded and cancellable</small></span>
+                  </label>
+                  <label>
+                    Reconnect attempts
+                    <input type="number" min="0" max="10" step="1" value={desktopReconnectAttempts} onChange={(event) => setDesktopReconnectAttempts(event.target.value)} />
+                    <small>0–10 retries after an active connection is lost.</small>
+                  </label>
                   {protocol === "rdp" && <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>Audio redirection is not enabled in the current helper yet; the connection will use video and input only.</span></div>}
                   <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP accepts a hostname or IP and uses native platform certificate validation; untrusted certificates fail closed. Real-server and Windows interoperability remain experimental." : "VNC is loopback-only in this candidate and uses legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
                 </>

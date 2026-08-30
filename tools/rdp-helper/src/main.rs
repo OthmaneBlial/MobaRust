@@ -26,8 +26,9 @@ use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, rdp_scancode_parts,
-    validate_rdp_color_depth, write_event_frame,
+    MAX_USERNAME_BYTES, ReconnectPolicy, DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED, decode_command_frame, decode_credential_frame,
+    rdp_scancode_parts, validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -40,7 +41,6 @@ const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 // at this boundary, so the helper owns one and aborts the task if graceful
 // shutdown cannot complete within the separate grace period.
 const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const AUDIO_UNSUPPORTED: &str = "RDP audio redirection is not enabled in this helper";
 const TLS_ENVIRONMENT_UNSUPPORTED: &str =
@@ -55,6 +55,8 @@ struct Arguments {
     display: DisplaySize,
     color_depth: u16,
     audio_requested: bool,
+    reconnect_enabled: bool,
+    reconnect_attempts: u8,
 }
 
 #[derive(Debug)]
@@ -222,6 +224,10 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
         credential,
         stdout,
         incoming_rx,
+        ReconnectPolicy {
+            enabled: arguments.reconnect_enabled,
+            attempts: arguments.reconnect_attempts,
+        },
         RDP_STARTUP_TIMEOUT,
         STOP_GRACE_PERIOD,
     )
@@ -234,6 +240,7 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
     credential: HelperCredential,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
+    reconnect_policy: ReconnectPolicy,
     startup_timeout: Duration,
     startup_stop_grace: Duration,
 ) -> Result<(), Box<dyn Error>> {
@@ -273,7 +280,11 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
                 reconnect_established,
             } => {
                 if let Some(next_attempt) =
-                    next_reconnect_attempt(reconnect_attempt, reconnect_established)
+                    next_reconnect_attempt(
+                        reconnect_attempt,
+                        reconnect_established,
+                        reconnect_policy,
+                    )
                 {
                     write_state(stdout, HelperState::Reconnecting).await?;
                     reconnect_attempt = next_attempt;
@@ -517,9 +528,16 @@ fn reconnect_delay(attempt: u8) -> Duration {
     RECONNECT_INITIAL_BACKOFF.saturating_mul(1_u32 << u32::from(attempt.min(10)))
 }
 
-fn next_reconnect_attempt(current: u8, reconnect_established: bool) -> Option<u8> {
+fn next_reconnect_attempt(
+    current: u8,
+    reconnect_established: bool,
+    policy: ReconnectPolicy,
+) -> Option<u8> {
+    if !policy.enabled || policy.attempts == 0 {
+        return None;
+    }
     let completed_attempts = if reconnect_established { 0 } else { current };
-    (completed_attempts < MAX_RECONNECT_ATTEMPTS).then_some(completed_attempts + 1)
+    (completed_attempts < policy.attempts).then_some(completed_attempts + 1)
 }
 
 fn lost_outcome(reason: &'static str, active_sent: bool, reconnecting: bool) -> RdpAttemptOutcome {
@@ -844,6 +862,8 @@ where
     let mut height = 720u16;
     let mut color_depth = 32u16;
     let mut audio_requested = false;
+    let mut reconnect_enabled = DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED;
+    let mut reconnect_attempts = DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS;
     let mut iterator = arguments.into_iter();
 
     while let Some(argument) = iterator.next() {
@@ -886,6 +906,14 @@ where
                 )?
             }
             "--audio" => audio_requested = true,
+            "--reconnect-enabled" => reconnect_enabled = true,
+            "--reconnect-disabled" => reconnect_enabled = false,
+            "--reconnect-attempts" => {
+                reconnect_attempts = parse_u8(
+                    "reconnect attempts",
+                    &next_argument(&mut iterator, "--reconnect-attempts")?,
+                )?
+            }
             // Do not echo the complete token: a caller must never be able to
             // turn a mistaken secret-bearing argument into a diagnostic leak.
             _ => return Err(ArgumentError("unknown helper argument".into())),
@@ -903,6 +931,8 @@ where
         display: DisplaySize { width, height },
         color_depth,
         audio_requested,
+        reconnect_enabled,
+        reconnect_attempts,
     };
     arguments
         .display
@@ -910,6 +940,12 @@ where
         .map_err(|error| ArgumentError(error.to_string()))?;
     validate_rdp_color_depth(arguments.color_depth)
         .map_err(|error| ArgumentError(error.to_string()))?;
+    ReconnectPolicy {
+        enabled: arguments.reconnect_enabled,
+        attempts: arguments.reconnect_attempts,
+    }
+    .validate()
+    .map_err(|_| ArgumentError("invalid reconnect policy".into()))?;
     Ok(arguments)
 }
 
@@ -933,6 +969,12 @@ fn parse_u16(name: &str, value: &str) -> Result<u16, ArgumentError> {
                 Ok(value)
             }
         })
+}
+
+fn parse_u8(name: &str, value: &str) -> Result<u8, ArgumentError> {
+    value
+        .parse::<u8>()
+        .map_err(|_| ArgumentError(format!("invalid {name}")))
 }
 
 fn validated_text(name: &str, value: &str, max_bytes: usize) -> Result<String, ArgumentError> {
@@ -992,6 +1034,56 @@ mod tests {
                 height: 720
             })
         );
+        assert!(arguments.reconnect_enabled);
+        assert_eq!(arguments.reconnect_attempts, 3);
+    }
+
+    #[test]
+    fn parser_accepts_explicit_bounded_reconnect_policy() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--reconnect-disabled",
+                "--reconnect-attempts",
+                "10",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+
+        assert!(!arguments.reconnect_enabled);
+        assert_eq!(arguments.reconnect_attempts, 10);
+    }
+
+    #[test]
+    fn parser_rejects_unbounded_reconnect_policy_without_echoing_value() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--reconnect-attempts",
+                "11",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid reconnect policy");
+        assert!(!error.to_string().contains("11"));
     }
 
     #[test]
@@ -1119,6 +1211,8 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         };
         assert_eq!(unsupported_option(&arguments), None);
 
@@ -1141,6 +1235,8 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         };
 
         assert!(
@@ -1254,11 +1350,34 @@ mod tests {
 
     #[test]
     fn reconnect_budget_is_bounded_until_a_retry_reaches_active() {
-        assert_eq!(next_reconnect_attempt(0, false), Some(1));
-        assert_eq!(next_reconnect_attempt(1, false), Some(2));
-        assert_eq!(next_reconnect_attempt(2, false), Some(3));
-        assert_eq!(next_reconnect_attempt(3, false), None);
-        assert_eq!(next_reconnect_attempt(3, true), Some(1));
+        let policy = ReconnectPolicy::default();
+        assert_eq!(next_reconnect_attempt(0, false, policy), Some(1));
+        assert_eq!(next_reconnect_attempt(1, false, policy), Some(2));
+        assert_eq!(next_reconnect_attempt(2, false, policy), Some(3));
+        assert_eq!(next_reconnect_attempt(3, false, policy), None);
+        assert_eq!(next_reconnect_attempt(3, true, policy), Some(1));
+        assert_eq!(
+            next_reconnect_attempt(
+                0,
+                false,
+                ReconnectPolicy {
+                    enabled: false,
+                    attempts: 10,
+                },
+            ),
+            None
+        );
+        assert_eq!(
+            next_reconnect_attempt(
+                0,
+                false,
+                ReconnectPolicy {
+                    enabled: true,
+                    attempts: 0,
+                },
+            ),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1490,6 +1609,8 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
         };
         let (_incoming_tx, mut incoming_rx) = mpsc::channel(1);
         let mut stdout = tokio::io::sink();
@@ -1502,6 +1623,7 @@ mod tests {
                 HelperCredential::new("fixture-secret"),
                 &mut stdout,
                 &mut incoming_rx,
+                ReconnectPolicy::default(),
                 Duration::from_millis(40),
                 Duration::from_millis(40),
             ))
