@@ -30,7 +30,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] SCP transfer-manager wiring for bounded single-file jobs with progress, cancellation, and atomic commits
 - [x] Bounded recursive SFTP upload/download with streaming files, progress, cancellation, and atomic file commits
 - [x] Bounded native transfer manager (three concurrent single-file jobs)
-- [ ] Remote terminal and file browser composition
+- [x] Remote terminal and file browser composition
 
 ## 0.4 — network workstation
 
