@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -30,6 +30,7 @@ use zeroize::Zeroizing;
 /// an unbounded number of response allocations. This allows ordinary password
 /// plus MFA prompt flows while failing closed on pathological fan-out.
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
+const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -71,6 +72,8 @@ pub enum SshError {
     PrivateKey(#[source] russh::keys::Error),
     #[error("SSH private key algorithm is unsupported: {0}")]
     UnsupportedKeyAlgorithm(String),
+    #[error("SSH private key exceeds the 4 MiB safety limit")]
+    PrivateKeyTooLarge,
     #[error("SSH known_hosts check failed")]
     KnownHosts(#[source] russh::keys::Error),
     #[error("SSH transport failed")]
@@ -1783,8 +1786,7 @@ async fn authenticate(
             path,
             passphrase,
         } => {
-            let key = russh::keys::load_secret_key(&path, passphrase.as_ref().map(Secret::as_str))
-                .map_err(map_private_key_error)?;
+            let key = load_private_key(&path, passphrase.as_ref().map(Secret::as_str))?;
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
@@ -1800,6 +1802,35 @@ async fn authenticate(
             authenticate_keyboard_interactive(handle, username, response).await
         }
     }
+}
+
+fn load_private_key(
+    path: &std::path::Path,
+    passphrase: Option<&str>,
+) -> Result<russh::keys::PrivateKey, SshError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| SshError::PrivateKey(russh::keys::Error::IO(error)))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| SshError::PrivateKey(russh::keys::Error::IO(error)))?;
+    if !metadata.is_file() {
+        return Err(SshError::PrivateKey(russh::keys::Error::CouldNotReadKey));
+    }
+    if metadata.len() > MAX_PRIVATE_KEY_FILE_BYTES as u64 {
+        return Err(SshError::PrivateKeyTooLarge);
+    }
+
+    let mut key_bytes = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
+    file.take((MAX_PRIVATE_KEY_FILE_BYTES as u64) + 1)
+        .read_to_end(&mut key_bytes)
+        .map_err(|error| SshError::PrivateKey(russh::keys::Error::IO(error)))?;
+    if key_bytes.len() > MAX_PRIVATE_KEY_FILE_BYTES {
+        return Err(SshError::PrivateKeyTooLarge);
+    }
+
+    let key_text = std::str::from_utf8(&key_bytes)
+        .map_err(|_| SshError::PrivateKey(russh::keys::Error::CouldNotReadKey))?;
+    russh::keys::decode_secret_key(key_text, passphrase).map_err(map_private_key_error)
 }
 
 fn map_private_key_error(error: russh::keys::Error) -> SshError {
@@ -2879,6 +2910,40 @@ mod tests {
             "SSH private key algorithm is unsupported: RSA"
         );
         assert!(!error.to_string().contains("private-key-bytes"));
+    }
+
+    #[test]
+    fn private_key_loader_rejects_oversized_files_before_parser() {
+        let path = std::env::temp_dir().join(format!(
+            "mobarust-ssh-oversized-key-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, vec![b'X'; MAX_PRIVATE_KEY_FILE_BYTES + 1])
+            .expect("write disposable oversized key fixture");
+
+        let error = load_private_key(&path, None).expect_err("oversized key must be rejected");
+        assert!(matches!(error, SshError::PrivateKeyTooLarge));
+        assert_eq!(
+            error.to_string(),
+            "SSH private key exceeds the 4 MiB safety limit"
+        );
+        std::fs::remove_file(path).expect("remove disposable key fixture");
+    }
+
+    #[test]
+    fn private_key_loader_rejects_non_utf8_without_echoing_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "mobarust-ssh-invalid-key-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).expect("write disposable invalid key fixture");
+
+        let error = load_private_key(&path, None).expect_err("invalid key must be rejected");
+        assert!(matches!(error, SshError::PrivateKey(_)));
+        assert_eq!(error.to_string(), "SSH private key could not be loaded");
+        std::fs::remove_file(path).expect("remove disposable key fixture");
     }
 
     #[test]
