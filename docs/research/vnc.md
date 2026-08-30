@@ -79,9 +79,11 @@ RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
 pointer, and bounded Latin-1 clipboard input. Unsupported JPEG rectangles and
 server-side resize are reported rather than simulated.
 
-`tools/vnc-helper/tests/local_vnc.rs` runs a deterministic no-auth RFB fixture
-on an OS-assigned `127.0.0.1` port and verifies handshake, framebuffer, key,
-pointer, and clean stop. The current Tauri UI is wired to the parent
+`tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
+password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
+fixture verifies security-type selection and the DES challenge response before
+checking framebuffer, key, pointer, and clean stop. The current Tauri UI is
+wired to the parent
 supervisor/renderer and offers explicit user-triggered reconnect after helper
 failure, but this is not yet cross-platform interoperability or production
 evidence. The research working notes remain in

@@ -26,7 +26,8 @@ evidence exist.
 
 ## Required evidence before promotion
 
-- real local or explicitly approved VNC server fixture;
+- real local or explicitly approved VNC server fixture; the current local
+  fixture covers both no-auth and VNC password challenge-response paths;
 - framebuffer updates and rectangle bounds validated end to end;
 - keyboard and pointer control;
 - authentication without secrets in arguments, environment, logs, or React;

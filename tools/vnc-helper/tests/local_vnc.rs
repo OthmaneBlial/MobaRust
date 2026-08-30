@@ -1,6 +1,8 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use des::Des;
+use des::cipher::{Block, BlockCipherEncrypt, KeyInit};
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState,
     decode_event_frame, encode_command_frame, read_frame, write_credential_frame,
@@ -14,12 +16,31 @@ const FIXTURE_SIZE: DisplaySize = DisplaySize {
     width: 320,
     height: 200,
 };
+const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
+const FIXTURE_CHALLENGE: [u8; 16] = [
+    0x6d, 0x6f, 0x62, 0x61, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x76, 0x6e, 0x63, 0x2d, 0x31, 0x36, 0x21,
+];
+
+#[derive(Clone, Copy)]
+enum FixtureAuth {
+    None,
+    VncPassword,
+}
 
 #[tokio::test]
 async fn helper_controls_a_real_rfb_fixture_over_loopback() {
+    exercise_fixture(FixtureAuth::None, "").await;
+}
+
+#[tokio::test]
+async fn helper_authenticates_with_vnc_password_fixture_over_loopback() {
+    exercise_fixture(FixtureAuth::VncPassword, FIXTURE_PASSWORD).await;
+}
+
+async fn exercise_fixture(auth: FixtureAuth, password: &str) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server_task = tokio::spawn(run_fixture(listener));
+    let server_task = tokio::spawn(run_fixture(listener, auth));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-vnc-helper"))
         .args([
@@ -62,7 +83,7 @@ async fn helper_controls_a_real_rfb_fixture_over_loopback() {
         },
     )
     .await;
-    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+    write_credential_frame(&mut stdin, &HelperCredential::new(password))
         .await
         .unwrap();
 
@@ -153,7 +174,7 @@ async fn next_event(stdout: &mut tokio::process::ChildStdout) -> HelperEvent {
     decode_event_frame(&frame).unwrap()
 }
 
-async fn run_fixture(listener: TcpListener) -> Result<(), String> {
+async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), String> {
     let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
     stream
         .write_all(b"RFB 003.008\n")
@@ -168,18 +189,50 @@ async fn run_fixture(listener: TcpListener) -> Result<(), String> {
         return Err("unexpected RFB version".into());
     }
 
-    stream
-        .write_all(&[1, 1])
-        .await
-        .map_err(|error| error.to_string())?;
+    match auth {
+        FixtureAuth::None => {
+            stream
+                .write_all(&[1, 1])
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        FixtureAuth::VncPassword => {
+            stream
+                .write_all(&[1, 2])
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
     let mut selected = [0_u8; 1];
     stream
         .read_exact(&mut selected)
         .await
         .map_err(|error| error.to_string())?;
-    if selected[0] != 1 {
-        return Err("helper did not select no-auth fixture mode".into());
+    match auth {
+        FixtureAuth::None if selected[0] != 1 => {
+            return Err("helper did not select no-auth fixture mode".into());
+        }
+        FixtureAuth::VncPassword if selected[0] != 2 => {
+            return Err("helper did not select VNC password fixture mode".into());
+        }
+        _ => {}
     }
+
+    if matches!(auth, FixtureAuth::VncPassword) {
+        stream
+            .write_all(&FIXTURE_CHALLENGE)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut response = [0_u8; 16];
+        stream
+            .read_exact(&mut response)
+            .await
+            .map_err(|error| error.to_string())?;
+        if response != vnc_auth_response(&FIXTURE_CHALLENGE, FIXTURE_PASSWORD) {
+            return Err("helper produced an invalid VNC password response".into());
+        }
+    }
+
     stream
         .write_all(&[0, 0, 0, 0])
         .await
@@ -266,6 +319,27 @@ async fn run_fixture(listener: TcpListener) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn vnc_auth_response(challenge: &[u8; 16], password: &str) -> [u8; 16] {
+    let mut key = [0_u8; 8];
+    for (index, value) in key.iter_mut().enumerate() {
+        *value = password
+            .as_bytes()
+            .get(index)
+            .copied()
+            .unwrap_or_default()
+            .reverse_bits();
+    }
+    let cipher = Des::new_from_slice(&key).expect("DES key has the required length");
+    let mut response = [0_u8; 16];
+    for (source, destination) in challenge.chunks_exact(8).zip(response.chunks_exact_mut(8)) {
+        let mut block =
+            Block::<Des>::try_from(source).expect("RFB challenge is an exact DES block");
+        cipher.encrypt_block(&mut block);
+        destination.copy_from_slice(&block);
+    }
+    response
 }
 
 async fn read_set_pixel_format(stream: &mut TcpStream) -> Result<(), String> {
