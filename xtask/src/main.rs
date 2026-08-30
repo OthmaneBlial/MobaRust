@@ -551,7 +551,7 @@ fn run_sanitized_test<const N: usize>(
 /// configuration. Compiler and package caches remain inherited explicitly;
 /// only home-directory configuration/data/cache lookup is redirected.
 fn apply_isolated_home(command: &mut Command, isolated_home: &Path) {
-    command.env("CI", "1");
+    command.env("CI", "true");
     command.env("HOME", isolated_home);
     command.env("XDG_CONFIG_HOME", isolated_home.join("config"));
     command.env("XDG_DATA_HOME", isolated_home.join("data"));
