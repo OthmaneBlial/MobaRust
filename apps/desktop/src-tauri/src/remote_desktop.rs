@@ -2,6 +2,7 @@ use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
     HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
     MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
+    write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
@@ -334,7 +335,7 @@ async fn write_helper_commands<W: AsyncWrite + Unpin>(
         let Ok(frame) = encode_command_frame(&command) else {
             break;
         };
-        if stdin.write_all(&frame[..]).await.is_err() || stdin.flush().await.is_err() {
+        if write_frame_with_timeout(&mut stdin, &frame).await.is_err() {
             break;
         }
     }

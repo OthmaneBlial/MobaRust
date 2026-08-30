@@ -70,6 +70,12 @@ framebuffer updates, input, resize, clipboard capability reporting, and server
 disconnect. Manual interoperability checks must use a dedicated real VNC
 server; mocks alone are not production evidence.
 
+The shared native helper contract also puts a two-second deadline on control,
+credential, and event pipe writes. The deadline is tested with a deliberately
+backpressured in-memory pipe so cancellation cannot depend on a responsive
+peer. It protects helper lifecycle only; it does not prove VNC network
+throughput or cross-platform interoperability.
+
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`

@@ -125,6 +125,7 @@ The frontend is a presentation and interaction layer. Session configuration refe
 - Frontend IPC uses narrow typed commands; there is no unrestricted `execute_anything(command)` bridge.
 - Remote filenames and terminal/editor content are treated as untrusted input.
 - Transfers, reconnects, diagnostics, helpers, and remote commands have bounded cancellation and timeout behavior.
+- RDP/VNC helper-pipe writes have a dedicated deadline, so a wedged native peer cannot block shutdown forever.
 - `base/` is a local, ignored research corpus and is never part of the application or release payload.
 - The RDP candidate remains excluded from normal bundles while its dependency audit reports `RUSTSEC-2023-0071` through `rsa 0.10.0-rc.18`.
 

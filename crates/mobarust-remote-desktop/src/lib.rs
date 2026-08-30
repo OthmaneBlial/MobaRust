@@ -26,6 +26,7 @@ pub const MAX_HOST_BYTES: usize = 255;
 pub const MAX_USERNAME_BYTES: usize = 256;
 pub const MAX_DOMAIN_BYTES: usize = 255;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
+pub const HELPER_PIPE_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -601,6 +602,8 @@ pub enum HelperProtocolError {
     },
     #[error("helper I/O failed: {0}")]
     Io(String),
+    #[error("helper pipe write timed out")]
+    PipeWriteTimeout,
 }
 
 /// Encodes one length-prefixed JSON frame for a helper's native pipe.
@@ -727,14 +730,7 @@ pub async fn write_event_frame<W: AsyncWrite + Unpin>(
     event: &HelperEvent,
 ) -> Result<(), HelperProtocolError> {
     let frame = encode_event_frame(event)?;
-    writer
-        .write_all(&frame[..])
-        .await
-        .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
-    writer
-        .flush()
-        .await
-        .map_err(|error| HelperProtocolError::Io(error.to_string()))
+    write_frame_with_timeout(writer, &frame).await
 }
 
 /// Writes the credential handoff and guarantees that the serialized frame is
@@ -744,14 +740,36 @@ pub async fn write_credential_frame<W: AsyncWrite + Unpin>(
     credential: &HelperCredential,
 ) -> Result<(), HelperProtocolError> {
     let frame = encode_credential_frame(credential)?;
-    writer
-        .write_all(&frame[..])
-        .await
-        .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
-    writer
-        .flush()
-        .await
-        .map_err(|error| HelperProtocolError::Io(error.to_string()))
+    write_frame_with_timeout(writer, &frame).await
+}
+
+/// Writes one already-validated native frame with a deadline. Helper pipes
+/// are local IPC, but a crashed or wedged peer must not leave a protocol task
+/// blocked forever while the parent is trying to stop it.
+pub async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    frame: &[u8],
+) -> Result<(), HelperProtocolError> {
+    write_frame_with_deadline(writer, frame, HELPER_PIPE_WRITE_TIMEOUT).await
+}
+
+async fn write_frame_with_deadline<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    frame: &[u8],
+    deadline: Duration,
+) -> Result<(), HelperProtocolError> {
+    timeout(deadline, async {
+        writer
+            .write_all(frame)
+            .await
+            .map_err(|error| HelperProtocolError::Io(error.to_string()))?;
+        writer
+            .flush()
+            .await
+            .map_err(|error| HelperProtocolError::Io(error.to_string()))
+    })
+    .await
+    .map_err(|_| HelperProtocolError::PipeWriteTimeout)?
 }
 
 pub fn encode_event_frame(event: &HelperEvent) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
@@ -844,12 +862,9 @@ impl HelperSupervisor {
     ) -> Result<(), HelperProcessError> {
         let stdin = self.stdin().ok_or(HelperProcessError::StdinUnavailable)?;
         let frame = encode_command_frame(command)?;
-        stdin.write_all(&frame[..]).await.map_err(|error| {
-            HelperProcessError::Protocol(HelperProtocolError::Io(error.to_string()))
-        })?;
-        stdin.flush().await.map_err(|error| {
-            HelperProcessError::Protocol(HelperProtocolError::Io(error.to_string()))
-        })
+        write_frame_with_timeout(stdin, &frame)
+            .await
+            .map_err(HelperProcessError::Protocol)
     }
 
     /// Sends a password through the dedicated zeroizing native channel. The
@@ -1096,6 +1111,19 @@ mod tests {
         let decoded = decode_credential_frame(&frame).unwrap();
         write_task.await.unwrap().unwrap();
         assert_eq!(decoded.password(), "fixture-pipe-password");
+    }
+
+    #[tokio::test]
+    async fn backpressured_helper_pipe_write_hits_its_deadline() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            write_frame_with_deadline(&mut writer, &[0; 4096], Duration::from_millis(5)),
+        )
+        .await
+        .expect("the test must not wait beyond its outer deadline");
+
+        assert!(matches!(result, Err(HelperProtocolError::PipeWriteTimeout)));
     }
 
     #[test]

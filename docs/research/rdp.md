@@ -164,6 +164,12 @@ cooperative stop, bounded graceful shutdown, and forced termination fallback.
 The parent owns the helper process and reports a crash distinctly from a
 remote protocol failure.
 
+Control, credential, and event frames now use a dedicated two-second native
+pipe-write deadline. A stalled helper or parent cannot keep an RDP lifecycle
+task blocked forever; the process supervisor remains responsible for the
+bounded stop and forced-reap fallback. This is local IPC evidence, not RDP
+interoperability evidence.
+
 The desktop canvas uses a framebuffer-aware input map. When `object-fit:
 contain` adds letterbox bands, clicks and wheel events in those bands are
 discarded instead of being mapped to a misleading remote pixel. Pointer
