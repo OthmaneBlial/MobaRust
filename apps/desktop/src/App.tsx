@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -100,6 +100,37 @@ type TerminalClosedEvent = {
 
 type TerminalStatus = "starting" | "connected" | "reconnecting" | "closed" | "error";
 
+type DesktopProtocol = "rdp" | "vnc";
+
+type RemoteDesktopConnectRequest = {
+  protocol: DesktopProtocol;
+  host: string;
+  port: number;
+  username: string;
+  domain?: string;
+  credentialId?: string;
+  width: number;
+  height: number;
+  colorDepth: number;
+  audioEnabled: boolean;
+};
+
+type RemoteDesktopConnectResponse = {
+  sessionId: string;
+  protocol: DesktopProtocol;
+  host: string;
+};
+
+type RemoteDesktopEvent = {
+  sessionId: string;
+  event:
+    | { event: "hello"; payload: { version: number } }
+    | { event: "state"; payload: { state: "created" | "starting" | "ready" | "active" | "reconnecting" | "stopping" | "stopped" | "crashed" | "failed" } }
+    | { event: "framebuffer"; payload: { width: number; height: number; pixels: number[] } }
+    | { event: "clipboard"; payload: { text: string } }
+    | { event: "diagnostic"; payload: { level: string; message: string } };
+};
+
 type SshSessionEvent = {
   terminalId: string;
   state: "reconnecting" | "connected" | "failed" | "disconnected";
@@ -123,7 +154,8 @@ type TerminalViewportProps = {
   workspaceId: string;
   instanceKey: number;
   remoteSessionId: string | null;
-  remoteProtocol: "ssh" | "telnet" | "serial" | null;
+  remoteProtocol: "ssh" | "telnet" | "serial" | DesktopProtocol | null;
+  remoteDesktopRequest?: RemoteDesktopConnectRequest | null;
   fontSize: number;
   scrollbackLines: number;
   cursorBlink: boolean;
@@ -138,7 +170,8 @@ type WorkspaceTerminal = {
   instanceKey: number;
   label: string;
   remoteSessionId: string | null;
-  remoteProtocol: "ssh" | "telnet" | "serial" | null;
+  remoteProtocol: "ssh" | "telnet" | "serial" | DesktopProtocol | null;
+  remoteDesktopRequest?: RemoteDesktopConnectRequest | null;
   remoteHost: string | null;
   status: TerminalStatus;
 };
@@ -652,6 +685,152 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
 
+function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChange, onNativeTerminalId }: {
+  workspaceId: string;
+  instanceKey: number;
+  request: RemoteDesktopConnectRequest;
+  onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
+  onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dimensions, setDimensions] = useState({ width: request.width, height: request.height });
+
+  useEffect(() => {
+    const host = hostRef.current;
+    const canvas = canvasRef.current;
+    if (!host || !canvas) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+
+    const setErrorAndFail = (message: string) => {
+      if (disposed) return;
+      setError(message);
+      onStatusChange(workspaceId, "error");
+    };
+
+    const sendResize = () => {
+      const width = Math.max(320, Math.min(4096, Math.round(host.clientWidth)));
+      const height = Math.max(200, Math.min(4096, Math.round(host.clientHeight)));
+      setDimensions({ width, height });
+      const sessionId = sessionIdRef.current;
+      if (!IS_TAURI || !sessionId || width === 0 || height === 0) return;
+      void invoke("remote_desktop_resize", { sessionId, width, height }).catch(() => undefined);
+    };
+
+    const renderFramebuffer = (width: number, height: number, pixels: number[]) => {
+      if (pixels.length !== width * height * 4) {
+        setErrorAndFail("The remote desktop sent an invalid framebuffer.");
+        return;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        setErrorAndFail("The remote desktop renderer is unavailable.");
+        return;
+      }
+      context.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
+      setDimensions({ width, height });
+    };
+
+    const boot = async () => {
+      onStatusChange(workspaceId, "starting");
+      if (!IS_TAURI) {
+        setError(`${request.protocol.toUpperCase()} requires the desktop runtime; browser preview does not open remote hosts.`);
+        onStatusChange(workspaceId, "error");
+        return;
+      }
+      try {
+        unlisten = await listen<RemoteDesktopEvent>("remote-desktop://event", (event) => {
+          if (event.payload.sessionId !== sessionIdRef.current) return;
+          const helperEvent = event.payload.event;
+          if (helperEvent.event === "state") {
+            if (helperEvent.payload.state === "ready" || helperEvent.payload.state === "active") onStatusChange(workspaceId, "connected");
+            if (helperEvent.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
+            if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") setErrorAndFail("The remote desktop helper stopped unexpectedly.");
+            if (helperEvent.payload.state === "stopped") onStatusChange(workspaceId, "closed");
+          }
+          if (helperEvent.event === "framebuffer") renderFramebuffer(helperEvent.payload.width, helperEvent.payload.height, helperEvent.payload.pixels);
+          if (helperEvent.event === "diagnostic") setError(helperEvent.payload.message);
+        });
+        const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request });
+        if (disposed) {
+          void invoke("remote_desktop_stop", { sessionId: response.sessionId });
+          return;
+        }
+        sessionIdRef.current = response.sessionId;
+        onNativeTerminalId(workspaceId, response.sessionId);
+        sendResize();
+      } catch (startError) {
+        setErrorAndFail(String(startError));
+      }
+    };
+
+    const observer = new ResizeObserver(sendResize);
+    observer.observe(host);
+    void boot();
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      unlisten?.();
+      const sessionId = sessionIdRef.current;
+      sessionIdRef.current = null;
+      onNativeTerminalId(workspaceId, null);
+      if (IS_TAURI && sessionId) void invoke("remote_desktop_stop", { sessionId });
+    };
+  }, [instanceKey, onNativeTerminalId, onStatusChange, request, workspaceId]);
+
+  const sendKey = (event: ReactKeyboardEvent<HTMLCanvasElement>, pressed: boolean) => {
+    const sessionId = sessionIdRef.current;
+    const code = desktopKeyCode(request.protocol, event);
+    if (!IS_TAURI || !sessionId || code === null) return;
+    event.preventDefault();
+    void invoke("remote_desktop_key", { sessionId, scancode: code, pressed }).catch((sendError) => setError(String(sendError)));
+  };
+
+  const sendPointer = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    const sessionId = sessionIdRef.current;
+    const canvas = canvasRef.current;
+    if (!IS_TAURI || !sessionId || !canvas) return;
+    const bounds = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - bounds.left) * canvas.width / Math.max(bounds.width, 1))));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - bounds.top) * canvas.height / Math.max(bounds.height, 1))));
+    void invoke("remote_desktop_pointer", { sessionId, x, y, buttons: event.buttons }).catch((sendError) => setError(String(sendError)));
+  };
+
+  const paste = (event: ReactClipboardEvent<HTMLCanvasElement>) => {
+    const sessionId = sessionIdRef.current;
+    const text = event.clipboardData.getData("text/plain");
+    if (!IS_TAURI || !sessionId || !text) return;
+    event.preventDefault();
+    void invoke("remote_desktop_clipboard", { payload: { sessionId, text } }).catch((sendError) => setError(String(sendError)));
+  };
+
+  return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
+    <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
+    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{error && <span className="remote-desktop-error">{error}</span>}</div>
+  </div>;
+}
+
+function desktopKeyCode(protocol: DesktopProtocol, event: ReactKeyboardEvent<HTMLCanvasElement>): number | null {
+  if (protocol === "vnc") {
+    const special: Record<string, number> = { Enter: 0xff0d, Escape: 0xff1b, Backspace: 0xff08, Tab: 0xff09, Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, Meta: 0xffe7, ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54, Delete: 0xffff, Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56 };
+    return special[event.key] ?? (event.key.length === 1 ? event.key.codePointAt(0) ?? null : null);
+  }
+  const scanCodes: Record<string, number> = {
+    KeyA: 0x1e, KeyB: 0x30, KeyC: 0x2e, KeyD: 0x20, KeyE: 0x12, KeyF: 0x21, KeyG: 0x22, KeyH: 0x23, KeyI: 0x17, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, KeyM: 0x32, KeyN: 0x31, KeyO: 0x18, KeyP: 0x19, KeyQ: 0x10, KeyR: 0x13, KeyS: 0x1f, KeyT: 0x14, KeyU: 0x16, KeyV: 0x2f, KeyW: 0x11, KeyX: 0x2d, KeyY: 0x15, KeyZ: 0x2c,
+    Digit0: 0x0b, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06, Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a,
+    Enter: 0x1c, Escape: 0x01, Backspace: 0x0e, Tab: 0x0f, Space: 0x39, Minus: 0x0c, Equal: 0x0d, BracketLeft: 0x1a, BracketRight: 0x1b, Backslash: 0x2b, Semicolon: 0x27, Quote: 0x28, Comma: 0x33, Period: 0x34, Slash: 0x35,
+    ShiftLeft: 0x2a, ShiftRight: 0x36, ControlLeft: 0x1d, ControlRight: 0x1d, AltLeft: 0x38, AltRight: 0x38, ArrowUp: 0xc8, ArrowDown: 0xd0, ArrowLeft: 0xcb, ArrowRight: 0xcd, Delete: 0xd3, Home: 0xc7, End: 0xcf, PageUp: 0xc9, PageDown: 0xd1,
+    F1: 0x3b, F2: 0x3c, F3: 0x3d, F4: 0x3e, F5: 0x3f, F6: 0x40, F7: 0x41, F8: 0x42, F9: 0x43, F10: 0x44, F11: 0x57, F12: 0x58,
+  };
+  return scanCodes[event.code] ?? null;
+}
+
 function App() {
   const [activeView, setActiveView] = useState<View>("terminal");
   const [terminalTabs, setTerminalTabs] = useState<WorkspaceTerminal[]>(() => [createWorkspaceTerminal()]);
@@ -759,6 +938,9 @@ function App() {
   const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
     const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
     if (!terminal) return Promise.reject(new Error("terminal target no longer exists"));
+    if (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") {
+      return Promise.reject(new Error("broadcast text input is not available for remote desktop sessions"));
+    }
     const command = terminal.remoteProtocol === "ssh" ? "ssh_write" : terminal.remoteProtocol === "telnet" ? "telnet_write" : terminal.remoteProtocol === "serial" ? "serial_write" : "terminal_write";
     return invoke(command, { terminalId, data });
   }, []);
@@ -1155,6 +1337,24 @@ function App() {
       setConnectionError(String(error));
     }
   }, [refreshSavedSessions]);
+
+  const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest) => {
+    setConnectionError(null);
+    setSessionNotice(null);
+    const terminal = createWorkspaceTerminal({
+      label: `${request.protocol.toUpperCase()} · ${request.host}`,
+      remoteProtocol: request.protocol,
+      remoteHost: request.host,
+      remoteDesktopRequest: request,
+    });
+    setTerminalTabs((current) => [...current, terminal]);
+    setActiveTerminalId(terminal.id);
+    setSplitDirection("none");
+    setSplitTerminalIds([]);
+    setActiveView("terminal");
+    setQuickConnectOpen(false);
+    setSessionNotice(`${request.protocol.toUpperCase()} session queued. The native helper will report its actual connection state.`);
+  }, []);
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
@@ -2158,7 +2358,7 @@ function App() {
             <div>
               <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">{remoteProtocol ? remoteProtocol.toUpperCase() : "LOCAL"}</span></div>
               <h1>{remoteHost ?? "Local workstation"}</h1>
-              <p className="workspace-subtitle">{remoteProtocol === "ssh" ? "Interactive SSH shell with native host-key verification." : remoteProtocol === "telnet" ? "Legacy Telnet terminal. Traffic is unencrypted." : remoteProtocol === "serial" ? "Serial terminal with explicit device parameters." : "A quiet command surface for the machine in front of you."}</p>
+              <p className="workspace-subtitle">{remoteProtocol === "ssh" ? "Interactive SSH shell with native host-key verification." : remoteProtocol === "telnet" ? "Legacy Telnet terminal. Traffic is unencrypted." : remoteProtocol === "serial" ? "Serial terminal with explicit device parameters." : remoteProtocol === "rdp" ? "Remote desktop through a controlled native helper." : remoteProtocol === "vnc" ? "VNC desktop through a controlled native helper." : "A quiet command surface for the machine in front of you."}</p>
             </div>
             <div className="heading-actions">
               <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
@@ -2173,7 +2373,7 @@ function App() {
             <div className="main-column">
               <div className="context-strip">
                 <div className="context-title"><span className="status-pulse" /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
-                <div className="context-metrics"><span><TerminalIcon size={13} /> PTY</span><span><ArrowUpFromLine size={13} /> bidirectional</span><span><Radio size={13} /> 32 KB batches</span></div>
+                <div className="context-metrics">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? <><span><LayoutDashboard size={13} /> framebuffer</span><span><ArrowUpFromLine size={13} /> native input</span><span><ShieldCheck size={13} /> helper isolated</span></> : <><span><TerminalIcon size={13} /> PTY</span><span><ArrowUpFromLine size={13} /> bidirectional</span><span><Radio size={13} /> 32 KB batches</span></>}</div>
               </div>
 
               <div className="view-tabs" role="tablist" aria-label="Workspace views">
@@ -2188,11 +2388,11 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setSplitDirection("none"); setSplitTerminalIds([]); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                    <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">UTF-8</span><span className="terminal-chip">256 colors</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
-                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}><TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} /></div>; })}</div>
+                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest; return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}>{isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />}</div>; })}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -2215,9 +2415,9 @@ function App() {
 
             <aside className="right-rail">
               <div className="rail-heading"><span>Session brief</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
-              <div className="machine-card">
+                <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
-                <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? (remoteProtocol === "telnet" ? "Telnet · unencrypted" : remoteProtocol === "serial" ? "Serial · device" : "SSH · verified transport") : "Apple Silicon · local"}</div></div>
+                <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? (remoteProtocol === "telnet" ? "Telnet · unencrypted" : remoteProtocol === "serial" ? "Serial · device" : remoteProtocol === "rdp" ? "RDP · isolated helper" : remoteProtocol === "vnc" ? "VNC · isolated helper" : "SSH · verified transport") : "Apple Silicon · local"}</div></div>
                 <span className="machine-live">LIVE</span>
               </div>
               <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Shell" value={remoteHost ? "remote" : "zsh"} /><Metric label="Terminal" value="xterm-256color" /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
@@ -2231,7 +2431,7 @@ function App() {
       </div>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
-      {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} />}
+      {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
@@ -2746,7 +2946,7 @@ function macroActionSummary(action: MacroAction): string {
 function MacrosModal({ macros, terminals, savedSessions, onClose, onSave, onDelete, onRun }: { macros: MacroRecord[]; terminals: WorkspaceTerminal[]; savedSessions: SavedSession[]; onClose: () => void; onSave: (record: MacroRecord) => Promise<void>; onDelete: (record: MacroRecord) => Promise<void>; onRun: (record: MacroRecord, targetIds: string[]) => Promise<void> }) {
   const [selectedId, setSelectedId] = useState<string | null>(macros[0]?.id ?? null);
   const [draft, setDraft] = useState<MacroRecord>(() => newMacroRecord());
-  const [targetIds, setTargetIds] = useState<string[]>(() => terminals.filter((terminal) => terminal.status === "connected").map((terminal) => terminal.id));
+  const [targetIds, setTargetIds] = useState<string[]>(() => terminals.filter((terminal) => terminal.status === "connected" && terminal.remoteProtocol !== "rdp" && terminal.remoteProtocol !== "vnc").map((terminal) => terminal.id));
   const selected = macros.find((record) => record.id === selectedId);
   const active = selected ?? draft;
 
@@ -2763,7 +2963,7 @@ function MacrosModal({ macros, terminals, savedSessions, onClose, onSave, onDele
     setDraft(newMacroRecord());
   };
 
-  const readyTerminals = terminals.filter((terminal) => terminal.status === "connected");
+  const readyTerminals = terminals.filter((terminal) => terminal.status === "connected" && terminal.remoteProtocol !== "rdp" && terminal.remoteProtocol !== "vnc");
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="macros-modal" role="dialog" aria-modal="true" aria-label="Terminal macros" onMouseDown={(event) => event.stopPropagation()}>
     <div className="session-editor-heading"><div><span className="eyebrow">OPERATOR AUTOMATION</span><h2>Macros</h2><p>Run only after review and confirmation. Actions are bounded, visible, and cancellable.</p></div><button type="button" className="icon-button" aria-label="Close macros" onClick={onClose}><X size={17} /></button></div>
@@ -2809,8 +3009,8 @@ function MacroActionRow({ index, action, savedSessions, terminals, onChange, onR
 }
 
 function BroadcastModal({ terminals, selectedIds, enabled, onClose, onToggle, onEnable, onDisable }: { terminals: WorkspaceTerminal[]; selectedIds: string[]; enabled: boolean; onClose: () => void; onToggle: (id: string) => void; onEnable: () => void; onDisable: () => void }) {
-  const ready = terminals.filter((terminal) => terminal.status === "connected");
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="broadcast-modal" role="dialog" aria-modal="true" aria-label="Broadcast input" onMouseDown={(event) => event.stopPropagation()}><div className="session-editor-heading"><div><span className="eyebrow">TERMINAL / BROADCAST</span><h2>Broadcast input</h2><p>Select exact targets before enabling. Every keystroke is sent to all selected terminals.</p></div><button type="button" className="icon-button" aria-label="Close broadcast settings" onClick={onClose}><X size={17} /></button></div><div className="broadcast-warning"><ShieldAlert size={17} /><div><strong>{enabled ? "Broadcast is active" : "Broadcast is off"}</strong><span>Use <kbd>Esc</kbd> at any time to disable it. Pasted multiline input still requires confirmation.</span></div></div><div className="broadcast-target-list"><div className="macro-targets-heading"><span>Target terminals</span><small>{selectedIds.length} selected · {ready.length} ready</small></div>{terminals.map((terminal) => { const isReady = terminal.status === "connected"; return <label className={`macro-target ${!isReady ? "disabled" : ""}`} key={terminal.id}><input type="checkbox" disabled={!isReady} checked={selectedIds.includes(terminal.id)} onChange={() => onToggle(terminal.id)} /><span>{terminal.label}</span><small>{isReady ? (terminal.remoteHost ?? "local") : terminal.status}</small></label>; })}</div><div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> No input is sent while configuring</span><div><button type="button" className="outline-button" onClick={enabled ? onDisable : onClose}>{enabled ? "Disable" : "Cancel"}</button>{!enabled && <button type="button" className="primary-button" onClick={onEnable} disabled={selectedIds.length === 0}><Radio size={14} /> Enable broadcast</button>}</div></div></section></div>;
+  const ready = terminals.filter((terminal) => terminal.status === "connected" && terminal.remoteProtocol !== "rdp" && terminal.remoteProtocol !== "vnc");
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="broadcast-modal" role="dialog" aria-modal="true" aria-label="Broadcast input" onMouseDown={(event) => event.stopPropagation()}><div className="session-editor-heading"><div><span className="eyebrow">TERMINAL / BROADCAST</span><h2>Broadcast input</h2><p>Select exact targets before enabling. Every keystroke is sent to all selected terminals.</p></div><button type="button" className="icon-button" aria-label="Close broadcast settings" onClick={onClose}><X size={17} /></button></div><div className="broadcast-warning"><ShieldAlert size={17} /><div><strong>{enabled ? "Broadcast is active" : "Broadcast is off"}</strong><span>Use <kbd>Esc</kbd> at any time to disable it. Pasted multiline input still requires confirmation.</span></div></div><div className="broadcast-target-list"><div className="macro-targets-heading"><span>Target terminals</span><small>{selectedIds.length} selected · {ready.length} ready</small></div>{terminals.map((terminal) => { const isReady = terminal.status === "connected" && terminal.remoteProtocol !== "rdp" && terminal.remoteProtocol !== "vnc"; return <label className={`macro-target ${!isReady ? "disabled" : ""}`} key={terminal.id}><input type="checkbox" disabled={!isReady} checked={selectedIds.includes(terminal.id)} onChange={() => onToggle(terminal.id)} /><span>{terminal.label}</span><small>{isReady ? (terminal.remoteHost ?? "local") : terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc" ? "remote desktop · text broadcast disabled" : terminal.status}</small></label>; })}</div><div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> No input is sent while configuring</span><div><button type="button" className="outline-button" onClick={enabled ? onDisable : onClose}>{enabled ? "Disable" : "Cancel"}</button>{!enabled && <button type="button" className="primary-button" onClick={onEnable} disabled={selectedIds.length === 0}><Radio size={14} /> Enable broadcast</button>}</div></div></section></div>;
 }
 
 function SnippetForm({ snippet, isNew, onSave, onDelete, onCopy }: { snippet: SnippetRecord; isNew: boolean; onSave: (snippet: SnippetRecord) => Promise<void>; onDelete: () => Promise<void>; onCopy: (command: string) => Promise<void> }) {
@@ -3022,15 +3222,20 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   );
 }
 
-function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onConnectSerial }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void; onConnectSerial: (request: SerialConnectRequest) => void }) {
+function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onConnectSerial, onConnectRemoteDesktop }: { error: string | null; onClose: () => void; onConnectSsh: (request: SshConnectRequest) => void; onConnectTelnet: (request: TelnetConnectRequest) => void; onConnectSerial: (request: SerialConnectRequest) => void; onConnectRemoteDesktop: (request: RemoteDesktopConnectRequest) => void }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
-  const [protocol, setProtocol] = useState<"ssh" | "telnet" | "serial">("ssh");
+  const [protocol, setProtocol] = useState<"ssh" | "telnet" | "serial" | DesktopProtocol>("ssh");
   const [method, setMethod] = useState<"agent" | "privateKey" | "password" | "keyboardInteractive">("agent");
   const [keyPath, setKeyPath] = useState("");
   const [passphraseCredentialId, setPassphraseCredentialId] = useState("");
   const [credentialId, setCredentialId] = useState("");
+  const [domain, setDomain] = useState("");
+  const [desktopWidth, setDesktopWidth] = useState("1280");
+  const [desktopHeight, setDesktopHeight] = useState("720");
+  const [desktopColorDepth, setDesktopColorDepth] = useState("32");
+  const [desktopAudio, setDesktopAudio] = useState(false);
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
   const [jumpHost, setJumpHost] = useState("");
@@ -3090,6 +3295,21 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       });
       return;
     }
+    if (protocol === "rdp" || protocol === "vnc") {
+      onConnectRemoteDesktop({
+        protocol,
+        host: host.trim(),
+        port: Number(port),
+        username: username.trim() || (protocol === "vnc" ? "viewer" : ""),
+        domain: domain.trim() || undefined,
+        credentialId: credentialId.trim() || undefined,
+        width: Number(desktopWidth),
+        height: Number(desktopHeight),
+        colorDepth: Number(desktopColorDepth),
+        audioEnabled: desktopAudio,
+      });
+      return;
+    }
     const auth = method === "agent"
       ? { method: "agent" as const }
       : method === "privateKey"
@@ -3133,7 +3353,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                 ? "Open a real native SSH shell in seconds."
                 : protocol === "telnet"
                   ? "Open a legacy Telnet terminal with a visible plaintext warning."
-                  : "Open a serial terminal with explicit hardware parameters."}
+                  : protocol === "rdp"
+                    ? "Open a remote desktop through the isolated native helper."
+                    : protocol === "vnc"
+                      ? "Open a VNC desktop through the isolated native helper."
+                      : "Open a serial terminal with explicit hardware parameters."}
             </p>
           </div>
           <button type="button" className="icon-button" aria-label="Close quick connect" onClick={onClose}>
@@ -3147,13 +3371,15 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
             <select
               value={protocol}
               onChange={(event) => {
-                const next = event.target.value as "ssh" | "telnet" | "serial";
+                const next = event.target.value as "ssh" | "telnet" | "serial" | DesktopProtocol;
                 setProtocol(next);
-                setPort(next === "ssh" ? "22" : "23");
+                setPort(next === "ssh" ? "22" : next === "telnet" ? "23" : next === "rdp" ? "3389" : next === "vnc" ? "5900" : "0");
               }}
             >
               <option value="ssh">SSH</option>
               <option value="telnet">Telnet · unencrypted</option>
+              <option value="rdp">RDP · native helper</option>
+              <option value="vnc">VNC · native helper</option>
               <option value="serial">Serial device</option>
             </select>
           </label>
@@ -3289,6 +3515,36 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" />
                   </label>
                 </>
+              ) : protocol === "rdp" || protocol === "vnc" ? (
+                <>
+                  <label className="quick-connect-wide">
+                    Username <span className="optional">{protocol === "vnc" ? "optional for no-auth servers" : "required"}</span>
+                    <input required={protocol === "rdp"} value={username} onChange={(event) => setUsername(event.target.value)} placeholder={protocol === "rdp" ? "Administrator" : "viewer"} />
+                  </label>
+                  {protocol === "rdp" && <label>
+                    Domain <span className="optional">optional</span>
+                    <input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="WORKGROUP" />
+                  </label>}
+                  <label className="quick-connect-wide">
+                    Credential reference <span className="optional">{protocol === "vnc" ? "optional for no-auth" : "required"}</span>
+                    <input required={protocol === "rdp"} value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder={protocol === "rdp" ? "windows-admin-password" : "vnc-password"} />
+                    <small>Only an opaque vault reference crosses IPC. The secret is handed to the isolated native helper.</small>
+                  </label>
+                  <label>
+                    Width
+                    <input required inputMode="numeric" pattern="[0-9]+" value={desktopWidth} onChange={(event) => setDesktopWidth(event.target.value)} />
+                  </label>
+                  <label>
+                    Height
+                    <input required inputMode="numeric" pattern="[0-9]+" value={desktopHeight} onChange={(event) => setDesktopHeight(event.target.value)} />
+                  </label>
+                  <label>
+                    Color depth
+                    <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="24">24-bit</option><option value="32">32-bit</option></select>
+                  </label>
+                  {protocol === "rdp" && <label className="quick-connect-check"><input type="checkbox" checked={desktopAudio} onChange={(event) => setDesktopAudio(event.target.checked)} /> Request audio</label>}
+                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; certificate validation and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
+                </>
               ) : (
                 <>
                   <label className="quick-connect-wide">
@@ -3322,13 +3578,17 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
               ? "Unknown host keys are rejected."
               : protocol === "telnet"
                 ? "Telnet traffic is plaintext and unauthenticated."
+                : protocol === "rdp"
+                  ? "RDP uses the isolated helper; credentials stay in the native vault boundary."
+                  : protocol === "vnc"
+                    ? "VNC capability is isolated; legacy VNC password transport is not SSH-level encryption."
                 : "Serial device traffic is not encrypted by MobaRust."}
           </span>
           <div>
             <button type="button" className="outline-button" onClick={onClose}>Cancel</button>
             <button className="primary-button" type="submit">
               <Network size={14} />
-              Connect {protocol === "ssh" ? "SSH" : protocol === "telnet" ? "Telnet" : "Serial"}
+              Connect {protocol === "ssh" ? "SSH" : protocol === "telnet" ? "Telnet" : protocol === "rdp" ? "RDP" : protocol === "vnc" ? "VNC" : "Serial"}
             </button>
           </div>
         </div>
