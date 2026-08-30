@@ -25,7 +25,7 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
     /// Match against the OpenSSH known_hosts format. Unknown keys are rejected.
     KnownHosts(PathBuf),
@@ -33,13 +33,8 @@ pub enum HostKeyPolicy {
     PinnedFingerprint(String),
     /// Reject every key unless the caller explicitly supplies a trust source.
     /// This keeps the native transport from discovering a user's files.
+    #[default]
     RejectUnknown,
-}
-
-impl Default for HostKeyPolicy {
-    fn default() -> Self {
-        Self::RejectUnknown
-    }
 }
 
 #[derive(Debug, Error)]
