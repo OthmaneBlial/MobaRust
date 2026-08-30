@@ -2003,6 +2003,7 @@ function App() {
 
   const exportSessions = useCallback(async () => {
     if (!IS_TAURI) return;
+    if (!window.confirm("Export session metadata? The file contains no passwords or private keys, but may include credential references, key paths, and known_hosts paths. Continue only if this destination is trusted.")) return;
     try {
       const json = await invoke<string>("session_export");
       if (navigator.clipboard?.writeText) {
