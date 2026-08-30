@@ -54,6 +54,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Portable encrypted vault backend with marker-gated data directory, explicit unlock/lock, and native-only lookup
 - [x] Optional bounded local audit history with explicit clear, lifecycle-only fields, and no terminal transcript
 - [x] Local macOS ARM64 unsigned app bundle smoke check with native resource verification
+- [x] Local macOS ARM64 unsigned portable archive assembly with path and checksum verification
 - [ ] Signed portable distribution/package matrix
 
 ## Later protocol adapters
