@@ -58,6 +58,12 @@ because its separate lockfile currently fails the RSA timing-advisory audit.
 This is repository-local assembly evidence only; it does not prove a clean
 install, notarization, or remote-desktop interoperability.
 
+At runtime, the desktop parent also opens helper resources with
+`symlink_metadata` and rejects symlinks, directories, and other non-regular
+files before spawning a protocol process. This complements the bundle smoke
+test; it is an integrity boundary against local resource substitution, not a
+replacement for signed distribution or operating-system protection.
+
 ## Distribution matrix
 
 | Target | Helper build | Package evidence | Signing evidence |

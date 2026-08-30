@@ -220,13 +220,27 @@ pub fn helper_program(app: &AppHandle, protocol: DesktopProtocol) -> Result<Path
         filename.to_owned()
     };
     let program = resource_dir.join("helpers").join(filename);
-    if !program.is_file() {
-        return Err(format!(
+    validate_helper_resource(&program, protocol)?;
+    Ok(program)
+}
+
+fn validate_helper_resource(
+    program: &std::path::Path,
+    protocol: DesktopProtocol,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(program).map_err(|_| {
+        format!(
             "{} helper is not installed in the application package",
+            protocol_name(protocol)
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(format!(
+            "{} helper resource is not a regular file",
             protocol_name(protocol)
         ));
     }
-    Ok(program)
+    Ok(())
 }
 
 pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<(), String> {
@@ -425,7 +439,8 @@ fn should_report_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 mod tests {
     use super::{
         MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, should_report_unexpected_helper_exit, validate_request,
+        RemoteDesktopConnectRequest, should_report_unexpected_helper_exit,
+        validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::DesktopProtocol;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -544,5 +559,33 @@ mod tests {
         let error = serde_json::from_value::<RemoteDesktopConnectRequest>(payload)
             .expect_err("unknown fields must be rejected");
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn helper_resource_must_be_a_regular_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let helper = directory.path().join("mobarust-vnc-helper");
+        std::fs::write(&helper, b"fixture helper").unwrap();
+        validate_helper_resource(&helper, DesktopProtocol::Vnc).unwrap();
+
+        let nested_directory = directory.path().join("nested");
+        std::fs::create_dir(&nested_directory).unwrap();
+        let error = validate_helper_resource(&nested_directory, DesktopProtocol::Vnc).unwrap_err();
+        assert_eq!(error, "VNC helper resource is not a regular file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_resource_rejects_symlinks_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let helper = directory.path().join("mobarust-rdp-helper");
+        std::fs::write(&target, b"fixture target").unwrap();
+        symlink(&target, &helper).unwrap();
+
+        let error = validate_helper_resource(&helper, DesktopProtocol::Rdp).unwrap_err();
+        assert_eq!(error, "RDP helper resource is not a regular file");
     }
 }
