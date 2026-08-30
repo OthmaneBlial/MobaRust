@@ -14,6 +14,12 @@ SFTP file movement uses `tokio::io::copy` between async readers and writers. The
 
 Connection setup maps common transport causes into typed, redacted errors: DNS failure, refusal, unreachable host, timeout, generic network failure, or handshake failure. Raw hostnames, socket details, and library error text are not propagated to the user-facing error by default; host-key rejection remains a separate, explicit result with only the observed fingerprint. Authentication, channel, SFTP, SCP, and local I/O errors likewise use concise category messages instead of displaying library or OS detail.
 
+SFTP status responses are classified at the native boundary into missing remote
+path, permission denied, connection lost, protocol failure, server limit, and
+timeout categories. Async file I/O is classified separately so a remote path,
+socket, or server-provided diagnostic string cannot escape through an error
+display or debug payload.
+
 The opt-in X11 bridge applies the same boundary to local-display I/O. It accepts only the configured loopback TCP or absolute Unix-socket target and reports categorized display errors without returning raw socket paths or operating-system error text.
 
 ## Rejected alternatives

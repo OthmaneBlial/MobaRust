@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -79,6 +80,18 @@ pub enum SshError {
     RemoteMonitorUnsupported,
     #[error("SFTP operation failed")]
     Sftp(String),
+    #[error("SFTP remote path was not found")]
+    SftpPathMissing,
+    #[error("SFTP permission denied")]
+    SftpPermissionDenied,
+    #[error("SFTP connection was lost")]
+    SftpConnectionLost,
+    #[error("SFTP protocol operation failed")]
+    SftpProtocol,
+    #[error("SFTP server limit was reached")]
+    SftpLimit,
+    #[error("SFTP I/O failed")]
+    SftpIo,
     #[error("remote file changed since it was opened")]
     RemoteConflict,
     #[error("remote save target already exists")]
@@ -1046,7 +1059,7 @@ impl SshConnection {
                 .map_err(SshError::Channel)?;
             russh_sftp::client::SftpSession::new(channel.into_stream())
                 .await
-                .map_err(|error| SshError::Sftp(error.to_string()))
+                .map_err(map_sftp_error)
         })
         .await
         .map_err(|_| SshError::Timeout)??;
@@ -1599,6 +1612,41 @@ fn map_io_connect_error(error: &std::io::Error) -> SshError {
     }
 }
 
+fn map_sftp_error(error: russh_sftp::client::error::Error) -> SshError {
+    use russh_sftp::protocol::StatusCode;
+
+    match error {
+        russh_sftp::client::error::Error::Status(status) => match status.status_code {
+            StatusCode::NoSuchFile => SshError::SftpPathMissing,
+            StatusCode::PermissionDenied => SshError::SftpPermissionDenied,
+            StatusCode::NoConnection | StatusCode::ConnectionLost => SshError::SftpConnectionLost,
+            StatusCode::BadMessage | StatusCode::OpUnsupported => SshError::SftpProtocol,
+            StatusCode::Ok | StatusCode::Eof | StatusCode::Failure => {
+                SshError::Sftp("SFTP server rejected the operation".into())
+            }
+        },
+        russh_sftp::client::error::Error::IO(_) => SshError::SftpIo,
+        russh_sftp::client::error::Error::Timeout => SshError::Timeout,
+        russh_sftp::client::error::Error::Limited(_) => SshError::SftpLimit,
+        russh_sftp::client::error::Error::UnexpectedPacket
+        | russh_sftp::client::error::Error::UnexpectedBehavior(_) => SshError::SftpProtocol,
+    }
+}
+
+fn map_sftp_io_error(error: io::Error) -> SshError {
+    match error.kind() {
+        io::ErrorKind::NotFound => SshError::SftpPathMissing,
+        io::ErrorKind::PermissionDenied => SshError::SftpPermissionDenied,
+        io::ErrorKind::TimedOut => SshError::Timeout,
+        io::ErrorKind::BrokenPipe
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::NotConnected
+        | io::ErrorKind::UnexpectedEof => SshError::SftpConnectionLost,
+        _ => SshError::SftpIo,
+    }
+}
+
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     credentials: SshCredentials,
@@ -1813,15 +1861,11 @@ impl SftpConnection {
         self.session
             .canonicalize(path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+            .map_err(map_sftp_error)
     }
 
     pub async fn read_dir(&self, path: impl Into<String>) -> Result<Vec<RemoteEntry>, SshError> {
-        let entries = self
-            .session
-            .read_dir(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let entries = self.session.read_dir(path).await.map_err(map_sftp_error)?;
         Ok(entries
             .map(|entry| {
                 let metadata = entry.metadata();
@@ -1847,11 +1891,7 @@ impl SftpConnection {
     }
 
     pub async fn file_info(&self, path: impl Into<String>) -> Result<(u64, bool), SshError> {
-        let metadata = self
-            .session
-            .metadata(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let metadata = self.session.metadata(path).await.map_err(map_sftp_error)?;
         Ok((metadata.len(), metadata.is_dir()))
     }
 
@@ -1873,7 +1913,7 @@ impl SftpConnection {
         self.session
             .set_metadata(path, metadata)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+            .map_err(map_sftp_error)
     }
 
     /// Read a bounded UTF-8 document together with a byte revision. The bound
@@ -1893,32 +1933,21 @@ impl SftpConnection {
         encoding: RemoteTextEncoding,
     ) -> Result<RemoteTextDocument, SshError> {
         let path = path.into();
-        let metadata = self
-            .session
-            .metadata(&path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let metadata = self.session.metadata(&path).await.map_err(map_sftp_error)?;
         if metadata.is_dir() {
             return Err(SshError::Sftp("remote path is a directory".into()));
         }
         if metadata.len() > MAX_REMOTE_EDITOR_BYTES as u64 {
             return Err(SshError::RemoteFileTooLarge);
         }
-        let mut file = self
-            .session
-            .open(&path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let mut file = self.session.open(&path).await.map_err(map_sftp_error)?;
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         let mut limited = (&mut file).take((MAX_REMOTE_EDITOR_BYTES + 1) as u64);
         let result = limited
             .read_to_end(&mut bytes)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
-        let close_result = file
-            .close()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
+            .map_err(map_sftp_io_error);
+        let close_result = file.close().await.map_err(map_sftp_io_error);
         result?;
         close_result?;
         if bytes.len() > MAX_REMOTE_EDITOR_BYTES {
@@ -1984,15 +2013,9 @@ impl SftpConnection {
             .session
             .create(&temporary)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
-        let write_result = file
-            .write_all(&encoded)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
-        let close_result = file
-            .shutdown()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
+            .map_err(map_sftp_error)?;
+        let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
+        let close_result = file.shutdown().await.map_err(map_sftp_io_error);
         if let Err(error) = write_result {
             let _ = self.session.remove_file(&temporary).await;
             return Err(error);
@@ -2008,17 +2031,11 @@ impl SftpConnection {
                 Ok(file) => file,
                 Err(error) => {
                     let _ = self.session.remove_file(&temporary).await;
-                    return Err(SshError::Sftp(error.to_string()));
+                    return Err(map_sftp_error(error));
                 }
             };
-            let set_result = file
-                .set_metadata(metadata)
-                .await
-                .map_err(|error| SshError::Sftp(error.to_string()));
-            let close_result = file
-                .close()
-                .await
-                .map_err(|error| SshError::Sftp(error.to_string()));
+            let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
+            let close_result = file.close().await.map_err(map_sftp_io_error);
             if let Err(error) = set_result {
                 let _ = self.session.remove_file(&temporary).await;
                 return Err(error);
@@ -2039,17 +2056,17 @@ impl SftpConnection {
         );
         if let Err(error) = self.session.rename(&path, &backup).await {
             let _ = self.session.remove_file(&temporary).await;
-            return Err(SshError::Sftp(error.to_string()));
+            return Err(map_sftp_error(error));
         }
         if let Err(error) = self.session.rename(&temporary, &path).await {
             let _ = self.session.rename(&backup, &path).await;
             let _ = self.session.remove_file(&temporary).await;
-            return Err(SshError::Sftp(error.to_string()));
+            return Err(map_sftp_error(error));
         }
-        if let Err(error) = self.session.remove_file(&backup).await {
-            return Err(SshError::Sftp(format!(
-                "remote file saved but backup cleanup failed: {error}"
-            )));
+        if let Err(_error) = self.session.remove_file(&backup).await {
+            return Err(SshError::Sftp(
+                "remote file saved but backup cleanup failed".into(),
+            ));
         }
         self.read_text_document_with_encoding(path, encoding).await
     }
@@ -2091,15 +2108,9 @@ impl SftpConnection {
             .session
             .create(&temporary)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
-        let write_result = file
-            .write_all(&encoded)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
-        let close_result = file
-            .shutdown()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()));
+            .map_err(map_sftp_error)?;
+        let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
+        let close_result = file.shutdown().await.map_err(map_sftp_io_error);
         if let Err(error) = write_result {
             let _ = self.session.remove_file(&temporary).await;
             return Err(error);
@@ -2117,17 +2128,11 @@ impl SftpConnection {
                     Ok(file) => file,
                     Err(error) => {
                         let _ = self.session.remove_file(&temporary).await;
-                        return Err(SshError::Sftp(error.to_string()));
+                        return Err(map_sftp_error(error));
                     }
                 };
-                let set_result = file
-                    .set_metadata(metadata)
-                    .await
-                    .map_err(|error| SshError::Sftp(error.to_string()));
-                let close_result = file
-                    .close()
-                    .await
-                    .map_err(|error| SshError::Sftp(error.to_string()));
+                let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
+                let close_result = file.close().await.map_err(map_sftp_io_error);
                 if let Err(error) = set_result {
                     let _ = self.session.remove_file(&temporary).await;
                     return Err(error);
@@ -2145,45 +2150,36 @@ impl SftpConnection {
             );
             if let Err(error) = self.session.rename(&path, &backup).await {
                 let _ = self.session.remove_file(&temporary).await;
-                return Err(SshError::Sftp(error.to_string()));
+                return Err(map_sftp_error(error));
             }
             if let Err(error) = self.session.rename(&temporary, &path).await {
                 let _ = self.session.rename(&backup, &path).await;
                 let _ = self.session.remove_file(&temporary).await;
-                return Err(SshError::Sftp(error.to_string()));
+                return Err(map_sftp_error(error));
             }
-            if let Err(error) = self.session.remove_file(&backup).await {
-                return Err(SshError::Sftp(format!(
-                    "remote file saved but backup cleanup failed: {error}"
-                )));
+            if let Err(_error) = self.session.remove_file(&backup).await {
+                return Err(SshError::Sftp(
+                    "remote file saved but backup cleanup failed".into(),
+                ));
             }
         } else if let Err(error) = self.session.rename(&temporary, &path).await {
             let _ = self.session.remove_file(&temporary).await;
-            return Err(SshError::Sftp(error.to_string()));
+            return Err(map_sftp_error(error));
         }
 
         self.read_text_document_with_encoding(path, encoding).await
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
-        self.session
-            .try_exists(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+        self.session.try_exists(path).await.map_err(map_sftp_error)
     }
 
     pub async fn create_dir(&self, path: impl Into<String>) -> Result<(), SshError> {
-        self.session
-            .create_dir(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+        self.session.create_dir(path).await.map_err(map_sftp_error)
     }
 
     pub async fn remove_dir(&self, path: impl Into<String>) -> Result<(), SshError> {
-        self.session
-            .remove_dir(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+        self.session.remove_dir(path).await.map_err(map_sftp_error)
     }
 
     pub async fn rename(
@@ -2194,7 +2190,7 @@ impl SftpConnection {
         self.session
             .rename(old_path, new_path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+            .map_err(map_sftp_error)
     }
 
     pub async fn download_to<R>(
@@ -2209,14 +2205,11 @@ impl SftpConnection {
             .session
             .open(remote_path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_error)?;
         let copied = tokio::io::copy(&mut file, &mut destination)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
-        destination
-            .flush()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_io_error)?;
+        destination.flush().await.map_err(map_sftp_io_error)?;
         Ok(copied)
     }
 
@@ -2235,11 +2228,9 @@ impl SftpConnection {
             .session
             .open(remote_path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_error)?;
         let copied = copy_with_cancel(&mut file, destination, cancel, on_progress).await?;
-        file.close()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        file.close().await.map_err(map_sftp_io_error)?;
         Ok(copied)
     }
 
@@ -2255,13 +2246,11 @@ impl SftpConnection {
             .session
             .create(remote_path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_error)?;
         let copied = tokio::io::copy(&mut source, &mut file)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
-        file.shutdown()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_io_error)?;
+        file.shutdown().await.map_err(map_sftp_io_error)?;
         Ok(copied)
     }
 
@@ -2280,26 +2269,18 @@ impl SftpConnection {
             .session
             .create(remote_path)
             .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+            .map_err(map_sftp_error)?;
         let copied = copy_with_cancel(source, &mut file, cancel, on_progress).await?;
-        file.shutdown()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        file.shutdown().await.map_err(map_sftp_io_error)?;
         Ok(copied)
     }
 
     pub async fn remove_file(&self, path: impl Into<String>) -> Result<(), SshError> {
-        self.session
-            .remove_file(path)
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+        self.session.remove_file(path).await.map_err(map_sftp_error)
     }
 
     pub async fn close(&self) -> Result<(), SshError> {
-        self.session
-            .close()
-            .await
-            .map_err(|error| SshError::Sftp(error.to_string()))
+        self.session.close().await.map_err(map_sftp_error)
     }
 }
 
@@ -2655,6 +2636,56 @@ mod tests {
         )));
         assert_eq!(error.to_string(), "SSH network connection failed");
         assert!(!error.to_string().contains("personal-host-detail"));
+    }
+
+    #[test]
+    fn sftp_errors_are_typed_without_remote_paths_or_server_text() {
+        let status = |status_code| russh_sftp::protocol::Status {
+            id: 7,
+            status_code,
+            error_message: "sensitive remote path and server detail".into(),
+            language_tag: "".into(),
+        };
+
+        let cases = [
+            (
+                map_sftp_error(russh_sftp::client::error::Error::Status(status(
+                    russh_sftp::protocol::StatusCode::NoSuchFile,
+                ))),
+                "SFTP remote path was not found",
+            ),
+            (
+                map_sftp_error(russh_sftp::client::error::Error::Status(status(
+                    russh_sftp::protocol::StatusCode::PermissionDenied,
+                ))),
+                "SFTP permission denied",
+            ),
+            (
+                map_sftp_error(russh_sftp::client::error::Error::Status(status(
+                    russh_sftp::protocol::StatusCode::ConnectionLost,
+                ))),
+                "SFTP connection was lost",
+            ),
+            (
+                map_sftp_error(russh_sftp::client::error::Error::Status(status(
+                    russh_sftp::protocol::StatusCode::BadMessage,
+                ))),
+                "SFTP protocol operation failed",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+            assert!(!error.to_string().contains("sensitive remote path"));
+        }
+        assert!(matches!(
+            map_sftp_error(russh_sftp::client::error::Error::Timeout),
+            SshError::Timeout
+        ));
+        assert!(matches!(
+            map_sftp_io_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            SshError::SftpConnectionLost
+        ));
     }
 
     #[test]
