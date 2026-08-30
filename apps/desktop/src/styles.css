@@ -190,11 +190,14 @@ button:not(:disabled) { cursor: pointer; }
 .session-editor-summary strong { color: var(--text); font-family: var(--mono); font-size: 9px; font-weight: 400; }
 .session-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 11px; padding: 20px 0; }
 .session-editor-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
-.session-editor-grid input, .session-editor-grid textarea { width: 100%; padding: 9px; border: 1px solid var(--line); outline: 0; background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 10px; letter-spacing: 0; resize: vertical; text-transform: none; }
-.session-editor-grid input { height: 34px; }
+.session-editor-grid input, .session-editor-grid textarea, .session-editor-grid select { width: 100%; padding: 9px; border: 1px solid var(--line); outline: 0; background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 10px; letter-spacing: 0; resize: vertical; text-transform: none; }
+.session-editor-grid input, .session-editor-grid select { height: 34px; }
 .session-editor-grid textarea { min-height: 76px; line-height: 1.45; }
-.session-editor-grid input:focus, .session-editor-grid textarea:focus { border-color: rgba(232, 180, 92, .6); }
+.session-editor-grid input:focus, .session-editor-grid textarea:focus, .session-editor-grid select:focus { border-color: rgba(232, 180, 92, .6); }
 .session-editor-grid small { color: var(--faint); font-family: "Avenir Next", "Helvetica Neue", sans-serif; font-size: 9px; letter-spacing: 0; line-height: 1.4; text-transform: none; }
+.session-editor-auth { padding: 17px 0 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.session-editor-auth .session-editor-grid { padding: 0 0 12px; }
+.session-editor-auth .credential-modal-note { margin-top: 12px; }
 .session-editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding-top: 15px; border-top: 1px solid var(--line); }
 .session-editor-footer > div { display: flex; gap: 8px; }
 .settings-modal { width: min(700px, calc(100vw - 40px)); padding: 22px; border: 1px solid var(--line-strong); background: #121a18; box-shadow: 0 25px 80px rgba(0, 0, 0, .45); }

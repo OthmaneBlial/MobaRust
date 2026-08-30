@@ -281,11 +281,38 @@ fn session_list(store: State<'_, Mutex<SessionStore>>) -> Result<Vec<SessionReco
         .map(|store| store.list().to_vec())
 }
 
+fn validate_session_credential_references(session: &SessionRecord) -> Result<(), String> {
+    fn validate_auth(auth: &AuthMethod) -> Result<(), String> {
+        let references = match auth {
+            AuthMethod::Password { credential_ref }
+            | AuthMethod::KeyboardInteractive { credential_ref } => {
+                vec![credential_ref.as_str()]
+            }
+            AuthMethod::PrivateKey {
+                credential_ref: Some(credential_ref),
+                ..
+            } => vec![credential_ref.as_str()],
+            AuthMethod::None | AuthMethod::Agent | AuthMethod::PrivateKey { .. } => Vec::new(),
+        };
+        for reference in references {
+            CredentialId::new(reference).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    validate_auth(&session.auth)?;
+    for jump_host in &session.jump_host_profiles {
+        validate_auth(&jump_host.auth)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn session_save(
     store: State<'_, Mutex<SessionStore>>,
     session: SessionRecord,
 ) -> Result<SessionRecord, String> {
+    validate_session_credential_references(&session)?;
     store
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?

@@ -3247,10 +3247,40 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [startupCommand, setStartupCommand] = useState(session.startup_command ?? "");
   const [notes, setNotes] = useState(session.notes ?? "");
   const [favorite, setFavorite] = useState(session.favorite);
+  const isSsh = session.protocol === "SSH";
+  const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
+    session.auth.kind === "none" ? "agent" : session.auth.kind,
+  );
+  const [credentialRef, setCredentialRef] = useState(
+    session.auth.kind === "password" || session.auth.kind === "keyboardInteractive" || session.auth.kind === "privateKey"
+      ? session.auth.credentialRef ?? ""
+      : "",
+  );
+  const [keyRef, setKeyRef] = useState(session.auth.kind === "privateKey" ? session.auth.keyRef : "");
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedTags = [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))];
+    let auth = session.auth;
+    if (isSsh) {
+      setAuthError(null);
+      if (authKind === "password" || authKind === "keyboardInteractive") {
+        if (!credentialRef.trim()) {
+          setAuthError("Enter an opaque vault credential reference.");
+          return;
+        }
+        auth = { kind: authKind, credentialRef: credentialRef.trim() };
+      } else if (authKind === "privateKey") {
+        if (!keyRef.trim()) {
+          setAuthError("Enter the private-key path or reference. MobaRust will not read it while editing.");
+          return;
+        }
+        auth = { kind: "privateKey", keyRef: keyRef.trim(), credentialRef: credentialRef.trim() || null };
+      } else {
+        auth = { kind: "agent" };
+      }
+    }
     onSave({
       ...session,
       name: name.trim(),
@@ -3261,11 +3291,14 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       startup_command: startupCommand.trim() || null,
       notes: notes.trim() || null,
       environment: session.environment ?? [],
+      auth,
     });
   };
 
   const endpoint = session.username ? `${session.username}@${session.hostname}:${session.port}` : `${session.hostname}:${session.port}`;
-  const authLabel = session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "keyboardInteractive" ? "Keyboard-interactive vault response" : session.auth.kind === "privateKey" ? "Private key reference" : "No authentication";
+  const authLabel = isSsh
+    ? authKind === "agent" ? "SSH agent" : authKind === "password" ? "Vault credential reference" : authKind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference"
+    : session.auth.kind === "none" ? "No authentication" : session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference";
 
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
@@ -3274,7 +3307,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
           <div>
             <span className="eyebrow">SESSION / METADATA</span>
             <h2>Edit session</h2>
-            <p>Organize this profile without exposing or changing its credential material.</p>
+            <p>Organize this profile and change only opaque credential references. Secret material stays native.</p>
           </div>
           <button type="button" className="icon-button" aria-label="Close session editor" onClick={onClose}><X size={17} /></button>
         </div>
@@ -3312,6 +3345,33 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Operational notes" rows={3} />
           </label>
         </div>
+
+        {isSsh && <div className="session-editor-auth">
+          <span className="settings-section-label">SSH authentication</span>
+          <div className="session-editor-grid">
+            <label className="quick-connect-wide">
+              Method
+              <select value={authKind} onChange={(event) => { setAuthKind(event.target.value as typeof authKind); setAuthError(null); }}>
+                <option value="agent">Local SSH agent</option>
+                <option value="privateKey">Private key path</option>
+                <option value="password">Vault password reference</option>
+                <option value="keyboardInteractive">Keyboard-interactive vault response</option>
+              </select>
+            </label>
+            {authKind === "privateKey" && <label className="quick-connect-wide">
+              Private key path or reference
+              <input value={keyRef} onChange={(event) => setKeyRef(event.target.value)} placeholder="path or approved key reference" />
+              <small>Only this non-secret path crosses IPC. The key file is never opened by the editor.</small>
+            </label>}
+            {(authKind === "password" || authKind === "keyboardInteractive" || authKind === "privateKey") && <label className="quick-connect-wide">
+              {authKind === "privateKey" ? "Passphrase credential reference" : authKind === "keyboardInteractive" ? "Response credential reference" : "Credential reference"}
+              <input value={credentialRef} onChange={(event) => setCredentialRef(event.target.value)} placeholder="ops-password" />
+              <small>Opaque identifier only; the secret is retrieved inside Rust when connecting.</small>
+            </label>}
+          </div>
+          {authError && <div className="connect-error-inline" role="alert">{authError}</div>}
+          <div className="credential-modal-note"><ShieldCheck size={14} /><span>No password, passphrase, private-key bytes, or agent material is displayed or persisted here.</span></div>
+        </div>}
 
         <div className="session-editor-footer">
           <button type="button" className={`favorite-toggle ${favorite ? "selected" : ""}`} onClick={() => setFavorite((value) => !value)}><Star size={14} fill={favorite ? "currentColor" : "none"} /> {favorite ? "Favorite" : "Add to favorites"}</button>

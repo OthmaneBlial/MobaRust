@@ -162,6 +162,10 @@ pub enum SessionValidationError {
     MissingPort,
     #[error("session tags cannot be empty")]
     EmptyTag,
+    #[error("saved authentication reference cannot be empty")]
+    EmptyAuthReference,
+    #[error("saved private-key reference is invalid")]
+    InvalidKeyReference,
     #[error("serial profile is invalid")]
     InvalidSerialProfile,
     #[error("remote desktop profile is invalid")]
@@ -207,6 +211,10 @@ impl SessionRecord {
         if self.tags.iter().any(|tag| tag.trim().is_empty()) {
             return Err(SessionValidationError::EmptyTag);
         }
+        validate_auth_method(&self.auth)?;
+        for jump_host in &self.jump_host_profiles {
+            validate_auth_method(&jump_host.auth)?;
+        }
         match (self.protocol, &self.serial_profile) {
             (Protocol::Serial, Some(profile)) => profile.validate()?,
             (Protocol::Serial, None) => return Err(SessionValidationError::InvalidSerialProfile),
@@ -218,6 +226,41 @@ impl SessionRecord {
         }
         Ok(())
     }
+}
+
+fn validate_auth_method(auth: &AuthMethod) -> Result<(), SessionValidationError> {
+    let has_control = |value: &str| value.chars().any(char::is_control);
+    match auth {
+        AuthMethod::None | AuthMethod::Agent => {}
+        AuthMethod::Password { credential_ref }
+        | AuthMethod::KeyboardInteractive { credential_ref }
+            if credential_ref.trim().is_empty() =>
+        {
+            return Err(SessionValidationError::EmptyAuthReference);
+        }
+        AuthMethod::Password { credential_ref }
+        | AuthMethod::KeyboardInteractive { credential_ref }
+            if has_control(credential_ref) =>
+        {
+            return Err(SessionValidationError::EmptyAuthReference);
+        }
+        AuthMethod::PrivateKey {
+            key_ref,
+            credential_ref,
+        } => {
+            if key_ref.trim().is_empty() || has_control(key_ref) {
+                return Err(SessionValidationError::InvalidKeyReference);
+            }
+            if credential_ref
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty() || has_control(value))
+            {
+                return Err(SessionValidationError::EmptyAuthReference);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -298,6 +341,35 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+    }
+
+    #[test]
+    fn saved_authentication_references_are_non_empty_and_control_free() {
+        let mut session = SessionRecord::local_terminal("auth validation");
+        session.protocol = Protocol::Ssh;
+        session.hostname = "ssh.example.test".into();
+        session.port = 22;
+        session.auth = AuthMethod::KeyboardInteractive {
+            credential_ref: "ops-response".into(),
+        };
+        session.validate().unwrap();
+
+        session.auth = AuthMethod::Password {
+            credential_ref: "   ".into(),
+        };
+        assert_eq!(
+            session.validate(),
+            Err(SessionValidationError::EmptyAuthReference)
+        );
+
+        session.auth = AuthMethod::PrivateKey {
+            key_ref: "private\nkey".into(),
+            credential_ref: None,
+        };
+        assert_eq!(
+            session.validate(),
+            Err(SessionValidationError::InvalidKeyReference)
         );
     }
 }

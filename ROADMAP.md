@@ -18,7 +18,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Host-key verification and known_hosts policy
 - [x] Interactive SSH with PTY resize and cooperative close
 - [x] Agent, password-reference, and private-key-reference auth in the saved-session UX
-- [ ] Encrypted-key passphrase entry and keyboard-interactive auth in the saved-session UX
+- [x] Encrypted-key passphrase entry and keyboard-interactive auth in the saved-session UX
 - [x] SSH agent authentication through the native Quick Connect path
 - [x] Bounded reconnect policy and failure-state telemetry
 - [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
