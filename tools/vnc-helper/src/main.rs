@@ -291,14 +291,15 @@ async fn connect_vnc_client(
     };
 
     // vnc-rs 0.5.3 currently requires its auth callback to return an owned
-    // String. Keep the helper-owned source copy zeroizing for the whole
-    // callback lifetime; the upstream API remains a promotion gate until
-    // it can accept a zeroizing/borrowed credential type directly.
-    let password = Zeroizing::new(credential.password().to_owned());
+    // String. Move the helper-owned buffer into that required value instead
+    // of creating a second `to_string()` copy. The upstream-owned String is
+    // still not zeroizing, so this API remains a promotion gate until it can
+    // accept a zeroizing/borrowed credential type directly.
+    let mut password = Zeroizing::new(credential.password().to_owned());
     let encodings =
         quality_encodings(&arguments.quality).ok_or("VNC quality profile is invalid")?;
     let mut connector = VncConnector::new(stream)
-        .set_auth_method(async move { Ok::<String, VncError>(password.to_string()) })
+        .set_auth_method(async move { Ok::<String, VncError>(std::mem::take(&mut *password)) })
         .allow_shared(true)
         .set_pixel_format(PixelFormat::rgba());
     for &encoding in encodings {

@@ -132,7 +132,10 @@ helper-level evidence only; the Tauri parent still requires the full
 cross-platform and manual interoperability gate. `vnc-rs 0.5.3` still
 requires the authentication callback to return an owned `String`, so that
 upstream API limitation remains a credential-lifetime promotion gate and is
-not hidden by the local wrapper.
+not hidden by the local wrapper. The helper moves its zeroizing source buffer
+into the one upstream-owned `String` required by that callback, avoiding an
+additional `to_string()` copy; the upstream-owned value itself is still not
+zeroizing.
 
 Because the candidate does not provide a generally validated encrypted
 transport, the helper and the Tauri parent fail closed for safety: they accept

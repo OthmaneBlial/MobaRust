@@ -44,9 +44,11 @@ attempts, including a bounded client-to-server clipboard message. A reconnect
 keeps the helper process and credential handoff inside the native boundary; it
 does not expose the password to the parent or React.
 Its dependency audit is clean. The pinned
-`vnc-rs 0.5.3` callback API still creates an owned password `String`; the
-helper zeroizes its source copy but this API limitation remains a promotion
-gate until an audited alternative is selected.
+`vnc-rs 0.5.3` callback API still requires an owned password `String`; the
+helper moves its zeroizing source buffer into that one value without an
+additional plaintext clone, but the upstream-owned value itself is not
+zeroizing. This API limitation remains a promotion gate until an audited
+alternative is selected.
 
 The helper also accepts only three bounded quality policies. They change the
 requested supported VNC encoding order and refresh cadence, while the renderer
