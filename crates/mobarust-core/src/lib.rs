@@ -17,8 +17,8 @@ pub use r#macro::{
     MacroApprovalPolicy, MacroKey, MacroRecord, MacroValidationError,
 };
 pub use session::{
-    AuthMethod, JumpHostRecord, Protocol, RemoteDesktopProfile, SerialProfile, SessionId,
-    SessionRecord, SessionValidationError, TelnetProfile,
+    AuthMethod, JumpHostRecord, MAX_SERVER_ALIVE_INTERVAL_SECONDS, Protocol, RemoteDesktopProfile,
+    SerialProfile, SessionId, SessionRecord, SessionValidationError, TelnetProfile,
 };
 pub use settings::{
     AppSettings, AppearanceSettings, GeneralSettings, NetworkSettings, SettingsValidationError,

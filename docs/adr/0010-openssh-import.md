@@ -13,8 +13,9 @@ command. The importer recognizes:
 - `HostName`, `User`, and `Port`;
 - the first `IdentityFile` as a private-key reference;
 - comma-separated `ProxyJump` entries as jump-host references;
-- `ServerAliveInterval` as a visible note until the native keepalive model is
-  implemented.
+- `ServerAliveInterval` as a bounded native SSH keepalive interval; `0` or an
+  invalid/out-of-range value disables application of the setting and remains
+  visible in the import note.
 
 Wildcard aliases, negated patterns, malformed ports, and unsupported
 directives are not silently converted into a profile. The report contains
@@ -45,11 +46,11 @@ blocks reconnect with an explicit message until jump-host transport exists.
 - executing `ProxyJump` through a shell string;
 - reading arbitrary config includes recursively without a separate path and
   security review;
-- claiming imported `ServerAliveInterval` changes runtime behavior.
+- applying an invalid or unbounded `ServerAliveInterval` value.
 
 ## Verification
 
-Store tests cover global defaults, aliases, key and jump references, notes,
-unsupported directives, malformed ports, secret absence, persistence, and
-repeat-import idempotency. Desktop TypeScript and Rust command compilation
-must also pass before release.
+Store tests cover global defaults, aliases, key and jump references, the
+bounded keepalive mapping, notes, unsupported directives, malformed ports,
+secret absence, persistence, and repeat-import idempotency. Desktop
+TypeScript and Rust command compilation must also pass before release.

@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mobarust_core::{
-    AppSettings, AuditEvent, AuditEventKind, AuthMethod, MacroRecord, Protocol, SessionId,
-    SessionRecord, SnippetRecord,
+    AppSettings, AuditEvent, AuditEventKind, AuthMethod, MAX_SERVER_ALIVE_INTERVAL_SECONDS,
+    MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -860,6 +860,10 @@ impl SessionStore {
                     strip_quotes(interval.trim())
                 )
             });
+            let server_alive_interval = options
+                .get("serveraliveinterval")
+                .and_then(|interval| strip_quotes(interval.trim()).parse::<u64>().ok())
+                .filter(|seconds| *seconds > 0 && *seconds <= MAX_SERVER_ALIVE_INTERVAL_SECONDS);
             imported.push(SessionRecord {
                 id: SessionId::new(),
                 name: alias.clone(),
@@ -876,6 +880,7 @@ impl SessionStore {
                 pinned_fingerprint: None,
                 x11_display: None,
                 x11_single_connection: false,
+                server_alive_interval,
                 folder: Some("Imported / OpenSSH".into()),
                 tags: vec!["imported".into(), "openssh".into()],
                 favorite: false,
@@ -1081,6 +1086,7 @@ mod tests {
             pinned_fingerprint: None,
             x11_display: None,
             x11_single_connection: false,
+            server_alive_interval: None,
             folder: Some("Production".into()),
             tags: vec!["prod".into()],
             favorite: true,
@@ -1437,6 +1443,7 @@ mod tests {
             }
         );
         assert_eq!(report.imported[0].jump_hosts, vec!["jump.example"]);
+        assert_eq!(report.imported[0].server_alive_interval, Some(30));
         assert_eq!(
             report.imported[0].notes.as_deref(),
             Some("Imported from OpenSSH; ServerAliveInterval=30")

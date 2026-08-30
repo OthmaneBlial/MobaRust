@@ -760,6 +760,7 @@ fn session_save_ssh(
         pinned_fingerprint,
         jump_hosts,
         x11,
+        server_alive_interval,
         ..
     } = request;
     let auth = match request_auth {
@@ -798,6 +799,7 @@ fn session_save_ssh(
         pinned_fingerprint,
         x11_display: x11.as_ref().map(|value| value.display.clone()),
         x11_single_connection: x11.as_ref().is_some_and(|value| value.single_connection),
+        server_alive_interval,
         folder: Some("Remote sessions".into()),
         tags: Vec::new(),
         favorite: false,
@@ -874,6 +876,7 @@ fn session_save_serial(
         pinned_fingerprint: None,
         x11_display: None,
         x11_single_connection: false,
+        server_alive_interval: None,
         folder: Some("Serial devices".into()),
         tags: vec!["serial".into()],
         favorite: false,
@@ -939,6 +942,7 @@ fn session_save_telnet(
         pinned_fingerprint: None,
         x11_display: None,
         x11_single_connection: false,
+        server_alive_interval: None,
         folder: Some("Telnet sessions".into()),
         tags: vec!["telnet".into(), "plaintext".into()],
         favorite: false,
@@ -1002,6 +1006,7 @@ fn session_save_remote_desktop(
         pinned_fingerprint: None,
         x11_display: None,
         x11_single_connection: false,
+        server_alive_interval: None,
         folder: Some("Remote desktops".into()),
         tags: vec![protocol_tag.into()],
         favorite: false,

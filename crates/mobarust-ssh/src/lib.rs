@@ -391,6 +391,8 @@ pub struct SshConnectOptions {
     pub port: u16,
     pub host_key_policy: HostKeyPolicy,
     pub timeout: Duration,
+    /// Optional SSH keepalive interval. `None` disables keepalives.
+    pub keepalive_interval: Option<Duration>,
     pub credentials: SshCredentials,
     pub x11: Option<X11ForwardingOptions>,
 }
@@ -424,6 +426,7 @@ impl fmt::Debug for SshConnectOptions {
             .field("port", &self.port)
             .field("host_key_policy", &self.host_key_policy)
             .field("timeout", &self.timeout)
+            .field("keepalive_interval", &self.keepalive_interval)
             .field("credentials", &self.credentials)
             .field("x11", &self.x11.as_ref().map(|_| "enabled"))
             .finish()
@@ -1485,6 +1488,9 @@ fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
         || options.host.contains('\0')
         || options.port == 0
         || options.credentials.username().trim().is_empty()
+        || options
+            .keepalive_interval
+            .is_some_and(|interval| interval.is_zero() || interval > Duration::from_secs(86_400))
     {
         return Err(SshError::InvalidOptions);
     }
@@ -1510,6 +1516,7 @@ fn connection_parts(options: &SshConnectOptions) -> ConnectionParts {
         options.host_key_policy.clone(),
         false,
         options.timeout,
+        options.keepalive_interval,
         options.x11.is_some(),
     )
 }
@@ -1524,6 +1531,7 @@ fn inspection_connection_parts(options: &SshFingerprintOptions) -> ConnectionPar
         HostKeyPolicy::PinnedFingerprint(String::new()),
         true,
         options.timeout,
+        None,
         false,
     )
 }
@@ -1534,6 +1542,7 @@ fn connection_parts_for(
     policy: HostKeyPolicy,
     inspection_only: bool,
     timeout: Duration,
+    keepalive_interval: Option<Duration>,
     x11_enabled: bool,
 ) -> ConnectionParts {
     let observed_fingerprint = Arc::new(Mutex::new(None));
@@ -1551,6 +1560,7 @@ fn connection_parts_for(
     };
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(timeout),
+        keepalive_interval,
         ..Default::default()
     });
     ConnectionParts {

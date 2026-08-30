@@ -27,6 +27,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             port: fixture.port,
             host_key_policy: HostKeyPolicy::KnownHosts(unknown_hosts),
             timeout: Duration::from_secs(5),
+            keepalive_interval: None,
             credentials: SshCredentials::private_key(
                 fixture.username.clone(),
                 fixture.client_key.clone(),
@@ -59,6 +60,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             port: fixture.port,
             host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
             timeout: Duration::from_secs(5),
+            keepalive_interval: None,
             credentials: SshCredentials::private_key(
                 fixture.username.clone(),
                 fixture.client_key.clone(),
@@ -488,6 +490,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 port: fixture.port,
                 host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
                 timeout: Duration::from_secs(5),
+                keepalive_interval: None,
                 credentials: SshCredentials::private_key(
                     fixture.username.clone(),
                     fixture.client_key.clone(),
@@ -500,6 +503,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 port: fixture.port,
                 host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
                 timeout: Duration::from_secs(5),
+                keepalive_interval: None,
                 credentials: SshCredentials::private_key(
                     fixture.username.clone(),
                     fixture.client_key.clone(),
@@ -578,6 +582,7 @@ fn forwards_an_explicit_x11_channel_to_a_loopback_display_fixture() {
             port: fixture.port,
             host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
             timeout: Duration::from_secs(5),
+            keepalive_interval: None,
             credentials: SshCredentials::private_key(
                 fixture.username.clone(),
                 fixture.client_key.clone(),

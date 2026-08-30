@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub const MAX_SERVER_ALIVE_INTERVAL_SECONDS: u64 = 86_400;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Protocol {
@@ -167,6 +169,9 @@ pub struct SessionRecord {
     pub x11_display: Option<String>,
     #[serde(default)]
     pub x11_single_connection: bool,
+    /// SSH keepalive interval in seconds. `None` or `Some(0)` disables it.
+    #[serde(default)]
+    pub server_alive_interval: Option<u64>,
     pub folder: Option<String>,
     pub tags: Vec<String>,
     pub favorite: bool,
@@ -207,6 +212,8 @@ pub enum SessionValidationError {
     InvalidRemoteDesktopProfile,
     #[error("X11 display target is invalid")]
     InvalidX11Display,
+    #[error("SSH server-alive interval is invalid")]
+    InvalidServerAliveInterval,
 }
 
 impl SessionRecord {
@@ -224,6 +231,7 @@ impl SessionRecord {
             pinned_fingerprint: None,
             x11_display: None,
             x11_single_connection: false,
+            server_alive_interval: None,
             folder: Some("Local terminals".into()),
             tags: vec!["local".into()],
             favorite: true,
@@ -275,6 +283,12 @@ impl SessionRecord {
             display.trim().is_empty() || display.chars().any(char::is_control)
         }) {
             return Err(SessionValidationError::InvalidX11Display);
+        }
+        if self
+            .server_alive_interval
+            .is_some_and(|seconds| seconds > MAX_SERVER_ALIVE_INTERVAL_SECONDS)
+        {
+            return Err(SessionValidationError::InvalidServerAliveInterval);
         }
         Ok(())
     }
@@ -342,6 +356,7 @@ mod tests {
             pinned_fingerprint: None,
             x11_display: None,
             x11_single_connection: false,
+            server_alive_interval: None,
             folder: None,
             tags: vec!["production".into()],
             favorite: false,
@@ -357,6 +372,17 @@ mod tests {
         };
 
         assert_eq!(session.validate(), Err(SessionValidationError::MissingPort));
+    }
+
+    #[test]
+    fn server_alive_interval_is_bounded() {
+        let mut session = SessionRecord::local_terminal("local");
+        session.server_alive_interval = Some(MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1);
+
+        assert_eq!(
+            session.validate(),
+            Err(SessionValidationError::InvalidServerAliveInterval)
+        );
     }
 
     #[test]

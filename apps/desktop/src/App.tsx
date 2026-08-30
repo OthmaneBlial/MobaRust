@@ -283,6 +283,7 @@ type SavedSession = {
   pinned_fingerprint?: string | null;
   x11_display?: string | null;
   x11_single_connection?: boolean;
+  server_alive_interval?: number | null;
   folder: string | null;
   jump_hosts: string[];
   tags: string[];
@@ -383,6 +384,7 @@ type MacroRecordingState = {
 
 const MAX_RECORDED_MACRO_ACTIONS = 64;
 const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
+const MAX_SERVER_ALIVE_INTERVAL_SECONDS = 86_400;
 
 function normalizeMacroRecord(record: MacroRecord): MacroRecord {
   return { ...record, approval: record.approval ?? "beforeRun" };
@@ -449,6 +451,7 @@ type SshConnectRequest = {
     display: string;
     singleConnection: boolean;
   };
+  serverAliveInterval?: number;
   cols: number;
   rows: number;
 };
@@ -3370,6 +3373,7 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
     knownHostsPath: session.known_hosts_path ?? undefined,
     pinnedFingerprint: session.pinned_fingerprint ?? undefined,
     x11: session.x11_display?.trim() ? { display: session.x11_display, singleConnection: session.x11_single_connection ?? false } : undefined,
+    serverAliveInterval: session.server_alive_interval ?? undefined,
     jumpHosts: jumpHosts.length > 0 ? jumpHosts : undefined,
     cols: 120,
     rows: 32,
@@ -4196,6 +4200,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       : "",
   );
   const [keyRef, setKeyRef] = useState(session.auth.kind === "privateKey" ? session.auth.keyRef : "");
+  const [serverAliveInterval, setServerAliveInterval] = useState(String(session.server_alive_interval ?? 0));
   const [authError, setAuthError] = useState<string | null>(null);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -4204,6 +4209,11 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
     let auth = session.auth;
     if (isSsh) {
       setAuthError(null);
+      const parsedServerAliveInterval = Number(serverAliveInterval);
+      if (!Number.isInteger(parsedServerAliveInterval) || parsedServerAliveInterval < 0 || parsedServerAliveInterval > MAX_SERVER_ALIVE_INTERVAL_SECONDS) {
+        setAuthError(`ServerAliveInterval must be between 0 and ${MAX_SERVER_ALIVE_INTERVAL_SECONDS} seconds.`);
+        return;
+      }
       if (authKind === "password" || authKind === "keyboardInteractive") {
         if (!credentialRef.trim()) {
           setAuthError("Enter an opaque vault credential reference.");
@@ -4231,6 +4241,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       notes: notes.trim() || null,
       environment: session.environment ?? [],
       auth,
+      server_alive_interval: isSsh && Number(serverAliveInterval) === 0 ? null : isSsh ? Number(serverAliveInterval) : session.server_alive_interval ?? null,
     });
   };
 
@@ -4288,6 +4299,11 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         {isSsh && <div className="session-editor-auth">
           <span className="settings-section-label">SSH authentication</span>
           <div className="session-editor-grid">
+            <label className="quick-connect-wide">
+              ServerAliveInterval <span className="optional">optional · seconds</span>
+              <input type="number" min="0" max={MAX_SERVER_ALIVE_INTERVAL_SECONDS} step="1" value={serverAliveInterval} onChange={(event) => setServerAliveInterval(event.target.value)} />
+              <small>0 disables SSH keepalives. The bounded value is applied by the native SSH transport.</small>
+            </label>
             <label className="quick-connect-wide">
               Method
               <select value={authKind} onChange={(event) => { setAuthKind(event.target.value as typeof authKind); setAuthError(null); }}>
@@ -4487,6 +4503,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [x11Enabled, setX11Enabled] = useState(false);
   const [x11Display, setX11Display] = useState("");
   const [x11SingleConnection, setX11SingleConnection] = useState(false);
+  const [serverAliveInterval, setServerAliveInterval] = useState("0");
   const [jumpHost, setJumpHost] = useState("");
   const [jumpPort, setJumpPort] = useState("22");
   const [jumpUsername, setJumpUsername] = useState("");
@@ -4586,6 +4603,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
           ? { method: "keyboardInteractive" as const, credentialId }
         : { method: "password" as const, credentialId };
     const parsedJumpPort = Number(jumpPort);
+    const parsedServerAliveInterval = Number(serverAliveInterval);
+    if (!Number.isInteger(parsedServerAliveInterval) || parsedServerAliveInterval < 0 || parsedServerAliveInterval > MAX_SERVER_ALIVE_INTERVAL_SECONDS) {
+      setUriError(`ServerAliveInterval must be between 0 and ${MAX_SERVER_ALIVE_INTERVAL_SECONDS} seconds.`);
+      return;
+    }
     const jumpHosts = jumpHost.trim() && Number.isInteger(parsedJumpPort) && parsedJumpPort > 0 && parsedJumpPort <= 65535
       ? [{ host: jumpHost.trim(), port: parsedJumpPort, username: jumpUsername.trim() || username.trim(), auth: { method: "agent" as const } }]
       : undefined;
@@ -4597,6 +4619,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       knownHostsPath: knownHostsPath.trim() || undefined,
       pinnedFingerprint: pinnedFingerprint.trim() || undefined,
       x11: x11Enabled ? { display: x11Display.trim(), singleConnection: x11SingleConnection } : undefined,
+      serverAliveInterval: parsedServerAliveInterval,
       jumpHosts,
       cols: 120,
       rows: 32,
@@ -4790,6 +4813,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                   <label className="quick-connect-wide">
                     Pinned SHA-256 fingerprint <span className="optional">optional</span>
                     <input value={pinnedFingerprint} onChange={(event) => setPinnedFingerprint(event.target.value)} placeholder="SHA256:... (for deliberate first trust)" />
+                  </label>
+                  <label className="quick-connect-wide">
+                    ServerAliveInterval <span className="optional">optional · seconds</span>
+                    <input type="number" min="0" max={MAX_SERVER_ALIVE_INTERVAL_SECONDS} step="1" value={serverAliveInterval} onChange={(event) => setServerAliveInterval(event.target.value)} />
+                    <small>0 disables SSH keepalives. The value is applied inside the native SSH layer.</small>
                   </label>
                   <label className="quick-connect-wide quick-connect-check-row">
                     <input type="checkbox" checked={x11Enabled} onChange={(event) => setX11Enabled(event.target.checked)} />

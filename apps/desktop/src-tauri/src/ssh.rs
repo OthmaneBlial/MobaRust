@@ -1,4 +1,6 @@
-use mobarust_core::{TransferEvent, TransferLifecycle, TransferState};
+use mobarust_core::{
+    MAX_SERVER_ALIVE_INTERVAL_SECONDS, TransferEvent, TransferLifecycle, TransferState,
+};
 use mobarust_ssh::{
     HostKeyPolicy, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials, SshError,
     SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
@@ -44,6 +46,9 @@ pub struct SshConnectRequest {
     pub jump_hosts: Vec<SshJumpHostRequest>,
     #[serde(default)]
     pub x11: Option<SshX11Request>,
+    /// OpenSSH `ServerAliveInterval` value in seconds. Zero disables it.
+    #[serde(default)]
+    pub server_alive_interval: Option<u64>,
     #[serde(default = "default_terminal_cols")]
     pub cols: u32,
     #[serde(default = "default_terminal_rows")]
@@ -1263,6 +1268,7 @@ async fn connect_transport(
     vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
 ) -> Result<SshConnection, SshManagerError> {
+    let keepalive_interval = server_alive_interval_duration(request.server_alive_interval)?;
     let x11 = request
         .x11
         .as_ref()
@@ -1276,6 +1282,7 @@ async fn connect_transport(
         port: request.port,
         host_key_policy,
         timeout: Duration::from_secs(12),
+        keepalive_interval,
         credentials,
         x11,
     };
@@ -1291,6 +1298,7 @@ async fn connect_transport(
             port: jump.port,
             host_key_policy,
             timeout: Duration::from_secs(12),
+            keepalive_interval: None,
             credentials,
             x11: None,
         });
@@ -1307,6 +1315,20 @@ fn credentials_from_request(
     request: &SshConnectRequest,
 ) -> Result<SshCredentials, SshManagerError> {
     credentials_from_auth(vault, &request.username, &request.auth)
+}
+
+fn server_alive_interval_duration(
+    seconds: Option<u64>,
+) -> Result<Option<Duration>, SshManagerError> {
+    match seconds {
+        None | Some(0) => Ok(None),
+        Some(seconds) if seconds <= MAX_SERVER_ALIVE_INTERVAL_SECONDS => {
+            Ok(Some(Duration::from_secs(seconds)))
+        }
+        Some(_) => Err(SshManagerError::InvalidRequest(format!(
+            "ServerAliveInterval must be between 1 and {MAX_SERVER_ALIVE_INTERVAL_SECONDS} seconds"
+        ))),
+    }
 }
 
 fn credentials_from_jump_request(
@@ -3345,12 +3367,26 @@ fn default_terminal_rows() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReconnectOutcome, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol,
-        reconnect_with_backoff, remote_child_path, should_emit_transfer_progress, transfer_metrics,
-        validate_transfer_component,
+        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshTransferRequest,
+        TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, reconnect_with_backoff,
+        remote_child_path, server_alive_interval_duration, should_emit_transfer_progress,
+        transfer_metrics, validate_transfer_component,
     };
     use std::time::{Duration, Instant};
     use tokio::sync::{oneshot, watch};
+
+    #[test]
+    fn server_alive_interval_maps_to_a_bounded_native_duration() {
+        assert_eq!(server_alive_interval_duration(None).unwrap(), None);
+        assert_eq!(server_alive_interval_duration(Some(0)).unwrap(), None);
+        assert_eq!(
+            server_alive_interval_duration(Some(30)).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        assert!(
+            server_alive_interval_duration(Some(MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1)).is_err()
+        );
+    }
 
     #[test]
     fn recursive_remote_paths_keep_root_boundaries() {
