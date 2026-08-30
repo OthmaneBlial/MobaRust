@@ -1459,6 +1459,39 @@ mod tests {
     }
 
     #[test]
+    fn imports_keepalive_zero_or_out_of_range_values_without_applying_them() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        fs::write(
+            &path,
+            format!(
+                "Host disabled\n    ServerAliveInterval 0\nHost too-long\n    ServerAliveInterval {}\n",
+                MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1
+            ),
+        )
+        .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let report = store.import_openssh_config(&path).unwrap();
+
+        assert_eq!(report.imported.len(), 2);
+        assert_eq!(report.imported[0].server_alive_interval, None);
+        assert_eq!(report.imported[1].server_alive_interval, None);
+        assert_eq!(
+            report.imported[0].notes.as_deref(),
+            Some("Imported from OpenSSH; ServerAliveInterval=0")
+        );
+        let expected_note = format!(
+            "Imported from OpenSSH; ServerAliveInterval={}",
+            MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1
+        );
+        assert_eq!(
+            report.imported[1].notes.as_deref(),
+            Some(expected_note.as_str())
+        );
+    }
+
+    #[test]
     fn does_not_create_profiles_for_wildcard_or_invalid_hosts() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("config");

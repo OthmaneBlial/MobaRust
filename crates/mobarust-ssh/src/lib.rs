@@ -2587,6 +2587,26 @@ mod tests {
     }
 
     #[test]
+    fn keepalive_interval_is_applied_to_the_native_russh_config() {
+        let options = SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 22,
+            host_key_policy: HostKeyPolicy::RejectUnknown,
+            timeout: Duration::from_secs(12),
+            keepalive_interval: Some(Duration::from_secs(30)),
+            credentials: SshCredentials::agent("fixture-user"),
+            x11: None,
+        };
+
+        let parts = connection_parts(&options);
+        assert_eq!(
+            parts.config.keepalive_interval,
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(parts.config.keepalive_max, 3);
+    }
+
+    #[test]
     fn known_hosts_policy_accepts_a_recorded_key_only() {
         let directory = tempfile::tempdir().unwrap();
         let known_hosts = directory.path().join("known_hosts");

@@ -51,4 +51,9 @@ MobaRust cannot protect secrets from a fully compromised operating system, an at
 
 ## Release gates
 
-Before credential-backed SSH is presented as production-ready, add tests for redaction, malformed imports, host-key mismatch, cancellation, and secret lifetime. Run dependency audits locally and review every new native capability against this boundary.
+The credential-backed SSH slice has local coverage for redaction, malformed
+imports, host-key mismatch, cancellation, explicit host trust, and secret
+separation. Promotion to a broadly supported production release still requires
+the cross-platform runtime, packaging/signing, and external interoperability
+evidence listed in `ROADMAP.md`. Run dependency audits locally and review every
+new native capability against this boundary.
