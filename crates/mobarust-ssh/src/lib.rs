@@ -26,6 +26,11 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+/// Keep a hostile keyboard-interactive server from multiplying a secret into
+/// an unbounded number of response allocations. This allows ordinary password
+/// plus MFA prompt flows while failing closed on pathological fan-out.
+const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
     /// Match against the OpenSSH known_hosts format. Unknown keys are rejected.
@@ -50,6 +55,8 @@ pub enum SshError {
     Agent(String),
     #[error("SSH keyboard-interactive authentication requires non-echo prompts")]
     KeyboardInteractiveEchoPrompt,
+    #[error("SSH keyboard-interactive authentication requested too many prompts")]
+    KeyboardInteractiveTooManyPrompts,
     #[error("SSH connection timed out")]
     Timeout,
     #[error("SSH host could not be resolved")]
@@ -1832,10 +1839,7 @@ async fn authenticate_keyboard_interactive(
                 });
             }
             client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                if prompts.iter().any(|prompt| prompt.echo) {
-                    return Err(SshError::KeyboardInteractiveEchoPrompt);
-                }
-                let responses = vec![response.as_str().to_owned(); prompts.len()];
+                let responses = keyboard_interactive_responses(&response, &prompts)?;
                 handle
                     .authenticate_keyboard_interactive_respond(responses)
                     .await
@@ -1843,6 +1847,22 @@ async fn authenticate_keyboard_interactive(
             }
         };
     }
+}
+
+fn keyboard_interactive_responses(
+    response: &Secret,
+    prompts: &[client::Prompt],
+) -> Result<Vec<String>, SshError> {
+    if prompts.len() > MAX_KEYBOARD_INTERACTIVE_PROMPTS {
+        return Err(SshError::KeyboardInteractiveTooManyPrompts);
+    }
+    if prompts.iter().any(|prompt| prompt.echo) {
+        return Err(SshError::KeyboardInteractiveEchoPrompt);
+    }
+    Ok(prompts
+        .iter()
+        .map(|_| response.as_str().to_owned())
+        .collect())
 }
 
 #[cfg(unix)]
@@ -2967,6 +2987,52 @@ mod tests {
         assert!(debug.contains("keyboard-interactive"));
         assert!(debug.contains("ops"));
         assert!(!debug.contains("one-time-secret"));
+    }
+
+    #[test]
+    fn keyboard_interactive_prompt_fanout_is_bounded_before_secret_copies() {
+        let secret = Secret::new("fixture-response");
+        let prompts = (0..=MAX_KEYBOARD_INTERACTIVE_PROMPTS)
+            .map(|index| client::Prompt {
+                prompt: format!("prompt-{index}"),
+                echo: false,
+            })
+            .collect::<Vec<_>>();
+
+        let error = keyboard_interactive_responses(&secret, &prompts).unwrap_err();
+        assert!(matches!(error, SshError::KeyboardInteractiveTooManyPrompts));
+        assert_eq!(
+            error.to_string(),
+            "SSH keyboard-interactive authentication requested too many prompts"
+        );
+    }
+
+    #[test]
+    fn keyboard_interactive_responses_reject_echo_and_support_bounded_mfa() {
+        let secret = Secret::new("fixture-response");
+        let prompts = vec![
+            client::Prompt {
+                prompt: "password".into(),
+                echo: false,
+            },
+            client::Prompt {
+                prompt: "otp".into(),
+                echo: false,
+            },
+        ];
+        assert_eq!(
+            keyboard_interactive_responses(&secret, &prompts).unwrap(),
+            vec!["fixture-response", "fixture-response"]
+        );
+
+        let echo_prompt = vec![client::Prompt {
+            prompt: "visible input".into(),
+            echo: true,
+        }];
+        assert!(matches!(
+            keyboard_interactive_responses(&secret, &echo_prompt),
+            Err(SshError::KeyboardInteractiveEchoPrompt)
+        ));
     }
 
     #[test]

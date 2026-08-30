@@ -20,7 +20,7 @@ This document describes the security boundary for the first vertical slice and t
 
 | Threat | Current policy / planned control |
 | --- | --- |
-| Plaintext password exposure | Session records contain credential references only. Password acquisition stays native, secret material is bounded before vault/backend use, and it is not serialized in diagnostics. |
+| Plaintext password exposure | Session records contain credential references only. Password acquisition stays native, secret material is bounded before vault/backend use, keyboard-interactive response fan-out is capped before response strings are created, and it is not serialized in diagnostics. |
 | Private-key exposure | Keys are referenced by path and never copied into session metadata. Passwords and passphrases move from the native vault into zeroizing SSH buffers without an extra plaintext clone; the third-party key parser's loaded-key memory hygiene remains a release-review gate. |
 | Session environment exposure | Environment entries are bounded, validated, and treated as potentially sensitive configuration. They are applied natively to the SSH channel, excluded from `Debug` output/logs, and the UI warns that passwords/tokens belong in the vault instead. |
 | Malicious local process | Documented as an OS limitation; minimize plaintext lifetime and never claim protection from a process with equivalent user privileges. |

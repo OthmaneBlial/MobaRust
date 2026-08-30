@@ -24,6 +24,9 @@ Platform lookups and writes, portable-vault entries, and portable-vault
 passphrases are bounded to 1 MiB before backend use or key derivation to prevent
 accidental large secret allocations from becoming a native denial-of-service
 path.
+Keyboard-interactive SSH servers are also limited to eight non-echo prompts per
+request before the response is copied for the native library, preventing a
+remote server from multiplying a secret into unbounded response allocations.
 
 ## Consequences
 
