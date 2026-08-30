@@ -1419,9 +1419,17 @@ fn terminal_spawn(
     manager: State<'_, TerminalManager>,
     cols: u16,
     rows: u16,
+    target: terminal::LocalTerminalTarget,
 ) -> Result<String, String> {
     manager
-        .spawn(app, cols, rows)
+        .spawn(app, cols, rows, target)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn terminal_list_wsl() -> Result<Vec<String>, String> {
+    terminal::list_wsl_distributions()
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -1599,6 +1607,7 @@ fn main() {
             serial_attach,
             serial_close,
             terminal_spawn,
+            terminal_list_wsl,
             terminal_write,
             terminal_resize,
             terminal_close

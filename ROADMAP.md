@@ -11,6 +11,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Two-pane horizontal/vertical terminal splits with explicit close semantics
 - [x] Nested splits, drag-resizing, and richer pane focus management
 - [x] Local validation command and architecture/research records
+- [x] Explicit Windows WSL distribution discovery and native PTY launch path (Windows runtime evidence remains part of the matrix)
 - [ ] Cross-platform PTY matrix on Windows, Linux, and macOS
 
 ## 0.2 — SSH vertical slice

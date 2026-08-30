@@ -1,5 +1,5 @@
 use mobarust_core::OutputBatcher;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
@@ -22,6 +22,28 @@ pub enum TerminalError {
     Io(#[source] std::io::Error),
     #[error("terminal resize failed: {0}")]
     Resize(#[source] anyhow::Error),
+    #[error("local terminal target is not available on this platform")]
+    UnsupportedTarget,
+    #[error("WSL distribution name is invalid")]
+    InvalidWslDistribution,
+    #[cfg(target_os = "windows")]
+    #[error("WSL distribution discovery timed out")]
+    WslDiscoveryTimeout,
+    #[cfg(target_os = "windows")]
+    #[error("WSL distribution discovery failed: {0}")]
+    WslDiscovery(#[source] std::io::Error),
+    #[cfg(target_os = "windows")]
+    #[error("WSL distribution discovery returned an error: {0}")]
+    WslDiscoveryStatus(String),
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum LocalTerminalTarget {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "wsl")]
+    Wsl { distribution: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,7 +71,13 @@ pub struct TerminalManager {
 }
 
 impl TerminalManager {
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16) -> Result<String, TerminalError> {
+    pub fn spawn(
+        &self,
+        app: AppHandle,
+        cols: u16,
+        rows: u16,
+        target: LocalTerminalTarget,
+    ) -> Result<String, TerminalError> {
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
@@ -60,8 +88,27 @@ impl TerminalManager {
             })
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
 
-        let shell = default_shell();
-        let mut command = portable_pty::CommandBuilder::new(&shell);
+        let mut command = match target {
+            LocalTerminalTarget::Default => {
+                let shell = default_shell();
+                portable_pty::CommandBuilder::new(&shell)
+            }
+            LocalTerminalTarget::Wsl { distribution } => {
+                let distribution = validate_wsl_distribution(&distribution)?;
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = distribution;
+                    return Err(TerminalError::UnsupportedTarget);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let mut command = portable_pty::CommandBuilder::new("wsl.exe");
+                    command.arg("--distribution");
+                    command.arg(distribution);
+                    command
+                }
+            }
+        };
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
 
@@ -143,6 +190,97 @@ impl TerminalManager {
             .get(id)
             .cloned()
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))
+    }
+}
+
+fn validate_wsl_distribution(distribution: &str) -> Result<String, TerminalError> {
+    if distribution.chars().any(char::is_control) {
+        return Err(TerminalError::InvalidWslDistribution);
+    }
+    let distribution = distribution.trim();
+    if distribution.is_empty() || distribution.len() > 128 || distribution.starts_with('-') {
+        return Err(TerminalError::InvalidWslDistribution);
+    }
+    Ok(distribution.to_owned())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_wsl_distributions(bytes: &[u8]) -> Vec<String> {
+    let text = if bytes.starts_with(&[0xff, 0xfe]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+        std::char::decode_utf16(units)
+            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect::<String>()
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+        std::char::decode_utf16(units)
+            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect::<String>()
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    let mut distributions = Vec::new();
+    for line in text.lines() {
+        let name = line
+            .trim_matches('\0')
+            .trim()
+            .trim_start_matches('\u{feff}')
+            .trim_start_matches('*')
+            .trim();
+        if name.is_empty()
+            || validate_wsl_distribution(name).is_err()
+            || distributions.iter().any(|item| item == name)
+        {
+            continue;
+        }
+        distributions.push(name.to_owned());
+    }
+    distributions
+}
+
+/// Discover installed WSL distributions without invoking a shell.
+///
+/// The non-Windows branch returns an explicit unsupported error and performs
+/// no process or filesystem access. Windows callers get a short bounded
+/// `wsl.exe --list --quiet` query; the frontend can only launch names returned
+/// by this query.
+pub async fn list_wsl_distributions() -> Result<Vec<String>, TerminalError> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(TerminalError::UnsupportedTarget)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let output = tokio::time::timeout(
+            Duration::from_secs(3),
+            Command::new("wsl.exe")
+                .args(["--list", "--quiet"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| TerminalError::WslDiscoveryTimeout)?
+        .map_err(TerminalError::WslDiscovery)?;
+
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(TerminalError::WslDiscoveryStatus(if detail.is_empty() {
+                format!("process exited with {}", output.status)
+            } else {
+                detail
+            }));
+        }
+        Ok(parse_wsl_distributions(&output.stdout))
     }
 }
 
@@ -287,5 +425,29 @@ mod tests {
 
         assert!(output.contains("MOBARUST_PTY_OK"));
         assert!(output.contains("INPUT:hello"));
+    }
+
+    #[test]
+    fn wsl_listing_normalizes_windows_output_without_accepting_options() {
+        let output = b"\xff\xfeU\0b\0u\0n\0t\0u\0\r\0\n\0*\0D\0e\0b\0i\0a\0n\0\r\0\n\0-\0u\0n\0s\0a\0f\0e\0\r\0\n\0";
+        let distributions = parse_wsl_distributions(output);
+
+        assert_eq!(distributions, vec!["Ubuntu", "Debian"]);
+    }
+
+    #[test]
+    fn wsl_distribution_validation_rejects_control_and_option_like_names() {
+        assert!(validate_wsl_distribution("Ubuntu\n").is_err());
+        assert!(validate_wsl_distribution("--root").is_err());
+        assert_eq!(validate_wsl_distribution(" Ubuntu ").unwrap(), "Ubuntu");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn wsl_discovery_is_not_attempted_on_non_windows() {
+        assert!(matches!(
+            list_wsl_distributions().await,
+            Err(TerminalError::UnsupportedTarget)
+        ));
     }
 }

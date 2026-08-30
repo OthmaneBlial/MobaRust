@@ -165,6 +165,7 @@ type TerminalViewportProps = {
   instanceKey: number;
   remoteSessionId: string | null;
   remoteProtocol: "ssh" | "telnet" | "serial" | DesktopProtocol | null;
+  localTarget: LocalTerminalTarget;
   remoteDesktopRequest?: RemoteDesktopConnectRequest | null;
   fontSize: number;
   scrollbackLines: number;
@@ -184,12 +185,17 @@ type WorkspaceTerminal = {
   label: string;
   remoteSessionId: string | null;
   remoteProtocol: "ssh" | "telnet" | "serial" | DesktopProtocol | null;
+  localTarget: LocalTerminalTarget;
   remoteDesktopRequest?: RemoteDesktopConnectRequest | null;
   remoteHost: string | null;
   status: TerminalStatus;
 };
 
 type SplitDirection = "none" | "right" | "down";
+
+type LocalTerminalTarget =
+  | { type: "default" }
+  | { type: "wsl"; distribution: string };
 
 type TerminalLayoutNode =
   | { kind: "pane"; terminalId: string }
@@ -244,6 +250,7 @@ function createWorkspaceTerminal(config: Partial<Omit<WorkspaceTerminal, "id" | 
     label: "local shell",
     remoteSessionId: null,
     remoteProtocol: null,
+    localTarget: { type: "default" },
     remoteHost: null,
     status: "starting",
     ...config,
@@ -622,6 +629,7 @@ const previewSessions: SessionListItem[] = [
 
 const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "New local terminal", hint: "⌘ N", icon: TerminalIcon },
+  { label: "New WSL terminal", hint: "", icon: TerminalIcon },
   { label: "Quick connect", hint: "⌘ K", icon: Network },
   { label: "Open SFTP", hint: "⌘ ⇧ F", icon: Folder },
   { label: "Settings", hint: "", icon: Settings2 },
@@ -639,7 +647,7 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults }: TerminalViewportProps) {
+function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -816,6 +824,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
         const terminalId = await invoke<string>("terminal_spawn", {
           cols: terminal.cols,
           rows: terminal.rows,
+          target: localTarget,
         });
         if (disposed) {
           void invoke("terminal_close", { terminalId });
@@ -853,7 +862,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       onTerminalDisposed(workspaceId);
       terminal.dispose();
     };
-  }, [instanceKey, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, localTarget, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -1120,6 +1129,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
+  const [wslTerminalOpen, setWslTerminalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
@@ -1238,8 +1248,11 @@ function App() {
     }
   }, [activeTerminal, activeTerminalId, terminalLayout]);
 
-  const startNewTerminal = useCallback(() => {
-    const terminal = createWorkspaceTerminal();
+  const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }) => {
+    const terminal = createWorkspaceTerminal({
+      label: target.type === "wsl" ? `WSL · ${target.distribution}` : "local shell",
+      localTarget: target,
+    });
     setTerminalTabs((current) => [...current, terminal]);
     setActiveTerminalId(terminal.id);
     setTerminalLayout({ kind: "pane", terminalId: terminal.id });
@@ -1247,6 +1260,16 @@ function App() {
     setSessionNotice(null);
     setActiveView("terminal");
   }, []);
+
+  const openWslTerminalPicker = useCallback(() => {
+    setPaletteOpen(false);
+    setWslTerminalOpen(true);
+  }, []);
+
+  const startWslTerminal = useCallback((distribution: string) => {
+    startNewTerminal({ type: "wsl", distribution });
+    setWslTerminalOpen(false);
+  }, [startNewTerminal]);
 
   const openSftpView = useCallback(() => {
     if (remoteSessionId && remoteProtocol === "ssh") {
@@ -2990,7 +3013,7 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} />;
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} />;
   }, [handleNativeTerminalId, handleSearchResults, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
@@ -3036,10 +3059,13 @@ function App() {
             <button className="sidebar-toggle" onClick={() => setSidebarOpen(false)} aria-label="Collapse sidebar">
               <PanelLeftClose size={16} />
             </button>
-            <button className="new-button" onClick={startNewTerminal}>
+            <button className="new-button" onClick={() => startNewTerminal()}>
               <Plus size={15} strokeWidth={2.4} />
               <span>New terminal</span>
               <span className="shortcut">⌘ N</span>
+            </button>
+            <button className="icon-button new-terminal-menu-button" onClick={openWslTerminalPicker} aria-label="New WSL terminal" title="New WSL terminal">
+              <MoreHorizontal size={15} />
             </button>
           </div>
 
@@ -3105,7 +3131,7 @@ function App() {
               <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>⌘ ⇧ P</span></button>
               <button className="outline-button" onClick={() => setMacrosOpen(true)}><Play size={15} /> Macros <span>⌘ ⇧ M</span></button>
               <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>⌘ K</span></button>
-              <button className="primary-button" onClick={startNewTerminal}><Plus size={15} /> New terminal</button>
+              <button className="primary-button" onClick={() => startNewTerminal()}><Plus size={15} /> New terminal</button>
             </div>
           </div>
           {sessionNotice && <div className="workspace-notice" role="status"><CheckCircle2 size={14} /><span>{sessionNotice}</span></div>}
@@ -3131,7 +3157,7 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={() => setSettingsOpen(true)}><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={() => startNewTerminal()}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={() => setSettingsOpen(true)}><MoreHorizontal size={16} /></button></div>
                   </div>
                   {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
                   {macroRecording && <div className="macro-recording-banner" role="alert"><Radio size={15} /><div><strong>RECORDING INPUT · {macroRecording.terminalLabel}</strong><span>Only terminal input is captured locally. Do not type passwords, tokens, or private keys.</span></div><button type="button" className="danger-button" onClick={stopMacroRecording}><Square size={13} /> Stop recording</button></div>}
@@ -3179,9 +3205,10 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
+      {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
@@ -3758,7 +3785,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   </div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onNewWslTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onNewWslTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const commands = [
@@ -3767,7 +3794,8 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, o
       .map((action) => ({
         ...action,
         run: action.label === "New local terminal" ? onNewTerminal
-          : action.label === "Quick connect" ? onQuickConnect
+          : action.label === "New WSL terminal" ? onNewWslTerminal
+            : action.label === "Quick connect" ? onQuickConnect
             : action.label === "Open SFTP" ? onOpenFiles
               : action.label === "Settings" ? onOpenSettings
                 : action.label === "Credential vault" ? onOpenCredentials
@@ -3805,6 +3833,61 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, o
   };
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder="Search commands" aria-label="Search commands" aria-controls="command-palette-list" aria-activedescendant={commands[activeIndex] ? `command-${activeIndex}` : undefined} /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.length > 0 ? <div id="command-palette-list" role="listbox" aria-label="Available commands">{commands.map((action, index) => { const ActionIcon = action.icon; return <button key={action.label} id={`command-${index}`} type="button" role="option" aria-selected={index === activeIndex} className={`palette-item ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => execute(index)}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}</div> : <div className="palette-empty">No matching commands</div>}<div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+}
+
+function WslTerminalDialog({ onClose, onSelect }: { onClose: () => void; onSelect: (distribution: string) => void }) {
+  const [distributions, setDistributions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!IS_TAURI) {
+      setLoading(false);
+      setError("WSL discovery requires the Windows desktop runtime.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      setDistributions(await invoke<string[]>("terminal_list_wsl"));
+    } catch (refreshError) {
+      setDistributions([]);
+      setError(String(refreshError));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const platformMessage = error?.includes("not available on this platform")
+    ? "WSL is available only in the Windows desktop build."
+    : error;
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="quick-connect" role="dialog" aria-modal="true" aria-label="New WSL terminal" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="quick-connect-heading">
+        <div>
+          <span className="eyebrow">LOCAL / WINDOWS</span>
+          <h2>New WSL terminal</h2>
+          <p>Choose an installed distribution. MobaRust does not execute a shell to discover or launch it.</p>
+        </div>
+        <button type="button" className="icon-button" aria-label="Close WSL terminal picker" onClick={onClose}><X size={17} /></button>
+      </div>
+      <div className="wsl-dialog-body">
+        {loading ? <div className="wsl-empty"><LoaderCircle className="spin" size={20} /><strong>Checking Windows WSL</strong><span>This is a bounded local capability query.</span></div>
+          : platformMessage ? <div className="wsl-empty"><ShieldAlert size={20} /><strong>WSL is unavailable</strong><span>{platformMessage}</span></div>
+            : distributions.length === 0 ? <div className="wsl-empty"><TerminalIcon size={20} /><strong>No WSL distribution detected</strong><span>Install a distribution in Windows, then refresh this list.</span></div>
+              : <div className="wsl-distribution-list" role="listbox" aria-label="Installed WSL distributions">{distributions.map((distribution) => <button key={distribution} type="button" className="wsl-distribution" role="option" onClick={() => onSelect(distribution)}><TerminalIcon size={16} /><span><strong>{distribution}</strong><small>Launch interactive shell</small></span><ExternalLink size={14} /></button>)}</div>}
+      </div>
+      <div className="quick-connect-footer">
+        <span><ShieldCheck size={14} /> No SSH keys, credentials, or personal files are read</span>
+        <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="button" className="outline-button" onClick={() => void refresh()} disabled={loading}><RefreshCw className={loading ? "spin" : ""} size={14} /> Refresh</button></div>
+      </div>
+    </section>
+  </div>;
 }
 
 function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, onPortableSave, onPortableDelete }: { portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void>; onPortableSave: (credentialId: string, secret: string) => Promise<void>; onPortableDelete: (credentialId: string) => Promise<void> }) {

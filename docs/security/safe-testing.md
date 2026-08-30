@@ -25,6 +25,9 @@ configuration.
   `127.0.0.1` and an OS-assigned port.
 - Serial tests use configuration and lifecycle logic only. Hardware
   interoperability requires a separate, explicit manual test session.
+- WSL discovery and launch are compiled conditionally for Windows. macOS/Linux
+  tests do not invoke `wsl.exe`; the parser is tested with synthetic UTF-16
+  output and no local distribution is probed.
 - Tests do not install system packages, alter shell profiles, change firewall
   rules, modify keychains, write outside the repository/temp directories, or
   send credentials to a real host.
