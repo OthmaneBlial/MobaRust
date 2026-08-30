@@ -55,6 +55,10 @@ messages before a process is started:
   session opt-in, and the policy is rechecked against the running helper's
   capability report before forwarding input; inbound clipboard events are also
   rejected when the runtime report does not advertise clipboard support;
+- interactive keyboard, pointer, wheel, resize, and clipboard commands are
+  accepted only after the helper reaches `Active`; `Stop` remains permitted in
+  every non-terminal phase so startup and reconnect cancellation cannot be
+  blocked by readiness gating;
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and

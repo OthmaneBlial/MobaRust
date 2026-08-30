@@ -104,6 +104,17 @@ impl From<HelperCapabilityRequirements> for SessionCommandPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum HelperSessionPhase {
+    #[default]
+    Starting,
+    Ready,
+    Active,
+    Reconnecting,
+    Stopping,
+    Terminal,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum HelperDataPhase {
     #[default]
     AwaitingCapabilities,
@@ -139,6 +150,7 @@ struct ManagedSession {
     stop_requested: Arc<AtomicBool>,
     command_policy: SessionCommandPolicy,
     capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
+    phase: Arc<Mutex<HelperSessionPhase>>,
 }
 
 #[derive(Clone, Default)]
@@ -254,6 +266,7 @@ impl RemoteDesktopManager {
         let supervisor = Arc::new(Mutex::new(supervisor));
         let stop_requested = Arc::new(AtomicBool::new(false));
         let capabilities = Arc::new(Mutex::new(None));
+        let phase = Arc::new(Mutex::new(HelperSessionPhase::Starting));
         self.sessions.lock().await.insert(
             session_id.clone(),
             ManagedSession {
@@ -262,6 +275,7 @@ impl RemoteDesktopManager {
                 stop_requested: Arc::clone(&stop_requested),
                 command_policy: capability_requirements.into(),
                 capabilities: Arc::clone(&capabilities),
+                phase: Arc::clone(&phase),
             },
         );
         let sessions = Arc::clone(&self.sessions);
@@ -277,6 +291,7 @@ impl RemoteDesktopManager {
             supervisor: reader_supervisor,
             capability_requirements,
             capabilities,
+            phase,
         };
         tokio::spawn(read_helper_events(
             app,
@@ -310,7 +325,14 @@ impl RemoteDesktopManager {
             .cloned()
             .ok_or_else(|| "remote desktop session was not found".to_owned())?;
         let capabilities = session.capabilities.lock().await;
-        validate_command_for_session(session.command_policy, capabilities.as_ref(), &command)?;
+        let phase = session.phase.lock().await;
+        validate_command_for_session(
+            session.command_policy,
+            capabilities.as_ref(),
+            *phase,
+            &command,
+        )?;
+        drop(phase);
         drop(capabilities);
         session
             .commands
@@ -583,6 +605,7 @@ struct HelperReaderContext {
     supervisor: Arc<Mutex<HelperSupervisor>>,
     capability_requirements: HelperCapabilityRequirements,
     capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
+    phase: Arc<Mutex<HelperSessionPhase>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -623,6 +646,7 @@ async fn read_helper_events(
         supervisor,
         capability_requirements,
         capabilities,
+        phase,
     } = context;
     let mut progress = HelperEventProgress::default();
     let handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
@@ -738,6 +762,21 @@ async fn read_helper_events(
         } = &event
         {
             *capabilities.lock().await = Some(reported.clone());
+        }
+        if let HelperEvent::State { state } = &event {
+            *phase.lock().await = match state {
+                mobarust_remote_desktop::HelperState::Starting => HelperSessionPhase::Starting,
+                mobarust_remote_desktop::HelperState::Ready => HelperSessionPhase::Ready,
+                mobarust_remote_desktop::HelperState::Active => HelperSessionPhase::Active,
+                mobarust_remote_desktop::HelperState::Reconnecting => {
+                    HelperSessionPhase::Reconnecting
+                }
+                mobarust_remote_desktop::HelperState::Stopping => HelperSessionPhase::Stopping,
+                mobarust_remote_desktop::HelperState::Created
+                | mobarust_remote_desktop::HelperState::Stopped
+                | mobarust_remote_desktop::HelperState::Failed
+                | mobarust_remote_desktop::HelperState::Crashed => HelperSessionPhase::Terminal,
+            };
         }
         emit_helper_event(&app, &session_id, event.clone());
         if matches!(
@@ -862,8 +901,12 @@ fn validate_helper_capabilities(
 fn validate_command_for_session(
     policy: SessionCommandPolicy,
     capabilities: Option<&HelperCapabilities>,
+    phase: HelperSessionPhase,
     command: &HelperCommand,
 ) -> Result<(), String> {
+    if !matches!(command, HelperCommand::Stop) && phase != HelperSessionPhase::Active {
+        return Err("remote desktop helper is not active yet".into());
+    }
     match command {
         HelperCommand::Resize { .. } if policy.protocol != DesktopProtocol::Rdp => {
             Err("remote desktop server resize is unavailable for this protocol".into())
@@ -900,7 +943,7 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelperCapabilityRequirements, HelperDataPhase, HelperFrameReadError,
+        HelperCapabilityRequirements, HelperDataPhase, HelperFrameReadError, HelperSessionPhase,
         MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
         RemoteDesktopConnectRequest, SessionCommandPolicy, claim_unexpected_helper_exit,
         helper_input_failure_message, read_next_helper_frame, validate_command_for_session,
@@ -1331,6 +1374,7 @@ mod tests {
         let resize_error = validate_command_for_session(
             vnc_policy,
             None,
+            HelperSessionPhase::Active,
             &HelperCommand::Resize {
                 display: mobarust_remote_desktop::DisplaySize {
                     width: 1024,
@@ -1344,12 +1388,40 @@ mod tests {
         let clipboard_error = validate_command_for_session(
             vnc_policy,
             None,
+            HelperSessionPhase::Active,
             &HelperCommand::Clipboard {
                 text: String::from("must stay blocked").into(),
             },
         )
         .unwrap_err();
         assert!(clipboard_error.contains("disabled"));
+    }
+
+    #[test]
+    fn interactive_commands_wait_for_active_helper_but_stop_is_always_allowed() {
+        let policy = SessionCommandPolicy {
+            protocol: DesktopProtocol::Rdp,
+            clipboard_enabled: false,
+        };
+        let error = validate_command_for_session(
+            policy,
+            None,
+            HelperSessionPhase::Starting,
+            &HelperCommand::Key {
+                scancode: 30,
+                pressed: true,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("not active"));
+
+        validate_command_for_session(
+            policy,
+            None,
+            HelperSessionPhase::Reconnecting,
+            &HelperCommand::Stop,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1361,6 +1433,7 @@ mod tests {
         validate_command_for_session(
             policy,
             None,
+            HelperSessionPhase::Active,
             &HelperCommand::Resize {
                 display: mobarust_remote_desktop::DisplaySize {
                     width: 1280,
@@ -1372,6 +1445,7 @@ mod tests {
         validate_command_for_session(
             policy,
             None,
+            HelperSessionPhase::Active,
             &HelperCommand::Clipboard {
                 text: String::from("approved by the session policy").into(),
             },
@@ -1380,6 +1454,7 @@ mod tests {
         validate_command_for_session(
             policy,
             None,
+            HelperSessionPhase::Active,
             &HelperCommand::Key {
                 scancode: 30,
                 pressed: true,
@@ -1397,6 +1472,7 @@ mod tests {
         validate_command_for_session(
             policy,
             Some(&HelperCapabilities::vnc()),
+            HelperSessionPhase::Active,
             &HelperCommand::Clipboard {
                 text: String::from("approved VNC fixture text").into(),
             },
@@ -1415,6 +1491,7 @@ mod tests {
         let resize_error = validate_command_for_session(
             policy,
             Some(&capabilities),
+            HelperSessionPhase::Active,
             &HelperCommand::Resize {
                 display: mobarust_remote_desktop::DisplaySize {
                     width: 1280,
@@ -1430,6 +1507,7 @@ mod tests {
         let clipboard_error = validate_command_for_session(
             policy,
             Some(&capabilities),
+            HelperSessionPhase::Active,
             &HelperCommand::Clipboard {
                 text: String::from("must stay native").into(),
             },
