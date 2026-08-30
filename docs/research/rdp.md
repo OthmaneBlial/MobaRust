@@ -146,6 +146,12 @@ initial-attempt failure emits `Failed` instead of returning an unhandled raw
 channel error. This protects the lifecycle boundary only and does not change
 the still-open dependency, certificate, or Windows interoperability gates.
 
+The same bounded stop/reap path now runs when the IronRDP output channel closes
+or emits an unexpected termination error before the helper chooses `Lost` or
+`Failed`. A client task therefore cannot be left detached while the outer loop
+starts a reconnect. This remains local lifecycle evidence, not proof of a real
+RDP server or cross-platform runtime.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

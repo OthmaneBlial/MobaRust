@@ -417,8 +417,8 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                         return Ok(RdpAttemptOutcome::Stopped);
                     }
                     Some(RdpOutputEvent::Terminated(Err(_))) => {
+                        stop_client(&input_tx, &mut client_task).await;
                         if active_sent {
-                            stop_client(&input_tx, &mut client_task).await;
                             return Ok(lost_outcome(
                                 "RDP session ended unexpectedly",
                                 active_sent,
@@ -443,6 +443,7 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                         startup_pending = false;
                     }
                     None => {
+                        stop_client(&input_tx, &mut client_task).await;
                         if active_sent {
                             return Ok(lost_outcome(
                                 "RDP connection was lost",
