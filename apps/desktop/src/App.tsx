@@ -13,6 +13,7 @@ import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
 import {
   parseRemoteDesktopProfile,
   remoteDesktopCanResize,
+  remoteDesktopCanReceiveClipboard,
   remoteDesktopCanSendClipboard,
   supportsNativeRdpClipboard,
 } from "./remote-desktop-profile";
@@ -1128,6 +1129,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
           }
           if (helperEvent.event === "framebuffer") renderFramebuffer(helperEvent.payload.width, helperEvent.payload.height, helperEvent.payload.pixels);
           if (helperEvent.event === "clipboard") {
+            if (!remoteDesktopCanReceiveClipboard(request.protocol, request.clipboardEnabled, capabilitiesRef.current)) {
+              setErrorAndFail("The remote desktop helper sent clipboard data without negotiated opt-in.");
+              return;
+            }
             setRemoteClipboard(helperEvent.payload.text);
             setClipboardCopied(false);
           }

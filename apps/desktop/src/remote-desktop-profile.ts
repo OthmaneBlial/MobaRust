@@ -69,6 +69,15 @@ export function remoteDesktopCanSendClipboard(
   return (protocol === "rdp" || protocol === "vnc") && requested && capabilities?.clipboard === true;
 }
 
+/** Accept remote clipboard events only after the same explicit negotiation. */
+export function remoteDesktopCanReceiveClipboard(
+  protocol: "rdp" | "vnc",
+  requested: boolean,
+  capabilities: RemoteDesktopRuntimeCapabilities | null,
+): boolean {
+  return (protocol === "rdp" || protocol === "vnc") && requested && capabilities?.clipboard === true;
+}
+
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 16_384;
 const MIN_HEIGHT = 200;
