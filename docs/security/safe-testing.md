@@ -15,7 +15,8 @@ configuration.
   `SSH_AUTH_SOCK`, GitHub keys, or a user's private key.
 - RDP/VNC tests use protocol-independent fixtures or an explicitly approved
   disposable server. The isolated RDP helper can be compiled and exercised on
-  EOF without opening a socket.
+  EOF without opening a socket; the VNC integration fixture binds only to
+  `127.0.0.1` and an OS-assigned port.
 - Serial tests use configuration and lifecycle logic only. Hardware
   interoperability requires a separate, explicit manual test session.
 - Tests do not install system packages, alter shell profiles, change firewall
@@ -47,6 +48,12 @@ The isolated RDP helper check is also repository-scoped:
 
 ```text
 cargo xtask check-rdp-helper
+```
+
+The isolated VNC helper check is repository-scoped:
+
+```text
+cargo xtask check-vnc-helper
 ```
 
 The helper EOF smoke test below emits its native handshake and exits without

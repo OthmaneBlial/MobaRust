@@ -147,7 +147,7 @@ impl HelperLaunchConfig {
         if self.username.trim().is_empty() {
             return Err(HelperProtocolError::EmptyUsername);
         }
-        if self.credential_ref.trim().is_empty() {
+        if self.credential_ref.trim().is_empty() && self.protocol == DesktopProtocol::Rdp {
             return Err(HelperProtocolError::EmptyCredentialReference);
         }
         if self.color_depth == 0 {

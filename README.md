@@ -46,8 +46,9 @@ The first working slice provides:
 - a documented safe-testing policy that keeps protocol fixtures on loopback
   and temporary paths, without reading personal SSH material.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
-  redaction tests, plus an isolated IronRDP RDP adapter experiment under
-  `tools/rdp-helper`; this is not yet a packaged or production RDP client.
+  redaction tests, plus isolated IronRDP and `vnc-rs` adapter experiments under
+  `tools/rdp-helper` and `tools/vnc-helper`; these are not yet packaged or
+  production desktop clients.
 
 The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, explicit DNS/TCP/port-scan diagnostics view, and unauthenticated SSH host-key fingerprint inspection are covered locally. The bounded reconnect worker uses the same native SSH transport but still needs dedicated failure-injection coverage before release. Native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 

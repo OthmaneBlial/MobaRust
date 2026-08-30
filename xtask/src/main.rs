@@ -5,9 +5,11 @@ fn main() {
     let result = match command.as_str() {
         "check" => check(),
         "check-rdp-helper" => check_rdp_helper(),
+        "check-vnc-helper" => check_vnc_helper(),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
+            println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
             Ok(())
         }
         other => Err(format!("unknown xtask command: {other}")),
@@ -44,6 +46,7 @@ fn check() -> Result<(), String> {
     run("pnpm", ["run", "lint"], Some("apps/desktop"))?;
     run("pnpm", ["run", "build"], Some("apps/desktop"))?;
     check_rdp_helper()?;
+    check_vnc_helper()?;
     Ok(())
 }
 
@@ -70,6 +73,38 @@ fn check_rdp_helper() -> Result<(), String> {
             "clippy",
             "--manifest-path",
             "tools/rdp-helper/Cargo.toml",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        None,
+    )
+}
+
+fn check_vnc_helper() -> Result<(), String> {
+    run(
+        "cargo",
+        [
+            "fmt",
+            "--manifest-path",
+            "tools/vnc-helper/Cargo.toml",
+            "--",
+            "--check",
+        ],
+        None,
+    )?;
+    run(
+        "cargo",
+        ["test", "--manifest-path", "tools/vnc-helper/Cargo.toml"],
+        None,
+    )?;
+    run(
+        "cargo",
+        [
+            "clippy",
+            "--manifest-path",
+            "tools/vnc-helper/Cargo.toml",
             "--all-targets",
             "--",
             "-D",

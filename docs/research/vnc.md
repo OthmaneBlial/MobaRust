@@ -67,5 +67,19 @@ framebuffer updates, input, resize, clipboard capability reporting, and server
 disconnect. Manual interoperability checks must use a dedicated real VNC
 server; mocks alone are not production evidence.
 
-The research working notes are in `research_vnc_integration/` and are not a
-substitute for a real VNC implementation.
+## Isolated implementation experiment
+
+The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`
+RFB client behind the native helper contract. It negotiates RFB 3.8, supports
+no-auth and VNC-password negotiation through the credential pipe, requests an
+RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
+pointer, and bounded Latin-1 clipboard input. Unsupported JPEG rectangles and
+server-side resize are reported rather than simulated.
+
+`tools/vnc-helper/tests/local_vnc.rs` runs a deterministic no-auth RFB fixture
+on an OS-assigned `127.0.0.1` port and verifies handshake, framebuffer, key,
+pointer, and clean stop. This is meaningful protocol evidence, but it is not
+yet cross-platform interoperability or a production UI integration. The
+research working notes remain in `research_vnc_integration/`, and VNC must not
+be advertised as shipped until the parent supervisor/renderer, reconnect,
+packaging, and Windows/Linux/macOS checks are complete.

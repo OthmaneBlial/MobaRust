@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "mobarust-vnc-helper"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+
+[dependencies]
+mobarust-remote-desktop = { path = "../../crates/mobarust-remote-desktop" }
+tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+vnc-rs = "0.5.3"
