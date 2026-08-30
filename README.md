@@ -12,6 +12,7 @@ The first working slice provides:
 - a real `russh` transport crate with restrictive host-key policy, interactive SSH PTY, and streaming SFTP primitives;
 - password, private-key, agent, and bounded keyboard-interactive SSH authentication, with credential references resolved only in Rust;
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
+- a Quick Connect URI path for `ssh://`, `telnet://`, `rdp://`, and `vnc://` endpoints, with password-bearing URIs rejected and cleared;
 - an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
 - SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, modification/ownership metadata, explicit remote-path copy, and confirmed POSIX permission changes;
 - a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
