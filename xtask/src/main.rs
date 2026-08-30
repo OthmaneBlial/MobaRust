@@ -406,6 +406,10 @@ fn portable_check() -> Result<(), String> {
         &repository_root.join("LICENSE"),
         &package_directory.join("LICENSE"),
     )?;
+    copy_regular_tree(
+        &repository_root.join("NOTICE"),
+        &package_directory.join("NOTICE"),
+    )?;
     fs::write(
         package_directory.join("MobaRust.app/Contents/MacOS/portable.flag"),
         b"",
@@ -652,6 +656,7 @@ fn validate_portable_archive_listing(listing: &str, package_name: &str) -> Resul
     for required in [
         package_name.to_owned(),
         format!("{package_name}/LICENSE"),
+        format!("{package_name}/NOTICE"),
         format!("{package_name}/PORTABLE-UNSIGNED.txt"),
         format!("{package_name}/MobaRust.sha256"),
         format!("{package_name}/MobaRust.app/Contents/MacOS/mobarust"),
@@ -1659,7 +1664,7 @@ mod tests {
     fn portable_archive_listing_rejects_escape_and_requires_runtime_entries() {
         let package_name = "MobaRust-macos-arm64";
         let valid = format!(
-            "{package_name}/\n{package_name}/LICENSE\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/MacOS/portable.flag\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
+            "{package_name}/\n{package_name}/LICENSE\n{package_name}/NOTICE\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/MacOS/portable.flag\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
         );
         validate_portable_archive_listing(&valid, package_name)
             .expect("complete portable listing should pass");
