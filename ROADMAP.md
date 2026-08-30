@@ -73,7 +73,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Bounded port-scan UI with progress and cancellation
 - [x] Bounded platform-native ping and traceroute with cancellation and output limits
 - [x] Explicit unauthenticated SSH fingerprint inspection with no credential or known_hosts access
-- [ ] X11 forwarding and integrated/external X-server strategy (opt-in native external-display path shipped; cross-platform server matrix remains)
+- [ ] X11 forwarding and integrated/external X-server strategy (opt-in native external-display path shipped; research in `docs/research/x11.md`; cross-platform server matrix remains)
 - [x] One-shot SSH remote monitoring with capability-aware metrics and bounded collection
 - [ ] Signed portable packaging and cross-platform distribution evidence
 
