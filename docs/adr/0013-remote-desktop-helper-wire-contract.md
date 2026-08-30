@@ -31,7 +31,8 @@ messages before a process is started:
   framebuffer, clipboard, and bounded diagnostics); capability reports are
   emitted by the running helper so the UI can distinguish a compiled backend
   from a protocol feature flag, while the native parent rejects a report for
-  a protocol other than the one requested at session start;
+  a protocol or requested feature other than the one requested at session
+  start;
 - envelopes and every deserialized payload reject unknown fields, so a
   malformed or newer-incompatible helper message fails closed instead of
   silently discarding data;

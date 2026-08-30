@@ -1,10 +1,11 @@
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
-    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
-    HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
-    MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
-    MAX_USERNAME_BYTES, ReconnectPolicy, decode_event_frame, encode_command_frame, read_frame,
-    validate_gateway_endpoint, validate_rdp_color_depth, write_frame_with_timeout,
+    DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential, HelperEvent,
+    HelperLaunchConfig, HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES,
+    MAX_DOMAIN_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES,
+    MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy, decode_event_frame,
+    encode_command_frame, read_frame, validate_gateway_endpoint, validate_rdp_color_depth,
+    write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,27 @@ pub struct RemoteDesktopEvent {
     pub event: HelperEvent,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HelperCapabilityRequirements {
+    protocol: DesktopProtocol,
+    clipboard: bool,
+    audio: bool,
+    gateway: bool,
+    color_depth: Option<u16>,
+}
+
+fn required_helper_capabilities(
+    request: &RemoteDesktopConnectRequest,
+) -> HelperCapabilityRequirements {
+    HelperCapabilityRequirements {
+        protocol: request.protocol,
+        clipboard: request.clipboard_enabled,
+        audio: request.audio_enabled,
+        gateway: request.gateway_endpoint.is_some(),
+        color_depth: (request.protocol == DesktopProtocol::Rdp).then_some(request.color_depth),
+    }
+}
+
 #[derive(Clone)]
 struct ManagedSession {
     commands: mpsc::Sender<HelperCommand>,
@@ -98,6 +120,7 @@ impl RemoteDesktopManager {
         request: RemoteDesktopConnectRequest,
     ) -> Result<RemoteDesktopConnectResponse, String> {
         validate_request(&request)?;
+        let capability_requirements = required_helper_capabilities(&request);
         let credential_id = request
             .credential_id
             .clone()
@@ -217,7 +240,7 @@ impl RemoteDesktopManager {
             sessions,
             stop_requested,
             reader_supervisor,
-            request.protocol,
+            capability_requirements,
         ));
         tokio::spawn(write_helper_commands(
             writer_app,
@@ -377,8 +400,8 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
             "remote desktop credential reference is invalid",
         )?;
     }
-    if request.protocol == DesktopProtocol::Rdp && request.audio_enabled {
-        return Err("RDP audio redirection is not enabled in this helper".into());
+    if request.audio_enabled {
+        return Err("remote desktop audio redirection is not enabled in this helper".into());
     }
     if request.protocol == DesktopProtocol::Vnc && request.clipboard_enabled {
         return Err("RDP clipboard settings are supported only for RDP".into());
@@ -516,7 +539,7 @@ async fn read_helper_events(
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
     stop_requested: Arc<AtomicBool>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
-    expected_protocol: DesktopProtocol,
+    capability_requirements: HelperCapabilityRequirements,
 ) {
     loop {
         let frame = match read_frame(&mut stdout).await {
@@ -577,14 +600,14 @@ async fn read_helper_events(
                 break;
             }
         };
-        if !helper_event_matches_protocol(&event, expected_protocol) {
+        if let Err(message) = validate_helper_event(&event, capability_requirements) {
             if claim_unexpected_helper_exit(&stop_requested) {
                 emit_helper_event(
                     &app,
                     &session_id,
                     HelperEvent::Diagnostic {
                         level: mobarust_remote_desktop::DiagnosticLevel::Error,
-                        message: "remote desktop helper reported an incompatible protocol".into(),
+                        message: message.into(),
                     },
                 );
                 emit_helper_event(
@@ -618,11 +641,40 @@ async fn read_helper_events(
     sessions.lock().await.remove(&session_id);
 }
 
-fn helper_event_matches_protocol(event: &HelperEvent, expected: DesktopProtocol) -> bool {
+fn validate_helper_event(
+    event: &HelperEvent,
+    requirements: HelperCapabilityRequirements,
+) -> Result<(), &'static str> {
     match event {
-        HelperEvent::Capabilities { capabilities } => capabilities.protocol == expected,
-        _ => true,
+        HelperEvent::Capabilities { capabilities } => {
+            validate_helper_capabilities(capabilities, requirements)
+        }
+        _ => Ok(()),
     }
+}
+
+fn validate_helper_capabilities(
+    capabilities: &HelperCapabilities,
+    requirements: HelperCapabilityRequirements,
+) -> Result<(), &'static str> {
+    if capabilities.protocol != requirements.protocol {
+        return Err("remote desktop helper reported an incompatible protocol");
+    }
+    if requirements.clipboard && !capabilities.clipboard {
+        return Err("remote desktop helper does not support requested clipboard redirection");
+    }
+    if requirements.audio && !capabilities.audio {
+        return Err("remote desktop helper does not support requested audio redirection");
+    }
+    if requirements.gateway && !capabilities.gateway {
+        return Err("remote desktop helper does not support the requested gateway");
+    }
+    if let Some(depth) = requirements.color_depth
+        && !capabilities.color_depths.contains(&depth)
+    {
+        return Err("remote desktop helper does not support the requested color depth");
+    }
+    Ok(())
 }
 
 fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
@@ -644,9 +696,10 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, claim_unexpected_helper_exit, helper_event_matches_protocol,
-        helper_input_failure_message, validate_helper_resource, validate_request,
+        HelperCapabilityRequirements, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
+        MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest,
+        claim_unexpected_helper_exit, helper_input_failure_message, validate_helper_capabilities,
+        validate_helper_event, validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
@@ -682,32 +735,69 @@ mod tests {
     }
 
     #[test]
-    fn helper_capability_protocol_must_match_the_requested_protocol() {
+    fn helper_capabilities_must_match_the_requested_session() {
         let rdp_capabilities = HelperEvent::Capabilities {
             capabilities: HelperCapabilities::rdp(),
         };
-        assert!(helper_event_matches_protocol(
-            &rdp_capabilities,
-            DesktopProtocol::Rdp
-        ));
-        assert!(!helper_event_matches_protocol(
-            &rdp_capabilities,
-            DesktopProtocol::Vnc
-        ));
-
-        let vnc_capabilities = HelperEvent::Capabilities {
-            capabilities: HelperCapabilities::vnc(),
+        let rdp_requirements = HelperCapabilityRequirements {
+            protocol: DesktopProtocol::Rdp,
+            clipboard: false,
+            audio: false,
+            gateway: false,
+            color_depth: Some(32),
         };
-        assert!(helper_event_matches_protocol(
-            &vnc_capabilities,
-            DesktopProtocol::Vnc
-        ));
-        assert!(helper_event_matches_protocol(
-            &HelperEvent::State {
-                state: HelperState::Ready,
-            },
-            DesktopProtocol::Rdp
-        ));
+        assert!(validate_helper_event(&rdp_capabilities, rdp_requirements).is_ok());
+        assert!(
+            validate_helper_event(
+                &rdp_capabilities,
+                HelperCapabilityRequirements {
+                    protocol: DesktopProtocol::Vnc,
+                    ..rdp_requirements
+                }
+            )
+            .is_err()
+        );
+
+        let mut vnc_capability_data = HelperCapabilities::vnc();
+        vnc_capability_data.clipboard = false;
+        let vnc_capabilities = HelperEvent::Capabilities {
+            capabilities: vnc_capability_data.clone(),
+        };
+        assert!(
+            validate_helper_event(
+                &vnc_capabilities,
+                HelperCapabilityRequirements {
+                    protocol: DesktopProtocol::Vnc,
+                    clipboard: false,
+                    audio: false,
+                    gateway: false,
+                    color_depth: None,
+                },
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_helper_capabilities(
+                &vnc_capability_data,
+                HelperCapabilityRequirements {
+                    protocol: DesktopProtocol::Vnc,
+                    clipboard: true,
+                    audio: false,
+                    gateway: false,
+                    color_depth: None,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Ready,
+                },
+                rdp_requirements,
+            )
+            .is_ok()
+        );
     }
 
     fn request(protocol: DesktopProtocol, username: &str) -> RemoteDesktopConnectRequest {
@@ -750,6 +840,14 @@ mod tests {
     #[test]
     fn parent_boundary_rejects_rdp_audio_until_a_backend_exists() {
         let mut request = request(DesktopProtocol::Rdp, "Administrator");
+        request.audio_enabled = true;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("audio"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_vnc_audio_until_a_backend_exists() {
+        let mut request = request(DesktopProtocol::Vnc, "viewer");
         request.audio_enabled = true;
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("audio"));

@@ -111,9 +111,11 @@ handling, explicit user action for remote-to-local copies, deterministic
 cleanup, and Windows interoperability evidence. The helper now emits a typed
 capability report after `Ready`; the native parent first verifies that the
 reported protocol matches the requested session, then forwards it to the UI.
-The UI can show the actual platform backend and disable unsupported clipboard
-actions before a user attempts them. A mismatched report fails the session
-locally and is never treated as proof of a different protocol.
+The parent also verifies requested clipboard, audio, Gateway, and RDP color
+depth capabilities before forwarding the report. The UI can show the actual
+platform backend and disable unsupported clipboard actions before a user
+attempts them. A mismatched report fails the session locally and is never
+treated as proof of a different protocol or feature.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
