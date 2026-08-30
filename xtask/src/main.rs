@@ -8,12 +8,14 @@ fn main() {
         "check" => check(),
         "check-rdp-helper" => check_rdp_helper(),
         "check-vnc-helper" => check_vnc_helper(),
+        "benchmark" => benchmark(),
         "package-check" => package_check(),
         "stage-helpers" => stage_helpers(),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
             println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
+            println!("cargo xtask benchmark    Run synthetic local performance probes");
             println!(
                 "cargo xtask package-check    Build an unsigned current-platform Tauri app bundle"
             );
@@ -93,6 +95,20 @@ fn package_check() -> Result<(), String> {
         "pnpm",
         ["tauri", "build", "--debug", "--no-sign", "--bundles", "app"],
         Some("apps/desktop"),
+    )
+}
+
+fn benchmark() -> Result<(), String> {
+    run(
+        "cargo",
+        [
+            "run",
+            "--release",
+            "--manifest-path",
+            "benchmarks/Cargo.toml",
+            "--",
+        ],
+        None,
     )
 }
 

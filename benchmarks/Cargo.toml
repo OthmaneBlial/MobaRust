@@ -1,0 +1,12 @@
+[package]
+name = "mobarust-benchmarks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Reproducible synthetic local probes for MobaRust"
+
+[dependencies]
+mobarust-core = { path = "../crates/mobarust-core" }
+serde_json.workspace = true

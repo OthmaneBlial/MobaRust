@@ -71,6 +71,15 @@ The isolated VNC helper check is repository-scoped:
 cargo xtask check-vnc-helper
 ```
 
+The synthetic benchmark probe is repository-scoped as well:
+
+```text
+cargo xtask benchmark
+```
+
+It uses in-memory fixtures only; it does not open sockets or inspect local
+configuration, credentials, SSH directories, or attached devices.
+
 The helper EOF smoke test below emits its native handshake and exits without
 connecting:
 

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "benchmarks",
   "crates/mobarust-core",
   "crates/mobarust-ssh",
   "crates/mobarust-store",

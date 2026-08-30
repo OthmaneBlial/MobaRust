@@ -2871,6 +2871,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mobarust-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "mobarust-core",
+ "serde_json",
+]
+
+[[package]]
 name = "mobarust-core"
 version = "0.1.0"
 dependencies = [
