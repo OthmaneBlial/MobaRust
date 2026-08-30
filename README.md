@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>The remote-work control room for people who operate systems.</strong><br />
-  SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust and Tauri.
+  <strong>Your terminal, file transfer, and remote operations in one calm desktop workspace.</strong><br />
+  A free SSH client and SFTP workspace for developers, DevOps, sysadmins, and homelabs.
 </p>
 
 <p align="center">
@@ -23,28 +23,32 @@
   <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
 </p>
 
-> Looking for a free and open-source MobaXterm alternative? MobaRust is a local-first desktop SSH client and remote-operations workspace for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users.
+> Looking for a free and open-source MobaXterm alternative? MobaRust is a local-first desktop SSH client, SFTP client, terminal emulator, and remote-operations workspace for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users.
 
 MobaRust is independent and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
 
 MobaRust is a real desktop application, not a terminal-shaped website. React and TypeScript render the interface inside Tauri; Rust owns the native networking, PTY, filesystem, process, persistence, cancellation, and credential boundaries.
 
-## The idea
+## Stop juggling five tools for one server
 
-Remote work should not mean switching between a terminal, an SFTP client, a tunnel tool, a notes app, and a session list every few minutes.
+Remote work should not mean switching between a terminal, an SFTP client, a tunnel tool, a notes app, and a session list every few minutes. MobaRust puts the operator loop in one focused window:
 
-MobaRust brings that daily operator loop into one keyboard-friendly desktop application:
+1. **Connect** to a saved host or use Quick Connect in seconds.
+2. **Inspect** files, system information, connection state, and diagnostics.
+3. **Transfer** remote files with progress, cancellation, and conflict awareness.
+4. **Operate** through a visible terminal, tunnel, snippet, or carefully selected broadcast action.
+5. **Disconnect** cleanly, with bounded retries and no hidden background work.
 
-**Connect. Inspect. Transfer. Operate carefully. Disconnect cleanly.**
+The result is a practical MobaXterm alternative that stays keyboard-friendly, local-first, and honest about what is ready.
 
-## Why choose MobaRust?
+## Why operators choose MobaRust
 
 - **Free and open source** — Apache-2.0 licensed, inspectable, forkable, and developed in public.
-- **A practical MobaXterm alternative** — SSH, SFTP/SCP, local terminals, tunnels, session profiles, and diagnostics in one workspace.
+- **A serious MobaXterm alternative** — SSH, SFTP/SCP, local terminals, tunnels, session profiles, and diagnostics in one workspace.
 - **Local-first by design** — no mandatory cloud account or subscription for the local application.
 - **Native where it matters** — Rust handles sockets, PTYs, transfers, helpers, and sensitive operations behind typed Tauri commands.
 - **Safer defaults** — sessions reference credentials; passwords and private keys are not duplicated through ordinary profile data, logs, or process arguments.
-- **Honest capability labels** — mature SSH foundations are separated from RDP/VNC candidates and platform work that still needs evidence.
+- **No vaporware marketing** — mature SSH foundations are separated from RDP/VNC candidates and platform work that still needs evidence.
 
 ## Built for the remote workday
 
@@ -54,9 +58,9 @@ Snippets support descriptions, tags, and variables such as `${host}`, `${port}`,
 
 The best first use case is everyday SSH and SFTP work. RDP and VNC are real isolated candidates, while integrated X11, signed distribution, and complete cross-platform evidence remain deliberately on the roadmap.
 
-## An open alternative to the closed all-in-one toolbox
+## An open alternative to the commercial all-in-one toolbox
 
-MobaXterm made the all-in-one remote toolbox familiar. MobaRust keeps the useful idea while giving operators a free, open-source implementation that can be inspected, improved, and adapted in public.
+MobaXterm made the all-in-one remote toolbox familiar. MobaRust keeps that useful idea while giving operators a free, open-source implementation that can be inspected, improved, and adapted in public. There is no claim of feature-for-feature parity today; the roadmap makes the remaining work visible.
 
 | If you value… | MobaRust gives you… |
 | --- | --- |
