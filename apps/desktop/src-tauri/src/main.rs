@@ -32,7 +32,7 @@ use ssh::{
     SshAuthRequest, SshConnectRequest, SshDynamicForwardRequest, SshLocalForwardRequest,
     SshManager, SshRemoteForwardRequest, SshTransferRequest,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri::State;
@@ -1588,9 +1588,15 @@ fn terminal_close(manager: State<'_, TerminalManager>, terminal_id: String) -> R
 
 fn detect_portable_data_dir() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
+    portable_data_dir_for(&executable)
+}
+
+fn portable_data_dir_for(executable: &Path) -> Option<PathBuf> {
     let parent = executable.parent()?;
-    parent
-        .join("portable.flag")
+    let marker = parent.join("portable.flag");
+    let metadata = std::fs::symlink_metadata(marker).ok()?;
+    metadata
+        .file_type()
         .is_file()
         .then(|| parent.join("portable-data"))
 }
@@ -1747,4 +1753,37 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running MobaRust");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::portable_data_dir_for;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn portable_mode_requires_a_regular_marker_beside_the_executable() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-portable-marker-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create test directory");
+        let executable = root.join("mobarust");
+
+        assert_eq!(portable_data_dir_for(&executable), None);
+        fs::create_dir(root.join("portable.flag")).expect("create marker directory");
+        assert_eq!(portable_data_dir_for(&executable), None);
+        fs::remove_dir(root.join("portable.flag")).expect("remove marker directory");
+        fs::write(root.join("portable.flag"), b"").expect("write marker");
+        assert_eq!(
+            portable_data_dir_for(&executable),
+            Some(root.join("portable-data"))
+        );
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
 }

@@ -8,11 +8,13 @@ portable packaging and cross-platform distribution evidence remain pending.
 
 ## Decision
 
-Portable mode activates only when a `portable.flag` file is present beside the
-executable. In that mode, the application catalog and settings are placed in a
-`portable-data` directory beside the executable; otherwise the normal Tauri
-application-data directory is used. The marker prevents a normal development
-or installed run from silently switching storage roots.
+Portable mode activates only when a regular `portable.flag` file is present
+beside the executable. Symbolic-link markers are rejected so a portable launch
+cannot redirect its data root through an unexpected filesystem target. In that
+mode, the application catalog and settings are placed in a `portable-data`
+directory beside the executable; otherwise the normal Tauri application-data
+directory is used. The marker prevents a normal development or installed run
+from silently switching storage roots.
 
 Portable credentials are stored in a separate `vault.bin` file. The file uses
 Argon2id to derive a 256-bit key from an explicit passphrase and AES-256-GCM

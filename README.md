@@ -84,8 +84,9 @@ The desktop binary is named `mobarust`.
 
 Reference projects live under `base/` for local research only and are excluded from Git. See [the research log](docs/research/reference-projects.md).
 
-Portable mode is opt-in: a distribution must place an empty `portable.flag`
-beside the executable. MobaRust then keeps non-secret application data and the
+Portable mode is opt-in: a distribution must place an empty regular-file
+`portable.flag` beside the executable; symbolic-link markers are rejected.
+MobaRust then keeps non-secret application data and the
 separate encrypted `portable-data/vault.bin` beside it; it never turns normal
 installed or development runs into portable mode automatically.
 
