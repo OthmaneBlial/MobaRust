@@ -31,14 +31,14 @@ pub enum NetworkDiagnosticError {
     InvalidPortRange,
     #[error("network diagnostic timed out")]
     Timeout,
-    #[error("DNS lookup failed: {0}")]
-    Resolution(String),
+    #[error("DNS lookup failed")]
+    Resolution,
     #[error("network diagnostic was cancelled")]
     Cancelled,
-    #[error("network diagnostic worker failed: {0}")]
-    Worker(String),
-    #[error("network diagnostic process failed: {0}")]
-    Process(String),
+    #[error("network diagnostic worker failed")]
+    Worker,
+    #[error("network diagnostic process failed")]
+    Process,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,8 +162,7 @@ where
     while !tasks.is_empty() {
         if cancellation_closed {
             if let Some(result) = tasks.join_next().await {
-                let result =
-                    result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??;
+                let result = result.map_err(|_| NetworkDiagnosticError::Worker)??;
                 on_progress(&result, results.len() + 1, total);
                 results.push(result);
                 schedule_ports(&mut tasks, &options, &mut next_port);
@@ -185,7 +184,7 @@ where
             }
             result = tasks.join_next() => {
                 if let Some(result) = result {
-                    let result = result.map_err(|error| NetworkDiagnosticError::Worker(error.to_string()))??;
+                    let result = result.map_err(|_| NetworkDiagnosticError::Worker)??;
                     on_progress(&result, results.len() + 1, total);
                     results.push(result);
                     schedule_ports(&mut tasks, &options, &mut next_port);
@@ -231,13 +230,11 @@ pub async fn resolve_host(
     let addresses = tokio::time::timeout(timeout, lookup_host((host.as_str(), 0)))
         .await
         .map_err(|_| NetworkDiagnosticError::Timeout)?
-        .map_err(|error| NetworkDiagnosticError::Resolution(error.to_string()))?
+        .map_err(|_| NetworkDiagnosticError::Resolution)?
         .map(|address| address.ip())
         .collect::<Vec<_>>();
     if addresses.is_empty() {
-        return Err(NetworkDiagnosticError::Resolution(
-            "host resolved to no addresses".into(),
-        ));
+        return Err(NetworkDiagnosticError::Resolution);
     }
     Ok(addresses)
 }
@@ -360,7 +357,7 @@ async fn run_diagnostic_command(
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| NetworkDiagnosticError::Process(format!("{program}: {error}")))?;
+        .map_err(|_| NetworkDiagnosticError::Process)?;
     let mut output = Box::pin(child.wait_with_output());
     let mut deadline = Box::pin(tokio::time::sleep(timeout));
     let mut cancellation_closed = false;
@@ -368,7 +365,7 @@ async fn run_diagnostic_command(
     loop {
         tokio::select! {
             result = &mut output => {
-                return result.map_err(|error| NetworkDiagnosticError::Process(error.to_string()));
+                return result.map_err(|_| NetworkDiagnosticError::Process);
             }
             changed = cancellation.changed(), if !cancellation_closed => {
                 match changed {
@@ -484,6 +481,22 @@ mod tests {
             invalid.validate(),
             Err(NetworkDiagnosticError::InvalidTarget)
         ));
+    }
+
+    #[test]
+    fn diagnostic_errors_are_actionable_without_raw_system_details() {
+        let errors = [
+            NetworkDiagnosticError::Resolution,
+            NetworkDiagnosticError::Worker,
+            NetworkDiagnosticError::Process,
+        ];
+        let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(messages[0], "DNS lookup failed");
+        assert_eq!(messages[1], "network diagnostic worker failed");
+        assert_eq!(messages[2], "network diagnostic process failed");
+        assert!(messages.iter().all(|message| {
+            !message.contains("/Users/") && !message.contains("private-host-detail")
+        }));
     }
 
     #[test]

@@ -20,6 +20,11 @@ status (`open`, `closed`, or `timed-out`). DNS resolution is exposed as a
 separate bounded primitive. Ping, traceroute, and fingerprint inspection need
 their own platform and permission review before being presented in the UI.
 
+Diagnostic failures exposed to the UI use stable categories rather than raw
+OS resolver, process, or task text. This keeps local paths, command details,
+and host-specific system messages out of the IPC error surface while retaining
+actionable distinctions such as DNS failure, timeout, and process failure.
+
 ## Safety boundary
 
 - no implicit local-network discovery;
