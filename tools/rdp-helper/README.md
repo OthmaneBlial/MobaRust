@@ -57,6 +57,12 @@ backoff, and Stop cancels both the delay and the current attempt. Timing and
 stalled-handshake behavior are covered locally; no RDP server interoperability
 is claimed by these tests.
 
+Resize commands are validated again inside the helper before they are sent to
+IronRDP, and the requested display state is updated only after that enqueue
+succeeds. If the RDP input channel closes, the helper emits a stable lifecycle
+failure and uses the bounded stop/reconnect path rather than exposing a raw
+channel error.
+
 Safe local checks:
 
 ```text

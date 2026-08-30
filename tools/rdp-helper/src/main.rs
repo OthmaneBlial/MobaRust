@@ -548,6 +548,7 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(true)
         }
         HelperCommand::Resize { display } => {
+            display.validate()?;
             send_rdp_input(
                 input_tx,
                 RdpInputEvent::Resize {
@@ -1207,6 +1208,45 @@ mod tests {
 
         assert_eq!(error.to_string(), "RDP input channel is unavailable");
         assert!(!error.to_string().contains("FastPath"));
+    }
+
+    #[tokio::test]
+    async fn invalid_rdp_resize_is_rejected_before_queueing_or_mutating_state() {
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+        let mut current_display = DisplaySize {
+            width: 640,
+            height: 480,
+        };
+        let mut last_buttons = 0;
+        let mut client_task = tokio::spawn(async {});
+        let mut stdout = tokio::io::sink();
+
+        let error = handle_command(
+            HelperCommand::Resize {
+                display: DisplaySize {
+                    width: 319,
+                    height: 200,
+                },
+            },
+            &input_tx,
+            &mut current_display,
+            &mut last_buttons,
+            &mut stdout,
+            &mut client_task,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<HelperProtocolError>(),
+            Some(HelperProtocolError::InvalidDisplaySize {
+                width: 319,
+                height: 200
+            })
+        ));
+        assert_eq!(current_display.width, 640);
+        assert_eq!(current_display.height, 480);
+        assert!(input_rx.try_recv().is_err());
     }
 
     #[tokio::test]

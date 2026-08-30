@@ -152,6 +152,11 @@ or emits an unexpected termination error before the helper chooses `Lost` or
 starts a reconnect. This remains local lifecycle evidence, not proof of a real
 RDP server or cross-platform runtime.
 
+The helper also revalidates every dynamic resize at the final native command
+handler before enqueueing it into IronRDP. Invalid dimensions therefore cannot
+mutate the remembered display size or reach the engine even if a future caller
+invokes the handler outside the already-validating wire decoder.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a
