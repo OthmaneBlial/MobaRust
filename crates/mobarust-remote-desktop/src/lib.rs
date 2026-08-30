@@ -144,7 +144,7 @@ impl HelperLaunchConfig {
         if self.port == 0 {
             return Err(HelperProtocolError::InvalidPort);
         }
-        if self.username.trim().is_empty() {
+        if self.username.trim().is_empty() && self.protocol == DesktopProtocol::Rdp {
             return Err(HelperProtocolError::EmptyUsername);
         }
         if self.credential_ref.trim().is_empty() && self.protocol == DesktopProtocol::Rdp {
@@ -166,8 +166,6 @@ impl HelperLaunchConfig {
             self.host.clone(),
             "--port".into(),
             self.port.to_string(),
-            "--username".into(),
-            self.username.clone(),
             "--width".into(),
             self.display.width.to_string(),
             "--height".into(),
@@ -175,6 +173,9 @@ impl HelperLaunchConfig {
             "--color-depth".into(),
             self.color_depth.to_string(),
         ];
+        if !self.username.trim().is_empty() {
+            arguments.extend(["--username".into(), self.username.clone()]);
+        }
         if let Some(domain) = self.domain.as_deref().filter(|value| !value.is_empty()) {
             arguments.extend(["--domain".into(), domain.into()]);
         }
@@ -808,7 +809,10 @@ fn helper_command(config: &HelperLaunchConfig) -> tokio::process::Command {
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        // Helper diagnostics use the bounded, typed stdout protocol. Keeping
+        // stderr disconnected prevents an unconsumed OS pipe from stalling a
+        // helper and avoids retaining uncontrolled process output.
+        .stderr(Stdio::null())
         .kill_on_drop(true);
     command
 }
@@ -851,6 +855,20 @@ mod tests {
         );
         assert!(arguments.contains(&"--host".into()));
         assert!(arguments.contains(&"--domain".into()));
+    }
+
+    #[test]
+    fn vnc_no_auth_can_omit_username_and_credential_reference() {
+        let mut config = launch_config();
+        config.protocol = DesktopProtocol::Vnc;
+        config.username.clear();
+        config.credential_ref.clear();
+        config.program = PathBuf::from("/opt/mobarust/bin/mobarust-vnc-helper");
+
+        config.validate().unwrap();
+        let arguments = config.process_arguments();
+        assert!(!arguments.contains(&"--username".into()));
+        assert!(!arguments.contains(&"credential:test-only".into()));
     }
 
     #[test]

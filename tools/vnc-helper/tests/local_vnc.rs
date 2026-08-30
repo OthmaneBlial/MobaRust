@@ -29,8 +29,6 @@ async fn helper_controls_a_real_rfb_fixture_over_loopback() {
             "127.0.0.1",
             "--port",
             &port.to_string(),
-            "--username",
-            "fixture-user",
             "--width",
             "320",
             "--height",

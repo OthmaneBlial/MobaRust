@@ -499,7 +499,7 @@ where
         }
     }
 
-    let _username = username.ok_or_else(|| ArgumentError("missing username".into()))?;
+    let _username = username;
     let arguments = Arguments {
         host: host.ok_or_else(|| ArgumentError("missing host".into()))?,
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,

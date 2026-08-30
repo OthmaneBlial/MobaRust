@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -54,6 +55,7 @@ pub struct RemoteDesktopEvent {
 struct ManagedSession {
     commands: mpsc::Sender<HelperCommand>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
+    stop_requested: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Default)]
@@ -135,16 +137,24 @@ impl RemoteDesktopManager {
         let session_id = Uuid::new_v4().to_string();
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let supervisor = Arc::new(Mutex::new(supervisor));
+        let stop_requested = Arc::new(AtomicBool::new(false));
         self.sessions.lock().await.insert(
             session_id.clone(),
             ManagedSession {
                 commands: command_tx,
                 supervisor: Arc::clone(&supervisor),
+                stop_requested: Arc::clone(&stop_requested),
             },
         );
         let sessions = Arc::clone(&self.sessions);
         let reader_session_id = session_id.clone();
-        tokio::spawn(read_helper_events(app, reader_session_id, stdout, sessions));
+        tokio::spawn(read_helper_events(
+            app,
+            reader_session_id,
+            stdout,
+            sessions,
+            stop_requested,
+        ));
         tokio::spawn(write_helper_commands(stdin, command_rx));
 
         Ok(RemoteDesktopConnectResponse {
@@ -177,6 +187,7 @@ impl RemoteDesktopManager {
             .await
             .remove(session_id)
             .ok_or_else(|| "remote desktop session was not found".to_owned())?;
+        session.stop_requested.store(true, Ordering::Release);
         let _ = session.commands.send(HelperCommand::Stop).await;
         session
             .supervisor
@@ -220,7 +231,9 @@ fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<(), String>
     {
         return Err("remote desktop host and port are invalid".into());
     }
-    if request.username.trim().is_empty() || request.username.chars().any(char::is_control) {
+    if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
+        || request.username.chars().any(char::is_control)
+    {
         return Err("remote desktop username is invalid".into());
     }
     if request
@@ -271,57 +284,64 @@ async fn read_helper_events(
     session_id: String,
     mut stdout: impl tokio::io::AsyncRead + Unpin,
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
+    stop_requested: Arc<AtomicBool>,
 ) {
     loop {
         let frame = match read_frame(&mut stdout).await {
             Ok(Some(frame)) => frame,
             Ok(None) => {
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::State {
-                        state: mobarust_remote_desktop::HelperState::Crashed,
-                    },
-                );
+                if should_report_unexpected_helper_exit(&stop_requested) {
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::State {
+                            state: mobarust_remote_desktop::HelperState::Crashed,
+                        },
+                    );
+                }
                 break;
             }
             Err(_) => {
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::Diagnostic {
-                        level: mobarust_remote_desktop::DiagnosticLevel::Error,
-                        message: "remote desktop helper protocol failed".into(),
-                    },
-                );
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::State {
-                        state: mobarust_remote_desktop::HelperState::Crashed,
-                    },
-                );
+                if should_report_unexpected_helper_exit(&stop_requested) {
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::Diagnostic {
+                            level: mobarust_remote_desktop::DiagnosticLevel::Error,
+                            message: "remote desktop helper protocol failed".into(),
+                        },
+                    );
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::State {
+                            state: mobarust_remote_desktop::HelperState::Crashed,
+                        },
+                    );
+                }
                 break;
             }
         };
         let event = match decode_event_frame(&frame) {
             Ok(event) => event,
             Err(_) => {
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::Diagnostic {
-                        level: mobarust_remote_desktop::DiagnosticLevel::Error,
-                        message: "remote desktop helper sent an invalid event".into(),
-                    },
-                );
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::State {
-                        state: mobarust_remote_desktop::HelperState::Crashed,
-                    },
-                );
+                if should_report_unexpected_helper_exit(&stop_requested) {
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::Diagnostic {
+                            level: mobarust_remote_desktop::DiagnosticLevel::Error,
+                            message: "remote desktop helper sent an invalid event".into(),
+                        },
+                    );
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::State {
+                            state: mobarust_remote_desktop::HelperState::Crashed,
+                        },
+                    );
+                }
                 break;
             }
         };
@@ -348,4 +368,61 @@ fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
             event,
         },
     );
+}
+
+fn should_report_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
+    !stop_requested.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RemoteDesktopConnectRequest, should_report_unexpected_helper_exit, validate_request,
+    };
+    use mobarust_remote_desktop::DesktopProtocol;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn normal_helper_exit_is_reported_as_a_crash() {
+        let stop_requested = AtomicBool::new(false);
+        assert!(should_report_unexpected_helper_exit(&stop_requested));
+    }
+
+    #[test]
+    fn forced_shutdown_does_not_emit_a_false_crash() {
+        let stop_requested = AtomicBool::new(true);
+        assert!(!should_report_unexpected_helper_exit(&stop_requested));
+        stop_requested.store(false, Ordering::Release);
+        assert!(should_report_unexpected_helper_exit(&stop_requested));
+    }
+
+    fn request(protocol: DesktopProtocol, username: &str) -> RemoteDesktopConnectRequest {
+        RemoteDesktopConnectRequest {
+            protocol,
+            host: "127.0.0.1".into(),
+            port: if protocol == DesktopProtocol::Rdp {
+                3389
+            } else {
+                5900
+            },
+            username: username.into(),
+            domain: None,
+            credential_id: None,
+            width: 1024,
+            height: 768,
+            color_depth: 32,
+            audio_enabled: false,
+        }
+    }
+
+    #[test]
+    fn parent_boundary_allows_vnc_no_auth_metadata_without_username() {
+        validate_request(&request(DesktopProtocol::Vnc, "")).unwrap();
+    }
+
+    #[test]
+    fn parent_boundary_still_requires_rdp_username() {
+        let error = validate_request(&request(DesktopProtocol::Rdp, "")).unwrap_err();
+        assert!(error.contains("username"));
+    }
 }
