@@ -1268,6 +1268,35 @@ mod tests {
     }
 
     #[test]
+    fn explicit_checksum_command_accepts_manifest_inside_artifact() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-inner-manifest-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let artifact = root.join("package");
+        let manifest = artifact.join("MobaRust.sha256");
+        fs::create_dir_all(artifact.join("MobaRust.app/Contents/MacOS"))
+            .expect("create packaged artifact");
+        fs::write(
+            artifact.join("MobaRust.app/Contents/MacOS/mobarust"),
+            b"fixture executable",
+        )
+        .expect("write packaged executable");
+        write_checksum_manifest(&artifact, &artifact, &manifest).expect("write inner manifest");
+
+        verify_checksum_command(vec![
+            artifact.display().to_string(),
+            manifest.display().to_string(),
+        ])
+        .expect("inner manifest should verify relative to its package root");
+        fs::remove_dir_all(root).expect("remove inner manifest fixture");
+    }
+
+    #[test]
     fn process_environment_filter_covers_user_configuration_and_tool_hooks() {
         for variable in [
             "GIT_CONFIG_GLOBAL",
