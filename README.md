@@ -1,4 +1,4 @@
-# MobaRust — the free, open-source MobaXterm alternative
+# MobaRust — a free, open-source MobaXterm alternative for SSH and remote operations
 
 <p align="center">
   <img src="apps/desktop/src-tauri/icons/icon.svg" alt="MobaRust logo" width="112" />
@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One focused desktop workspace for every machine you operate.</strong><br />
-  SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust.
+  SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust and Tauri.
 </p>
 
 <p align="center">
@@ -23,11 +23,13 @@
   <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
 </p>
 
-> MobaRust is a free, open-source MobaXterm alternative for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users who want their remote-work toolbox to be transparent, local-first, and built for real operations.
+> MobaRust is a free, open-source MobaXterm alternative for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users who want one transparent desktop app for everyday remote work — without a mandatory subscription or cloud account.
 
 MobaRust is an independent project and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
 
-## Why MobaRust?
+MobaRust is a real desktop application, not a website pretending to be a terminal. React and TypeScript render the interface inside Tauri; Rust owns the native networking, PTY, filesystem, process, and credential boundaries.
+
+## Why choose MobaRust?
 
 Remote work should not require one app for SSH, another for file transfer, another for tunnels, and a fourth place for session notes. MobaRust brings the daily operator loop into one keyboard-friendly desktop application:
 
@@ -44,7 +46,7 @@ Remote work should not require one app for SSH, another for file transfer, anoth
 
 MobaRust is a Rust/Tauri desktop SSH client and remote-operations workspace with a React and TypeScript interface. It is designed as an open-source alternative to MobaXterm, while also taking inspiration from the best parts of terminal workspaces, SFTP clients, and lightweight administration tools.
 
-If you are looking for a MobaXterm alternative, these are the workflows MobaRust is designed to bring together:
+MobaXterm made the all-in-one remote toolbox familiar. MobaRust follows that useful idea with a free, open-source implementation that can be inspected, improved, and adapted in public. If you are comparing MobaRust with MobaXterm, PuTTY, Remmina, Tabby, or separate SSH/SFTP tools, these are the workflows MobaRust is designed to bring together:
 
 - cross-platform SSH client foundations for Windows, macOS, and Linux
 - explicit local shell targets for PowerShell, cmd, bash, zsh, fish, and WSL where the platform supports them
