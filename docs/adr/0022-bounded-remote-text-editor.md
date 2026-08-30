@@ -44,6 +44,7 @@ available.
 
 ## Verification
 
-The local OpenSSH fixture exercises upload, read, save, conflict rejection, and
-cleanup over a real loopback SFTP session. TypeScript, ESLint, Rust tests, and
-the production build cover the command and editor wiring.
+The local OpenSSH fixture exercises upload, permission metadata, read, save,
+permission preservation, conflict rejection, and cleanup over a real loopback
+SFTP session. TypeScript, ESLint, Rust tests, and the production build cover
+the command and editor wiring.

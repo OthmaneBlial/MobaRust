@@ -267,16 +267,33 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         )
         .await
         .expect("upload editor fixture");
+        sftp.set_permissions(&editor_path, 0o640)
+            .await
+            .expect("set editor fixture permissions");
         let document = sftp
             .read_text_document(&editor_path)
             .await
             .expect("read bounded remote text document");
         assert_eq!(document.content, "before\neditor fixture\n");
+        assert_eq!(document.permissions.map(|mode| mode & 0o7777), Some(0o640));
         let saved = sftp
             .save_text_document(&editor_path, &document.revision, "after\n")
             .await
             .expect("atomically save remote text document");
         assert_eq!(saved.content, "after\n");
+        assert_eq!(saved.permissions.map(|mode| mode & 0o7777), Some(0o640));
+        let saved_entries = sftp
+            .read_dir(&remote_root)
+            .await
+            .expect("list remote fixture directory after editor save");
+        let saved_entry = saved_entries
+            .iter()
+            .find(|entry| entry.path == editor_path)
+            .expect("find saved editor fixture");
+        assert_eq!(
+            saved_entry.permissions.map(|mode| mode & 0o7777),
+            Some(0o640)
+        );
         assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
         assert!(matches!(
             sftp.save_text_document(&editor_path, &document.revision, "stale\n")

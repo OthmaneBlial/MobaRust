@@ -77,7 +77,7 @@ The table below makes the current boundary explicit. “Verified locally” mean
 | Area | Current status |
 | --- | --- |
 | **SSH terminal** | Native SSH, host-key verification, password/key references, SSH-agent path, keyboard-interactive authentication, PTY resize, keepalives, cancellation, reconnect, and actionable errors |
-| **SFTP / SCP** | Remote browser, recursive transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, and native SCP compatibility |
+| **SFTP / SCP** | Remote browser, recursive transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, permission preservation, and native SCP compatibility |
 | **Session manager** | Saved profiles, folders, tags, favorites, recents, fast search, OpenSSH config import, jump-host chains, typed settings, and secret-free export |
 | **SSH tunnels** | Local forwarding, remote forwarding, bounded dynamic SOCKS5, explicit lifecycle state, stop controls, and cancellable clients |
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, explicit PowerShell/cmd/Unix shell targets, and WSL foundations |
