@@ -25,6 +25,8 @@ pub enum TerminalError {
     Io(#[source] std::io::Error),
     #[error("terminal resize failed: {0}")]
     Resize(#[source] anyhow::Error),
+    #[error("terminal process cleanup failed: {0}")]
+    Wait(#[source] std::io::Error),
     #[error("local terminal target is not available on this platform")]
     UnsupportedTarget,
     #[error("WSL distribution name is invalid")]
@@ -259,12 +261,27 @@ impl TerminalManager {
             .expect("terminal session map poisoned")
             .remove(id)
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))?;
-        session
-            .child
-            .lock()
-            .expect("terminal child poisoned")
-            .kill()
-            .map_err(TerminalError::Io)
+        let mut child = session.child.lock().expect("terminal child poisoned");
+        if child.try_wait().map_err(TerminalError::Io)?.is_some() {
+            return Ok(());
+        }
+
+        // A PTY close is cooperative at the application boundary but must
+        // still reap the native child. Treat a process that exited during the
+        // race between try_wait and kill as already closed, then wait once so
+        // no zombie or unreaped helper remains behind.
+        match child.kill() {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // The child can exit between try_wait and kill. Waiting here
+                // still reaps that child instead of abandoning the cleanup.
+                child.wait().map_err(TerminalError::Wait)?;
+                return Ok(());
+            }
+            Err(error) => return Err(TerminalError::Io(error)),
+        }
+        child.wait().map_err(TerminalError::Wait)?;
+        Ok(())
     }
 
     fn session(&self, id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
@@ -507,6 +524,48 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_running_pty_terminates_and_reaps_the_fixture_child() {
+        let system = portable_pty::native_pty_system();
+        let pair = system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open cleanup test pty");
+        let writer = pair.master.take_writer().expect("take cleanup writer");
+        let child = pair
+            .slave
+            .spawn_command(long_running_fixture_command())
+            .expect("spawn cleanup fixture");
+        let manager = TerminalManager::default();
+        manager
+            .sessions
+            .lock()
+            .expect("lock cleanup sessions")
+            .insert(
+                "cleanup-fixture".into(),
+                Arc::new(TerminalSession {
+                    master: Mutex::new(pair.master),
+                    writer: Mutex::new(writer),
+                    child: Mutex::new(child),
+                }),
+            );
+
+        manager
+            .close("cleanup-fixture")
+            .expect("close should reap the fixture child");
+        assert!(
+            manager
+                .sessions
+                .lock()
+                .expect("lock cleanup sessions after close")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn oversized_terminal_write_is_rejected_before_session_lookup() {
         let data = vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1];
         let error = TerminalManager::default()
@@ -536,6 +595,22 @@ mod tests {
                 "-c",
                 "printf 'MOBARUST_PTY_OK\\n'; read line; printf 'INPUT:%s\\n' \"$line\"",
             ]);
+            command
+        }
+    }
+
+    fn long_running_fixture_command() -> CommandBuilder {
+        #[cfg(target_os = "windows")]
+        {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args(["/C", "ping 127.0.0.1 -n 30 > nul"]);
+            command
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut command = CommandBuilder::new("/bin/sh");
+            command.args(["-c", "sleep 30"]);
             command
         }
     }

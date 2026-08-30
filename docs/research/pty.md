@@ -14,6 +14,8 @@ checks the same contract on every supported desktop target:
 - write a line through the master side;
 - receive an output marker and the echoed input;
 - wait for a clean child exit.
+- on explicit close, terminate a still-running child and reap it within the
+  native close operation; a child that already exited is treated as closed.
 
 The fixture command is explicit and platform-specific: `/bin/sh -c ...` on
 Unix and `cmd.exe /C ...` on Windows. It does not use the user's configured
@@ -44,6 +46,7 @@ and record:
 - PTY creation, resize, input, output batching, and clean close;
 - default shell discovery and non-login environment behavior;
 - cancellation when the child exits or disappears;
+- explicit close reaping without leaving an unreaped local child;
 - Unicode and Windows path handling where applicable;
 - clipboard and keyboard shortcuts in the desktop UI;
 - WSL distribution discovery and launch on Windows;

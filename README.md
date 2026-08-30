@@ -34,7 +34,7 @@ The current product baseline is real, tested, and intentionally narrower than a 
 | SFTP / SCP | Integrated remote browser, recursive streaming transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, and SCP compatibility |
 | Sessions | Saved profiles, folders, tags, favorites, recents, search, OpenSSH import, secret-free export, jump-host chains, and typed settings |
 | Tunnels | Local forwarding, remote forwarding, dynamic SOCKS5, explicit lifecycle state, stop controls, and bounded clients |
-| Local work | Native local PTY, shell lifecycle, resize, input/output batching, split panes, persistent tabs, and platform-aware WSL foundations |
+| Local work | Native local PTY, shell lifecycle, bounded child cleanup, resize, input/output batching, split panes, persistent tabs, and platform-aware WSL foundations |
 | Operator tools | Snippets with preview, visible macros, explicit multi-exec/broadcast targets, network diagnostics, port checks, remote monitoring, and audit history without terminal transcripts |
 | Legacy equipment | Telnet with clear unencrypted labeling and serial configuration/lifecycle support with graceful device-loss handling |
 | Security | Platform vault abstraction, portable encrypted vault, typed Tauri commands, redacted tracing, threat model, fuzz targets, and safe loopback fixtures |
@@ -47,8 +47,9 @@ The roadmap is currently **60/67 items evidenced — approximately 89.6%**. This
 
 The local implementation layer is further along than the release matrix: the
 macOS PTY path, isolated RDP candidate, real VNC helper with loopback fixtures,
-and target-aware unsigned package layout contract are implemented and checked
-locally. Windows/Linux runtime behavior, real-server interoperability,
+target-aware unsigned package layout contract, and explicit PTY child reaping
+on close are implemented and checked locally. Windows/Linux runtime behavior,
+real-server interoperability,
 hardware, and signed distribution remain explicitly pending.
 
 The remaining work is visible:
