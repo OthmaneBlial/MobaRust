@@ -7,7 +7,9 @@ configuration.
 ## Hard boundaries
 
 - Tests use temporary directories created for the test process and remove only
-  files they created.
+  files they created. The local SSH server also uses its fixture directory for
+  every remote path and directory listing; it never enumerates or writes the
+  system `/tmp` directory.
 - Network fixtures bind to `127.0.0.1` on an OS-assigned port. Tests do not use
   public hostnames, LAN addresses, cloud instances, or production endpoints.
 - SSH tests generate fixture host/client keys in the temporary test directory.

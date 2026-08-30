@@ -104,9 +104,15 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         assert!(String::from_utf8_lossy(&output).contains("MOBARUST_SSH_OK"));
         let source = fixture.directory.path().join("source.bin");
         let downloaded = fixture.directory.path().join("downloaded.bin");
+        let remote_root = fixture.directory.path().to_string_lossy().into_owned();
         fs::write(&source, vec![b'R'; 128 * 1024]).expect("write upload source");
         let sftp = connection.open_sftp().await.expect("open SFTP subsystem");
-        let remote_path = format!("/tmp/mobarust-sftp-{}", std::process::id());
+        let remote_path = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-sftp-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let uploaded = sftp
             .upload_from(
                 tokio::fs::File::open(&source)
@@ -117,7 +123,10 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("stream upload through SFTP");
         assert_eq!(uploaded, 128 * 1024);
-        let entries = sftp.read_dir("/tmp").await.expect("list remote directory");
+        let entries = sftp
+            .read_dir(&remote_root)
+            .await
+            .expect("list remote fixture directory");
         let uploaded_entry = entries
             .iter()
             .find(|entry| entry.path == remote_path)
@@ -131,9 +140,9 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("change remote fixture permissions");
         let updated_entries = sftp
-            .read_dir("/tmp")
+            .read_dir(&remote_root)
             .await
-            .expect("list remote directory after chmod");
+            .expect("list remote fixture directory after chmod");
         let updated_entry = updated_entries
             .iter()
             .find(|entry| entry.path == remote_path)
@@ -208,7 +217,12 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 .await
                 .expect("check new name")
         );
-        let directory_path = format!("/tmp/mobarust-directory-{}", std::process::id());
+        let directory_path = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-directory-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         sftp.create_dir(&directory_path)
             .await
             .expect("create remote directory");
@@ -228,7 +242,12 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
 
         let editor_source = fixture.directory.path().join("editor-source.txt");
         fs::write(&editor_source, "before\neditor fixture\n").expect("write editor source");
-        let editor_path = format!("/tmp/mobarust-editor-{}.txt", std::process::id());
+        let editor_path = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-editor-{}.txt", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         sftp.upload_from(
             tokio::fs::File::open(&editor_source)
                 .await
@@ -252,7 +271,12 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 .await,
             Err(SshError::RemoteConflict)
         ));
-        let save_as_path = format!("/tmp/mobarust-editor-copy-{}.txt", std::process::id());
+        let save_as_path = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-editor-copy-{}.txt", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let copied = sftp
             .save_text_document_as(&save_as_path, "copy\n", RemoteTextEncoding::Utf8, false)
             .await
@@ -281,7 +305,12 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("remove editor fixture");
         sftp.close().await.expect("close SFTP subsystem");
 
-        let scp_remote_path = format!("/tmp/mobarust-scp-{}", std::process::id());
+        let scp_remote_path = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-scp-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let scp_uploaded = connection
             .scp_upload(
                 &scp_remote_path,
