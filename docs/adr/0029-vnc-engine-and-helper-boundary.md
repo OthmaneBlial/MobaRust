@@ -48,6 +48,10 @@ The loopback fixture also sends maximum-width pointer and wheel coordinates
 after a `DesktopSize` resize and verifies that the socket receives the last
 valid pixel of the resized framebuffer. This is integration evidence for the
 helper boundary, while cross-platform interoperability remains open.
+
+The same fixture sends the Unicode Euro keysym `0x010020ac` and checks the
+exact RFB key event received by the local server, covering the native keyboard
+wire path as well as the coordinate path.
 Its dependency audit is clean. The pinned
 `vnc-rs 0.5.3` callback API still requires an owned password `String`; the
 helper moves its zeroizing source buffer into that one value without an

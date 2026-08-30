@@ -23,6 +23,7 @@ const RESIZED_FIXTURE_SIZE: DisplaySize = DisplaySize {
     height: 400,
 };
 const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
+const FIXTURE_KEYSYM: u32 = 0x0100_20ac;
 const FIXTURE_CHALLENGE: [u8; 16] = [
     0x6d, 0x6f, 0x62, 0x61, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x76, 0x6e, 0x63, 0x2d, 0x31, 0x36, 0x21,
 ];
@@ -889,7 +890,7 @@ async fn exercise_fixture_with_quality(
     send_command(
         &mut stdin,
         HelperCommand::Key {
-            scancode: 0x41,
+            scancode: FIXTURE_KEYSYM,
             pressed: true,
         },
     )
@@ -1222,6 +1223,12 @@ async fn run_fixture(
                     .read_exact(&mut payload)
                     .await
                     .map_err(|error| error.to_string())?;
+                let keysym = u32::from_be_bytes(payload[3..7].try_into().unwrap());
+                if keysym != FIXTURE_KEYSYM {
+                    return Err(format!(
+                        "fixture received unexpected VNC keysym: 0x{keysym:08x}"
+                    ));
+                }
                 saw_key = true;
             }
             5 => {
