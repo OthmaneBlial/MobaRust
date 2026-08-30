@@ -118,6 +118,12 @@ capability-dependent and is reported rather than simulated. The VNC canvas
 keeps the negotiated server resolution and scales it locally to the viewport,
 with that limitation shown in the overlay.
 
+The fixture suite also sends a bounded, malformed Tight/JPEG rectangle through
+the real helper boundary. The helper rejects it with the same stable
+framebuffer diagnostic, emits `Failed`, and does not forward partial pixels.
+This protects the native decoder failure path without opening a non-loopback
+connection or making a production interoperability claim.
+
 Clipboard opt-in is enforced at both sides of the native boundary. The parent
 rejects server clipboard events that were not requested, while the helper
 reports clipboard capability only when explicitly enabled, drops unsolicited
