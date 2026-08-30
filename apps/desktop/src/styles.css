@@ -49,6 +49,15 @@ button:not(:disabled) { cursor: pointer; }
 .terminal-frame-split-down { grid-template-rows: repeat(2, minmax(0, 1fr)); }
 .terminal-frame-split-right .terminal-pane.active, .terminal-frame-split-down .terminal-pane.active { display: block; min-width: 0; min-height: 0; padding: 15px 16px 12px; background: #101514; overflow: hidden; }
 .terminal-frame-split-right, .terminal-frame-split-down { gap: 0; }
+.terminal-search-bar { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 5px 11px; border-bottom: 1px solid var(--line); background: rgba(7, 11, 10, .5); color: var(--amber); }
+.terminal-search-bar input:not([type="checkbox"]) { min-width: 120px; flex: 1; height: 27px; padding: 0 8px; border: 1px solid var(--line); outline: 0; background: rgba(193, 214, 195, .04); color: var(--text); font-family: var(--mono); font-size: 9px; }
+.terminal-search-bar input:not([type="checkbox"]):focus { border-color: rgba(232, 180, 92, .6); }
+.terminal-search-bar > span { min-width: 55px; color: var(--faint); font-family: var(--mono); font-size: 8px; text-align: right; }
+.terminal-search-bar label { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-family: var(--mono); font-size: 8px; }
+.terminal-search-bar label input { width: 13px; height: 13px; margin: 0; accent-color: var(--amber); }
+.terminal-search-bar button { display: grid; place-items: center; width: 25px; height: 27px; border: 1px solid var(--line); background: transparent; color: var(--muted); }
+.terminal-search-bar button:hover { border-color: var(--line-strong); color: var(--text); }
+.terminal-search-bar button:disabled { cursor: not-allowed; opacity: .4; }
 .terminal-frame-single, .terminal-frame-has-layout { padding: 0; }
 .terminal-frame-single { background: #101514; }
 .terminal-frame-has-layout { background: var(--line); }

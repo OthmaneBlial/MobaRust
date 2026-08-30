@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactC
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import {
   Activity,
@@ -163,6 +164,9 @@ type TerminalViewportProps = {
   onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
   onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
   onInput: (workspaceId: string, terminalId: string, data: string) => void;
+  onTerminalReady: (workspaceId: string, terminal: Terminal, searchAddon: SearchAddon) => void;
+  onTerminalDisposed: (workspaceId: string) => void;
+  onSearchResults: (workspaceId: string, resultIndex: number, resultCount: number) => void;
 };
 
 type WorkspaceTerminal = {
@@ -530,7 +534,7 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
 
-function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput }: TerminalViewportProps) {
+function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -593,7 +597,11 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
     terminalRef.current = terminal;
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    const searchAddon = new SearchAddon({ highlightLimit: 1000 });
+    terminal.loadAddon(searchAddon);
     terminal.open(host);
+    const searchResults = searchAddon.onDidChangeResults((event) => onSearchResults(workspaceId, event.resultIndex, event.resultCount));
+    onTerminalReady(workspaceId, terminal, searchAddon);
 
     const fit = () => {
       if (host.clientWidth > 0 && host.clientHeight > 0) fitAddon.fit();
@@ -715,6 +723,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
     return () => {
       disposed = true;
       input.dispose();
+      searchResults.dispose();
       host.removeEventListener("paste", onPaste, true);
       resizeObserver.disconnect();
       unlistenOutput?.();
@@ -728,9 +737,10 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       }
       terminalIdRef.current = null;
       terminalRef.current = null;
+      onTerminalDisposed(workspaceId);
       terminal.dispose();
     };
-  }, [instanceKey, onInput, onNativeTerminalId, onStatusChange, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
 }
@@ -942,6 +952,10 @@ function App() {
   const [terminalTabs, setTerminalTabs] = useState<WorkspaceTerminal[]>(() => [createWorkspaceTerminal()]);
   const [activeTerminalId, setActiveTerminalId] = useState("");
   const [terminalLayout, setTerminalLayout] = useState<TerminalLayoutNode>({ kind: "pane", terminalId: "" });
+  const [terminalSearchOpen, setTerminalSearchOpen] = useState(false);
+  const [terminalSearchQuery, setTerminalSearchQuery] = useState("");
+  const [terminalSearchCaseSensitive, setTerminalSearchCaseSensitive] = useState(false);
+  const [terminalSearchResult, setTerminalSearchResult] = useState({ resultIndex: -1, resultCount: 0 });
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -999,6 +1013,8 @@ function App() {
   const networkScanIdRef = useRef<string | null>(null);
   const networkDiagnosticIdRef = useRef<string | null>(null);
   const nativeTerminalIdsRef = useRef(new Map<string, string>());
+  const terminalInstancesRef = useRef(new Map<string, { terminal: Terminal; searchAddon: SearchAddon }>());
+  const selectedTerminalIdRef = useRef("");
   const terminalTabsRef = useRef(terminalTabs);
   const broadcastEnabledRef = useRef(broadcastEnabled);
   const broadcastTargetIdsRef = useRef(broadcastTargetIds);
@@ -1039,6 +1055,7 @@ function App() {
 
   const activeTerminal = terminalTabs.find((terminal) => terminal.id === activeTerminalId) ?? terminalTabs[0];
   const selectedTerminalId = activeTerminal?.id ?? "";
+  selectedTerminalIdRef.current = selectedTerminalId;
   const remoteSessionId = activeTerminal?.remoteSessionId ?? null;
   const remoteProtocol = activeTerminal?.remoteProtocol ?? null;
   const remoteHost = activeTerminal?.remoteHost ?? null;
@@ -1068,6 +1085,18 @@ function App() {
   const handleNativeTerminalId = useCallback((workspaceId: string, terminalId: string | null) => {
     if (terminalId) nativeTerminalIdsRef.current.set(workspaceId, terminalId);
     else nativeTerminalIdsRef.current.delete(workspaceId);
+  }, []);
+
+  const handleTerminalReady = useCallback((workspaceId: string, terminal: Terminal, searchAddon: SearchAddon) => {
+    terminalInstancesRef.current.set(workspaceId, { terminal, searchAddon });
+  }, []);
+
+  const handleTerminalDisposed = useCallback((workspaceId: string) => {
+    terminalInstancesRef.current.delete(workspaceId);
+  }, []);
+
+  const handleSearchResults = useCallback((workspaceId: string, resultIndex: number, resultCount: number) => {
+    if (workspaceId === selectedTerminalIdRef.current) setTerminalSearchResult({ resultIndex, resultCount });
   }, []);
 
   const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
@@ -1100,6 +1129,71 @@ function App() {
       .then(() => setConnectionError(null))
       .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}`));
   }, [writeTerminalInput]);
+
+  const findTerminalMatch = useCallback((direction: "next" | "previous", query = terminalSearchQuery) => {
+    const instance = terminalInstancesRef.current.get(selectedTerminalIdRef.current);
+    const term = query.trim();
+    if (!instance || !term) {
+      instance?.searchAddon.clearDecorations();
+      setTerminalSearchResult({ resultIndex: -1, resultCount: 0 });
+      return;
+    }
+    const options = {
+      caseSensitive: terminalSearchCaseSensitive,
+      decorations: {
+        matchBackground: "#3b5148",
+        matchBorder: "#7b987e",
+        matchOverviewRuler: "#7b987e",
+        activeMatchBackground: "#e8b45c",
+        activeMatchBorder: "#f5d28f",
+        activeMatchColorOverviewRuler: "#e8b45c",
+      },
+    };
+    if (direction === "previous") instance.searchAddon.findPrevious(term, options);
+    else instance.searchAddon.findNext(term, options);
+  }, [terminalSearchCaseSensitive, terminalSearchQuery]);
+
+  const updateTerminalSearch = useCallback((query: string) => {
+    setTerminalSearchQuery(query);
+    findTerminalMatch("next", query);
+  }, [findTerminalMatch]);
+
+  const closeTerminalSearch = useCallback(() => {
+    terminalInstancesRef.current.get(selectedTerminalIdRef.current)?.searchAddon.clearDecorations();
+    setTerminalSearchOpen(false);
+    setTerminalSearchResult({ resultIndex: -1, resultCount: 0 });
+  }, []);
+
+  const copyTerminalSelection = useCallback(async () => {
+    const selection = terminalInstancesRef.current.get(selectedTerminalIdRef.current)?.terminal.getSelection() ?? "";
+    if (!selection) {
+      setConnectionError("Select terminal text before copying.");
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(selection);
+      else window.prompt("Copy this terminal selection", selection);
+      setConnectionError(null);
+      setSessionNotice("Terminal selection copied explicitly.");
+    } catch (error) {
+      setConnectionError(`Terminal selection could not be copied: ${String(error)}`);
+    }
+  }, []);
+
+  const clearTerminalScrollback = useCallback(() => {
+    const instance = terminalInstancesRef.current.get(selectedTerminalIdRef.current);
+    if (!instance) return;
+    instance.searchAddon.clearDecorations();
+    instance.terminal.clearSelection();
+    instance.terminal.clear();
+    setTerminalSearchResult({ resultIndex: -1, resultCount: 0 });
+    setSessionNotice("Cleared the active terminal scrollback. The process remains connected.");
+  }, []);
+
+  useEffect(() => {
+    setTerminalSearchResult({ resultIndex: -1, resultCount: 0 });
+    if (terminalSearchOpen && terminalSearchQuery.trim()) findTerminalMatch("next");
+  }, [findTerminalMatch, selectedTerminalId, terminalSearchOpen, terminalSearchQuery]);
 
   const closeTerminal = useCallback((workspaceId: string) => {
     nativeTerminalIdsRef.current.delete(workspaceId);
@@ -2446,6 +2540,7 @@ function App() {
         setMacrosOpen(true);
       }
       if (event.key === "Escape") {
+        if (terminalSearchOpen) closeTerminalSearch();
         setPaletteOpen(false);
         if (macroRun) cancelMacro();
         if (broadcastEnabled) {
@@ -2457,7 +2552,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [broadcastEnabled, cancelMacro, closeTerminal, cycleTerminal, macroRun, selectedTerminalId, startNewTerminal]);
+  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, macroRun, selectedTerminalId, startNewTerminal, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -2470,8 +2565,8 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />;
-  }, [handleNativeTerminalId, handleTerminalInput, handleTerminalStatus, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} />;
+  }, [handleNativeTerminalId, handleSearchResults, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
@@ -2608,8 +2703,9 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
+                  {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
@@ -3109,7 +3205,7 @@ function formatDuration(seconds?: number | null) {
 function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels" | "monitor"; onAction?: () => void }) {
   const isFiles = view === "files";
   const isMonitor = view === "monitor";
-  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : isMonitor ? <Gauge size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : isMonitor ? "REMOTE MONITOR" : "NETWORK FABRIC"}</span><h2>{isFiles ? "SFTP browser is staged for the SSH slice" : isMonitor ? "Connect an SSH session to inspect it" : "No tunnels are active"}</h2><p>{isFiles ? "This surface will only appear as usable once streaming transfers, cancellation, and path safety are implemented." : isMonitor ? "The monitor sends a single bounded read-only query and leaves unsupported platform metrics blank." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
+  return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : isMonitor ? <Gauge size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : isMonitor ? "REMOTE MONITOR" : "NETWORK FABRIC"}</span><h2>{isFiles ? "Open an SSH session to browse files" : isMonitor ? "Connect an SSH session to inspect it" : "No tunnels are active"}</h2><p>{isFiles ? "SFTP listing, streaming transfers, cancellation, and path safety are ready for a connected SSH session." : isMonitor ? "The monitor sends a single bounded read-only query and leaves unsupported platform metrics blank." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
 }
 
 function InfoCard({ icon: Icon, label, title, detail, action }: { icon: LucideIcon; label: string; title: string; detail: string; action: string }) {
