@@ -1,7 +1,7 @@
-# MobaRust — a free, open-source MobaXterm alternative for SSH and remote operations
+# MobaRust — the free, open-source MobaXterm alternative
 
 <p align="center">
-  <img src="apps/desktop/src-tauri/icons/icon.svg" alt="MobaRust logo" width="112" />
+  <img src="apps/desktop/src-tauri/icons/icon.svg" alt="MobaRust logo" width="120" />
 </p>
 
 <p align="center">
@@ -23,45 +23,52 @@
   <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
 </p>
 
-> MobaRust is a free, open-source MobaXterm alternative for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users who want one transparent desktop app for everyday remote work — without a mandatory subscription or cloud account.
+> Looking for a free and open-source MobaXterm alternative? MobaRust is a local-first desktop SSH client and remote-operations workspace for developers, DevOps engineers, system administrators, infrastructure teams, and homelab users.
 
-MobaRust is an independent project and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
+MobaRust is independent and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
 
-MobaRust is a real desktop application, not a website pretending to be a terminal. React and TypeScript render the interface inside Tauri; Rust owns the native networking, PTY, filesystem, process, and credential boundaries.
+MobaRust is a real desktop application, not a terminal-shaped website. React and TypeScript render the interface inside Tauri; Rust owns the native networking, PTY, filesystem, process, persistence, cancellation, and credential boundaries.
+
+## The idea
+
+Remote work should not mean switching between a terminal, an SFTP client, a tunnel tool, a notes app, and a session list every few minutes.
+
+MobaRust brings that daily operator loop into one keyboard-friendly desktop application:
+
+**Connect. Inspect. Transfer. Operate carefully. Disconnect cleanly.**
 
 ## Why choose MobaRust?
 
-Remote work should not require one app for SSH, another for file transfer, another for tunnels, and a fourth place for session notes. MobaRust brings the daily operator loop into one keyboard-friendly desktop application:
+- **Free and open source** — Apache-2.0 licensed, inspectable, forkable, and developed in public.
+- **A practical MobaXterm alternative** — SSH, SFTP/SCP, local terminals, tunnels, session profiles, and diagnostics in one workspace.
+- **Local-first by design** — no mandatory cloud account or subscription for the local application.
+- **Native where it matters** — Rust handles sockets, PTYs, transfers, helpers, and sensitive operations behind typed Tauri commands.
+- **Safer defaults** — sessions reference credentials; passwords and private keys are not duplicated through ordinary profile data, logs, or process arguments.
+- **Honest capability labels** — mature SSH foundations are separated from RDP/VNC candidates and platform work that still needs evidence.
 
-**Connect. Inspect. Transfer. Automate carefully. Disconnect cleanly.**
+## Built for the remote workday
 
-- **Free and open source** — Apache-2.0 licensed, inspectable, forkable, and built in public.
-- **One operator workspace** — Keep terminals, remote files, tunnels, diagnostics, snippets, and session context together.
-- **Rust at the native boundary** — Networking, PTYs, transfers, persistence, cancellation, and sensitive operations stay native where possible.
-- **Credentials treated as secrets** — Sessions reference vault entries instead of duplicating passwords or private-key material throughout the app.
-- **No account required for the local app** — The project is designed around local state, not a mandatory cloud account or subscription.
-- **Honest capability labels** — Experimental RDP/VNC work is clearly separated from the mature SSH foundation and release evidence still in progress.
+Save a host once, organize it into folders, add tags and notes, mark favorites, and find it instantly. Browse remote files over SFTP, transfer recursively with progress and cancellation, start a tunnel, run a reviewed snippet, and keep the connection searchable without rebuilding the same context in several tools.
 
-## What is MobaRust?
+Snippets support descriptions, tags, and variables such as `${host}`, `${port}`, and `${username}`. Preview and edit before sending. Macros remain visible and cancellable. Multi-exec requires explicit target selection, shows a strong broadcast indicator, and provides an emergency disable path.
 
-MobaRust is a Rust/Tauri desktop SSH client and remote-operations workspace with a React and TypeScript interface. It is designed as an open-source alternative to MobaXterm, while also taking inspiration from the best parts of terminal workspaces, SFTP clients, and lightweight administration tools.
+The best first use case is everyday SSH and SFTP work. RDP, VNC, integrated X11, signed distribution, and complete cross-platform evidence are deliberately still on the roadmap.
 
-MobaXterm made the all-in-one remote toolbox familiar. MobaRust follows that useful idea with a free, open-source implementation that can be inspected, improved, and adapted in public. If you are comparing MobaRust with MobaXterm, PuTTY, Remmina, Tabby, or separate SSH/SFTP tools, these are the workflows MobaRust is designed to bring together:
+## An open alternative to the closed all-in-one toolbox
 
-- cross-platform SSH client foundations for Windows, macOS, and Linux
-- explicit local shell targets for PowerShell, cmd, bash, zsh, fish, and WSL where the platform supports them
-- SFTP and SCP file transfers
-- local terminals and native PTY sessions
-- SSH tunnels and bounded SOCKS5 diagnostics
-- session profiles, folders, tags, favorites, and fast search
-- snippets, visible macros, and explicit multi-terminal broadcast
-- Telnet and serial support for legacy equipment
-- experimental RDP and VNC integration paths
-- remote file editing, network diagnostics, and optional system monitoring
+MobaXterm made the all-in-one remote toolbox familiar. MobaRust keeps the useful idea while giving operators a free, open-source implementation that can be inspected, improved, and adapted in public.
 
-## Capability map
+| If you value… | MobaRust gives you… |
+| --- | --- |
+| A free alternative | Apache-2.0 source with no mandatory account for local use |
+| One place for remote work | Terminals, files, tunnels, diagnostics, and session context together |
+| Control over sensitive data | Separated session configuration and secret material, with native credential resolution |
+| A maintainable desktop stack | Rust/Tauri native boundaries and a React/TypeScript interface |
+| Trustworthy progress | Reproducible fixtures, visible limitations, and a public roadmap |
 
-The table below makes the current boundary explicit. “Implemented” means repository code and local validation exist. Platform, real-server, hardware, signing, or interoperability gates are called out instead of being hidden behind a marketing claim.
+## What can you use today?
+
+The table below makes the current boundary explicit. “Verified locally” means repository code and deterministic local validation exist. Platform, real-server, hardware, signing, or interoperability gates are called out instead of being hidden behind a marketing claim.
 
 | Area | Current status |
 | --- | --- |
@@ -78,13 +85,7 @@ The table below makes the current boundary explicit. “Implemented” means rep
 
 This is a serious foundation — not a screenshot, a static placeholder, or a shell command wrapped in a web page.
 
-## The MobaRust difference
-
-### One window for the remote workday
-
-Open an SSH session, browse its files over SFTP, start a tunnel, check a port, run a saved snippet, and keep the connection searchable without rebuilding the same context in several tools.
-
-### Native power with a focused interface
+## Native power with a focused interface
 
 React and TypeScript make the desktop UI fast to iterate and easy to use. Rust and Tauri own the native boundary: sockets, PTYs, helper processes, file operations, vault access, cancellation, and typed IPC. The frontend is an interaction layer — not a credential store and not an unrestricted shell bridge.
 
