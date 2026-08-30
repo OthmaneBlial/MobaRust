@@ -24,10 +24,10 @@ use ironrdp_pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use mobarust_remote_desktop::{
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, ReconnectPolicy, DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
-    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED, decode_command_frame, decode_credential_frame,
+    MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame, decode_credential_frame,
     rdp_scancode_parts, validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
@@ -224,14 +224,23 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
         credential,
         stdout,
         incoming_rx,
-        ReconnectPolicy {
-            enabled: arguments.reconnect_enabled,
-            attempts: arguments.reconnect_attempts,
+        RdpSessionPolicy {
+            reconnect: ReconnectPolicy {
+                enabled: arguments.reconnect_enabled,
+                attempts: arguments.reconnect_attempts,
+            },
+            startup_timeout: RDP_STARTUP_TIMEOUT,
+            startup_stop_grace: STOP_GRACE_PERIOD,
         },
-        RDP_STARTUP_TIMEOUT,
-        STOP_GRACE_PERIOD,
     )
     .await
+}
+
+#[derive(Clone, Copy)]
+struct RdpSessionPolicy {
+    reconnect: ReconnectPolicy,
+    startup_timeout: Duration,
+    startup_stop_grace: Duration,
 }
 
 async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
@@ -240,9 +249,7 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
     credential: HelperCredential,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
-    reconnect_policy: ReconnectPolicy,
-    startup_timeout: Duration,
-    startup_stop_grace: Duration,
+    session_policy: RdpSessionPolicy,
 ) -> Result<(), Box<dyn Error>> {
     let mut current_display = display;
     let mut reconnect_attempt = 0u8;
@@ -267,8 +274,8 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
             stdout,
             incoming_rx,
             RdpAttemptPolicy {
-                startup_timeout,
-                startup_stop_grace,
+                startup_timeout: session_policy.startup_timeout,
+                startup_stop_grace: session_policy.startup_stop_grace,
                 reconnecting,
             },
         )
@@ -279,13 +286,11 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
                 reason,
                 reconnect_established,
             } => {
-                if let Some(next_attempt) =
-                    next_reconnect_attempt(
-                        reconnect_attempt,
-                        reconnect_established,
-                        reconnect_policy,
-                    )
-                {
+                if let Some(next_attempt) = next_reconnect_attempt(
+                    reconnect_attempt,
+                    reconnect_established,
+                    session_policy.reconnect,
+                ) {
                     write_state(stdout, HelperState::Reconnecting).await?;
                     reconnect_attempt = next_attempt;
                 } else {
@@ -1623,9 +1628,11 @@ mod tests {
                 HelperCredential::new("fixture-secret"),
                 &mut stdout,
                 &mut incoming_rx,
-                ReconnectPolicy::default(),
-                Duration::from_millis(40),
-                Duration::from_millis(40),
+                RdpSessionPolicy {
+                    reconnect: ReconnectPolicy::default(),
+                    startup_timeout: Duration::from_millis(40),
+                    startup_stop_grace: Duration::from_millis(40),
+                },
             ))
             .await
             .unwrap();

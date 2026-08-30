@@ -14,10 +14,10 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use mobarust_remote_desktop::{
+    DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, ReconnectPolicy, DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
-    DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED, decode_command_frame, decode_credential_frame,
+    MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame, decode_credential_frame,
     write_event_frame,
 };
 use tokio::io::AsyncWrite;
