@@ -115,7 +115,7 @@ impl Drop for SecretMaterial {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum VaultError {
     #[error("credential reference must contain only letters, numbers, '.', '_' or '-'")]
     InvalidCredentialId,
@@ -155,6 +155,14 @@ pub enum VaultError {
     PortablePathUnsafe(PathBuf),
     #[error("portable vault state is unavailable")]
     PortableStateUnavailable(String),
+}
+
+impl fmt::Debug for VaultError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep structured `?error` logging from exposing paths, backend
+        // diagnostics, or any future detail carried by a String field.
+        write!(formatter, "VaultError({self})")
+    }
 }
 
 /// Access to the platform credential store selected by `keyring`.
@@ -300,7 +308,7 @@ impl fmt::Debug for PortableVault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PortableVault")
-            .field("path", &self.path)
+            .field("path", &"<redacted>")
             .field("credential_count", &self.entries.len())
             .finish()
     }
@@ -699,10 +707,15 @@ mod tests {
 
         for error in errors {
             let display = error.to_string();
+            let debug = format!("{error:?}");
             assert!(!display.contains(private_path.to_string_lossy().as_ref()));
             assert!(!display.contains("raw OS detail"));
             assert!(!display.contains("backend detail"));
             assert!(!display.contains("private-key"));
+            assert!(!debug.contains(private_path.to_string_lossy().as_ref()));
+            assert!(!debug.contains("raw OS detail"));
+            assert!(!debug.contains("backend detail"));
+            assert!(!debug.contains("private-key"));
         }
 
         let error = VaultError::PortableIo {
@@ -799,6 +812,9 @@ mod tests {
         let secret_value = "fixture-only-secret";
 
         let mut vault = PortableVault::create(&path, &passphrase).unwrap();
+        let debug = format!("{vault:?}");
+        assert!(!debug.contains(path.to_string_lossy().as_ref()));
+        assert!(debug.contains("<redacted>"));
         vault
             .put(&credential_id, SecretMaterial::new(secret_value))
             .unwrap();

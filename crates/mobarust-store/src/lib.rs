@@ -5,6 +5,7 @@
 //! `mobarust-vault` and never enters this file.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -25,7 +26,7 @@ const MAX_OPENSSH_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_LOCAL_STORE_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_IMPORT_JSON_BYTES: usize = MAX_LOCAL_STORE_FILE_BYTES;
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum StoreError {
     #[error("could not read session store")]
     Read {
@@ -143,6 +144,15 @@ pub enum StoreError {
         #[source]
         source: io::Error,
     },
+}
+
+impl fmt::Debug for StoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep `?error` logging as safe as the user-facing Display text. The
+        // structured source chain remains available through Error::source for
+        // an explicitly controlled internal diagnostic path.
+        write!(formatter, "StoreError({self})")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1324,9 +1334,13 @@ mod tests {
 
         for error in errors {
             let display = error.to_string();
+            let debug = format!("{error:?}");
             assert!(!display.contains(private_path.to_string_lossy().as_ref()));
             assert!(!display.contains("raw OS detail"));
             assert!(!display.contains("private-key"));
+            assert!(!debug.contains(private_path.to_string_lossy().as_ref()));
+            assert!(!debug.contains("raw OS detail"));
+            assert!(!debug.contains("private-key"));
         }
 
         let error = StoreError::Read {
