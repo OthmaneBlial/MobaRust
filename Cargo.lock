@@ -2913,6 +2913,7 @@ dependencies = [
 name = "mobarust-serial"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mobarust-core",
  "serde",
  "serialport",

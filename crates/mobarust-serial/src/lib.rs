@@ -251,6 +251,19 @@ impl SerialConnection {
             .map_err(|_| SerialError::Timeout)?
             .map_err(|_| SerialError::Worker)??;
 
+        Self::from_open_port(options, port)
+    }
+
+    /// Adopt an already-open native serial port.
+    ///
+    /// This keeps the lifecycle and I/O path testable with a caller-owned
+    /// pseudo-terminal pair without weakening the normal device-explicit
+    /// [`Self::connect`] path.
+    pub fn from_open_port(
+        options: SerialOptions,
+        port: Box<dyn serialport::SerialPort>,
+    ) -> Result<Self, SerialError> {
+        options.validate()?;
         let mut lifecycle = ConnectionLifecycle::new();
         lifecycle
             .apply(ConnectionEvent::BeginConnect)
@@ -461,6 +474,10 @@ fn map_open_error(error: serialport::Error) -> SerialError {
 }
 
 fn classify_io_error(operation: &'static str, error: io::Error) -> SerialError {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::EIO) {
+        return SerialError::DeviceDisconnected { operation };
+    }
     if matches!(
         error.kind(),
         io::ErrorKind::NotConnected

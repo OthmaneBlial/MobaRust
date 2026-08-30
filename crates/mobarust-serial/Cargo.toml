@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Native serial terminal transport and device lifecycle for MobaRust"
 
 [dependencies]
+libc.workspace = true
 mobarust-core = { path = "../mobarust-core" }
 serialport.workspace = true
 serde.workspace = true

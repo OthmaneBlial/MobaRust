@@ -25,8 +25,10 @@ configuration.
   disposable server. The isolated RDP helper can be compiled and exercised on
   EOF without opening a socket; the VNC integration fixture binds only to
   `127.0.0.1` and an OS-assigned port.
-- Serial tests use configuration and lifecycle logic only. Hardware
-  interoperability requires a separate, explicit manual test session.
+- Serial tests use configuration plus a disposable Unix pseudo-terminal
+  fixture. They never enumerate host ports or open a physical adapter;
+  hardware interoperability requires a separate, explicit manual test
+  session.
 - WSL discovery and launch are compiled conditionally for Windows. macOS/Linux
   tests do not invoke `wsl.exe`; the parser is tested with synthetic UTF-16
   output and no local distribution is probed.

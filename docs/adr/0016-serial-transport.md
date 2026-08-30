@@ -64,14 +64,14 @@ user-facing error text.
 
 Unit tests cover all serial parameters, line-ending framing, invalid paths and
 baud rates, device-loss classification, and cancellation lifecycle behavior.
-The current tests intentionally use a synthetic path only for validation, so
-they prove no hardware interoperability claim. Controlled pseudo-terminal or
-loopback fixtures should be added later per platform without touching personal
-devices.
+The Unix integration fixture now creates a disposable pseudo-terminal inside
+the test process and verifies real serialport reads, writes, and device-loss
+classification. It never enumerates the host's ports or opens a physical
+adapter. This proves only Unix pseudo-terminal behavior; it is not hardware
+interoperability evidence.
 
 ## Follow-ups
 
-- add platform fixtures for a disposable pseudo-terminal/loopback device;
 - verify USB adapter disappearance on Windows, Linux, and macOS in controlled
   environments;
 - add reconnect policy and line-ending/encoding controls to saved profiles.
