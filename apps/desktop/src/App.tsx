@@ -479,6 +479,11 @@ type RemoteEntry = {
   size: number;
   isDirectory: boolean;
   modifiedUnixSeconds?: number | null;
+  uid?: number | null;
+  owner?: string | null;
+  gid?: number | null;
+  group?: string | null;
+  permissions?: number | null;
 };
 
 type RemoteTextDocument = {
@@ -3094,7 +3099,7 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
       <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
       {visibleEntries.map((entry) => <div className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path}>
         <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
-          <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? `directory · ${formatRemoteModified(entry.modifiedUnixSeconds)}` : `${formatBytes(entry.size)} · ${formatRemoteModified(entry.modifiedUnixSeconds)}`}</small>
+          <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{remoteEntryDetails(entry)}</small>
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
         {!entry.isDirectory && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
@@ -3396,6 +3401,27 @@ function formatRemoteModified(seconds?: number | null) {
   if (seconds == null || !Number.isFinite(seconds)) return "modified unknown";
   const date = new Date(seconds * 1000);
   return Number.isNaN(date.getTime()) ? "modified unknown" : `modified ${date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })}`;
+}
+
+function remoteEntryDetails(entry: RemoteEntry) {
+  const details = [
+    entry.isDirectory ? "directory" : formatBytes(entry.size),
+    formatRemoteModified(entry.modifiedUnixSeconds),
+    formatRemotePermissions(entry.permissions),
+    formatRemoteOwner(entry),
+  ].filter(Boolean);
+  return details.join(" · ");
+}
+
+function formatRemotePermissions(permissions?: number | null) {
+  if (permissions == null || !Number.isFinite(permissions)) return null;
+  return `mode ${((permissions >>> 0) & 0o7777).toString(8).padStart(4, "0")}`;
+}
+
+function formatRemoteOwner(entry: RemoteEntry) {
+  const owner = entry.owner?.trim() || (entry.uid != null ? `uid ${entry.uid}` : null);
+  const group = entry.group?.trim() || (entry.gid != null ? `gid ${entry.gid}` : null);
+  return owner && group ? `${owner}:${group}` : owner || group;
 }
 
 function formatBytes(bytes: number) {

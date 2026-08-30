@@ -116,7 +116,15 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("stream upload through SFTP");
         assert_eq!(uploaded, 128 * 1024);
         let entries = sftp.read_dir("/tmp").await.expect("list remote directory");
-        assert!(entries.iter().any(|entry| entry.path == remote_path));
+        let uploaded_entry = entries
+            .iter()
+            .find(|entry| entry.path == remote_path)
+            .expect("find uploaded remote file");
+        assert_eq!(uploaded_entry.size, 128 * 1024);
+        assert!(!uploaded_entry.is_directory);
+        assert!(uploaded_entry.permissions.is_some());
+        assert!(uploaded_entry.uid.is_some() || uploaded_entry.owner.is_some());
+        assert!(uploaded_entry.gid.is_some() || uploaded_entry.group.is_some());
         assert!(
             sftp.try_exists(&remote_path)
                 .await

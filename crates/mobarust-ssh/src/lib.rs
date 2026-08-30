@@ -1474,6 +1474,11 @@ pub struct RemoteEntry {
     pub size: u64,
     pub is_directory: bool,
     pub modified_unix_seconds: Option<u64>,
+    pub uid: Option<u32>,
+    pub owner: Option<String>,
+    pub gid: Option<u32>,
+    pub group: Option<String>,
+    pub permissions: Option<u32>,
 }
 
 impl SftpConnection {
@@ -1504,6 +1509,11 @@ impl SftpConnection {
                     size: metadata.len(),
                     is_directory: metadata.is_dir(),
                     modified_unix_seconds,
+                    uid: metadata.uid,
+                    owner: metadata.user,
+                    gid: metadata.gid,
+                    group: metadata.group,
+                    permissions: metadata.permissions,
                 }
             })
             .collect())
