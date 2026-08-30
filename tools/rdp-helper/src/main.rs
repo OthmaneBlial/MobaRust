@@ -39,6 +39,8 @@ const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 // at this boundary, so the helper owns one and aborts the task if graceful
 // shutdown cannot complete within the separate grace period.
 const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_RECONNECT_ATTEMPTS: u8 = 3;
+const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 struct Arguments {
@@ -186,28 +188,96 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
     startup_timeout: Duration,
     startup_stop_grace: Duration,
 ) -> Result<(), Box<dyn Error>> {
-    let config = match build_config(arguments, display, &credential) {
+    let mut current_display = display;
+    let mut reconnect_attempt = 0u8;
+
+    loop {
+        if reconnect_attempt > 0
+            && !wait_rdp_reconnect_backoff(
+                reconnect_delay(reconnect_attempt - 1),
+                stdout,
+                incoming_rx,
+            )
+            .await?
+        {
+            return Ok(());
+        }
+
+        let reconnecting = reconnect_attempt > 0;
+        match run_rdp_attempt(
+            arguments,
+            &credential,
+            &mut current_display,
+            stdout,
+            incoming_rx,
+            RdpAttemptPolicy {
+                startup_timeout,
+                startup_stop_grace,
+                reconnecting,
+            },
+        )
+        .await?
+        {
+            RdpAttemptOutcome::Stopped | RdpAttemptOutcome::Fatal => return Ok(()),
+            RdpAttemptOutcome::Lost { reason, was_active } => {
+                if was_active {
+                    reconnect_attempt = 0;
+                }
+                if reconnect_attempt >= MAX_RECONNECT_ATTEMPTS {
+                    send_error(stdout, reason).await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(());
+                }
+                write_state(stdout, HelperState::Reconnecting).await?;
+                reconnect_attempt = reconnect_attempt.saturating_add(1);
+            }
+        }
+    }
+}
+
+enum RdpAttemptOutcome {
+    Lost {
+        reason: &'static str,
+        was_active: bool,
+    },
+    Fatal,
+    Stopped,
+}
+
+#[derive(Clone, Copy)]
+struct RdpAttemptPolicy {
+    startup_timeout: Duration,
+    startup_stop_grace: Duration,
+    reconnecting: bool,
+}
+
+async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
+    arguments: &Arguments,
+    credential: &HelperCredential,
+    current_display: &mut DisplaySize,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+    policy: RdpAttemptPolicy,
+) -> Result<RdpAttemptOutcome, Box<dyn Error>> {
+    let config = match build_config(arguments, *current_display, credential) {
         Ok(config) => config,
         Err(_) => {
             send_error(stdout, "invalid RDP configuration").await?;
             write_state(stdout, HelperState::Failed).await?;
-            return Ok(());
+            return Ok(RdpAttemptOutcome::Fatal);
         }
     };
 
     // The third-party RDP config owns its password for the connection
-    // lifetime. The helper never logs or serializes that config; the pending
-    // native credential wrapper is dropped as soon as the config is built.
-    drop(credential);
-
+    // lifetime. Rebuild it only inside this native helper for a retry; the
+    // zeroizing source credential never crosses into the parent or React.
     let (output_tx, mut output_rx) = mpsc::channel(2);
     let client = RdpClient::new(config, output_tx);
     let input_tx = client.input_sender();
     let mut client_task = tokio::task::spawn_local(client.run());
     let mut last_buttons = 0u8;
-    let mut current_display = display;
     let mut active_sent = false;
-    let startup_deadline = tokio::time::sleep(startup_timeout);
+    let startup_deadline = tokio::time::sleep(policy.startup_timeout);
     tokio::pin!(startup_deadline);
     let mut startup_pending = true;
 
@@ -216,11 +286,17 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
     loop {
         tokio::select! {
             _ = &mut startup_deadline, if startup_pending => {
-                send_error(stdout, "RDP connection timed out").await?;
                 let _ = input_tx.send(RdpInputEvent::Close);
-                stop_client_with_grace(&input_tx, &mut client_task, startup_stop_grace).await;
+                stop_client_with_grace(&input_tx, &mut client_task, policy.startup_stop_grace).await;
+                if policy.reconnecting {
+                    return Ok(RdpAttemptOutcome::Lost {
+                        reason: "RDP connection timed out",
+                        was_active: false,
+                    });
+                }
+                send_error(stdout, "RDP connection timed out").await?;
                 write_state(stdout, HelperState::Failed).await?;
-                return Ok(());
+                return Ok(RdpAttemptOutcome::Fatal);
             }
             incoming = incoming_rx.recv() => {
                 match incoming {
@@ -228,25 +304,25 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
                         if handle_command(
                             command,
                             &input_tx,
-                            &mut current_display,
+                            current_display,
                             &mut last_buttons,
                             stdout,
                             &mut client_task,
                         ).await? {
-                            return Ok(());
+                            return Ok(RdpAttemptOutcome::Stopped);
                         }
                     }
                     Some(Incoming::End) | None => {
                         stop_client(&input_tx, &mut client_task).await;
                         write_state(stdout, HelperState::Stopped).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Stopped);
                     }
                     Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
                         send_error(stdout, "invalid helper input").await?;
                         let _ = input_tx.send(RdpInputEvent::Close);
                         stop_client(&input_tx, &mut client_task).await;
                         write_state(stdout, HelperState::Failed).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Fatal);
                     }
                 }
             }
@@ -265,23 +341,39 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
                                 let _ = input_tx.send(RdpInputEvent::Close);
                                 stop_client(&input_tx, &mut client_task).await;
                                 write_state(stdout, HelperState::Failed).await?;
-                                return Ok(());
+                                return Ok(RdpAttemptOutcome::Fatal);
                             }
                         }
                     }
                     Some(RdpOutputEvent::ConnectionFailure(error)) => {
+                        if active_sent {
+                            stop_client(&input_tx, &mut client_task).await;
+                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                        }
+                        if policy.reconnecting {
+                            stop_client(&input_tx, &mut client_task).await;
+                            return Ok(RdpAttemptOutcome::Lost { reason: rdp_failure_message(&error), was_active: false });
+                        }
                         send_error(stdout, rdp_failure_message(&error)).await?;
+                        stop_client(&input_tx, &mut client_task).await;
                         write_state(stdout, HelperState::Failed).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Fatal);
                     }
                     Some(RdpOutputEvent::Terminated(Ok(_))) => {
                         write_state(stdout, HelperState::Stopped).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Stopped);
                     }
                     Some(RdpOutputEvent::Terminated(Err(_))) => {
+                        if active_sent {
+                            stop_client(&input_tx, &mut client_task).await;
+                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP session ended unexpectedly", was_active: true });
+                        }
+                        if policy.reconnecting {
+                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP session terminated unexpectedly", was_active: false });
+                        }
                         send_error(stdout, "RDP session terminated unexpectedly").await?;
                         write_state(stdout, HelperState::Failed).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Fatal);
                     }
                     Some(RdpOutputEvent::PointerDefault)
                     | Some(RdpOutputEvent::PointerHidden)
@@ -290,19 +382,61 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
                         startup_pending = false;
                     }
                     None => {
+                        if active_sent {
+                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                        }
+                        if policy.reconnecting {
+                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: false });
+                        }
                         write_state(stdout, HelperState::Crashed).await?;
-                        return Ok(());
+                        return Ok(RdpAttemptOutcome::Fatal);
                     }
                 }
             }
             result = &mut client_task => {
+                if active_sent {
+                    return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                }
+                if policy.reconnecting {
+                    return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: false });
+                }
                 if result.is_err() {
                     send_error(stdout, "RDP helper engine stopped unexpectedly").await?;
                     write_state(stdout, HelperState::Crashed).await?;
                 } else {
                     write_state(stdout, HelperState::Stopped).await?;
                 }
-                return Ok(());
+                return Ok(RdpAttemptOutcome::Fatal);
+            }
+        }
+    }
+}
+
+fn reconnect_delay(attempt: u8) -> Duration {
+    RECONNECT_INITIAL_BACKOFF.saturating_mul(1_u32 << u32::from(attempt.min(10)))
+}
+
+async fn wait_rdp_reconnect_backoff<W: AsyncWrite + Unpin>(
+    duration: Duration,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+) -> Result<bool, Box<dyn Error>> {
+    let delay = tokio::time::sleep(duration);
+    tokio::pin!(delay);
+    loop {
+        tokio::select! {
+            _ = &mut delay => return Ok(true),
+            incoming = incoming_rx.recv() => match incoming {
+                Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) | None => {
+                    write_state(stdout, HelperState::Stopped).await?;
+                    return Ok(false);
+                }
+                Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
+                    send_error(stdout, "invalid helper input").await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(false);
+                }
+                Some(Incoming::Command(_)) => {}
             }
         }
     }
@@ -771,6 +905,32 @@ mod tests {
         );
         assert_eq!(rdp_failure_message(&reason), "RDP connection failed");
         assert!(!rdp_failure_message(&reason).contains("secret server name"));
+    }
+
+    #[test]
+    fn reconnect_backoff_is_exponential_and_saturating() {
+        assert_eq!(reconnect_delay(0), Duration::from_millis(250));
+        assert_eq!(reconnect_delay(1), Duration::from_millis(500));
+        assert_eq!(reconnect_delay(2), Duration::from_secs(1));
+        assert!(reconnect_delay(10) >= reconnect_delay(2));
+    }
+
+    #[tokio::test]
+    async fn reconnect_backoff_honors_stop_without_waiting_for_the_delay() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender
+            .send(Incoming::Command(HelperCommand::Stop))
+            .await
+            .unwrap();
+        let mut stdout = tokio::io::sink();
+        let started = std::time::Instant::now();
+
+        assert!(
+            !wait_rdp_reconnect_backoff(Duration::from_secs(30), &mut stdout, &mut receiver,)
+                .await
+                .unwrap()
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[tokio::test]

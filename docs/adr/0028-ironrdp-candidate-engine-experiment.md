@@ -39,10 +39,16 @@ the `native-tls`/`clipboard` features. The helper:
 The vault crypto was not changed to accommodate the RDP experiment. Passwords
 must arrive through a protected native channel, never as process arguments,
 environment variables, logs, or frontend state. Trust/pinning policy,
-reconnect, clipboard, audio, gateway support, packaging, and Windows
-interoperability are still release gates. The current helper deliberately
-reports clipboard input as unsupported rather than silently bridging the local
-clipboard.
+reconnect interoperability, clipboard, audio, gateway support, packaging, and
+Windows interoperability are still release gates. The current helper
+deliberately reports clipboard input as unsupported rather than silently
+bridging the local clipboard.
+
+The helper now owns a bounded reconnect policy after an active-session loss:
+three attempts with exponential backoff, native credential reuse, and
+cooperative cancellation during the delay. This is lifecycle hardening only;
+the separate local/Windows fixture must prove that a real RDP session recovers
+before the feature can be promoted.
 
 The selected `ironrdp-tls 0.2.2` native-tls backend delegates certificate-chain
 and hostname validation to the platform connector and trust store. The helper
@@ -73,5 +79,6 @@ The helper's real connection path is still exercised only against a dedicated
 fixture when one is available.
 
 The next gate is parent-process wiring plus a disposable local/Windows RDP
-fixture, with a real framebuffer and controlled input. Until that evidence and
-packaging exist, the UI must not advertise RDP as implemented.
+fixture, with a real framebuffer and controlled input, including a real loss
+and recovery cycle. Until that evidence and packaging exist, the UI must not
+advertise RDP as implemented.

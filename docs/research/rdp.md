@@ -48,10 +48,13 @@ can be placed behind the helper boundary with a reusable `RdpClient`, typed
 image output, keyboard/mouse/resize input, TLS/CredSSP configuration, and a
 zeroizing native credential frame. Its clipboard command is intentionally
 rejected until a user-controlled OS clipboard backend is wired. This is still
-not a production selection: certificate trust/pinning policy, reconnect,
-audio, gateway behavior, packaging, and real Windows interoperability remain
-open gates. No global package, personal credential, or remote server was used
-during the local validation.
+not a production selection: certificate trust/pinning policy, reconnect
+interoperability, audio, gateway behavior, packaging, and real Windows
+interoperability remain open gates. The helper now rebuilds a native RDP client
+after an active-session loss with three bounded exponential-backoff attempts;
+it keeps the credential inside the helper and honors Stop during the delay.
+No global package, personal credential, or remote server was used during the
+local validation.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
