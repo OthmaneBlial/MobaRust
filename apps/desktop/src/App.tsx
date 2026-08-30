@@ -242,8 +242,11 @@ type WorkspaceTerminal = {
 
 type SplitDirection = "none" | "right" | "down";
 
+type LocalShell = "default" | "powershell" | "cmd" | "bash" | "zsh" | "fish";
+type LocalShellChoice = Exclude<LocalShell, "default">;
+
 type LocalTerminalTarget =
-  | { type: "default"; cwd?: string; environment?: Array<[string, string]>; startupCommand?: string }
+  | { type: "default"; shell?: LocalShell; cwd?: string; environment?: Array<[string, string]>; startupCommand?: string }
   | { type: "wsl"; distribution: string; cwd?: string; environment?: Array<[string, string]>; startupCommand?: string };
 
 type TerminalLayoutNode =
@@ -720,10 +723,22 @@ const previewSessions: SessionListItem[] = [
   { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"], lastUsedAt: 1 },
 ];
 
-function quickActions(keyboard: AppSettings["keyboard"]): Array<{ label: string; hint: string; icon: LucideIcon }> {
+function quickActions(keyboard: AppSettings["keyboard"]): Array<{ label: string; hint: string; icon: LucideIcon; shell?: LocalShellChoice }> {
+  const isWindows = typeof navigator !== "undefined" && navigator.platform.includes("Win");
+  const shellActions = isWindows
+    ? [
+      { label: "New PowerShell terminal", hint: "Windows", icon: TerminalIcon, shell: "powershell" as const },
+      { label: "New cmd terminal", hint: "Windows", icon: TerminalIcon, shell: "cmd" as const },
+    ]
+    : [
+      { label: "New bash terminal", hint: "Unix", icon: TerminalIcon, shell: "bash" as const },
+      { label: "New zsh terminal", hint: "Unix", icon: TerminalIcon, shell: "zsh" as const },
+      { label: "New fish terminal", hint: "Unix", icon: TerminalIcon, shell: "fish" as const },
+    ];
   return [
     { label: "New local terminal", hint: formatShortcut(keyboard.newTerminal), icon: TerminalIcon },
-    { label: "New WSL terminal", hint: "", icon: TerminalIcon },
+    ...shellActions,
+    ...(isWindows ? [{ label: "New WSL terminal", hint: "Windows", icon: TerminalIcon }] : []),
     { label: "Quick connect", hint: formatShortcut(keyboard.quickConnect), icon: Network },
     { label: "Open SFTP", hint: "", icon: Folder },
     { label: "Focus pane", hint: formatShortcut(keyboard.focusPane), icon: PanelRight },
@@ -1463,8 +1478,11 @@ function App() {
   }, [activeTerminal, activeTerminalId, terminalLayout]);
 
   const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }, label?: string) => {
+    const shellLabel = target.type === "default" && target.shell && target.shell !== "default"
+      ? target.shell === "powershell" ? "PowerShell" : target.shell
+      : "local shell";
     const terminal = createWorkspaceTerminal({
-      label: label ?? (target.type === "wsl" ? `WSL · ${target.distribution}` : "local shell"),
+      label: label ?? (target.type === "wsl" ? `WSL · ${target.distribution}` : shellLabel),
       localTarget: target,
     });
     setTerminalTabs((current) => [...current, terminal]);
@@ -1474,6 +1492,17 @@ function App() {
     setSessionNotice(null);
     setActiveView("terminal");
   }, []);
+
+  const startExplicitShell = useCallback((shell: LocalShellChoice) => {
+    const isWindowsShell = shell === "powershell" || shell === "cmd";
+    const isWindows = navigator.platform.includes("Win");
+    if (isWindowsShell !== isWindows) {
+      setSessionNotice(`${shell === "powershell" ? "PowerShell" : shell} is available only in its supported desktop runtime.`);
+      setPaletteOpen(false);
+      return;
+    }
+    startNewTerminal({ type: "default", shell }, shell === "powershell" ? "PowerShell" : shell);
+  }, [startNewTerminal]);
 
   const openWslTerminalPicker = useCallback(() => {
     setPaletteOpen(false);
@@ -3653,7 +3682,7 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
+      {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewShell={startExplicitShell} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
       {helpOpen && <HelpModal keyboard={settings.keyboard} onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
@@ -4202,7 +4231,7 @@ function HelpModal({ keyboard, onClose }: { keyboard: AppSettings["keyboard"]; o
   </div>;
 }
 
-function CommandPalette({ keyboard, onClose, onNewTerminal, onNewWslTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar, onFocusPane }: { keyboard: AppSettings["keyboard"]; onClose: () => void; onNewTerminal: () => void; onNewWslTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void; onFocusPane: () => void }) {
+function CommandPalette({ keyboard, onClose, onNewTerminal, onNewShell, onNewWslTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar, onFocusPane }: { keyboard: AppSettings["keyboard"]; onClose: () => void; onNewTerminal: () => void; onNewShell: (shell: LocalShellChoice) => void; onNewWslTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void; onFocusPane: () => void }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const commands = [
@@ -4210,7 +4239,7 @@ function CommandPalette({ keyboard, onClose, onNewTerminal, onNewWslTerminal, on
       .filter((action) => action.label !== "Command palette")
       .map((action) => ({
         ...action,
-        run: action.label === "New local terminal" ? onNewTerminal
+        run: action.shell ? () => onNewShell(action.shell!) : action.label === "New local terminal" ? onNewTerminal
           : action.label === "New WSL terminal" ? onNewWslTerminal
             : action.label === "Quick connect" ? onQuickConnect
             : action.label === "Open SFTP" ? onOpenFiles

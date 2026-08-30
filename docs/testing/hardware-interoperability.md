@@ -32,7 +32,7 @@ or server is a pending result, not a reason to probe the local machine.
 
 | Area | Safe evidence available now | What it does not prove |
 | --- | --- | --- |
-| macOS ARM64 PTY | Native disposable-PTY fixture passes locally | Windows/Linux runtime behavior, real clipboard/window-manager behavior |
+| macOS ARM64 PTY | Native disposable-PTY fixture passes locally; explicit bash/zsh/fish targets are bounded in the local contract | Windows/Linux shell runtime behavior, real clipboard/window-manager behavior |
 | SSH | Local SSH fixture covers authentication, PTY I/O, resize, SFTP, and disconnect | Internet-host interoperability or the operator's SSH configuration |
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
@@ -49,7 +49,7 @@ inference.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | macOS ARM64 | Run and record | Run local fixture and manual UI checks | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Partial local evidence |
 | macOS x64 | Separate runtime required | Separate runtime required | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Pending |
-| Windows x64 | Real Windows runtime and WSL | Real Windows runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
+| Windows x64 | Real Windows runtime, PowerShell/cmd, and WSL | Real Windows runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
 | Windows ARM64 | Real Windows ARM64 runtime | Real Windows ARM64 runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
 | Linux x64 | X11 and Wayland runtimes | Real Linux runtime | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Pending |
 | Linux ARM64 | Separate runtime required | Separate runtime required | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Pending |

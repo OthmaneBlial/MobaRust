@@ -32,6 +32,9 @@ configuration.
 - WSL discovery and launch are compiled conditionally for Windows. macOS/Linux
   tests do not invoke `wsl.exe`; the parser is tested with synthetic UTF-16
   output and no local distribution is probed.
+- Explicit shell selection maps to a fixed platform allowlist. macOS/Linux
+  tests cover the shell-name contract without scanning for executables, and
+  Windows PowerShell/cmd/WSL runtime behavior remains a dedicated target test.
 - Tests do not install system packages, alter shell profiles, change firewall
   rules, modify keychains, write outside the repository/temp directories, or
   send credentials to a real host.

@@ -56,6 +56,8 @@ pub enum LocalTerminalTarget {
     #[serde(rename = "default")]
     Default {
         #[serde(default)]
+        shell: LocalShell,
+        #[serde(default)]
         cwd: Option<String>,
         #[serde(default)]
         environment: Vec<(String, String)>,
@@ -74,10 +76,29 @@ pub enum LocalTerminalTarget {
     },
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalShell {
+    #[serde(rename = "default")]
+    #[default]
+    Default,
+    #[serde(rename = "powershell")]
+    PowerShell,
+    #[serde(rename = "cmd")]
+    Cmd,
+    #[serde(rename = "bash")]
+    Bash,
+    #[serde(rename = "zsh")]
+    Zsh,
+    #[serde(rename = "fish")]
+    Fish,
+}
+
 impl LocalTerminalTarget {
     fn validate(&self) -> Result<(), TerminalError> {
         let (cwd, environment, startup_command) = match self {
             Self::Default {
+                shell: _,
                 cwd,
                 environment,
                 startup_command,
@@ -142,11 +163,12 @@ impl TerminalManager {
 
         let (mut command, startup_command) = match target {
             LocalTerminalTarget::Default {
+                shell,
                 cwd,
                 environment,
                 startup_command,
             } => {
-                let shell = default_shell();
+                let shell = shell_command(shell)?;
                 let mut command = portable_pty::CommandBuilder::new(&shell);
                 if let Some(cwd) = cwd {
                     command.cwd(cwd);
@@ -480,6 +502,29 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
 }
 
+#[cfg(target_os = "windows")]
+fn shell_command(shell: LocalShell) -> Result<String, TerminalError> {
+    match shell {
+        LocalShell::Default => Ok(default_shell()),
+        LocalShell::PowerShell => Ok("powershell.exe".into()),
+        LocalShell::Cmd => Ok("cmd.exe".into()),
+        LocalShell::Bash | LocalShell::Zsh | LocalShell::Fish => {
+            Err(TerminalError::UnsupportedTarget)
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_command(shell: LocalShell) -> Result<String, TerminalError> {
+    match shell {
+        LocalShell::Default => Ok(default_shell()),
+        LocalShell::Bash => Ok("bash".into()),
+        LocalShell::Zsh => Ok("zsh".into()),
+        LocalShell::Fish => Ok("fish".into()),
+        LocalShell::PowerShell | LocalShell::Cmd => Err(TerminalError::UnsupportedTarget),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,11 +682,32 @@ mod tests {
         assert_eq!(
             target,
             LocalTerminalTarget::Default {
+                shell: LocalShell::Default,
                 cwd: None,
                 environment: Vec::new(),
                 startup_command: None,
             }
         );
+    }
+
+    #[test]
+    fn explicit_shell_choices_deserialize_without_accepting_an_executable_path() {
+        let target: LocalTerminalTarget =
+            serde_json::from_str(r#"{"type":"default","shell":"powershell"}"#)
+                .expect("deserialize typed shell target");
+        assert_eq!(
+            target,
+            LocalTerminalTarget::Default {
+                shell: LocalShell::PowerShell,
+                cwd: None,
+                environment: Vec::new(),
+                startup_command: None,
+            }
+        );
+
+        let arbitrary: Result<LocalTerminalTarget, _> =
+            serde_json::from_str(r#"{"type":"default","shell":"/tmp/attacker-shell"}"#);
+        assert!(arbitrary.is_err());
     }
 
     #[test]
@@ -659,6 +725,7 @@ mod tests {
     #[test]
     fn local_target_rejects_invalid_startup_configuration_without_touching_paths() {
         let target = LocalTerminalTarget::Default {
+            shell: LocalShell::Default,
             cwd: Some("/tmp/mobarust\nfixture".into()),
             environment: vec![("SAFE_NAME".into(), "safe".into())],
             startup_command: None,
@@ -669,6 +736,7 @@ mod tests {
         ));
 
         let target = LocalTerminalTarget::Default {
+            shell: LocalShell::Default,
             cwd: None,
             environment: vec![("BAD-NAME".into(), "value".into())],
             startup_command: None,
@@ -679,6 +747,7 @@ mod tests {
         ));
 
         let target = LocalTerminalTarget::Default {
+            shell: LocalShell::Default,
             cwd: None,
             environment: Vec::new(),
             startup_command: Some("printf\nunsafe".into()),
@@ -686,6 +755,36 @@ mod tests {
         assert!(matches!(
             target.validate(),
             Err(TerminalError::InvalidStartupCommand)
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn explicit_windows_shells_are_rejected_without_spawning_or_discovery() {
+        assert!(matches!(
+            shell_command(LocalShell::PowerShell),
+            Err(TerminalError::UnsupportedTarget)
+        ));
+        assert!(matches!(
+            shell_command(LocalShell::Cmd),
+            Err(TerminalError::UnsupportedTarget)
+        ));
+        assert_eq!(shell_command(LocalShell::Bash).unwrap(), "bash");
+        assert_eq!(shell_command(LocalShell::Zsh).unwrap(), "zsh");
+        assert_eq!(shell_command(LocalShell::Fish).unwrap(), "fish");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn explicit_windows_shells_use_fixed_executables() {
+        assert_eq!(
+            shell_command(LocalShell::PowerShell).unwrap(),
+            "powershell.exe"
+        );
+        assert_eq!(shell_command(LocalShell::Cmd).unwrap(), "cmd.exe");
+        assert!(matches!(
+            shell_command(LocalShell::Bash),
+            Err(TerminalError::UnsupportedTarget)
         ));
     }
 

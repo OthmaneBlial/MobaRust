@@ -18,16 +18,20 @@ checks the same contract on every supported desktop target:
   native close operation; a child that already exited is treated as closed.
 
 The fixture command is explicit and platform-specific: `/bin/sh -c ...` on
-Unix and `cmd.exe /C ...` on Windows. It does not use the user's configured
-shell, WSL, a login profile, a network endpoint, or a personal file.
+Unix and `cmd.exe /C ...` on Windows. The product launch contract now also
+accepts only typed shell choices: `powershell.exe`/`cmd.exe` on Windows and
+`bash`/`zsh`/`fish` on Unix, with the configured `SHELL` or `ComSpec` retained
+for the default target. It does not accept an arbitrary executable from the
+frontend, use a login profile for discovery, contact a network endpoint, or
+read a personal file.
 
 ## Evidence matrix
 
 | Target | Source/test coverage | Runtime evidence | Status |
 | --- | --- | --- | --- |
 | macOS ARM64 | native PTY fixture and local shell branch | `cargo xtask check` on the local ARM64 host | Verified locally |
-| Windows x64 | Windows shell branch, WSL parser and conditional discovery path | Requires a real Windows runtime | Pending |
-| Linux x64 | Unix shell branch and native PTY path | Requires a real Linux desktop runtime | Pending |
+| Windows x64 | Windows shell branch with typed PowerShell/cmd targets, WSL parser and conditional discovery path | Requires a real Windows runtime | Pending |
+| Linux x64 | Unix shell branch with typed bash/zsh/fish targets and native PTY path | Requires a real Linux desktop runtime | Pending |
 | macOS x64 | Same Unix source branch | Requires a separate x64 runtime or artifact | Pending |
 | Windows ARM64 | Windows shell branch | Requires a real Windows ARM64 runtime | Pending |
 | Linux ARM64 | Unix shell branch | Requires a real Linux ARM64 runtime | Pending |
@@ -45,6 +49,7 @@ and record:
 
 - PTY creation, resize, input, output batching, and clean close;
 - default shell discovery and non-login environment behavior;
+- explicit PowerShell/cmd or bash/zsh/fish launch where each executable is installed;
 - cancellation when the child exits or disappears;
 - explicit close reaping without leaving an unreaped local child;
 - Unicode and Windows path handling where applicable;

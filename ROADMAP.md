@@ -16,6 +16,7 @@ Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
 - [x] Persistent terminal tabs for local and remote sessions with per-tab lifecycle routing
 - [x] Two-pane horizontal/vertical terminal splits with explicit close semantics
 - [x] Nested splits, drag-resizing, and richer pane focus management
+- [x] Typed local shell targets for PowerShell/cmd on Windows and bash/zsh/fish on Unix (runtime matrix remains open)
 - [x] Local validation command and architecture/research records
 - [x] Explicit Windows WSL distribution discovery and native PTY launch path (Windows runtime evidence remains part of the matrix)
 - [ ] Cross-platform PTY matrix on Windows, Linux, and macOS

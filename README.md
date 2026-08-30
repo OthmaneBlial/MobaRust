@@ -47,6 +47,7 @@ MobaRust is a Rust/Tauri desktop SSH client and remote-operations workspace with
 If you are looking for a MobaXterm alternative, these are the workflows MobaRust is designed to bring together:
 
 - cross-platform SSH client foundations for Windows, macOS, and Linux
+- explicit local shell targets for PowerShell, cmd, bash, zsh, fish, and WSL where the platform supports them
 - SFTP and SCP file transfers
 - local terminals and native PTY sessions
 - SSH tunnels and bounded SOCKS5 diagnostics
@@ -66,7 +67,7 @@ The table below makes the current boundary explicit. “Implemented” means rep
 | **SFTP / SCP** | Remote browser, recursive transfers, bounded concurrency, progress, cancellation, atomic commits, conflict handling, and native SCP compatibility |
 | **Session manager** | Saved profiles, folders, tags, favorites, recents, fast search, OpenSSH config import, jump-host chains, typed settings, and secret-free export |
 | **SSH tunnels** | Local forwarding, remote forwarding, bounded dynamic SOCKS5, explicit lifecycle state, stop controls, and cancellable clients |
-| **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, and WSL foundations |
+| **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, explicit PowerShell/cmd/Unix shell targets, and WSL foundations |
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
 | **RDP** | Isolated native candidate with framebuffer/input/lifecycle work, explicit hostname/IP target metadata, platform certificate validation, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, gateway, audio, clipboard, and production packaging remain open |
@@ -105,7 +106,7 @@ Read the [threat model](docs/security/threat-model.md) and [safe testing policy]
 
 The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
 
-The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; a macOS-only TLS fixture now proves that an untrusted self-signed certificate is rejected, while real Windows/Linux interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
+The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, explicit local shell targets, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; a macOS-only TLS fixture now proves that an untrusted self-signed certificate is rejected, while real Windows/Linux shell interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
 
 The next gates are visible in the [roadmap](ROADMAP.md):
 
