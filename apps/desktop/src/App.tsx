@@ -4482,7 +4482,6 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopWidth, setDesktopWidth] = useState("1280");
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
-  const [desktopAudio, setDesktopAudio] = useState(false);
   const [knownHostsPath, setKnownHostsPath] = useState("");
   const [pinnedFingerprint, setPinnedFingerprint] = useState("");
   const [x11Enabled, setX11Enabled] = useState(false);
@@ -4575,7 +4574,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         width: Number(desktopWidth),
         height: Number(desktopHeight),
         colorDepth: Number(desktopColorDepth),
-        audioEnabled: desktopAudio,
+        audioEnabled: false,
       });
       return;
     }
@@ -4837,7 +4836,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     Color depth
                     <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="24">24-bit</option><option value="32">32-bit</option></select>
                   </label>
-                  {protocol === "rdp" && <label className="quick-connect-check"><input type="checkbox" checked={desktopAudio} onChange={(event) => setDesktopAudio(event.target.checked)} /> Request audio</label>}
+                  {protocol === "rdp" && <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>Audio redirection is not enabled in the current helper yet; the connection will use video and input only.</span></div>}
                   <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; trust-store/pinning policy and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
                 </>
               ) : (

@@ -47,7 +47,9 @@ The isolated `tools/rdp-helper` adapter confirms that a Rust-native candidate
 can be placed behind the helper boundary with a reusable `RdpClient`, typed
 image output, keyboard/mouse/resize input, TLS/CredSSP configuration, and a
 zeroizing native credential frame. Its clipboard command is intentionally
-rejected until a user-controlled OS clipboard backend is wired. This is still
+rejected until a user-controlled OS clipboard backend is wired. Audio requests
+are rejected at both the desktop boundary and helper boundary rather than
+silently ignored. This is still
 not a production selection: certificate trust/pinning policy, reconnect
 interoperability, audio, gateway behavior, packaging, and real Windows
 interoperability remain open gates. The helper now rebuilds a native RDP client

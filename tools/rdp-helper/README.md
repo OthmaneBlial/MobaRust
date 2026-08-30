@@ -27,6 +27,9 @@ the operating-system trust store. Explicit self-signed acceptance or pinning
 policy is not wired yet; this remains an isolated candidate and must not be
 treated as a production RDP client.
 
+Audio redirection is not implemented. The desktop boundary and the helper
+both reject an audio request explicitly; it is never silently discarded.
+
 The helper applies a 15-second startup timeout to a stalled RDP handshake and
 then uses a separate bounded graceful-stop window before forcing termination.
 This prevents an unresponsive endpoint from leaving the helper permanently

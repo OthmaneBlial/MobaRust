@@ -41,6 +41,7 @@ const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+const AUDIO_UNSUPPORTED: &str = "RDP audio redirection is not enabled in this helper";
 
 #[derive(Debug)]
 struct Arguments {
@@ -87,6 +88,11 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     let mut stdout = tokio::io::stdout();
     write_event_frame(&mut stdout, &HelperEvent::Hello { version: 1 }).await?;
     write_state(&mut stdout, HelperState::Starting).await?;
+    if let Some(error) = unsupported_option(&arguments) {
+        send_error(&mut stdout, error).await?;
+        write_state(&mut stdout, HelperState::Failed).await?;
+        return Ok(());
+    }
 
     let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
     let command_task = tokio::task::spawn_local(read_commands(tokio::io::stdin(), incoming_tx));
@@ -557,10 +563,11 @@ fn build_config(
     if let Some(domain) = arguments.domain.as_deref() {
         builder = builder.with_domain(domain);
     }
-    // Audio is intentionally not enabled until a platform-native playback
-    // policy exists. Keeping the flag parsed prevents accidental argv drift.
-    let _ = arguments.audio_requested;
     Ok(builder.build()?)
+}
+
+fn unsupported_option(arguments: &Arguments) -> Option<&'static str> {
+    arguments.audio_requested.then_some(AUDIO_UNSUPPORTED)
 }
 
 fn rdp_failure_message(error: &ironrdp_connector::ConnectorError) -> &'static str {
@@ -829,6 +836,27 @@ mod tests {
         let error = parse_arguments(["--password=fixture-secret".to_owned()]).unwrap_err();
         assert_eq!(error.to_string(), "unknown helper argument");
         assert!(!error.to_string().contains("fixture-secret"));
+    }
+
+    #[test]
+    fn audio_option_is_reported_as_unsupported_instead_of_ignored() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--audio",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(unsupported_option(&arguments), Some(AUDIO_UNSUPPORTED));
     }
 
     #[test]

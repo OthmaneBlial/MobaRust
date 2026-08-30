@@ -243,6 +243,9 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     {
         return Err("remote desktop domain is invalid".into());
     }
+    if request.protocol == DesktopProtocol::Rdp && request.audio_enabled {
+        return Err("RDP audio redirection is not enabled in this helper".into());
+    }
     if request.color_depth == 0 {
         return Err("remote desktop color depth is invalid".into());
     }
@@ -424,5 +427,13 @@ mod tests {
     fn parent_boundary_still_requires_rdp_username() {
         let error = validate_request(&request(DesktopProtocol::Rdp, "")).unwrap_err();
         assert!(error.contains("username"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_rdp_audio_until_a_backend_exists() {
+        let mut request = request(DesktopProtocol::Rdp, "Administrator");
+        request.audio_enabled = true;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("audio"));
     }
 }
