@@ -37,6 +37,8 @@ is no infinite background loop.
 Connection setup maps DNS failure, refusal, unreachable host, timeout, and
 generic network failure to typed redacted errors. Raw socket and operating
 system error text is not propagated through the user-facing Telnet boundary.
+Read, write, close, and connection-setup failures are operation-scoped
+messages; the underlying OS error is not retained in the native error value.
 
 ## Verification
 

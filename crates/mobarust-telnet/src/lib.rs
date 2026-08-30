@@ -52,8 +52,8 @@ pub enum TelnetError {
     HostUnreachable,
     #[error("Telnet network connection failed")]
     ConnectionFailed,
-    #[error("Telnet I/O failed: {0}")]
-    Io(#[source] io::Error),
+    #[error("Telnet {operation} failed")]
+    Io { operation: &'static str },
     #[error("Telnet protocol frame is invalid: {0}")]
     Protocol(String),
     #[error("Telnet connection is closed")]
@@ -172,6 +172,12 @@ fn map_connect_error(error: io::Error) -> TelnetError {
         io::ErrorKind::TimedOut => TelnetError::Timeout,
         _ => TelnetError::ConnectionFailed,
     }
+}
+
+fn io_error(operation: &'static str, _error: io::Error) -> TelnetError {
+    // Keep OS/socket details out of the native error boundary. They can carry
+    // device names, local paths, or other workstation-specific information.
+    TelnetError::Io { operation }
 }
 
 /// A bounded retry policy for explicitly requested reconnect attempts.
@@ -400,7 +406,9 @@ impl TelnetConnection {
         .await
         .map_err(|_| TelnetError::Timeout)?
         .map_err(map_connect_error)?;
-        stream.set_nodelay(true).map_err(TelnetError::Io)?;
+        stream
+            .set_nodelay(true)
+            .map_err(|error| io_error("connection setup", error))?;
 
         let (reader, writer) = stream.into_split();
         let mut lifecycle = ConnectionLifecycle::new();
@@ -476,7 +484,11 @@ impl TelnetConnection {
             }
 
             let mut raw = vec![0_u8; MAX_READ_BYTES];
-            let read = self.reader.read(&mut raw).await.map_err(TelnetError::Io)?;
+            let read = self
+                .reader
+                .read(&mut raw)
+                .await
+                .map_err(|error| io_error("read", error))?;
             if read == 0 {
                 self.lifecycle
                     .lock()
@@ -566,7 +578,9 @@ impl TelnetConnection {
                 return Err(error);
             }
         };
-        stream.set_nodelay(true).map_err(TelnetError::Io)?;
+        stream
+            .set_nodelay(true)
+            .map_err(|error| io_error("connection setup", error))?;
         let (reader, writer) = stream.into_split();
         self.reader = reader;
         self.writer = Arc::new(AsyncMutex::new(writer));
@@ -645,7 +659,10 @@ impl TelnetConnection {
     async fn write_control(&self, bytes: Vec<u8>) -> Result<(), TelnetError> {
         tokio::time::timeout(self.options.operation_timeout, async {
             let mut writer = self.writer.lock().await;
-            writer.write_all(&bytes).await.map_err(TelnetError::Io)
+            writer
+                .write_all(&bytes)
+                .await
+                .map_err(|error| io_error("write", error))
         })
         .await
         .map_err(|_| TelnetError::Timeout)?
@@ -654,7 +671,10 @@ impl TelnetConnection {
     async fn shutdown_writer(&self) -> Result<(), TelnetError> {
         tokio::time::timeout(self.options.operation_timeout, async {
             let mut writer = self.writer.lock().await;
-            writer.shutdown().await.map_err(TelnetError::Io)
+            writer
+                .shutdown()
+                .await
+                .map_err(|error| io_error("close", error))
         })
         .await
         .map_err(|_| TelnetError::Timeout)?
@@ -745,6 +765,17 @@ mod tests {
             !map_connect_error(io::Error::other("private-host-detail"))
                 .to_string()
                 .contains("private-host-detail")
+        );
+    }
+
+    #[test]
+    fn io_errors_are_operation_scoped_without_raw_system_details() {
+        let error = io_error("read", io::Error::other("private-device-or-socket-detail"));
+        assert_eq!(error.to_string(), "Telnet read failed");
+        assert!(
+            !error
+                .to_string()
+                .contains("private-device-or-socket-detail")
         );
     }
 
