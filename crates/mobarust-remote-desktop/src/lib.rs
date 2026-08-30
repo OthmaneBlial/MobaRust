@@ -215,8 +215,8 @@ pub struct HelperLaunchConfig {
     pub display: DisplaySize,
     pub color_depth: u16,
     pub audio_enabled: bool,
-    /// RDP clipboard redirection is opt-in. The helper only enables a native
-    /// OS backend on platforms where the candidate provides one.
+    /// Clipboard input is opt-in. RDP requires a reviewed native OS backend;
+    /// VNC uses the helper's negotiated text channel when advertised.
     #[serde(default)]
     pub clipboard_enabled: bool,
     /// VNC encoding/refresh profile. Ignored by RDP helpers.

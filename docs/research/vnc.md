@@ -177,7 +177,10 @@ domain, and audio are not passed to the VNC helper; VNC currently exposes
 local viewport scaling rather than pretending to provide server-side color
 depth control.
 
-The VNC profile now offers three bounded quality policies: `balanced`
+The VNC profile now offers an explicit clipboard opt-in backed by the helper's
+negotiated Latin-1 text channel; it is independent from the RDP-only native OS
+clipboard backend. The VNC profile also offers three bounded quality policies:
+`balanced`
 prefers ZRLE, `low-latency` prefers raw rectangles, and `low-bandwidth`
 also prefers ZRLE while reducing refresh frequency. Each policy selects a
 bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms respectively).

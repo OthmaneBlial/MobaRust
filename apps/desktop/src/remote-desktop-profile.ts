@@ -44,8 +44,9 @@ export type RemoteDesktopProfileParseResult =
 
 /**
  * The pinned RDP candidate has a native OS clipboard backend only on Windows.
- * Keep this decision in a small, testable helper so profile forms do not offer
- * an action that the current native helper will reject on macOS or Linux.
+ * VNC's helper exposes a negotiated text channel separately. Keep the RDP
+ * platform decision in a small, testable helper so forms do not offer an action
+ * that the native helper will reject on macOS or Linux.
  */
 export function supportsNativeRdpClipboard(platform: string | undefined = typeof navigator === "undefined" ? undefined : navigator.platform): boolean {
   return typeof platform === "string" && /^win/i.test(platform);
@@ -59,13 +60,13 @@ export function remoteDesktopCanResize(
   return protocol === "rdp" && capabilities?.serverResize === true;
 }
 
-/** Clipboard input is an explicit RDP opt-in and requires helper support. */
+/** Clipboard input is an explicit opt-in and requires helper support. */
 export function remoteDesktopCanSendClipboard(
   protocol: "rdp" | "vnc",
   requested: boolean,
   capabilities: RemoteDesktopRuntimeCapabilities | null,
 ): boolean {
-  return protocol === "rdp" && requested && capabilities?.clipboard === true;
+  return (protocol === "rdp" || protocol === "vnc") && requested && capabilities?.clipboard === true;
 }
 
 const MIN_WIDTH = 320;
@@ -168,7 +169,7 @@ export function parseRemoteDesktopProfile(
       height,
       color_depth: colorDepth,
       audio_enabled: false,
-      clipboard_enabled: protocol === "RDP" && (draft.clipboardEnabled ?? false),
+      clipboard_enabled: draft.clipboardEnabled ?? false,
       vnc_quality: vncQuality as VncQuality,
       reconnect_enabled: draft.reconnectEnabled ?? true,
       reconnect_attempts: reconnectAttempts,

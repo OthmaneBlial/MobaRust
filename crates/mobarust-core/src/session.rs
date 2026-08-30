@@ -195,8 +195,9 @@ pub struct RemoteDesktopProfile {
     pub height: u16,
     pub color_depth: u16,
     pub audio_enabled: bool,
-    /// RDP clipboard redirection is opt-in and currently has a native backend
-    /// only on Windows. Older profiles remain disabled by default.
+    /// Clipboard redirection is opt-in. RDP currently has a native backend
+    /// only on Windows; VNC uses its negotiated helper text channel. Older
+    /// profiles remain disabled by default.
     #[serde(default)]
     pub clipboard_enabled: bool,
     #[serde(default = "default_vnc_quality")]

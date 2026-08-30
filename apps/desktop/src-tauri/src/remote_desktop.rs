@@ -451,9 +451,6 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     if request.protocol == DesktopProtocol::Rdp && request.clipboard_enabled && !cfg!(windows) {
         return Err("RDP clipboard redirection requires the native Windows backend".into());
     }
-    if request.protocol == DesktopProtocol::Vnc && request.clipboard_enabled {
-        return Err("RDP clipboard settings are supported only for RDP".into());
-    }
     if request.color_depth == 0 {
         return Err("remote desktop color depth is invalid".into());
     }
@@ -1392,6 +1389,22 @@ mod tests {
     }
 
     #[test]
+    fn session_command_policy_allows_opted_in_vnc_clipboard() {
+        let policy = SessionCommandPolicy {
+            protocol: DesktopProtocol::Vnc,
+            clipboard_enabled: true,
+        };
+        validate_command_for_session(
+            policy,
+            Some(&HelperCapabilities::vnc()),
+            &HelperCommand::Clipboard {
+                text: String::from("approved VNC fixture text").into(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn session_command_policy_rechecks_advertised_runtime_capabilities() {
         let policy = SessionCommandPolicy {
             protocol: DesktopProtocol::Rdp,
@@ -1428,6 +1441,13 @@ mod tests {
     #[test]
     fn parent_boundary_allows_vnc_no_auth_metadata_without_username() {
         validate_request(&request(DesktopProtocol::Vnc, "")).unwrap();
+    }
+
+    #[test]
+    fn parent_boundary_allows_opted_in_vnc_clipboard() {
+        let mut request = request(DesktopProtocol::Vnc, "viewer");
+        request.clipboard_enabled = true;
+        validate_request(&request).unwrap();
     }
 
     #[test]

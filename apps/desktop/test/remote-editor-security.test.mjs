@@ -86,7 +86,8 @@ assert.equal(remoteDesktopCanResize("rdp", { serverResize: false, clipboard: tru
 assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: true }), true);
 assert.equal(remoteDesktopCanSendClipboard("rdp", false, { serverResize: true, clipboard: true }), false);
 assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: false }), false);
-assert.equal(remoteDesktopCanSendClipboard("vnc", true, { serverResize: false, clipboard: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("vnc", true, { serverResize: false, clipboard: true }), true);
+assert.equal(remoteDesktopCanSendClipboard("vnc", false, { serverResize: false, clipboard: true }), false);
 
 assert.deepEqual(
   parseRemoteDesktopProfile("RDP", {
@@ -134,6 +135,28 @@ assert.deepEqual(
       reconnect_enabled: true,
       reconnect_attempts: 3,
     },
+  },
+);
+assert.deepEqual(
+  parseRemoteDesktopProfile("VNC", {
+    domain: "",
+    width: "1280",
+    height: "720",
+    colorDepth: "24",
+    vncQuality: "balanced",
+    clipboardEnabled: true,
+  }).profile,
+  {
+    domain: null,
+    gateway: null,
+    width: 1280,
+    height: 720,
+    color_depth: 24,
+    audio_enabled: false,
+    clipboard_enabled: true,
+    vnc_quality: "balanced",
+    reconnect_enabled: true,
+    reconnect_attempts: 3,
   },
 );
 assert.match(

@@ -51,10 +51,10 @@ messages before a process is started:
   helper into a failed session and reusing the bounded stop/reap path;
 - the parent stores the requested protocol policy with each live session and
   rejects protocol-unsupported commands before they enter the helper queue;
-  VNC server resize is rejected, clipboard input requires explicit session
-  opt-in, and the policy is rechecked against the running helper's capability
-  report before forwarding input; inbound clipboard events are also rejected
-  when the runtime report does not advertise clipboard support;
+  VNC server resize is rejected, RDP/VNC clipboard input requires explicit
+  session opt-in, and the policy is rechecked against the running helper's
+  capability report before forwarding input; inbound clipboard events are also
+  rejected when the runtime report does not advertise clipboard support;
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and
