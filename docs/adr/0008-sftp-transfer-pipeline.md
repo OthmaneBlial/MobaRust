@@ -32,6 +32,11 @@ secret. It receives only paths, byte counters, lifecycle state, and sanitized
 operation errors. The native layer owns local file handles, SFTP channels,
 cleanup, and cancellation.
 
+Progress events also carry a native bytes-per-second estimate and a bounded
+ETA derived from the transfer's monotonic elapsed time. These values are
+advisory and are omitted until enough bytes have moved to produce a useful
+estimate; the frontend does not infer network timing from wall-clock events.
+
 Directory listing and remote mutations (create directory, rename, delete, and
 bounded POSIX permission changes) use separate native SFTP jobs as well. They are spawned from the SSH
 session loop, so a slow directory operation cannot stop the shell reader from

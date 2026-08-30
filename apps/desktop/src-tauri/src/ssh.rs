@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
@@ -217,6 +217,8 @@ struct SshTransferEvent {
     destination: String,
     bytes_transferred: u64,
     total_bytes: Option<u64>,
+    bytes_per_second: Option<u64>,
+    eta_seconds: Option<u64>,
     state: TransferState,
     error: Option<String>,
 }
@@ -466,6 +468,7 @@ struct TransferJob {
     cancel: Option<oneshot::Receiver<()>>,
     source: String,
     destination: String,
+    created_at: Instant,
 }
 
 impl TransferJob {
@@ -476,6 +479,8 @@ impl TransferJob {
         state: TransferState,
         error: Option<String>,
     ) -> SshTransferEvent {
+        let (bytes_per_second, eta_seconds) =
+            transfer_metrics(bytes_transferred, total_bytes, self.created_at.elapsed());
         SshTransferEvent {
             transfer_id: self.transfer_id.clone(),
             terminal_id: self.terminal_id.clone(),
@@ -485,6 +490,8 @@ impl TransferJob {
             destination: self.destination.clone(),
             bytes_transferred,
             total_bytes,
+            bytes_per_second,
+            eta_seconds,
             state,
             error,
         }
@@ -1041,6 +1048,7 @@ impl SshManager {
             cancel: Some(cancel_receiver),
             source: transfer_source(&direction, &remote_path, &local_path),
             destination: transfer_destination(&direction, &remote_path, &local_path),
+            created_at: Instant::now(),
         };
 
         self.transfers
@@ -3057,6 +3065,23 @@ fn transfer_destination(
     }
 }
 
+fn transfer_metrics(
+    bytes_transferred: u64,
+    total_bytes: Option<u64>,
+    elapsed: Duration,
+) -> (Option<u64>, Option<u64>) {
+    if bytes_transferred == 0 || elapsed.is_zero() {
+        return (None, None);
+    }
+    let bytes_per_second =
+        ((bytes_transferred as f64 / elapsed.as_secs_f64()).round() as u64).max(1);
+    let eta_seconds = total_bytes.map(|total| {
+        let remaining = total.saturating_sub(bytes_transferred);
+        (remaining as f64 / bytes_per_second as f64).ceil() as u64
+    });
+    (Some(bytes_per_second), eta_seconds)
+}
+
 fn default_terminal_cols() -> u32 {
     120
 }
@@ -3072,8 +3097,10 @@ fn default_terminal_rows() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        SshTransferRequest, TransferProtocol, remote_child_path, validate_transfer_component,
+        SshTransferRequest, TransferProtocol, remote_child_path, transfer_metrics,
+        validate_transfer_component,
     };
+    use std::time::Duration;
 
     #[test]
     fn recursive_remote_paths_keep_root_boundaries() {
@@ -3109,5 +3136,21 @@ mod tests {
         }))
         .expect("deserialize SCP transfer request");
         assert_eq!(scp_request.protocol, TransferProtocol::Scp);
+    }
+
+    #[test]
+    fn transfer_metrics_are_bounded_and_deterministic() {
+        assert_eq!(
+            transfer_metrics(50, Some(100), Duration::from_secs(2)),
+            (Some(25), Some(2))
+        );
+        assert_eq!(
+            transfer_metrics(100, Some(100), Duration::from_secs(1)),
+            (Some(100), Some(0))
+        );
+        assert_eq!(
+            transfer_metrics(0, Some(100), Duration::from_secs(1)),
+            (None, None)
+        );
     }
 }
