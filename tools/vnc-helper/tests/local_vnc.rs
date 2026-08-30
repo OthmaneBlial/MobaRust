@@ -224,6 +224,24 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
 
     send_command(
         &mut stdin,
+        HelperCommand::Resize {
+            display: DisplaySize {
+                width: 640,
+                height: 400,
+            },
+        },
+    )
+    .await;
+    assert!(matches!(
+        timeout(Duration::from_secs(2), next_event(&mut stdout))
+            .await
+            .unwrap(),
+        HelperEvent::Diagnostic { message, .. }
+            if message == "VNC server-side resize is not supported; viewport scaling remains local"
+    ));
+
+    send_command(
+        &mut stdin,
         HelperCommand::Key {
             scancode: 0x41,
             pressed: true,

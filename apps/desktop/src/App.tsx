@@ -1048,7 +1048,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
     <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
-    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small></div>
+    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{request.protocol === "vnc" && <small>Server resolution is unchanged · viewport scaling is local</small>}</div>
   </div>;
 }
 

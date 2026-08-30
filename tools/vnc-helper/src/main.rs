@@ -291,7 +291,7 @@ async fn handle_command<W: AsyncWrite + Unpin>(
         HelperCommand::Resize { .. } => {
             send_error(
                 stdout,
-                "VNC server-side resize is not supported by this adapter",
+                "VNC server-side resize is not supported; viewport scaling remains local",
             )
             .await?;
             Ok(false)

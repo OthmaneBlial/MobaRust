@@ -82,7 +82,8 @@ server-side resize are reported rather than simulated.
 `tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
 password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
 fixture verifies security-type selection and the DES challenge response before
-checking framebuffer, key, pointer, and clean stop. The current Tauri UI is
+checking framebuffer, explicit server-side resize rejection, key, pointer, and
+clean stop. The current Tauri UI is
 wired to the parent
 supervisor/renderer and offers explicit user-triggered reconnect after helper
 failure, but this is not yet cross-platform interoperability or production
@@ -91,7 +92,9 @@ evidence. The research working notes remain in
 packaging and Windows/Linux/macOS checks are complete. The parent UI surfaces
 remote clipboard events as an explicit “Copy text” action without
 automatically touching the local clipboard; server-side resize remains
-capability-dependent and is reported rather than simulated.
+capability-dependent and is reported rather than simulated. The VNC canvas
+keeps the negotiated server resolution and scales it locally to the viewport,
+with that limitation shown in the overlay.
 
 The helper now also reports a server disconnect during negotiation and can
 cooperatively cancel a stalled RFB negotiation as soon as `Stop` arrives,
