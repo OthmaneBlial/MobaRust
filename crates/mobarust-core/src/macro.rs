@@ -14,6 +14,16 @@ pub struct MacroRecord {
     pub description: String,
     pub tags: Vec<String>,
     pub actions: Vec<MacroAction>,
+    #[serde(default)]
+    pub approval: MacroApprovalPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MacroApprovalPolicy {
+    #[default]
+    BeforeRun,
+    EachAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +84,7 @@ impl MacroRecord {
             description: String::new(),
             tags: Vec::new(),
             actions: Vec::new(),
+            approval: MacroApprovalPolicy::BeforeRun,
         }
     }
 
@@ -162,11 +173,19 @@ mod tests {
                 command: "systemctl status app".into(),
             },
         ];
+        record.approval = MacroApprovalPolicy::EachAction;
         record.validate().unwrap();
         let encoded = serde_json::to_string(&record).unwrap();
         let decoded: MacroRecord = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, record);
         assert!(decoded.requires_elevated_confirmation());
+    }
+
+    #[test]
+    fn legacy_macros_default_to_before_run_approval() {
+        let encoded = r#"{"id":"00000000-0000-0000-0000-000000000001","title":"Legacy","description":"","tags":[],"actions":[{"kind":"sendKey","key":"enter"}]}"#;
+        let decoded: MacroRecord = serde_json::from_str(encoded).unwrap();
+        assert_eq!(decoded.approval, MacroApprovalPolicy::BeforeRun);
     }
 
     #[test]

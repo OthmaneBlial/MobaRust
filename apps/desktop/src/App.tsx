@@ -329,6 +329,7 @@ type SnippetRecord = {
 };
 
 type MacroKey = "enter" | "escape" | "tab" | "backspace" | "ctrlC" | "ctrlD" | "arrowUp" | "arrowDown" | "arrowLeft" | "arrowRight";
+type MacroApprovalPolicy = "beforeRun" | "eachAction";
 
 type MacroAction =
   | { kind: "sendText"; text: string }
@@ -344,7 +345,65 @@ type MacroRecord = {
   description: string;
   tags: string[];
   actions: MacroAction[];
+  approval: MacroApprovalPolicy;
 };
+
+type MacroRecordingState = {
+  terminalId: string;
+  terminalLabel: string;
+  actions: MacroAction[];
+  textBytes: number;
+};
+
+const MAX_RECORDED_MACRO_ACTIONS = 64;
+const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
+
+function normalizeMacroRecord(record: MacroRecord): MacroRecord {
+  return { ...record, approval: record.approval ?? "beforeRun" };
+}
+
+function recordedMacroActions(data: string): MacroAction[] {
+  const controlKeys: Array<[string, MacroKey]> = [
+    ["\x1b[A", "arrowUp"],
+    ["\x1b[B", "arrowDown"],
+    ["\x1b[D", "arrowLeft"],
+    ["\x1b[C", "arrowRight"],
+    ["\r\n", "enter"],
+    ["\x03", "ctrlC"],
+    ["\x04", "ctrlD"],
+    ["\x7f", "backspace"],
+    ["\x1b", "escape"],
+    ["\t", "tab"],
+    ["\r", "enter"],
+    ["\n", "enter"],
+  ];
+  const actions: MacroAction[] = [];
+  let text = "";
+  const flushText = () => {
+    if (text) actions.push({ kind: "sendText", text });
+    text = "";
+  };
+  let index = 0;
+  while (index < data.length) {
+    const control = controlKeys.find(([sequence]) => data.startsWith(sequence, index));
+    if (control) {
+      flushText();
+      actions.push({ kind: "sendKey", key: control[1] });
+      index += control[0].length;
+      continue;
+    }
+    const code = data.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) {
+      flushText();
+      index += 1;
+      continue;
+    }
+    text += data[index];
+    index += 1;
+  }
+  flushText();
+  return actions;
+}
 
 type SshAuthRequest =
   | { method: "agent" }
@@ -968,6 +1027,8 @@ function App() {
   const [broadcastEnabled, setBroadcastEnabled] = useState(false);
   const [broadcastTargetIds, setBroadcastTargetIds] = useState<string[]>([]);
   const [macroRun, setMacroRun] = useState<{ title: string; step: number; total: number; targets: string[] } | null>(null);
+  const [macroRecording, setMacroRecording] = useState<MacroRecordingState | null>(null);
+  const [recordedMacroDraft, setRecordedMacroDraft] = useState<MacroRecord | null>(null);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -1019,12 +1080,14 @@ function App() {
   const terminalTabsRef = useRef(terminalTabs);
   const broadcastEnabledRef = useRef(broadcastEnabled);
   const broadcastTargetIdsRef = useRef(broadcastTargetIds);
+  const macroRecordingRef = useRef<MacroRecordingState | null>(macroRecording);
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement; path: SplitPath } | null>(null);
   terminalTabsRef.current = terminalTabs;
   broadcastEnabledRef.current = broadcastEnabled;
   broadcastTargetIdsRef.current = broadcastTargetIds;
+  macroRecordingRef.current = macroRecording;
   macroRunRef.current = macroRun;
 
   useEffect(() => {
@@ -1088,6 +1151,46 @@ function App() {
     setQuickConnectOpen(true);
   }, [remoteProtocol, remoteSessionId]);
 
+  const startMacroRecording = useCallback(() => {
+    if (!selectedTerminalId || !activeTerminal || remoteProtocol === "rdp" || remoteProtocol === "vnc") return;
+    if (macroRunRef.current) {
+      setConnectionError("Stop the running macro before recording terminal input.");
+      return;
+    }
+    if (!nativeTerminalIdsRef.current.has(selectedTerminalId)) {
+      setConnectionError("The selected terminal is not ready for recording yet.");
+      return;
+    }
+    const next = { terminalId: selectedTerminalId, terminalLabel: activeTerminal.label, actions: [], textBytes: 0 };
+    macroRecordingRef.current = next;
+    setMacroRecording(next);
+    setRecordedMacroDraft(null);
+    setConnectionError(null);
+    setSessionNotice(`Recording input from “${activeTerminal.label}”. Stop recording to review it as a macro.`);
+  }, [activeTerminal, remoteProtocol, selectedTerminalId]);
+
+  const stopMacroRecording = useCallback(() => {
+    const recording = macroRecordingRef.current;
+    if (!recording) return;
+    macroRecordingRef.current = null;
+    setMacroRecording(null);
+    if (recording.actions.length === 0) {
+      setSessionNotice("Macro recording stopped without captured input.");
+      return;
+    }
+    const draft: MacroRecord = {
+      id: crypto.randomUUID(),
+      title: `Recorded · ${recording.terminalLabel}`,
+      description: "Captured terminal input. Review every action before saving or running.",
+      tags: ["recorded"],
+      actions: recording.actions,
+      approval: "eachAction",
+    };
+    setRecordedMacroDraft(draft);
+    setMacrosOpen(true);
+    setSessionNotice(`Captured ${recording.actions.length} bounded macro action${recording.actions.length === 1 ? "" : "s"}. Review before saving.`);
+  }, []);
+
   const handleTerminalStatus = useCallback((workspaceId: string, status: TerminalStatus) => {
     setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, status } : terminal));
   }, []);
@@ -1119,6 +1222,29 @@ function App() {
     return invoke(command, { terminalId, data });
   }, []);
 
+  const recordTerminalInput = useCallback((workspaceId: string, data: string) => {
+    const recording = macroRecordingRef.current;
+    if (!recording || recording.terminalId !== workspaceId) return;
+    const actions = recordedMacroActions(data);
+    if (actions.length === 0) return;
+    const textBytes = recording.textBytes + new TextEncoder().encode(data).length;
+    const mergedActions = [...recording.actions];
+    for (const action of actions) {
+      const previous = mergedActions.at(-1);
+      if (previous?.kind === "sendText" && action.kind === "sendText") previous.text += action.text;
+      else mergedActions.push(action);
+    }
+    if (mergedActions.length > MAX_RECORDED_MACRO_ACTIONS || textBytes > MAX_RECORDED_MACRO_TEXT_BYTES) {
+      macroRecordingRef.current = null;
+      setMacroRecording(null);
+      setConnectionError("Macro recording stopped at its safe 64-action/64 KiB limit. Review the captured draft before saving.");
+      return;
+    }
+    const next = { ...recording, actions: mergedActions, textBytes };
+    macroRecordingRef.current = next;
+    setMacroRecording(next);
+  }, []);
+
   const handleTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
     const selectedTargets = broadcastEnabledRef.current ? broadcastTargetIdsRef.current : [workspaceId];
     const targetIds = [...new Set(selectedTargets)];
@@ -1135,10 +1261,11 @@ function App() {
       setConnectionError(`Input was not sent: ${unavailable.length} selected terminal${unavailable.length === 1 ? " is" : "s are"} not ready.`);
       return;
     }
+    recordTerminalInput(workspaceId, data);
     void Promise.all(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)))
       .then(() => setConnectionError(null))
       .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}`));
-  }, [writeTerminalInput]);
+  }, [recordTerminalInput, writeTerminalInput]);
 
   const findTerminalMatch = useCallback((direction: "next" | "previous", query = terminalSearchQuery) => {
     const instance = terminalInstancesRef.current.get(selectedTerminalIdRef.current);
@@ -1314,7 +1441,7 @@ function App() {
   const refreshMacros = useCallback(() => {
     if (!IS_TAURI) return;
     void invoke<MacroRecord[]>("macro_list")
-      .then(setMacros)
+      .then((records) => setMacros(records.map(normalizeMacroRecord)))
       .catch((error) => setConnectionError(`Macros could not be loaded: ${String(error)}`));
   }, []);
 
@@ -1354,9 +1481,9 @@ function App() {
 
   const saveMacro = useCallback(async (record: MacroRecord) => {
     try {
-      const saved = IS_TAURI ? await invoke<MacroRecord>("macro_save", { record }) : record;
+      const saved = normalizeMacroRecord(IS_TAURI ? await invoke<MacroRecord>("macro_save", { record }) : record);
       setMacros((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved]);
-      setSessionNotice(`Saved macro “${saved.title}”. It requires an explicit run confirmation.`);
+      setSessionNotice(`Saved macro “${saved.title}”. ${saved.approval === "eachAction" ? "Each action requires approval." : "It requires an explicit run confirmation."}`);
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Macro could not be saved: ${String(error)}`);
@@ -1798,7 +1925,8 @@ function App() {
     const warning = record.actions.some((action) => action.kind === "executeCommand" || action.kind === "openSession" || action.kind === "switchWorkspace")
       ? `Macro “${record.title}” includes command or session-control actions. Run it on ${targetLabels.join(", ")}?`
       : `Run macro “${record.title}” on ${targetLabels.join(", ")}?`;
-    if (!window.confirm(`${warning}\n\nExecution is visible and can be cancelled. Do not include passwords or tokens in macro text.`)) return;
+    const approvalNote = record.approval === "eachAction" ? "Every action will ask for approval before it runs." : "Execution is visible and can be cancelled.";
+    if (!window.confirm(`${warning}\n\n${approvalNote} Do not include passwords or tokens in macro text.`)) return;
 
     const keyData: Record<MacroKey, string> = {
       enter: "\r",
@@ -1824,6 +1952,7 @@ function App() {
 
     macroCancelRef.current = false;
     setMacrosOpen(false);
+    setRecordedMacroDraft(null);
     setActiveView("terminal");
     const runState = { title: record.title, step: 0, total: record.actions.length, targets: targetLabels };
     macroRunRef.current = runState;
@@ -1831,6 +1960,22 @@ function App() {
     try {
       for (const [index, action] of record.actions.entries()) {
         if (macroCancelRef.current) throw new Error("cancelled");
+        if (record.approval === "eachAction") {
+          const actionDescription = action.kind === "executeCommand"
+            ? "execute a saved command (review its text in the editor)"
+            : action.kind === "sendText"
+              ? "send a saved text payload"
+              : action.kind === "sendKey"
+                ? `send the ${action.key} key`
+                : action.kind === "wait"
+                  ? `wait ${action.milliseconds} ms`
+                  : action.kind === "openSession"
+                    ? "open a saved session"
+                    : "switch workspace";
+          if (!window.confirm(`Approve macro action ${index + 1}/${record.actions.length}: ${actionDescription}?\n\nNo action will run if you cancel.`)) {
+            throw new Error("approval declined");
+          }
+        }
         const nextRunState = { title: record.title, step: index + 1, total: record.actions.length, targets: targetLabels };
         macroRunRef.current = nextRunState;
         setMacroRun(nextRunState);
@@ -1859,6 +2004,9 @@ function App() {
       setMacroRun(null);
       if (macroCancelRef.current || String(error).includes("cancelled")) {
         setSessionNotice(`Macro “${record.title}” cancelled before completion.`);
+        setConnectionError(null);
+      } else if (String(error).includes("approval declined")) {
+        setSessionNotice(`Macro “${record.title}” stopped before the next unapproved action.`);
         setConnectionError(null);
       } else {
         setConnectionError(`Macro “${record.title}” stopped: ${String(error)}`);
@@ -2553,6 +2701,7 @@ function App() {
         if (terminalSearchOpen) closeTerminalSearch();
         setPaletteOpen(false);
         if (macroRun) cancelMacro();
+        if (macroRecording) stopMacroRecording();
         if (broadcastEnabled) {
           setBroadcastEnabled(false);
           setBroadcastOpen(false);
@@ -2562,7 +2711,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, macroRun, selectedTerminalId, startNewTerminal, terminalSearchOpen]);
+  }, [broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, macroRecording, macroRun, selectedTerminalId, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -2713,9 +2862,10 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
                   {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
+                  {macroRecording && <div className="macro-recording-banner" role="alert"><Radio size={15} /><div><strong>RECORDING INPUT · {macroRecording.terminalLabel}</strong><span>Only terminal input is captured locally. Do not type passwords, tokens, or private keys.</span></div><button type="button" className="danger-button" onClick={stopMacroRecording}><Square size={13} /> Stop recording</button></div>}
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
@@ -2763,7 +2913,7 @@ function App() {
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
-      {macrosOpen && <MacrosModal macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => setMacrosOpen(false)} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
+      {macrosOpen && <MacrosModal key={recordedMacroDraft?.id ?? "macros"} initialDraft={recordedMacroDraft ?? undefined} macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => { setMacrosOpen(false); setRecordedMacroDraft(null); }} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
     </main>
   );
@@ -3320,7 +3470,7 @@ function SnippetsModal({ snippets, onClose, onSave, onDelete, onCopy }: { snippe
 }
 
 function newMacroRecord(): MacroRecord {
-  return { id: crypto.randomUUID(), title: "", description: "", tags: [], actions: [] };
+  return { id: crypto.randomUUID(), title: "", description: "", tags: [], actions: [], approval: "beforeRun" };
 }
 
 function newMacroAction(kind: MacroAction["kind"]): MacroAction {
@@ -3341,9 +3491,9 @@ function macroActionSummary(action: MacroAction): string {
   return "Switch workspace";
 }
 
-function MacrosModal({ macros, terminals, savedSessions, onClose, onSave, onDelete, onRun }: { macros: MacroRecord[]; terminals: WorkspaceTerminal[]; savedSessions: SavedSession[]; onClose: () => void; onSave: (record: MacroRecord) => Promise<void>; onDelete: (record: MacroRecord) => Promise<void>; onRun: (record: MacroRecord, targetIds: string[]) => Promise<void> }) {
-  const [selectedId, setSelectedId] = useState<string | null>(macros[0]?.id ?? null);
-  const [draft, setDraft] = useState<MacroRecord>(() => newMacroRecord());
+function MacrosModal({ initialDraft, macros, terminals, savedSessions, onClose, onSave, onDelete, onRun }: { initialDraft?: MacroRecord; macros: MacroRecord[]; terminals: WorkspaceTerminal[]; savedSessions: SavedSession[]; onClose: () => void; onSave: (record: MacroRecord) => Promise<void>; onDelete: (record: MacroRecord) => Promise<void>; onRun: (record: MacroRecord, targetIds: string[]) => Promise<void> }) {
+  const [selectedId, setSelectedId] = useState<string | null>(initialDraft ? null : macros[0]?.id ?? null);
+  const [draft, setDraft] = useState<MacroRecord>(() => initialDraft ?? newMacroRecord());
   const [targetIds, setTargetIds] = useState<string[]>(() => terminals.filter((terminal) => terminal.status === "connected" && terminal.remoteProtocol !== "rdp" && terminal.remoteProtocol !== "vnc").map((terminal) => terminal.id));
   const selected = macros.find((record) => record.id === selectedId);
   const active = selected ?? draft;
@@ -3377,11 +3527,12 @@ function MacroEditor({ record, isNew, savedSessions, terminals, targets, readyTe
   const [description, setDescription] = useState(record.description);
   const [tags, setTags] = useState(record.tags.join(", "));
   const [actions, setActions] = useState<MacroAction[]>(record.actions);
+  const [approval, setApproval] = useState<MacroApprovalPolicy>(record.approval ?? "beforeRun");
 
   const updateAction = (index: number, action: MacroAction) => setActions((current) => current.map((item, itemIndex) => itemIndex === index ? action : item));
   const addAction = (kind: MacroAction["kind"]) => setActions((current) => [...current, newMacroAction(kind)]);
   const removeAction = (index: number) => setActions((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  const buildRecord = (): MacroRecord => ({ id: record.id, title: title.trim(), description: description.trim(), tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))], actions });
+  const buildRecord = (): MacroRecord => ({ id: record.id, title: title.trim(), description: description.trim(), tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))], actions, approval });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void onSave(buildRecord());
@@ -3393,6 +3544,7 @@ function MacroEditor({ record, isNew, savedSessions, terminals, targets, readyTe
     <label>Title<input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Restart service safely" /></label>
     <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this sequence does" rows={2} /></label>
     <label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="ops, maintenance" /></label>
+    <label>Approval policy<select value={approval} onChange={(event) => setApproval(event.target.value as MacroApprovalPolicy)}><option value="beforeRun">Confirm before run</option><option value="eachAction">Confirm every action</option></select><small>{approval === "eachAction" ? "A second confirmation appears before each action; cancelling stops the sequence." : "One explicit confirmation appears before the visible, cancellable sequence."}</small></label>
     <div className="macro-actions-heading"><span>Actions · {actions.length}/64</span><small>Each step runs in order and can be cancelled.</small></div>
     <div className="macro-actions-list">{actions.length === 0 && <div className="macro-empty">Add a typed action below. Saving or running an empty macro is blocked.</div>}{actions.map((action, index) => <MacroActionRow key={`${index}-${action.kind}`} index={index} action={action} savedSessions={savedSessions} terminals={terminals} onChange={updateAction} onRemove={removeAction} />)}</div>
     <div className="macro-add-actions"><button type="button" className="outline-button" onClick={() => addAction("sendText")}><Plus size={13} /> Text</button><button type="button" className="outline-button" onClick={() => addAction("executeCommand")}><Plus size={13} /> Command</button><button type="button" className="outline-button" onClick={() => addAction("sendKey")}><Plus size={13} /> Key</button><button type="button" className="outline-button" onClick={() => addAction("wait")}><Plus size={13} /> Wait</button><button type="button" className="outline-button" onClick={() => addAction("openSession")}><Plus size={13} /> Open</button><button type="button" className="outline-button" onClick={() => addAction("switchWorkspace")}><Plus size={13} /> Switch</button></div>

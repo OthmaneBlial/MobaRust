@@ -11,8 +11,8 @@ pub mod transfer;
 
 pub use lifecycle::{ConnectionEvent, ConnectionLifecycle, ConnectionState, TransitionError};
 pub use r#macro::{
-    MAX_MACRO_ACTIONS, MAX_MACRO_TEXT_BYTES, MAX_MACRO_WAIT_MILLISECONDS, MacroAction, MacroKey,
-    MacroRecord, MacroValidationError,
+    MAX_MACRO_ACTIONS, MAX_MACRO_TEXT_BYTES, MAX_MACRO_WAIT_MILLISECONDS, MacroAction,
+    MacroApprovalPolicy, MacroKey, MacroRecord, MacroValidationError,
 };
 pub use session::{
     AuthMethod, JumpHostRecord, Protocol, RemoteDesktopProfile, SerialProfile, SessionId,
