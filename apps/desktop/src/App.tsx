@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type UIEvent as ReactUIEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -177,6 +177,49 @@ type WorkspaceTerminal = {
 };
 
 type SplitDirection = "none" | "right" | "down";
+
+type TerminalLayoutNode =
+  | { kind: "pane"; terminalId: string }
+  | { kind: "split"; direction: Exclude<SplitDirection, "none">; ratio: number; first: TerminalLayoutNode; second: TerminalLayoutNode };
+
+type SplitPathPart = "first" | "second";
+type SplitPath = SplitPathPart[];
+
+function layoutTerminalIds(node: TerminalLayoutNode): string[] {
+  return node.kind === "pane" ? [node.terminalId] : [...layoutTerminalIds(node.first), ...layoutTerminalIds(node.second)];
+}
+
+function findLayoutPath(node: TerminalLayoutNode, terminalId: string, path: SplitPath = []): SplitPath | null {
+  if (node.kind === "pane") return node.terminalId === terminalId ? path : null;
+  return findLayoutPath(node.first, terminalId, [...path, "first"]) ?? findLayoutPath(node.second, terminalId, [...path, "second"]);
+}
+
+function replaceLayoutNode(node: TerminalLayoutNode, path: SplitPath, replacement: TerminalLayoutNode): TerminalLayoutNode {
+  if (path.length === 0) return replacement;
+  if (node.kind === "pane") return node;
+  const [head, ...rest] = path;
+  return head === "first"
+    ? { ...node, first: replaceLayoutNode(node.first, rest, replacement) }
+    : { ...node, second: replaceLayoutNode(node.second, rest, replacement) };
+}
+
+function updateLayoutRatio(node: TerminalLayoutNode, path: SplitPath, ratio: number): TerminalLayoutNode {
+  if (path.length === 0) return node.kind === "split" ? { ...node, ratio } : node;
+  if (node.kind === "pane") return node;
+  const [head, ...rest] = path;
+  return head === "first"
+    ? { ...node, first: updateLayoutRatio(node.first, rest, ratio) }
+    : { ...node, second: updateLayoutRatio(node.second, rest, ratio) };
+}
+
+function removeLayoutNode(node: TerminalLayoutNode, terminalId: string): TerminalLayoutNode | null {
+  if (node.kind === "pane") return node.terminalId === terminalId ? null : node;
+  const first = removeLayoutNode(node.first, terminalId);
+  const second = removeLayoutNode(node.second, terminalId);
+  if (!first) return second;
+  if (!second) return first;
+  return { ...node, first, second };
+}
 
 let terminalInstanceCounter = 0;
 
@@ -838,13 +881,67 @@ function desktopKeyCode(protocol: DesktopProtocol, event: ReactKeyboardEvent<HTM
   return scanCodes[event.code] ?? null;
 }
 
+function TerminalLayoutView({
+  node,
+  terminals,
+  renderPane,
+  onFocus,
+  onStartResize,
+  onAdjustResize,
+  onResetResize,
+}: {
+  node: TerminalLayoutNode;
+  terminals: WorkspaceTerminal[];
+  renderPane: (terminal: WorkspaceTerminal) => ReactNode;
+  onFocus: (terminalId: string) => void;
+  onStartResize: (event: ReactMouseEvent<HTMLDivElement>, path: SplitPath, direction: Exclude<SplitDirection, "none">) => void;
+  onAdjustResize: (event: ReactKeyboardEvent<HTMLDivElement>, path: SplitPath, direction: Exclude<SplitDirection, "none">) => void;
+  onResetResize: (path: SplitPath) => void;
+}) {
+  const visibleIds = new Set(layoutTerminalIds(node));
+
+  const renderNode = (current: TerminalLayoutNode, path: SplitPath): ReactNode => {
+    if (current.kind === "pane") {
+      const terminal = terminals.find((item) => item.id === current.terminalId);
+      return <div key={`pane-${current.terminalId}`} className="terminal-pane terminal-layout-pane active" onMouseDown={() => onFocus(current.terminalId)} onFocusCapture={() => onFocus(current.terminalId)}>{terminal ? renderPane(terminal) : null}</div>;
+    }
+
+    const gridStyle = current.direction === "right"
+      ? { gridTemplateColumns: `minmax(0, ${current.ratio}%) 1px minmax(0, ${100 - current.ratio}%)` }
+      : { gridTemplateRows: `minmax(0, ${current.ratio}%) 1px minmax(0, ${100 - current.ratio}%)` };
+    const dividerPath = path;
+    return <div key={`split-${path.join("-") || "root"}`} className={`terminal-layout-split terminal-layout-split-${current.direction}`} style={gridStyle}>
+      {renderNode(current.first, [...path, "first"])}
+      <div
+        className={`terminal-split-divider terminal-split-divider-${current.direction}`}
+        role="separator"
+        aria-orientation={current.direction === "right" ? "vertical" : "horizontal"}
+        tabIndex={0}
+        aria-label="Resize split panes"
+        aria-valuemin={20}
+        aria-valuemax={80}
+        aria-valuenow={Math.round(current.ratio)}
+        onMouseDown={(event) => onStartResize(event, dividerPath, current.direction)}
+        onDoubleClick={() => onResetResize(dividerPath)}
+        onKeyDown={(event) => onAdjustResize(event, dividerPath, current.direction)}
+      />
+      {renderNode(current.second, [...path, "second"])}
+    </div>;
+  };
+
+  return <>
+    <div className="terminal-layout-root">{renderNode(node, [])}</div>
+    <div className="terminal-hidden-panes" aria-hidden="true">
+      {terminals.filter((terminal) => !visibleIds.has(terminal.id)).map((terminal) => <div key={`hidden-${terminal.id}`} className="terminal-pane terminal-pane-hidden">{renderPane(terminal)}</div>)}
+    </div>
+  </>;
+}
+
 function App() {
   const [activeView, setActiveView] = useState<View>("terminal");
   const [terminalTabs, setTerminalTabs] = useState<WorkspaceTerminal[]>(() => [createWorkspaceTerminal()]);
   const [activeTerminalId, setActiveTerminalId] = useState("");
-  const [splitDirection, setSplitDirection] = useState<SplitDirection>("none");
-  const [splitTerminalIds, setSplitTerminalIds] = useState<string[]>([]);
-  const [splitRatio, setSplitRatio] = useState(50);
+  const [terminalLayout, setTerminalLayout] = useState<TerminalLayoutNode>({ kind: "pane", terminalId: "" });
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -907,7 +1004,7 @@ function App() {
   const broadcastTargetIdsRef = useRef(broadcastTargetIds);
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
-  const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement } | null>(null);
+  const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement; path: SplitPath } | null>(null);
   terminalTabsRef.current = terminalTabs;
   broadcastEnabledRef.current = broadcastEnabled;
   broadcastTargetIdsRef.current = broadcastTargetIds;
@@ -923,7 +1020,8 @@ function App() {
         : event.clientY - bounds.top;
       const length = resize.direction === "right" ? bounds.width : bounds.height;
       if (length <= 0) return;
-      setSplitRatio(Math.max(20, Math.min(80, (position / length) * 100)));
+      const ratio = Math.max(20, Math.min(80, (position / length) * 100));
+      setTerminalLayout((current) => updateLayoutRatio(current, resize.path, ratio));
     };
     const onPointerUp = () => {
       splitResizeRef.current = null;
@@ -948,15 +1046,16 @@ function App() {
 
   useEffect(() => {
     if (!activeTerminalId && activeTerminal) setActiveTerminalId(activeTerminal.id);
-  }, [activeTerminal, activeTerminalId]);
+    if (activeTerminal && terminalLayout.kind === "pane" && !terminalLayout.terminalId) {
+      setTerminalLayout({ kind: "pane", terminalId: activeTerminal.id });
+    }
+  }, [activeTerminal, activeTerminalId, terminalLayout]);
 
   const startNewTerminal = useCallback(() => {
     const terminal = createWorkspaceTerminal();
     setTerminalTabs((current) => [...current, terminal]);
     setActiveTerminalId(terminal.id);
-    setSplitDirection("none");
-    setSplitTerminalIds([]);
-    setSplitRatio(50);
+    setTerminalLayout({ kind: "pane", terminalId: terminal.id });
     setConnectionError(null);
     setSessionNotice(null);
     setActiveView("terminal");
@@ -1009,69 +1108,73 @@ function App() {
       const replacement = createWorkspaceTerminal();
       setTerminalTabs([replacement]);
       setActiveTerminalId(replacement.id);
-      setSplitDirection("none");
-      setSplitTerminalIds([]);
-      setSplitRatio(50);
+      setTerminalLayout({ kind: "pane", terminalId: replacement.id });
       setActiveView("terminal");
       return;
     }
     const closingIndex = terminalTabs.findIndex((terminal) => terminal.id === workspaceId);
     const remaining = terminalTabs.filter((terminal) => terminal.id !== workspaceId);
     setTerminalTabs(remaining);
-    const remainingSplitIds = splitTerminalIds.filter((id) => id !== workspaceId);
-    setSplitTerminalIds(remainingSplitIds);
-    if (remainingSplitIds.length < 2) {
-      setSplitDirection("none");
-      setSplitRatio(50);
-    }
+    setTerminalLayout((current) => removeLayoutNode(current, workspaceId) ?? { kind: "pane", terminalId: remaining[0].id });
     if (activeTerminalId === workspaceId) {
       setActiveTerminalId(remaining[Math.min(closingIndex, remaining.length - 1)].id);
     }
-  }, [activeTerminalId, splitTerminalIds, terminalTabs]);
+  }, [activeTerminalId, terminalTabs]);
 
   const cycleTerminal = useCallback((direction: 1 | -1) => {
     if (terminalTabs.length < 2) return;
     const index = Math.max(0, terminalTabs.findIndex((terminal) => terminal.id === selectedTerminalId));
     const nextIndex = (index + direction + terminalTabs.length) % terminalTabs.length;
     setActiveTerminalId(terminalTabs[nextIndex].id);
+    setTerminalLayout({ kind: "pane", terminalId: terminalTabs[nextIndex].id });
     setActiveView("terminal");
   }, [selectedTerminalId, terminalTabs]);
 
   const openSplit = useCallback((direction: Exclude<SplitDirection, "none">) => {
     const firstId = selectedTerminalId;
     if (!firstId) return;
-    let second = terminalTabs.find((terminal) => terminal.id !== firstId);
+    const visibleIds = new Set(layoutTerminalIds(terminalLayout));
+    let second = terminalTabs.find((terminal) => terminal.id !== firstId && !visibleIds.has(terminal.id));
     if (!second) {
       second = createWorkspaceTerminal();
       setTerminalTabs((current) => [...current, second!]);
     }
-    setSplitTerminalIds([firstId, second.id]);
-    setSplitDirection(direction);
-    setSplitRatio(50);
+    const newSplit: TerminalLayoutNode = { kind: "split", direction, ratio: 50, first: { kind: "pane", terminalId: firstId }, second: { kind: "pane", terminalId: second.id } };
+    setTerminalLayout((current) => {
+      const path = findLayoutPath(current, firstId);
+      return path ? replaceLayoutNode(current, path, newSplit) : newSplit;
+    });
     setActiveView("terminal");
-  }, [selectedTerminalId, terminalTabs]);
+  }, [selectedTerminalId, terminalLayout, terminalTabs]);
 
-  const beginSplitResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (splitDirection === "none") return;
+  const beginSplitResize = useCallback((event: ReactMouseEvent<HTMLDivElement>, path: SplitPath, direction: Exclude<SplitDirection, "none">) => {
     const frame = event.currentTarget.parentElement;
     if (!frame) return;
     event.preventDefault();
-    splitResizeRef.current = { direction: splitDirection, frame };
-    document.body.style.cursor = splitDirection === "right" ? "col-resize" : "row-resize";
+    splitResizeRef.current = { direction, frame, path };
+    document.body.style.cursor = direction === "right" ? "col-resize" : "row-resize";
     document.body.style.userSelect = "none";
-  }, [splitDirection]);
+  }, []);
 
-  const adjustSplitRatio = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const increase = splitDirection === "right"
+  const adjustSplitRatio = useCallback((event: ReactKeyboardEvent<HTMLDivElement>, path: SplitPath, direction: Exclude<SplitDirection, "none">) => {
+    const increase = direction === "right"
       ? event.key === "ArrowRight"
       : event.key === "ArrowDown";
-    const decrease = splitDirection === "right"
+    const decrease = direction === "right"
       ? event.key === "ArrowLeft"
       : event.key === "ArrowUp";
     if (!increase && !decrease) return;
     event.preventDefault();
-    setSplitRatio((current) => Math.max(20, Math.min(80, current + (increase ? 5 : -5))));
-  }, [splitDirection]);
+    setTerminalLayout((current) => {
+      const currentNode = path.reduce<TerminalLayoutNode | null>((node, part) => node?.kind === "split" ? node[part] : null, current);
+      const ratio = currentNode?.kind === "split" ? currentNode.ratio : 50;
+      return updateLayoutRatio(current, path, Math.max(20, Math.min(80, ratio + (increase ? 5 : -5))));
+    });
+  }, []);
+
+  const resetSplitRatio = useCallback((path: SplitPath) => {
+    setTerminalLayout((current) => updateLayoutRatio(current, path, 50));
+  }, []);
 
   const refreshSavedSessions = useCallback(() => {
     if (!IS_TAURI) return;
@@ -1314,8 +1417,7 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
-      setSplitDirection("none");
-      setSplitTerminalIds([]);
+      setTerminalLayout({ kind: "pane", terminalId: terminal.id });
       setActiveView("terminal");
       setQuickConnectOpen(false);
       if (offerSave) {
@@ -1352,8 +1454,7 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
-      setSplitDirection("none");
-      setSplitTerminalIds([]);
+      setTerminalLayout({ kind: "pane", terminalId: terminal.id });
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
@@ -1379,8 +1480,7 @@ function App() {
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
-      setSplitDirection("none");
-      setSplitTerminalIds([]);
+      setTerminalLayout({ kind: "pane", terminalId: terminal.id });
       setActiveView("terminal");
       setQuickConnectOpen(false);
       setSessionNotice(`Connected to ${response.device}. Serial traffic is not encrypted by MobaRust.`);
@@ -1412,8 +1512,7 @@ function App() {
     });
     setTerminalTabs((current) => [...current, terminal]);
     setActiveTerminalId(terminal.id);
-    setSplitDirection("none");
-    setSplitTerminalIds([]);
+    setTerminalLayout({ kind: "pane", terminalId: terminal.id });
     setActiveView("terminal");
     setQuickConnectOpen(false);
     setSessionNotice(`${request.protocol.toUpperCase()} session queued. The native helper will report its actual connection state.`);
@@ -2368,14 +2467,11 @@ function App() {
   const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
-  const splitFirstRenderedId = splitDirection === "none"
-    ? null
-    : terminalTabs.find((terminal) => splitTerminalIds.includes(terminal.id))?.id ?? null;
-  const splitFrameStyle = splitDirection === "right"
-    ? { gridTemplateColumns: `minmax(0, ${splitRatio}%) 1px minmax(0, ${100 - splitRatio}%)` }
-    : splitDirection === "down"
-      ? { gridTemplateRows: `minmax(0, ${splitRatio}%) 1px minmax(0, ${100 - splitRatio}%)` }
-      : undefined;
+
+  const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
+    const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />;
+  }, [handleNativeTerminalId, handleTerminalInput, handleTerminalStatus, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
@@ -2511,12 +2607,12 @@ function App() {
               {activeView === "terminal" ? (
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
-                    <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setSplitDirection("none"); setSplitTerminalIds([]); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
+                    <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
                   <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" aria-label="Copy terminal output"><Copy size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
                   </div>
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
-                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`} style={splitFrameStyle}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest; return <Fragment key={terminal.id}><div className={`terminal-pane ${visible ? "active" : ""}`} onMouseDown={() => setActiveTerminalId(terminal.id)} onFocusCapture={() => setActiveTerminalId(terminal.id)}>{isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />}</div>{splitDirection !== "none" && terminal.id === splitFirstRenderedId && <div className={`terminal-split-divider terminal-split-divider-${splitDirection}`} role="separator" tabIndex={0} aria-label="Resize split panes" aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(splitRatio)} onMouseDown={beginSplitResize} onDoubleClick={() => setSplitRatio(50)} onKeyDown={adjustSplitRatio} />}</Fragment>; })}</div>
+                  <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (

@@ -49,6 +49,14 @@ button:not(:disabled) { cursor: pointer; }
 .terminal-frame-split-down { grid-template-rows: repeat(2, minmax(0, 1fr)); }
 .terminal-frame-split-right .terminal-pane.active, .terminal-frame-split-down .terminal-pane.active { display: block; min-width: 0; min-height: 0; padding: 15px 16px 12px; background: #101514; overflow: hidden; }
 .terminal-frame-split-right, .terminal-frame-split-down { gap: 0; }
+.terminal-frame-single, .terminal-frame-has-layout { padding: 0; }
+.terminal-frame-single { background: #101514; }
+.terminal-frame-has-layout { background: var(--line); }
+.terminal-layout-root { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.terminal-layout-split { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 0; background: var(--line); }
+.terminal-layout-pane { display: block !important; min-width: 0; min-height: 0; padding: 15px 16px 12px; background: #101514; overflow: hidden; }
+.terminal-hidden-panes { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.terminal-pane-hidden { display: none !important; }
 .terminal-split-divider { z-index: 2; background: var(--line-strong); outline: 0; }
 .terminal-split-divider-right { cursor: col-resize; }
 .terminal-split-divider-down { cursor: row-resize; }

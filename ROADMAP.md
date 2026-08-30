@@ -9,7 +9,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Tauri shell and xterm.js operator workspace
 - [x] Persistent terminal tabs for local and remote sessions with per-tab lifecycle routing
 - [x] Two-pane horizontal/vertical terminal splits with explicit close semantics
-- [ ] Nested splits, drag-resizing, and richer pane focus management
+- [x] Nested splits, drag-resizing, and richer pane focus management
 - [x] Local validation command and architecture/research records
 - [ ] Cross-platform PTY matrix on Windows, Linux, and macOS
 
