@@ -157,10 +157,16 @@ impl RemoteDesktopProfile {
 
     pub fn validate_for_protocol(&self, protocol: Protocol) -> Result<(), SessionValidationError> {
         self.validate()?;
+        if !matches!(protocol, Protocol::Rdp | Protocol::Vnc) {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
         if protocol == Protocol::Rdp && !matches!(self.color_depth, 16 | 32) {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
-        if protocol == Protocol::Rdp && self.audio_enabled {
+        if self.audio_enabled {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        if protocol == Protocol::Vnc && self.domain.is_some() {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         Ok(())
@@ -633,12 +639,29 @@ mod tests {
             invalid_depth.validate_for_protocol(Protocol::Rdp),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
+        invalid_depth.domain = None;
         invalid_depth.validate_for_protocol(Protocol::Vnc).unwrap();
+
+        let mut invalid_vnc_domain = profile.clone();
+        invalid_vnc_domain.domain = Some("LAB".into());
+        assert_eq!(
+            invalid_vnc_domain.validate_for_protocol(Protocol::Vnc),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
 
         let mut invalid_audio = profile.clone();
         invalid_audio.audio_enabled = true;
         assert_eq!(
             invalid_audio.validate_for_protocol(Protocol::Rdp),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+        assert_eq!(
+            invalid_audio.validate_for_protocol(Protocol::Vnc),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+
+        assert_eq!(
+            profile.validate_for_protocol(Protocol::Ssh),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
 
