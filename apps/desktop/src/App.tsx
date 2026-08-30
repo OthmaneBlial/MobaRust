@@ -5098,7 +5098,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
               <label>
                 Host
                 <input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" />
-                {(protocol === "rdp" || protocol === "vnc") && <small>Experimental local fixture only: use 127.0.0.1 or ::1. Real hosts are blocked until transport security is validated.</small>}
+                {protocol === "rdp" ? <small>RDP accepts a hostname or IP through native certificate validation; untrusted certificates fail closed. Real-server interoperability remains experimental.</small> : protocol === "vnc" ? <small>Experimental local fixture only: use 127.0.0.1 or ::1. Real hosts are blocked until transport security is validated.</small> : null}
               </label>
               <label>
                 Port
