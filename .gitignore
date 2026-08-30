@@ -13,6 +13,7 @@ coverage/
 # Desktop artifacts
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/helpers/
 apps/desktop/src-tauri/icons/*.icns
 apps/desktop/src-tauri/icons/*.ico
 apps/desktop/src-tauri/icons/*.png

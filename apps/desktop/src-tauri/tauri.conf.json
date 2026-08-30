@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "sh ../../tools/prepare-desktop.sh",
     "frontendDist": "../dist"
   },
   "app": {
@@ -26,7 +26,8 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "resources": ["helpers/*"],
     "icon": []
   }
 }

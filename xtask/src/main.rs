@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 
 fn main() {
@@ -6,10 +8,18 @@ fn main() {
         "check" => check(),
         "check-rdp-helper" => check_rdp_helper(),
         "check-vnc-helper" => check_vnc_helper(),
+        "package-check" => package_check(),
+        "stage-helpers" => stage_helpers(),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
             println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
+            println!(
+                "cargo xtask package-check    Build an unsigned current-platform Tauri app bundle"
+            );
+            println!(
+                "cargo xtask stage-helpers    Build and stage ignored desktop helper resources"
+            );
             Ok(())
         }
         other => Err(format!("unknown xtask command: {other}")),
@@ -19,6 +29,59 @@ fn main() {
         eprintln!("xtask: {error}");
         std::process::exit(1);
     }
+}
+
+fn stage_helpers() -> Result<(), String> {
+    let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "xtask manifest has no repository parent".to_owned())?
+        .to_path_buf();
+    let staging_directory = repository_root.join("apps/desktop/src-tauri/helpers");
+    fs::create_dir_all(&staging_directory)
+        .map_err(|error| format!("could not create helper staging directory: {error}"))?;
+    let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let helpers = [
+        ("tools/rdp-helper/Cargo.toml", "mobarust-rdp-helper"),
+        ("tools/vnc-helper/Cargo.toml", "mobarust-vnc-helper"),
+    ];
+
+    for (manifest, binary) in helpers {
+        let manifest_path = repository_root.join(manifest);
+        let status = Command::new("cargo")
+            .args(["build", "--release", "--manifest-path"])
+            .arg(&manifest_path)
+            .current_dir(&repository_root)
+            .status()
+            .map_err(|error| format!("could not build {binary}: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "cargo failed while building {binary} with {status}"
+            ));
+        }
+        let source = manifest_path
+            .parent()
+            .ok_or_else(|| format!("helper manifest has no parent: {}", manifest_path.display()))?
+            .join("target/release")
+            .join(format!("{binary}{executable_suffix}"));
+        let destination = staging_directory.join(format!("{binary}{executable_suffix}"));
+        fs::copy(&source, &destination).map_err(|error| {
+            format!(
+                "could not stage {binary} from {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        println!("staged {}", destination.display());
+    }
+    Ok(())
+}
+
+fn package_check() -> Result<(), String> {
+    run(
+        "pnpm",
+        ["tauri", "build", "--debug", "--no-sign", "--bundles", "app"],
+        Some("apps/desktop"),
+    )
 }
 
 fn check() -> Result<(), String> {

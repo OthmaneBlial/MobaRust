@@ -47,6 +47,9 @@ The first working slice provides:
 - a local quality command: `cargo xtask check`.
 - a documented safe-testing policy that keeps protocol fixtures on loopback
   and temporary paths, without reading personal SSH material.
+- a Tauri packaging hook that stages the isolated RDP/VNC helpers as ignored
+  native resources; signing, clean-install, and cross-platform evidence remain
+  explicit release gates.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests, plus isolated IronRDP and `vnc-rs` adapter experiments under
   `tools/rdp-helper` and `tools/vnc-helper`; these are not yet packaged or
