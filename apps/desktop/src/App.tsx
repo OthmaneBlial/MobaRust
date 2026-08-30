@@ -5231,7 +5231,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
                   </label>}
                   {protocol === "rdp" && <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>Audio redirection is not enabled in the current helper yet; the connection will use video and input only.</span></div>}
-                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP is isolated in a native helper; trust-store/pinning policy and gateway support remain explicit capability work." : "VNC is legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
+                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP accepts a hostname or IP and uses native platform certificate validation; untrusted certificates fail closed. Real-server and Windows interoperability remain experimental." : "VNC is loopback-only in this candidate and uses legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
                 </>
               ) : (
                 <>

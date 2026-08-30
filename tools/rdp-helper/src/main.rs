@@ -13,7 +13,6 @@
 use std::env;
 use std::error::Error;
 use std::fmt;
-use std::net::IpAddr;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -44,8 +43,6 @@ const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const AUDIO_UNSUPPORTED: &str = "RDP audio redirection is not enabled in this helper";
-const RDP_TARGET_UNSUPPORTED: &str =
-    "RDP experiment is restricted to a loopback IP during candidate review";
 const TLS_ENVIRONMENT_UNSUPPORTED: &str =
     "RDP helper refuses ambient TLS certificate override variables";
 
@@ -695,15 +692,11 @@ fn unsupported_option(arguments: &Arguments) -> Option<&'static str> {
         return Some(AUDIO_UNSUPPORTED);
     }
 
-    // The pinned IronRDP TLS backends do not validate server identity. Keep
-    // this candidate fail-closed so an accidental launch cannot reach a real
-    // or private host while the dependency is being evaluated.
-    let loopback_ip = arguments
-        .host
-        .parse::<IpAddr>()
-        .map(|address| address.is_loopback())
-        .unwrap_or(false);
-    (!loopback_ip).then_some(RDP_TARGET_UNSUPPORTED)
+    // Hostnames and IP literals are accepted here because the patched native
+    // TLS adapter owns DNS/SNI and platform certificate verification. The
+    // helper still refuses ambient certificate overrides and TLS key logging
+    // before any connection attempt.
+    None
 }
 
 fn tls_certificate_override_present() -> bool {
@@ -1050,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn insecure_tls_candidate_is_restricted_to_loopback_ip_literals() {
+    fn validated_tls_candidate_accepts_hostname_and_ip_metadata_without_network_io() {
         let mut arguments = Arguments {
             host: "example.invalid".into(),
             port: 3389,
@@ -1063,14 +1056,37 @@ mod tests {
             color_depth: 32,
             audio_requested: false,
         };
-        assert_eq!(unsupported_option(&arguments), Some(RDP_TARGET_UNSUPPORTED));
-
-        arguments.host = "127.0.0.1".into();
         assert_eq!(unsupported_option(&arguments), None);
-        arguments.host = "::1".into();
+
+        arguments.host = "192.0.2.10".into();
         assert_eq!(unsupported_option(&arguments), None);
         arguments.host = "localhost".into();
-        assert_eq!(unsupported_option(&arguments), Some(RDP_TARGET_UNSUPPORTED));
+        assert_eq!(unsupported_option(&arguments), None);
+    }
+
+    #[test]
+    fn rdp_config_preserves_hostname_metadata_without_connecting() {
+        let arguments = Arguments {
+            host: "example.invalid".into(),
+            port: 3389,
+            username: "fixture-user".into(),
+            domain: None,
+            display: DisplaySize {
+                width: 320,
+                height: 200,
+            },
+            color_depth: 32,
+            audio_requested: false,
+        };
+
+        assert!(
+            build_config(
+                &arguments,
+                arguments.display,
+                &HelperCredential::new("fixture-secret"),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

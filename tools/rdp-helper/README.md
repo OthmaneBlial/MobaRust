@@ -30,15 +30,16 @@ implementation was audited locally and its TLS backends do not validate server
 identity. The helper therefore patches that dependency inside this isolated
 workspace with `ironrdp-tls-validated`, a small compatibility crate that uses
 Rustls, SNI, and `rustls-platform-verifier`. This improves the candidate's
-trust behavior but is not production evidence: the helper remains loopback-only
-and excluded from normal bundles. RD Gateway is also deferred until its
+trust behavior but is not production evidence: RDP hostname/IP targets are
+accepted only through this native platform-verification path, and the helper
+remains excluded from normal bundles. RD Gateway is also deferred until its
 separate transport path has the same trust policy.
 
-The helper enforces this boundary at runtime during the experiment: it accepts
-only literal loopback IP targets (`127.0.0.1` or `::1`) and rejects hostnames and
-all other addresses before opening a socket. The local TLS adapter validates
-the presented certificate when a handshake is attempted, but this restriction
-remains until real interoperability evidence exists.
+The helper now accepts explicit hostname or IP metadata and passes it unchanged
+to the native TLS adapter, which owns DNS, SNI, and platform certificate
+verification. Untrusted or invalid certificates fail closed. This candidate
+behavior is still subject to real interoperability, dependency, and packaging
+evidence; local tests continue to use only disposable loopback fixtures.
 
 Promotion requires an audited engine/backend with real certificate-chain and
 hostname validation (or an explicit, reviewed pinning policy), deterministic

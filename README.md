@@ -69,7 +69,7 @@ The table below makes the current boundary explicit. “Implemented” means rep
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, and WSL foundations |
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
-| **RDP** | Isolated native candidate with framebuffer/input/lifecycle work and local process tests; mature-engine integration, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
+| **RDP** | Isolated native candidate with framebuffer/input/lifecycle work, explicit hostname/IP target metadata, platform certificate validation, and local process tests; mature-engine integration, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
 | **VNC** | Native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, cancellation, and clean shutdown; broader interoperability remains open |
 | **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server remains a separate research and packaging decision |
 

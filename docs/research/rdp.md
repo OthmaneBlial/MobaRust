@@ -113,26 +113,25 @@ Rustls path also uses a no-certificate-verification implementation. The helper
 experiment now patches that dependency inside its isolated workspace with
 `ironrdp-tls-validated`, a small compatibility crate that uses Rustls, platform
 certificate verification, and SNI. This improves the candidate's trust
-behavior but does not establish production interoperability: loopback
-restriction, certificate fixtures, Windows evidence, dependency audit, and
-packaging gates remain. RD Gateway remains deferred until its separate
-transport path has the same trust evidence.
+behavior but does not establish production interoperability: certificate
+fixtures, Windows evidence, dependency audit, and packaging gates remain. RDP
+hostname/IP metadata is now allowed only through this native verification path;
+RD Gateway remains deferred until its separate transport path has the same
+trust evidence.
 
-The helper continues to fail closed at runtime while this candidate is under
-review: it accepts only literal loopback IP targets (`127.0.0.1` or `::1`) and
-rejects hostnames and all other addresses before opening a socket. The local
-TLS adapter validates the presented certificate when a handshake is attempted,
-but this safety restriction remains until real interoperability evidence exists.
+The helper fails closed at runtime for unsafe trust configuration: it rejects
+inherited `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` settings before a
+connection attempt, then passes the explicit hostname or IP to the native TLS
+adapter for DNS, SNI, and platform certificate verification. Invalid or
+untrusted certificates are rejected. Local tests still use only disposable
+loopback listeners and never contact a real remote host.
 
-This is a hard promotion blocker, not a missing preference in the UI:
-MobaRust must first select or patch an audited engine/backend with genuine
-certificate-chain and hostname validation, or a deliberate reviewed pinning
-policy. Deterministic certificate fixtures and Windows interoperability are
-also required. The local Rustls verifier adds platform trust-store and
-packaging surface on Windows, macOS, and Linux; that must be included in the
-future distribution matrix. The helper also refuses an inherited
-`SSLKEYLOGFILE` variable; no TLS key-log output is allowed during local
-experiments.
+Real-server promotion remains a hard gate, not a missing preference in the UI:
+MobaRust still needs deterministic certificate fixtures, an audited dependency
+chain, and Windows interoperability evidence. The local Rustls verifier adds
+platform trust-store and packaging surface on Windows, macOS, and Linux; that
+must be included in the future distribution matrix. No TLS key-log output or
+ambient certificate override is allowed during local experiments.
 The helper owns a 15-second startup deadline around the candidate's network
 handshake. When it expires, it requests a cooperative close and waits only a
 separate bounded grace period before forcing task termination. A stalled

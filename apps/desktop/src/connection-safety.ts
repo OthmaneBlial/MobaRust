@@ -1,12 +1,10 @@
-export type ExperimentalDesktopProtocol = "rdp" | "vnc";
-
-export const EXPERIMENTAL_DESKTOP_TARGET_ERROR =
-  "Experimental RDP/VNC helpers accept only a loopback IP (127.0.0.1 or ::1) until transport security is validated.";
+export const EXPERIMENTAL_VNC_TARGET_ERROR =
+  "The experimental VNC helper accepts only a loopback IP (127.0.0.1 or ::1) during candidate review.";
 
 /**
- * Deliberately accepts IP literals only. Resolving a hostname here would make
- * the UI's safety decision depend on DNS and would not match the native
- * fail-closed boundary.
+ * This helper is intentionally limited to literal IP checks. RDP hostnames
+ * and IPs are passed unchanged to the native TLS boundary; VNC remains
+ * loopback-only until its transport-security path is promoted.
  */
 export function isLoopbackIpLiteral(value: string): boolean {
   const host = value.trim().toLowerCase();
@@ -24,11 +22,8 @@ export function experimentalDesktopTargetError(
   protocol: string,
   host: string,
 ): string | null {
-  if (
-    (protocol === "rdp" || protocol === "vnc") &&
-    !isLoopbackIpLiteral(host)
-  ) {
-    return EXPERIMENTAL_DESKTOP_TARGET_ERROR;
+  if (protocol === "vnc" && !isLoopbackIpLiteral(host)) {
+    return EXPERIMENTAL_VNC_TARGET_ERROR;
   }
   return null;
 }

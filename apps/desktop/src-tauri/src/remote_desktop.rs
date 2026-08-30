@@ -7,7 +7,6 @@ use mobarust_remote_desktop::{
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -266,13 +265,10 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
         MAX_HOST_BYTES,
         "remote desktop host is invalid",
     )?;
-    if matches!(
-        request.protocol,
-        DesktopProtocol::Rdp | DesktopProtocol::Vnc
-    ) && !is_loopback_ip_literal(&request.host)
-    {
+    if request.protocol == DesktopProtocol::Vnc && !is_loopback_ip_literal(&request.host) {
         return Err(
-            "experimental RDP/VNC helpers are restricted to a loopback IP until transport security is validated".into(),
+            "the experimental VNC helper is restricted to a loopback IP during candidate review"
+                .into(),
         );
     }
     if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
@@ -323,7 +319,7 @@ fn validate_metadata(value: &str, max_bytes: usize, message: &str) -> Result<(),
 
 fn is_loopback_ip_literal(value: &str) -> bool {
     value
-        .parse::<IpAddr>()
+        .parse::<std::net::IpAddr>()
         .map(|address| address.is_loopback())
         .unwrap_or(false)
 }
@@ -598,13 +594,19 @@ mod tests {
     }
 
     #[test]
-    fn parent_boundary_rejects_experimental_desktop_targets_outside_loopback() {
-        for protocol in [DesktopProtocol::Rdp, DesktopProtocol::Vnc] {
-            let mut request = request(protocol, "fixture-user");
-            request.host = "example.invalid".into();
-            let error = validate_request(&request).unwrap_err();
-            assert!(error.contains("loopback"));
-        }
+    fn parent_boundary_allows_rdp_hostname_metadata_without_network_io() {
+        let mut request = request(DesktopProtocol::Rdp, "fixture-user");
+        request.host = "example.invalid".into();
+        validate_request(&request).unwrap();
+    }
+
+    #[test]
+    fn parent_boundary_keeps_vnc_targets_loopback_only() {
+        let mut request = request(DesktopProtocol::Vnc, "fixture-user");
+        request.host = "example.invalid".into();
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("VNC"));
+        assert!(error.contains("loopback"));
     }
 
     #[test]

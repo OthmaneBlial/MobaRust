@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   experimentalDesktopTargetError,
-  EXPERIMENTAL_DESKTOP_TARGET_ERROR,
+  EXPERIMENTAL_VNC_TARGET_ERROR,
   isLoopbackIpLiteral,
 } from "../src/connection-safety.ts";
 import { parseQuickConnectUri } from "../src/connection-uri.ts";
@@ -51,7 +51,11 @@ assert.equal(isLoopbackIpLiteral("localhost"), false);
 assert.equal(isLoopbackIpLiteral("192.0.2.10"), false);
 assert.equal(
   experimentalDesktopTargetError("rdp", "example.invalid"),
-  EXPERIMENTAL_DESKTOP_TARGET_ERROR,
+  null,
+);
+assert.equal(
+  experimentalDesktopTargetError("vnc", "example.invalid"),
+  EXPERIMENTAL_VNC_TARGET_ERROR,
 );
 assert.equal(experimentalDesktopTargetError("vnc", "::1"), null);
 assert.equal(experimentalDesktopTargetError("ssh", "example.invalid"), null);
@@ -62,9 +66,15 @@ assert.deepEqual(parseQuickConnectUri("rdp://fixture@[::1]:3389"), {
   port: 3389,
   username: "fixture",
 });
+assert.deepEqual(parseQuickConnectUri("rdp://fixture@example.invalid:3389"), {
+  protocol: "rdp",
+  host: "example.invalid",
+  port: 3389,
+  username: "fixture",
+});
 assert.throws(
   () => parseQuickConnectUri("vnc://viewer@example.invalid:5900"),
-  new RegExp(EXPERIMENTAL_DESKTOP_TARGET_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  new RegExp(EXPERIMENTAL_VNC_TARGET_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
 );
 assert.throws(
   () => parseQuickConnectUri("rdp://fixture:secret@127.0.0.1:3389"),
