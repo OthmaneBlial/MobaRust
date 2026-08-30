@@ -91,7 +91,8 @@ impl ConnectionLifecycle {
             (ConnectionState::Connected, ConnectionEvent::DisconnectRequested)
             | (ConnectionState::Connecting, ConnectionEvent::DisconnectRequested)
             | (ConnectionState::Authenticating, ConnectionEvent::DisconnectRequested)
-            | (ConnectionState::Reconnecting, ConnectionEvent::DisconnectRequested) => {
+            | (ConnectionState::Reconnecting, ConnectionEvent::DisconnectRequested)
+            | (ConnectionState::Failed, ConnectionEvent::DisconnectRequested) => {
                 ConnectionState::Disconnecting
             }
             (ConnectionState::Disconnecting, ConnectionEvent::Disconnected) => {
@@ -188,5 +189,20 @@ mod tests {
         }
 
         assert_eq!(lifecycle.state(), ConnectionState::Connected);
+    }
+
+    #[test]
+    fn a_failed_connection_can_be_closed_cleanly() {
+        let mut lifecycle = ConnectionLifecycle::new();
+        for event in [
+            ConnectionEvent::BeginConnect,
+            ConnectionEvent::Fail,
+            ConnectionEvent::DisconnectRequested,
+            ConnectionEvent::Disconnected,
+        ] {
+            lifecycle.apply(event).unwrap();
+        }
+
+        assert_eq!(lifecycle.state(), ConnectionState::Disconnected);
     }
 }

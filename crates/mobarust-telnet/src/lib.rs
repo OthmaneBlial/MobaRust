@@ -462,6 +462,36 @@ impl TelnetConnection {
             .state()
     }
 
+    /// Records a transport loss without closing the reusable session object.
+    /// The native manager can then wait for an explicit reconnect command.
+    pub fn mark_connection_lost(&self) -> Result<(), TelnetError> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("Telnet lifecycle lock poisoned");
+        if lifecycle.state() == ConnectionState::Connected {
+            lifecycle
+                .apply(ConnectionEvent::ConnectionLost)
+                .map_err(|error| TelnetError::Protocol(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn mark_failed(&self) {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("Telnet lifecycle lock poisoned");
+        if matches!(
+            lifecycle.state(),
+            ConnectionState::Connecting
+                | ConnectionState::Authenticating
+                | ConnectionState::Reconnecting
+        ) {
+            let _ = lifecycle.apply(ConnectionEvent::Fail);
+        }
+    }
+
     pub fn encoding(&self) -> TelnetEncoding {
         self.options.encoding
     }
@@ -490,11 +520,7 @@ impl TelnetConnection {
                 .await
                 .map_err(|error| io_error("read", error))?;
             if read == 0 {
-                self.lifecycle
-                    .lock()
-                    .expect("Telnet lifecycle lock poisoned")
-                    .apply(ConnectionEvent::ConnectionLost)
-                    .map_err(|error| TelnetError::Protocol(error.to_string()))?;
+                self.mark_connection_lost()?;
                 return Ok(0);
             }
             let decoded = self.codec.feed(&raw[..read], &self.options)?;
@@ -578,9 +604,10 @@ impl TelnetConnection {
                 return Err(error);
             }
         };
-        stream
-            .set_nodelay(true)
-            .map_err(|error| io_error("connection setup", error))?;
+        if let Err(error) = stream.set_nodelay(true) {
+            self.mark_failed();
+            return Err(io_error("connection setup", error));
+        }
         let (reader, writer) = stream.into_split();
         self.reader = reader;
         self.writer = Arc::new(AsyncMutex::new(writer));
@@ -596,7 +623,13 @@ impl TelnetConnection {
             .expect("Telnet lifecycle lock poisoned")
             .apply(ConnectionEvent::AuthenticationSucceeded)
             .map_err(|error| TelnetError::Protocol(error.to_string()))?;
-        self.send_initial_capabilities().await
+        match self.send_initial_capabilities().await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.mark_failed();
+                Err(error)
+            }
+        }
     }
 
     pub async fn cancel(&mut self) -> Result<(), TelnetError> {
@@ -623,6 +656,7 @@ impl TelnetConnection {
                 | ConnectionState::Reconnecting
                 | ConnectionState::Connecting
                 | ConnectionState::Authenticating
+                | ConnectionState::Failed
         ) {
             self.lifecycle
                 .lock()
@@ -878,6 +912,63 @@ mod tests {
             connection.cancel().await.unwrap();
             assert_eq!(connection.state(), ConnectionState::Cancelled);
             server.abort();
+        });
+    }
+
+    #[test]
+    fn reconnect_after_peer_disconnect_preserves_the_session_options() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut first, _) = listener.accept().await.unwrap();
+                let mut initial = [0_u8; 256];
+                let initial_len =
+                    tokio::time::timeout(Duration::from_secs(1), first.read(&mut initial))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert!(
+                    initial[..initial_len]
+                        .windows(3)
+                        .any(|window| window == [IAC, WILL, TERMINAL_TYPE])
+                );
+                drop(first);
+
+                let (mut second, _) = listener.accept().await.unwrap();
+                let mut reconnect_initial = [0_u8; 256];
+                let reconnect_len = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    second.read(&mut reconnect_initial),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert!(
+                    reconnect_initial[..reconnect_len]
+                        .windows(3)
+                        .any(|window| window == [IAC, WILL, TERMINAL_TYPE])
+                );
+                second.write_all(b"restored\n").await.unwrap();
+            });
+
+            let mut options = TelnetOptions::new(address.ip().to_string(), address.port());
+            options.terminal = "mobarust-reconnect-test".into();
+            options.columns = 144;
+            options.rows = 44;
+            let mut connection = TelnetConnection::connect(options.clone()).await.unwrap();
+
+            let mut buffer = [0_u8; 64];
+            assert_eq!(connection.read(&mut buffer).await.unwrap(), 0);
+            assert_eq!(connection.state(), ConnectionState::Reconnecting);
+            connection.reconnect().await.unwrap();
+            assert_eq!(connection.state(), ConnectionState::Connected);
+
+            let bytes = connection.read(&mut buffer).await.unwrap();
+            assert_eq!(&buffer[..bytes], b"restored\n");
+            assert_eq!(connection.options, options);
+            connection.close().await.unwrap();
+            server.await.unwrap();
         });
     }
 }

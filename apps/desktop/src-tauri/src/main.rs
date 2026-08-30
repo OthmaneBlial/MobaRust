@@ -1447,6 +1447,17 @@ async fn telnet_close(
 }
 
 #[tauri::command]
+async fn telnet_reconnect(
+    manager: State<'_, TelnetManager>,
+    terminal_id: String,
+) -> Result<(), String> {
+    manager
+        .reconnect(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn serial_connect(
     app: tauri::AppHandle,
     manager: State<'_, SerialManager>,
@@ -1721,6 +1732,7 @@ fn main() {
             telnet_resize,
             telnet_attach,
             telnet_close,
+            telnet_reconnect,
             serial_connect,
             serial_list_devices,
             serial_write,

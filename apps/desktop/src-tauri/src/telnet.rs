@@ -1,4 +1,4 @@
-use mobarust_core::OutputBatcher;
+use mobarust_core::{ConnectionState, OutputBatcher};
 use mobarust_telnet::{TelnetConnection, TelnetEncoding, TelnetError, TelnetOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -40,6 +40,7 @@ pub struct TelnetConnectResponse {
 #[serde(rename_all = "camelCase")]
 enum TelnetSessionState {
     Connected,
+    Reconnecting,
     Disconnected,
     Failed,
 }
@@ -69,6 +70,7 @@ struct TelnetClosedEvent {
 enum TelnetCommand {
     Write(Vec<u8>),
     Resize { columns: u16, rows: u16 },
+    Reconnect,
     Close,
 }
 
@@ -148,6 +150,13 @@ impl TelnetManager {
     pub async fn close(&self, terminal_id: &str) -> Result<(), TelnetManagerError> {
         self.sender(terminal_id)?
             .send(TelnetCommand::Close)
+            .await
+            .map_err(|_| TelnetManagerError::Closed)
+    }
+
+    pub async fn reconnect(&self, terminal_id: &str) -> Result<(), TelnetManagerError> {
+        self.sender(terminal_id)?
+            .send(TelnetCommand::Reconnect)
             .await
             .map_err(|_| TelnetManagerError::Closed)
     }
@@ -252,14 +261,20 @@ async fn run_telnet_session(
     manager.emit_state(&app, &terminal_id, TelnetSessionState::Connected, None);
     let mut output_batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
     let mut buffer = vec![0_u8; 16 * 1024];
-    let mut reason = "remote disconnected".to_owned();
-
-    'session: loop {
+    let reason = 'session: loop {
         tokio::select! {
-            read = tokio::time::timeout(READ_POLL_INTERVAL, connection.read(&mut buffer)) => {
+            read = tokio::time::timeout(READ_POLL_INTERVAL, connection.read(&mut buffer)), if connection.state() == ConnectionState::Connected => {
                 match read {
                     Err(_) => continue,
-                    Ok(Ok(0)) => break 'session,
+                    Ok(Ok(0)) => {
+                        manager.emit_state(
+                            &app,
+                            &terminal_id,
+                            TelnetSessionState::Reconnecting,
+                            Some("remote disconnected".to_owned()),
+                        );
+                        continue 'session;
+                    }
                     Ok(Ok(bytes)) => {
                         for chunk in output_batcher.push(&buffer[..bytes]) {
                             manager.publish_output(&app, &terminal_id, connection.encoding().decode(&chunk.bytes));
@@ -269,36 +284,67 @@ async fn run_telnet_session(
                         }
                     }
                     Ok(Err(error)) => {
-                        reason = error.to_string();
-                        manager.emit_state(&app, &terminal_id, TelnetSessionState::Failed, Some(reason.clone()));
-                        break 'session;
+                        let reason = error.to_string();
+                        let _ = connection.mark_connection_lost();
+                        manager.emit_state(
+                            &app,
+                            &terminal_id,
+                            TelnetSessionState::Reconnecting,
+                            Some(reason),
+                        );
+                        continue 'session;
                     }
                 }
             }
             command = commands.recv() => {
                 match command {
                     Some(TelnetCommand::Write(data)) => {
+                        if connection.state() != ConnectionState::Connected {
+                            continue;
+                        }
                         if let Err(error) = connection.write(&data).await {
-                            reason = error.to_string();
-                            manager.emit_state(&app, &terminal_id, TelnetSessionState::Failed, Some(reason.clone()));
-                            break 'session;
+                            let reason = error.to_string();
+                            let _ = connection.mark_connection_lost();
+                            manager.emit_state(
+                                &app,
+                                &terminal_id,
+                                TelnetSessionState::Reconnecting,
+                                Some(reason),
+                            );
                         }
                     }
                     Some(TelnetCommand::Resize { columns, rows }) => {
+                        if connection.state() != ConnectionState::Connected {
+                            continue;
+                        }
                         if let Err(error) = connection.resize(columns, rows).await {
-                            reason = error.to_string();
-                            manager.emit_state(&app, &terminal_id, TelnetSessionState::Failed, Some(reason.clone()));
-                            break 'session;
+                            let reason = error.to_string();
+                            let _ = connection.mark_connection_lost();
+                            manager.emit_state(
+                                &app,
+                                &terminal_id,
+                                TelnetSessionState::Reconnecting,
+                                Some(reason),
+                            );
+                        }
+                    }
+                    Some(TelnetCommand::Reconnect) => {
+                        if connection.state() == ConnectionState::Connected {
+                            continue;
+                        }
+                        manager.emit_state(&app, &terminal_id, TelnetSessionState::Reconnecting, None);
+                        match connection.reconnect().await {
+                            Ok(()) => manager.emit_state(&app, &terminal_id, TelnetSessionState::Connected, None),
+                            Err(error) => manager.emit_state(&app, &terminal_id, TelnetSessionState::Failed, Some(error.to_string())),
                         }
                     }
                     Some(TelnetCommand::Close) | None => {
-                        reason = "closed by application".into();
-                        break 'session;
+                        break 'session "closed by application".to_owned();
                     }
                 }
             }
         }
-    }
+    };
 
     let _ = connection.close().await;
     manager.emit_state(&app, &terminal_id, TelnetSessionState::Disconnected, None);

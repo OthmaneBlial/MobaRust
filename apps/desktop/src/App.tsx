@@ -150,7 +150,7 @@ type SshX11Event = {
 
 type TelnetSessionEvent = {
   terminalId: string;
-  state: "connected" | "disconnected" | "failed";
+  state: "connected" | "reconnecting" | "disconnected" | "failed";
   error?: string | null;
 };
 
@@ -800,6 +800,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
           unlistenState = await listen<TelnetSessionEvent>("telnet://state", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
             if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
+            else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
             else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
             else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
           });
@@ -1371,6 +1372,17 @@ function App() {
     try {
       await invoke("serial_reconnect", { terminalId: remoteSessionId });
       setSessionNotice("Serial reconnect requested. The device remains local and unencrypted.");
+    } catch (error) {
+      setConnectionError(String(error));
+    }
+  }, [remoteProtocol, remoteSessionId]);
+
+  const reconnectTelnet = useCallback(async () => {
+    if (remoteProtocol !== "telnet" || !remoteSessionId) return;
+    setConnectionError(null);
+    try {
+      await invoke("telnet_reconnect", { terminalId: remoteSessionId });
+      setSessionNotice("Telnet reconnect requested. Traffic remains unencrypted.");
     } catch (error) {
       setConnectionError(String(error));
     }
@@ -3222,7 +3234,7 @@ function App() {
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
-                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" />{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>⌘K for quick connect</span></div>
+                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />

@@ -22,6 +22,12 @@ output pending until the renderer explicitly attaches. A saved Telnet profile
 contains only host, port, terminal, encoding, and bounded dimensions; it never
 contains credentials.
 
+Transport loss preserves the native session identity. EOF and I/O failures move
+the connection to `Reconnecting` and wait for an explicit `telnet_reconnect`
+command; one bounded connect attempt then reports either `Connected` or
+retryable `Failed`. The renderer keeps the terminal and event wiring alive so
+users can close or retry the same session deliberately.
+
 Telnet is always presented as unencrypted. The adapter must not reuse SSH
 security copy or imply host-key verification, credential confidentiality, or
 transport integrity. If credentials are added later, they must remain behind
@@ -53,6 +59,7 @@ behavior. It binds only to `127.0.0.1` on an operating-system-selected port.
 
 - invoking the system `telnet` command through a shell;
 - advertising Telnet as encrypted or SSH-equivalent;
+- silently reconnecting in the background or hiding the unencrypted transport;
 - accepting arbitrary option negotiation without bounds;
 - testing against legacy equipment or internet hosts from the developer
   workstation;
