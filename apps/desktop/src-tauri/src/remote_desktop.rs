@@ -126,6 +126,7 @@ struct ManagedSession {
     supervisor: Arc<Mutex<HelperSupervisor>>,
     stop_requested: Arc<AtomicBool>,
     command_policy: SessionCommandPolicy,
+    capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
 }
 
 #[derive(Clone, Default)]
@@ -240,6 +241,7 @@ impl RemoteDesktopManager {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let supervisor = Arc::new(Mutex::new(supervisor));
         let stop_requested = Arc::new(AtomicBool::new(false));
+        let capabilities = Arc::new(Mutex::new(None));
         self.sessions.lock().await.insert(
             session_id.clone(),
             ManagedSession {
@@ -247,6 +249,7 @@ impl RemoteDesktopManager {
                 supervisor: Arc::clone(&supervisor),
                 stop_requested: Arc::clone(&stop_requested),
                 command_policy: capability_requirements.into(),
+                capabilities: Arc::clone(&capabilities),
             },
         );
         let sessions = Arc::clone(&self.sessions);
@@ -256,14 +259,18 @@ impl RemoteDesktopManager {
         let writer_session_id = session_id.clone();
         let writer_supervisor = Arc::clone(&supervisor);
         let writer_stop_requested = Arc::clone(&stop_requested);
+        let reader_context = HelperReaderContext {
+            sessions,
+            stop_requested,
+            supervisor: reader_supervisor,
+            capability_requirements,
+            capabilities,
+        };
         tokio::spawn(read_helper_events(
             app,
             reader_session_id,
             stdout,
-            sessions,
-            stop_requested,
-            reader_supervisor,
-            capability_requirements,
+            reader_context,
         ));
         tokio::spawn(write_helper_commands(
             writer_app,
@@ -290,7 +297,9 @@ impl RemoteDesktopManager {
             .get(session_id)
             .cloned()
             .ok_or_else(|| "remote desktop session was not found".to_owned())?;
-        validate_command_for_session(session.command_policy, &command)?;
+        let capabilities = session.capabilities.lock().await;
+        validate_command_for_session(session.command_policy, capabilities.as_ref(), &command)?;
+        drop(capabilities);
         session
             .commands
             .send(command)
@@ -559,15 +568,27 @@ fn helper_input_failure_message(error: &HelperProtocolError) -> &'static str {
     }
 }
 
-async fn read_helper_events(
-    app: AppHandle,
-    session_id: String,
-    mut stdout: impl tokio::io::AsyncRead + Unpin,
+struct HelperReaderContext {
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
     stop_requested: Arc<AtomicBool>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
     capability_requirements: HelperCapabilityRequirements,
+    capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
+}
+
+async fn read_helper_events(
+    app: AppHandle,
+    session_id: String,
+    mut stdout: impl tokio::io::AsyncRead + Unpin,
+    context: HelperReaderContext,
 ) {
+    let HelperReaderContext {
+        sessions,
+        stop_requested,
+        supervisor,
+        capability_requirements,
+        capabilities,
+    } = context;
     let mut progress = HelperEventProgress::default();
     loop {
         let frame = match read_frame(&mut stdout).await {
@@ -651,6 +672,12 @@ async fn read_helper_events(
                 break;
             }
         }
+        if let HelperEvent::Capabilities {
+            capabilities: reported,
+        } = &event
+        {
+            *capabilities.lock().await = Some(reported.clone());
+        }
         emit_helper_event(&app, &session_id, event.clone());
         if matches!(
             event,
@@ -730,14 +757,21 @@ fn validate_helper_capabilities(
 
 fn validate_command_for_session(
     policy: SessionCommandPolicy,
+    capabilities: Option<&HelperCapabilities>,
     command: &HelperCommand,
 ) -> Result<(), String> {
     match command {
         HelperCommand::Resize { .. } if policy.protocol != DesktopProtocol::Rdp => {
             Err("remote desktop server resize is unavailable for this protocol".into())
         }
+        HelperCommand::Resize { .. } if capabilities.is_some_and(|value| !value.server_resize) => {
+            Err("remote desktop helper does not support server resize for this session".into())
+        }
         HelperCommand::Clipboard { .. } if !policy.clipboard_enabled => {
             Err("remote desktop clipboard input is disabled for this session".into())
+        }
+        HelperCommand::Clipboard { .. } if capabilities.is_some_and(|value| !value.clipboard) => {
+            Err("remote desktop helper does not support clipboard input for this session".into())
         }
         _ => Ok(()),
     }
@@ -949,6 +983,7 @@ mod tests {
         };
         let resize_error = validate_command_for_session(
             vnc_policy,
+            None,
             &HelperCommand::Resize {
                 display: mobarust_remote_desktop::DisplaySize {
                     width: 1024,
@@ -961,6 +996,7 @@ mod tests {
 
         let clipboard_error = validate_command_for_session(
             vnc_policy,
+            None,
             &HelperCommand::Clipboard {
                 text: String::from("must stay blocked").into(),
             },
@@ -977,6 +1013,7 @@ mod tests {
         };
         validate_command_for_session(
             policy,
+            None,
             &HelperCommand::Resize {
                 display: mobarust_remote_desktop::DisplaySize {
                     width: 1280,
@@ -987,6 +1024,7 @@ mod tests {
         .unwrap();
         validate_command_for_session(
             policy,
+            None,
             &HelperCommand::Clipboard {
                 text: String::from("approved by the session policy").into(),
             },
@@ -994,12 +1032,47 @@ mod tests {
         .unwrap();
         validate_command_for_session(
             policy,
+            None,
             &HelperCommand::Key {
                 scancode: 30,
                 pressed: true,
             },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn session_command_policy_rechecks_advertised_runtime_capabilities() {
+        let policy = SessionCommandPolicy {
+            protocol: DesktopProtocol::Rdp,
+            clipboard_enabled: true,
+        };
+        let mut capabilities = HelperCapabilities::rdp();
+        capabilities.server_resize = false;
+        let resize_error = validate_command_for_session(
+            policy,
+            Some(&capabilities),
+            &HelperCommand::Resize {
+                display: mobarust_remote_desktop::DisplaySize {
+                    width: 1280,
+                    height: 720,
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(resize_error.contains("server resize"));
+
+        capabilities.server_resize = true;
+        capabilities.clipboard = false;
+        let clipboard_error = validate_command_for_session(
+            policy,
+            Some(&capabilities),
+            &HelperCommand::Clipboard {
+                text: String::from("must stay native").into(),
+            },
+        )
+        .unwrap_err();
+        assert!(clipboard_error.contains("clipboard input"));
     }
 
     #[test]

@@ -43,8 +43,9 @@ messages before a process is started:
   handshakes or active data that arrives before a validated capability report;
 - the parent stores the requested protocol policy with each live session and
   rejects protocol-unsupported commands before they enter the helper queue;
-  VNC server resize is rejected, and clipboard input requires explicit session
-  opt-in;
+  VNC server resize is rejected, clipboard input requires explicit session
+  opt-in, and the policy is rechecked against the running helper's capability
+  report before forwarding input;
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and
