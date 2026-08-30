@@ -22,7 +22,15 @@ mod implementation;
 compile_error!("select exactly one TLS backend: `rustls` or `stub`");
 
 #[cfg(any(feature = "stub", feature = "rustls"))]
-pub use implementation::{negotiated, upgrade, TlsStream};
+pub use implementation::{TlsStream, negotiated, upgrade};
+
+/// Validate a destination using the same native TLS server-name parser used by
+/// [`upgrade`]. This is intentionally a pure pre-connect check so callers can
+/// reject malformed metadata before opening a socket.
+#[cfg(any(feature = "stub", feature = "rustls"))]
+pub fn validate_server_name(value: &str) -> std::io::Result<()> {
+    implementation::validate_server_name(value)
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NegotiatedTls {

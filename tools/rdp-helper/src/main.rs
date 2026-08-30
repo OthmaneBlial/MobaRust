@@ -885,8 +885,11 @@ where
         }
     }
 
+    let host = host.ok_or_else(|| ArgumentError("missing host".into()))?;
+    ironrdp_tls::validate_server_name(&host).map_err(|_| ArgumentError("invalid host".into()))?;
+
     let arguments = Arguments {
-        host: host.ok_or_else(|| ArgumentError("missing host".into()))?,
+        host,
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         username: username.ok_or_else(|| ArgumentError("missing username".into()))?,
         domain,
@@ -997,6 +1000,50 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "invalid host");
         assert!(!error.to_string().contains(&oversized_host));
+    }
+
+    #[test]
+    fn parser_accepts_hostname_and_ip_targets_without_resolving_them() {
+        for host in ["example.invalid", "192.0.2.10", "::1"] {
+            let arguments = parse_arguments(
+                [
+                    "--mobarust-protocol",
+                    "rdp",
+                    "--host",
+                    host,
+                    "--port",
+                    "3389",
+                    "--username",
+                    "fixture-user",
+                ]
+                .into_iter()
+                .map(String::from),
+            )
+            .unwrap();
+            assert_eq!(arguments.host, host);
+        }
+    }
+
+    #[test]
+    fn parser_rejects_invalid_server_names_before_connecting_without_echoing_them() {
+        let invalid_host = "not a valid/server name";
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                invalid_host,
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid host");
+        assert!(!error.to_string().contains(invalid_host));
     }
 
     #[test]

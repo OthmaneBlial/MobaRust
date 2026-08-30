@@ -1780,6 +1780,7 @@ dependencies = [
  "ironrdp-client",
  "ironrdp-connector",
  "ironrdp-pdu",
+ "ironrdp-tls",
  "mobarust-remote-desktop",
  "smallvec",
  "tokio",

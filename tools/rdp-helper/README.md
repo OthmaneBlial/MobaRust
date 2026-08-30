@@ -37,9 +37,11 @@ separate transport path has the same trust policy.
 
 The helper now accepts explicit hostname or IP metadata and passes it unchanged
 to the native TLS adapter, which owns DNS, SNI, and platform certificate
-verification. Untrusted or invalid certificates fail closed. This candidate
-behavior is still subject to real interoperability, dependency, and packaging
-evidence; local tests continue to use only disposable loopback fixtures.
+verification. The same native `ServerName` parser rejects malformed targets
+before a socket is opened, without echoing the submitted value. Untrusted or
+invalid certificates fail closed. This candidate behavior is still subject to
+real interoperability, dependency, and packaging evidence; local tests
+continue to use only disposable loopback fixtures.
 
 Promotion requires an audited engine/backend with real certificate-chain and
 hostname validation (or an explicit, reviewed pinning policy), deterministic

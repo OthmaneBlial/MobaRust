@@ -122,9 +122,11 @@ trust evidence.
 The helper fails closed at runtime for unsafe trust configuration: it rejects
 inherited `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` settings before a
 connection attempt, then passes the explicit hostname or IP to the native TLS
-adapter for DNS, SNI, and platform certificate verification. Invalid or
-untrusted certificates are rejected. Local tests still use only disposable
-loopback listeners and never contact a real remote host.
+adapter for DNS, SNI, and platform certificate verification. The same native
+`ServerName` parser rejects malformed targets before a socket is opened,
+without echoing the submitted value. Invalid or untrusted certificates are
+rejected. Local tests still use only disposable loopback listeners and never
+contact a real remote host.
 
 Real-server promotion remains a hard gate, not a missing preference in the UI:
 MobaRust still needs deterministic certificate fixtures, an audited dependency

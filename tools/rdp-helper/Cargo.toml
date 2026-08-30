@@ -10,6 +10,7 @@ rust-version = "1.88"
 
 [dependencies]
 ironrdp-client = { version = "0.1.0", default-features = false, features = ["clipboard", "rustls"] }
+ironrdp-tls = { path = "ironrdp-tls-validated", features = ["rustls"] }
 ironrdp-connector = "0.10.0"
 ironrdp-pdu = "0.9.0"
 mobarust-remote-desktop = { path = "../../crates/mobarust-remote-desktop" }
