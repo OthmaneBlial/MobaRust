@@ -948,7 +948,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
           if (event.payload.sessionId !== sessionIdRef.current) return;
           const helperEvent = event.payload.event;
           if (helperEvent.event === "state") {
-            if (helperEvent.payload.state === "ready" || helperEvent.payload.state === "active") onStatusChange(workspaceId, "connected");
+            if (helperEvent.payload.state === "ready" || helperEvent.payload.state === "active") {
+              setError(null);
+              onStatusChange(workspaceId, "connected");
+            }
             if (helperEvent.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
             if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") setErrorAndFail("The remote desktop helper stopped unexpectedly.");
             if (helperEvent.payload.state === "stopped") onStatusChange(workspaceId, "closed");

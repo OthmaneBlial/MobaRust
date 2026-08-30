@@ -27,6 +27,9 @@ use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_RECONNECT_ATTEMPTS: u8 = 3;
+const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 struct Arguments {
@@ -143,66 +146,189 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     incoming_rx: &mut mpsc::Receiver<Incoming>,
 ) -> Result<(), Box<dyn Error>> {
     display.validate()?;
-    let address = format!("{}:{}", arguments.host, arguments.port);
-    let connect_future = async move {
-        let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(error)) => return Err(connection_error_message(&error)),
-            Err(_) => return Err("VNC connection timed out"),
-        };
-
-        // vnc-rs 0.5.3 currently requires its auth callback to return an owned
-        // String. Keep the helper-owned source copy zeroizing for the whole
-        // callback lifetime; the upstream API remains a promotion gate until
-        // it can accept a zeroizing/borrowed credential type directly.
-        let password = Zeroizing::new(credential.password().to_owned());
-        let connector = VncConnector::new(stream)
-            .set_auth_method(async move { Ok::<String, VncError>(password.to_string()) })
-            .add_encoding(VncEncoding::Zrle)
-            .add_encoding(VncEncoding::CopyRect)
-            .add_encoding(VncEncoding::Raw)
-            .add_encoding(VncEncoding::CursorPseudo)
-            .add_encoding(VncEncoding::DesktopSizePseudo)
-            .allow_shared(true)
-            .set_pixel_format(PixelFormat::rgba())
-            .build()
-            .map_err(|_| "VNC client configuration failed")?;
-        let state = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
-            Ok(Ok(state)) => state,
-            Ok(Err(error)) => return Err(negotiation_error_message(&error)),
-            Err(_) => return Err("VNC negotiation timed out"),
-        };
-        state
-            .finish()
-            .map_err(|_| "VNC protocol negotiation failed")
+    let client = match wait_for_vnc_connection(arguments, &credential, stdout, incoming_rx).await? {
+        ConnectionOutcome::Connected(client) => client,
+        ConnectionOutcome::Failed(message) => {
+            send_error(stdout, message).await?;
+            write_state(stdout, HelperState::Failed).await?;
+            return Ok(());
+        }
+        ConnectionOutcome::Fatal | ConnectionOutcome::Stopped => return Ok(()),
     };
+    let mut client = client;
+
+    loop {
+        let mut canvas = Canvas::new(display)?;
+        write_state(stdout, HelperState::Ready).await?;
+
+        match run_connected_vnc_session(&client, &mut canvas, stdout, incoming_rx).await? {
+            ConnectedOutcome::Stopped => return Ok(()),
+            ConnectedOutcome::Fatal => return Ok(()),
+            ConnectedOutcome::Lost(message) => {
+                close_vnc_client(&client).await;
+                write_state(stdout, HelperState::Reconnecting).await?;
+                client = match reconnect_vnc_client(
+                    arguments,
+                    &credential,
+                    message,
+                    stdout,
+                    incoming_rx,
+                )
+                .await?
+                {
+                    Some(client) => client,
+                    None => return Ok(()),
+                };
+            }
+        }
+    }
+}
+
+async fn close_vnc_client(client: &VncClient) {
+    let _ = timeout(CLOSE_TIMEOUT, client.close()).await;
+}
+
+enum ConnectionOutcome {
+    Connected(VncClient),
+    Failed(&'static str),
+    Fatal,
+    Stopped,
+}
+
+enum ConnectedOutcome {
+    Lost(&'static str),
+    Fatal,
+    Stopped,
+}
+
+async fn wait_for_vnc_connection<W: AsyncWrite + Unpin>(
+    arguments: &Arguments,
+    credential: &HelperCredential,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+) -> Result<ConnectionOutcome, Box<dyn Error>> {
+    let connect_future = connect_vnc_client(arguments, credential);
     tokio::pin!(connect_future);
-    let client = loop {
+    loop {
         tokio::select! {
             result = &mut connect_future => match result {
-                Ok(client) => break client,
-                Err(message) => {
-                    send_error(stdout, message).await?;
-                    write_state(stdout, HelperState::Failed).await?;
-                    return Ok(());
-                }
+                Ok(client) => return Ok(ConnectionOutcome::Connected(client)),
+                Err(message) => return Ok(ConnectionOutcome::Failed(message)),
             },
             incoming = incoming_rx.recv() => match incoming {
                 Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) | None => {
                     write_state(stdout, HelperState::Stopped).await?;
-                    return Ok(());
+                    return Ok(ConnectionOutcome::Stopped);
                 }
                 Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
                     send_error(stdout, "invalid helper input").await?;
                     write_state(stdout, HelperState::Failed).await?;
-                    return Ok(());
+                    return Ok(ConnectionOutcome::Fatal);
                 }
                 Some(Incoming::Command(_)) => {}
             }
         }
+    }
+}
+
+async fn reconnect_vnc_client<W: AsyncWrite + Unpin>(
+    arguments: &Arguments,
+    credential: &HelperCredential,
+    initial_reason: &'static str,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+) -> Result<Option<VncClient>, Box<dyn Error>> {
+    let mut last_reason = initial_reason;
+    for attempt in 0..MAX_RECONNECT_ATTEMPTS {
+        let backoff = RECONNECT_INITIAL_BACKOFF.saturating_mul(1_u32 << attempt);
+        if !wait_reconnect_backoff(backoff, stdout, incoming_rx).await? {
+            return Ok(None);
+        }
+        match wait_for_vnc_connection(arguments, credential, stdout, incoming_rx).await? {
+            ConnectionOutcome::Connected(client) => return Ok(Some(client)),
+            ConnectionOutcome::Failed(message) => {
+                last_reason = message;
+                if attempt + 1 < MAX_RECONNECT_ATTEMPTS {
+                    send_error(stdout, last_reason).await?;
+                }
+            }
+            ConnectionOutcome::Fatal | ConnectionOutcome::Stopped => return Ok(None),
+        }
+    }
+    send_error(stdout, last_reason).await?;
+    write_state(stdout, HelperState::Failed).await?;
+    Ok(None)
+}
+
+async fn connect_vnc_client(
+    arguments: &Arguments,
+    credential: &HelperCredential,
+) -> Result<VncClient, &'static str> {
+    let address = format!("{}:{}", arguments.host, arguments.port);
+    let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(error)) => return Err(connection_error_message(&error)),
+        Err(_) => return Err("VNC connection timed out"),
     };
-    let mut canvas = Canvas::new(display)?;
-    write_state(stdout, HelperState::Ready).await?;
+
+    // vnc-rs 0.5.3 currently requires its auth callback to return an owned
+    // String. Keep the helper-owned source copy zeroizing for the whole
+    // callback lifetime; the upstream API remains a promotion gate until
+    // it can accept a zeroizing/borrowed credential type directly.
+    let password = Zeroizing::new(credential.password().to_owned());
+    let connector = VncConnector::new(stream)
+        .set_auth_method(async move { Ok::<String, VncError>(password.to_string()) })
+        .add_encoding(VncEncoding::Zrle)
+        .add_encoding(VncEncoding::CopyRect)
+        .add_encoding(VncEncoding::Raw)
+        .add_encoding(VncEncoding::CursorPseudo)
+        .add_encoding(VncEncoding::DesktopSizePseudo)
+        .allow_shared(true)
+        .set_pixel_format(PixelFormat::rgba())
+        .build()
+        .map_err(|_| "VNC client configuration failed")?;
+    let state = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
+        Ok(Ok(state)) => state,
+        Ok(Err(error)) => return Err(negotiation_error_message(&error)),
+        Err(_) => return Err("VNC negotiation timed out"),
+    };
+    state
+        .finish()
+        .map_err(|_| "VNC protocol negotiation failed")
+}
+
+async fn wait_reconnect_backoff<W: AsyncWrite + Unpin>(
+    duration: Duration,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+) -> Result<bool, Box<dyn Error>> {
+    let delay = sleep(duration);
+    tokio::pin!(delay);
+    loop {
+        tokio::select! {
+            _ = &mut delay => return Ok(true),
+            incoming = incoming_rx.recv() => match incoming {
+                Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) | None => {
+                    write_state(stdout, HelperState::Stopped).await?;
+                    return Ok(false);
+                }
+                Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
+                    send_error(stdout, "invalid helper input").await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(false);
+                }
+                Some(Incoming::Command(_)) => {}
+            }
+        }
+    }
+}
+
+async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
+    client: &VncClient,
+    canvas: &mut Canvas,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+) -> Result<ConnectedOutcome, Box<dyn Error>> {
     let mut active_sent = false;
     let mut last_refresh = Instant::now();
 
@@ -211,36 +337,34 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        match handle_command(&client, command, stdout).await {
+                        match handle_command(client, command, stdout).await {
                             Ok(true) => {
-                                let _ = client.close().await;
+                                close_vnc_client(client).await;
                                 write_state(stdout, HelperState::Stopped).await?;
-                                return Ok(());
+                                return Ok(ConnectedOutcome::Stopped);
                             }
                             Ok(false) => {}
                             Err(_) => {
                                 send_error(stdout, "VNC input handling failed").await?;
-                                let _ = client.close().await;
-                                write_state(stdout, HelperState::Failed).await?;
-                                return Ok(());
+                                return Ok(ConnectedOutcome::Lost("VNC input handling failed"));
                             }
                         }
                     }
                     Some(Incoming::End) | None => {
-                        let _ = client.close().await;
+                        close_vnc_client(client).await;
                         write_state(stdout, HelperState::Stopped).await?;
-                        return Ok(());
+                        return Ok(ConnectedOutcome::Stopped);
                     }
                     Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
                         send_error(stdout, "invalid helper input").await?;
-                        let _ = client.close().await;
+                        close_vnc_client(client).await;
                         write_state(stdout, HelperState::Failed).await?;
-                        return Ok(());
+                        return Ok(ConnectedOutcome::Fatal);
                     }
                 }
             }
             _ = sleep(Duration::from_millis(16)) => {
-                loop {
+                let connection_loss = loop {
                     match client.poll_event().await {
                         Ok(Some(event)) => {
                             match canvas.apply(event) {
@@ -254,25 +378,22 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
                                 Ok(None) => {}
                                 Err(_) => {
                                     send_error(stdout, "VNC framebuffer update was invalid").await?;
-                                    let _ = client.close().await;
+                                    close_vnc_client(client).await;
                                     write_state(stdout, HelperState::Failed).await?;
-                                    return Ok(());
+                                    return Ok(ConnectedOutcome::Fatal);
                                 }
                             }
                         }
-                        Ok(None) => break,
-                        Err(_) => {
-                            send_error(stdout, "VNC session ended unexpectedly").await?;
-                            write_state(stdout, HelperState::Failed).await?;
-                            return Ok(());
-                        }
+                        Ok(None) => break None,
+                        Err(_) => break Some("VNC session ended unexpectedly"),
                     }
+                };
+                if let Some(reason) = connection_loss {
+                    return Ok(ConnectedOutcome::Lost(reason));
                 }
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     if client.input(X11Event::Refresh).await.is_err() {
-                        send_error(stdout, "VNC refresh failed").await?;
-                        write_state(stdout, HelperState::Failed).await?;
-                        return Ok(());
+                        return Ok(ConnectedOutcome::Lost("VNC refresh failed"));
                     }
                     last_refresh = Instant::now();
                 }

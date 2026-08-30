@@ -37,8 +37,11 @@ evidence exist.
 - dependency and license review.
 
 The isolated helper currently has loopback evidence for authentication,
-framebuffer, keyboard, pointer, clean stop, negotiation disconnect, and
-cooperative cancellation. Its dependency audit is clean. The pinned
+framebuffer, keyboard, pointer, clean stop, negotiation disconnect,
+cooperative cancellation, connected-session loss, and bounded reconnect
+attempts. A reconnect keeps the helper process and credential handoff inside
+the native boundary; it does not expose the password to the parent or React.
+Its dependency audit is clean. The pinned
 `vnc-rs 0.5.3` callback API still creates an owned password `String`; the
 helper zeroizes its source copy but this API limitation remains a promotion
 gate until an audited alternative is selected.

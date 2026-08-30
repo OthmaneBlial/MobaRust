@@ -67,7 +67,8 @@ The first working slice provides:
   held back pending a clean dependency audit. Neither is a production desktop
   client until signing, clean-install, and interoperability gates pass; VNC
   clipboard updates require an explicit local copy action and are never copied
-  automatically.
+  automatically; the isolated VNC helper also has bounded, cancellable
+  reconnect evidence against loopback fixtures.
 
 The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, explicit DNS/TCP/port-scan diagnostics view, and unauthenticated SSH host-key fingerprint inspection are covered locally. The bounded reconnect policy now has deterministic failure, recovery, and in-flight cancellation tests; full platform interoperability remains a release gate. Native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
 
