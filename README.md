@@ -43,7 +43,13 @@ The goal is the kind of workflow people choose instead of MobaXterm for daily ad
 
 ## The honest status
 
-The roadmap is currently **59/66 items evidenced — approximately 89.4%**. This is an engineering progress measure, not a claim of complete MobaXterm parity.
+The roadmap is currently **60/67 items evidenced — approximately 89.6%**. This is an engineering progress measure, not a claim of complete MobaXterm parity.
+
+The local implementation layer is further along than the release matrix: the
+macOS PTY path, isolated RDP candidate, real VNC helper with loopback fixtures,
+and target-aware unsigned package layout contract are implemented and checked
+locally. Windows/Linux runtime behavior, real-server interoperability,
+hardware, and signed distribution remain explicitly pending.
 
 The remaining work is visible:
 
@@ -84,6 +90,7 @@ Run the repository-scoped safety and packaging checks before contributing:
 cargo xtask check
 cargo xtask package-check
 cargo xtask portable-check
+cargo xtask package-layout-check
 cargo xtask pre-push-check
 ```
 

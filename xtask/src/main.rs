@@ -16,6 +16,7 @@ fn main() {
         "check-vnc-helper" => check_vnc_helper(),
         "benchmark" => benchmark(),
         "package-check" => package_check(),
+        "package-layout-check" => package_layout_check(),
         "portable-check" => portable_check(),
         "stage-helpers" => stage_helpers(),
         "pre-push-check" => pre_push_check(),
@@ -28,6 +29,9 @@ fn main() {
             println!("cargo xtask benchmark    Run synthetic local performance probes");
             println!(
                 "cargo xtask package-check    Build and inspect an unsigned current-platform Tauri app bundle"
+            );
+            println!(
+                "cargo xtask package-layout-check    Validate the macOS, Windows, and Linux runtime package contract"
             );
             println!(
                 "cargo xtask portable-check    Assemble and inspect an unsigned current-platform portable archive"
@@ -147,6 +151,152 @@ fn package_check() -> Result<(), String> {
         Some("apps/desktop"),
     )?;
     verify_current_platform_bundle()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackagePlatform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+impl PackagePlatform {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Macos => "macOS",
+            Self::Windows => "Windows",
+            Self::Linux => "Linux",
+        }
+    }
+
+    fn executable(self) -> &'static str {
+        match self {
+            Self::Macos => "Contents/MacOS/mobarust",
+            Self::Windows => "mobarust.exe",
+            Self::Linux => "mobarust",
+        }
+    }
+
+    fn vnc_helper(self) -> &'static str {
+        match self {
+            Self::Macos => "Contents/Resources/helpers/mobarust-vnc-helper",
+            Self::Windows => "helpers/mobarust-vnc-helper.exe",
+            Self::Linux => "helpers/mobarust-vnc-helper",
+        }
+    }
+
+    fn rdp_helper(self) -> &'static str {
+        match self {
+            Self::Macos => "Contents/Resources/helpers/mobarust-rdp-helper",
+            Self::Windows => "helpers/mobarust-rdp-helper.exe",
+            Self::Linux => "helpers/mobarust-rdp-helper",
+        }
+    }
+}
+
+/// Validate the platform-specific runtime shape without building or signing
+/// an artifact. `package_root` is the app root: the `.app` directory on
+/// macOS, and the unpacked application directory on Windows/Linux. Keeping
+/// this contract separate from the host build lets CI validate each target
+/// later without weakening the current Mac-only smoke test.
+fn verify_platform_package_layout(
+    package_root: &Path,
+    platform: PackagePlatform,
+) -> Result<(), String> {
+    let executable = package_root.join(platform.executable());
+    require_regular_file(
+        &executable,
+        &format!("{} runtime executable", platform.label()),
+    )?;
+
+    let vnc_helper = package_root.join(platform.vnc_helper());
+    require_regular_file(&vnc_helper, &format!("{} VNC helper", platform.label()))?;
+
+    let rdp_helper = package_root.join(platform.rdp_helper());
+    match fs::symlink_metadata(&rdp_helper) {
+        Ok(_) => Err(format!(
+            "{} package contains the unshippable RDP helper: {}",
+            platform.label(),
+            rdp_helper.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "could not verify {} RDP helper absence {}: {error}",
+            platform.label(),
+            rdp_helper.display()
+        )),
+    }
+}
+
+fn require_regular_file(path: &Path, description: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "could not inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{description} is not a regular file: {}",
+            path.display()
+        ))
+    }
+}
+
+fn package_layout_check() -> Result<(), String> {
+    let root = repository_root()?.join("target/debug/package-layout-check");
+    remove_generated_path(&root)?;
+
+    let result =
+        (|| {
+            for platform in [
+                PackagePlatform::Macos,
+                PackagePlatform::Windows,
+                PackagePlatform::Linux,
+            ] {
+                let package = root.join(platform.label().to_ascii_lowercase());
+                fs::create_dir_all(package.join(platform.vnc_helper()).parent().ok_or_else(
+                    || format!("{} package helper path has no parent", platform.label()),
+                )?)
+                .map_err(|error| {
+                    format!(
+                        "could not create {} package fixture: {error}",
+                        platform.label()
+                    )
+                })?;
+                fs::create_dir_all(package.join(platform.executable()).parent().ok_or_else(
+                    || format!("{} executable path has no parent", platform.label()),
+                )?)
+                .map_err(|error| {
+                    format!(
+                        "could not create {} executable fixture: {error}",
+                        platform.label()
+                    )
+                })?;
+                fs::write(package.join(platform.executable()), b"runtime").map_err(|error| {
+                    format!(
+                        "could not write {} runtime fixture: {error}",
+                        platform.label()
+                    )
+                })?;
+                fs::write(package.join(platform.vnc_helper()), b"vnc-helper").map_err(|error| {
+                    format!("could not write {} VNC fixture: {error}", platform.label())
+                })?;
+                verify_platform_package_layout(&package, platform)?;
+            }
+            Ok(())
+        })();
+    let cleanup = remove_generated_path(&root);
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => {
+            println!("verified unsigned runtime package layouts for macOS, Windows, and Linux");
+            Ok(())
+        }
+    }
 }
 
 fn portable_check() -> Result<(), String> {
@@ -628,15 +778,7 @@ fn verify_current_platform_bundle() -> Result<(), String> {
 
     if cfg!(target_os = "macos") {
         let bundle = bundle_root.join("macos/MobaRust.app");
-        let executable = bundle.join("Contents/MacOS/mobarust");
-        if !executable.is_file() {
-            return Err(format!(
-                "macOS bundle executable is missing: {}",
-                executable.display()
-            ));
-        }
-        verify_bundled_helper(&bundle, "mobarust-vnc-helper")?;
-        verify_unbundled_helper(&bundle, "mobarust-rdp-helper")?;
+        verify_platform_package_layout(&bundle, PackagePlatform::Macos)?;
         println!("verified macOS app bundle and the shippable VNC helper resource");
     } else {
         println!(
@@ -829,38 +971,6 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn verify_bundled_helper(bundle: &std::path::Path, helper: &str) -> Result<(), String> {
-    let path = bundle.join("Contents/Resources/helpers").join(helper);
-    let metadata = fs::symlink_metadata(&path).map_err(|error| {
-        format!(
-            "could not inspect bundled helper {}: {error}",
-            path.display()
-        )
-    })?;
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "bundled helper is not a regular file: {}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-fn verify_unbundled_helper(bundle: &std::path::Path, helper: &str) -> Result<(), String> {
-    let path = bundle.join("Contents/Resources/helpers").join(helper);
-    match fs::symlink_metadata(&path) {
-        Ok(_) => Err(format!(
-            "unshippable helper was included in the bundle: {}",
-            path.display()
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "could not verify unshippable helper absence {}: {error}",
-            path.display()
-        )),
-    }
-}
-
 fn benchmark() -> Result<(), String> {
     run(
         "cargo",
@@ -903,6 +1013,7 @@ fn check() -> Result<(), String> {
     run("pnpm", ["run", "build"], Some("apps/desktop"))?;
     check_rdp_helper()?;
     check_vnc_helper()?;
+    package_layout_check()?;
     check_fuzz()?;
     Ok(())
 }
@@ -1378,24 +1489,51 @@ mod tests {
     }
 
     #[test]
-    fn package_verifier_rejects_the_unshippable_rdp_helper() {
+    fn platform_package_contract_covers_mac_windows_and_linux_layouts() {
         let root = std::env::temp_dir().join(format!(
-            "mobarust-xtask-bundle-test-{}-{}",
+            "mobarust-xtask-platform-layout-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock")
                 .as_nanos()
         ));
-        let helpers = root.join("Contents/Resources/helpers");
-        fs::create_dir_all(&helpers).expect("create helper directory");
-        verify_unbundled_helper(&root, "mobarust-rdp-helper")
-            .expect("RDP helper should be absent initially");
-        fs::write(helpers.join("mobarust-rdp-helper"), b"candidate")
-            .expect("write forbidden helper");
-        let error = verify_unbundled_helper(&root, "mobarust-rdp-helper").unwrap_err();
-        assert!(error.contains("unshippable helper"));
-        fs::remove_dir_all(root).expect("remove test bundle");
+
+        for platform in [
+            PackagePlatform::Macos,
+            PackagePlatform::Windows,
+            PackagePlatform::Linux,
+        ] {
+            let package = root.join(platform.label().to_ascii_lowercase());
+            fs::create_dir_all(
+                package
+                    .join(platform.executable())
+                    .parent()
+                    .expect("runtime parent"),
+            )
+            .expect("create runtime directory");
+            fs::create_dir_all(
+                package
+                    .join(platform.vnc_helper())
+                    .parent()
+                    .expect("helper parent"),
+            )
+            .expect("create helper directory");
+            fs::write(package.join(platform.executable()), b"runtime").expect("write runtime");
+            fs::write(package.join(platform.vnc_helper()), b"vnc helper")
+                .expect("write VNC helper");
+
+            verify_platform_package_layout(&package, platform)
+                .expect("complete platform layout should pass");
+
+            fs::write(package.join(platform.rdp_helper()), b"RDP candidate")
+                .expect("write forbidden RDP helper");
+            let error = verify_platform_package_layout(&package, platform)
+                .expect_err("the RDP candidate must remain excluded");
+            assert!(error.contains("unshippable RDP helper"));
+        }
+
+        fs::remove_dir_all(root).expect("remove platform layout fixture");
     }
 
     #[cfg(unix)]

@@ -50,6 +50,26 @@ the complete deterministic manifest before reporting success. It proves local
 artifact integrity only; it is not a signature verifier and does not establish
 publisher authenticity.
 
+## Cross-platform package layout contract
+
+`cargo xtask package-layout-check` validates the runtime shape expected by the
+three desktop targets using repository-local fixtures. It checks that each
+package has its native `mobarust` executable, the current-platform VNC helper,
+and no RDP candidate that has not passed its dependency and interoperability
+gates:
+
+| Target | App root | Runtime | VNC helper |
+| --- | --- | --- | --- |
+| macOS | `MobaRust.app/` | `Contents/MacOS/mobarust` | `Contents/Resources/helpers/mobarust-vnc-helper` |
+| Windows | unpacked app directory | `mobarust.exe` | `helpers/mobarust-vnc-helper.exe` |
+| Linux | unpacked app directory | `mobarust` | `helpers/mobarust-vnc-helper` |
+
+This is an implementation contract and a safe local test of path policy. It
+does not build Windows/Linux artifacts, validate their runtime behavior, sign
+them, or replace the required cross-platform release matrix. The existing
+`package-check` and `portable-check` commands remain the macOS artifact smoke
+checks until dedicated target environments are available.
+
 ## Portable local smoke package
 
 cargo xtask portable-check first runs the bundle smoke check, then copies the

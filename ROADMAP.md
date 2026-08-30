@@ -2,6 +2,12 @@
 
 The roadmap is ordered by operator value and evidence, not by protocol count.
 
+The local implementation layer is intentionally tracked separately from
+platform and release evidence. PTY, the isolated RDP candidate, the real VNC
+helper/fixtures, and the unsigned package contract can be developed and
+verified on macOS; the unchecked matrix items below still require dedicated
+Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
+
 ## 0.1 — local workstation foundation
 
 - [x] Rust workspace with explicit connection and transfer state models
@@ -55,6 +61,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Optional bounded local audit history with explicit clear, lifecycle-only fields, and no terminal transcript
 - [x] Local macOS ARM64 unsigned app bundle smoke check with native resource verification
 - [x] Local macOS ARM64 unsigned portable archive assembly with path and checksum verification
+- [x] Target-aware unsigned package layout contract for macOS, Windows, and Linux (fixture-verified locally; runtime builds and signing remain open)
 - [ ] Signed portable distribution/package matrix
 
 ## Later protocol adapters
