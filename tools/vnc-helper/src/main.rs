@@ -8,6 +8,7 @@
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -30,6 +31,7 @@ use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const VNC_INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const VNC_TARGET_UNSUPPORTED: &str =
@@ -61,6 +63,17 @@ impl fmt::Display for ArgumentError {
 }
 
 impl Error for ArgumentError {}
+
+#[derive(Debug)]
+struct VncInputError(&'static str);
+
+impl fmt::Display for VncInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl Error for VncInputError {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -414,7 +427,14 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                     return Ok(ConnectedOutcome::Lost(reason));
                 }
                 if last_refresh.elapsed() >= refresh_interval {
-                    if client.input(X11Event::Refresh).await.is_err() {
+                    if send_vnc_input(
+                        client.input(X11Event::Refresh),
+                        "VNC refresh failed",
+                        "VNC refresh timed out",
+                    )
+                    .await
+                    .is_err()
+                    {
                         return Ok(ConnectedOutcome::Lost("VNC refresh failed"));
                     }
                     last_refresh = Instant::now();
@@ -440,19 +460,23 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Key { scancode, pressed } => {
-            client
-                .input(X11Event::KeyEvent((scancode, pressed).into()))
-                .await
-                .map_err(|_| "VNC keyboard input failed")?;
+            send_vnc_input(
+                client.input(X11Event::KeyEvent((scancode, pressed).into())),
+                "VNC keyboard input failed",
+                "VNC keyboard input timed out",
+            )
+            .await?;
             Ok(false)
         }
         HelperCommand::Pointer { x, y, buttons } => {
-            client
-                .input(X11Event::PointerEvent(ClientMouseEvent::from((
+            send_vnc_input(
+                client.input(X11Event::PointerEvent(ClientMouseEvent::from((
                     x, y, buttons,
-                ))))
-                .await
-                .map_err(|_| "VNC pointer input failed")?;
+                )))),
+                "VNC pointer input failed",
+                "VNC pointer input timed out",
+            )
+            .await?;
             Ok(false)
         }
         HelperCommand::Wheel { x, y, delta } => {
@@ -462,16 +486,20 @@ async fn handle_command<W: AsyncWrite + Unpin>(
                 0b0001_0000
             };
             for _ in 0..wheel_steps(delta) {
-                client
-                    .input(X11Event::PointerEvent(ClientMouseEvent::from((
+                send_vnc_input(
+                    client.input(X11Event::PointerEvent(ClientMouseEvent::from((
                         x, y, button,
-                    ))))
-                    .await
-                    .map_err(|_| "VNC wheel input failed")?;
-                client
-                    .input(X11Event::PointerEvent(ClientMouseEvent::from((x, y, 0))))
-                    .await
-                    .map_err(|_| "VNC wheel input failed")?;
+                    )))),
+                    "VNC wheel input failed",
+                    "VNC wheel input timed out",
+                )
+                .await?;
+                send_vnc_input(
+                    client.input(X11Event::PointerEvent(ClientMouseEvent::from((x, y, 0)))),
+                    "VNC wheel input failed",
+                    "VNC wheel input timed out",
+                )
+                .await?;
             }
             Ok(false)
         }
@@ -483,14 +511,49 @@ async fn handle_command<W: AsyncWrite + Unpin>(
                 )
                 .await?;
             } else {
-                client
-                    .input(X11Event::CopyText(text.to_string()))
-                    .await
-                    .map_err(|_| "VNC clipboard input failed")?;
+                send_vnc_input(
+                    client.input(X11Event::CopyText(text.to_string())),
+                    "VNC clipboard input failed",
+                    "VNC clipboard input timed out",
+                )
+                .await?;
             }
             Ok(false)
         }
         HelperCommand::Start { .. } => Ok(false),
+    }
+}
+
+async fn send_vnc_input<F>(
+    operation: F,
+    failure_message: &'static str,
+    timeout_message: &'static str,
+) -> Result<(), VncInputError>
+where
+    F: Future<Output = Result<(), VncError>>,
+{
+    bounded_vnc_input(
+        VNC_INPUT_TIMEOUT,
+        operation,
+        failure_message,
+        timeout_message,
+    )
+    .await
+}
+
+async fn bounded_vnc_input<F>(
+    limit: Duration,
+    operation: F,
+    failure_message: &'static str,
+    timeout_message: &'static str,
+) -> Result<(), VncInputError>
+where
+    F: Future<Output = Result<(), VncError>>,
+{
+    match timeout(limit, operation).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(VncInputError(failure_message)),
+        Err(_) => Err(VncInputError(timeout_message)),
     }
 }
 
@@ -1019,5 +1082,18 @@ mod tests {
         assert_eq!(wheel_steps(-240), 2);
         assert_eq!(wheel_steps(16), 1);
         assert_eq!(wheel_steps(16 * 120), 8);
+    }
+
+    #[tokio::test]
+    async fn vnc_input_operations_have_a_bounded_timeout() {
+        let error = bounded_vnc_input(
+            Duration::from_millis(10),
+            std::future::pending::<Result<(), VncError>>(),
+            "input failed",
+            "input timed out",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "input timed out");
     }
 }

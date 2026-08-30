@@ -172,3 +172,11 @@ bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms respectively).
 Tight/JPEG is deliberately not requested while JPEG rectangle rendering is
 unsupported. These are client-side encoding preferences; they do not claim to
 change the VNC server resolution or invent transport encryption.
+
+The connected-session loop also puts a dedicated two-second deadline on each
+keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
+the VNC engine. This prevents a full internal input queue from making a helper
+wait forever when a server stops accepting traffic; expiry follows the normal
+bounded reconnect path. `poll_event` remains non-blocking, and there is no
+idle-session timeout, so a quiet but healthy desktop is not disconnected merely
+because it has no framebuffer events.
