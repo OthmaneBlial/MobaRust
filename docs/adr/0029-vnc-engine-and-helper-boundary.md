@@ -52,10 +52,11 @@ alternative is selected.
 
 The helper also accepts only three bounded quality policies. They change the
 requested supported VNC encoding order and refresh cadence, while the renderer
-continues to receive a normalized RGBA framebuffer. Tight/JPEG is not
-requested until JPEG rectangle rendering is implemented. The policy is
-persisted as session metadata with a compatibility default for older profiles;
-it does not expose a secret or alter the server-side display mode.
+continues to receive a normalized RGBA framebuffer. Tight/JPEG is not currently
+advertised in the preference order, but server-sent Tight/JPEG rectangles are
+decoded through a bounded native decoder. The policy is persisted as session
+metadata with a compatibility default for older profiles; it does not expose a
+secret or alter the server-side display mode.
 
 After the helper reaches `Ready`, it reports its native capability set through
 the shared event contract: text clipboard is available, server-side resize is

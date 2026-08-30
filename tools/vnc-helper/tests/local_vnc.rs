@@ -1,6 +1,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use base64::Engine as _;
 use des::Des;
 use des::cipher::{Block, BlockCipherEncrypt, KeyInit};
 use mobarust_remote_desktop::{
@@ -43,6 +44,78 @@ async fn helper_controls_a_real_rfb_fixture_over_loopback() {
 #[tokio::test]
 async fn helper_authenticates_with_vnc_password_fixture_over_loopback() {
     exercise_fixture(FixtureAuth::VncPassword, FIXTURE_PASSWORD).await;
+}
+
+#[tokio::test]
+async fn helper_decodes_tight_jpeg_framebuffer_fixture() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        serve_tight_framebuffer_connection(&mut stream).await?;
+        let _ = release_rx.await;
+        Ok::<(), String>(())
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+        .await
+        .unwrap();
+
+    let mut saw_framebuffer = false;
+    for _ in 0..8 {
+        if let HelperEvent::Framebuffer {
+            width: 320,
+            height: 200,
+            ref pixels,
+        } = timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap()
+        {
+            assert!(pixels[..8].chunks_exact(4).all(|pixel| pixel[3] == 0xff));
+            saw_framebuffer = true;
+            break;
+        }
+    }
+    assert!(
+        saw_framebuffer,
+        "the helper did not emit the Tight JPEG frame"
+    );
+
+    send_command(&mut stdin, HelperCommand::Stop).await;
+    let mut saw_stopped = false;
+    for _ in 0..6 {
+        if matches!(
+            timeout(Duration::from_secs(2), next_event(&mut stdout))
+                .await
+                .unwrap(),
+            HelperEvent::State {
+                state: HelperState::Stopped
+            }
+        ) {
+            saw_stopped = true;
+            break;
+        }
+    }
+    assert!(
+        saw_stopped,
+        "the helper did not stop after the JPEG fixture"
+    );
+    let _ = release_tx.send(());
+    server_task.await.unwrap().unwrap();
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1061,6 +1134,47 @@ async fn serve_framebuffer_connection(
     stream: &mut TcpStream,
     pixel: [u8; 4],
 ) -> Result<(), String> {
+    prepare_vnc_connection(stream).await?;
+
+    let mut update = vec![0_u8, 0, 0, 1];
+    update.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 1]);
+    update.extend_from_slice(&[0, 0, 0, 0]);
+    update.extend_from_slice(&pixel);
+    stream
+        .write_all(&update)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn serve_tight_framebuffer_connection(stream: &mut TcpStream) -> Result<(), String> {
+    prepare_vnc_connection(stream).await?;
+    let jpeg = base64::engine::general_purpose::STANDARD
+        .decode("/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAxAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAE0AAQEAAAAAAAAAAAAAAAAAAAAGAQEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAACAAIDARIAAhIAAxIA/9oADAMBAAIRAxEAPwCLEmN/H//Z")
+        .map_err(|error| error.to_string())?;
+    let mut update = vec![0_u8, 0, 0, 1];
+    update.extend_from_slice(&[0, 0, 0, 0, 0, 2, 0, 2]);
+    update.extend_from_slice(&7_i32.to_be_bytes());
+    update.push(0x90);
+    let mut length = jpeg.len();
+    loop {
+        let mut byte = u8::try_from(length & 0x7f).map_err(|_| "fixture JPEG length overflow")?;
+        length >>= 7;
+        if length != 0 {
+            byte |= 0x80;
+        }
+        update.push(byte);
+        if length == 0 {
+            break;
+        }
+    }
+    update.extend_from_slice(&jpeg);
+    stream
+        .write_all(&update)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn prepare_vnc_connection(stream: &mut TcpStream) -> Result<(), String> {
     stream
         .write_all(b"RFB 003.008\n")
         .await
@@ -1107,15 +1221,7 @@ async fn serve_framebuffer_connection(
     read_set_pixel_format(stream).await?;
     read_set_encodings(stream).await?;
     read_update_request(stream).await?;
-
-    let mut update = vec![0_u8, 0, 0, 1];
-    update.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 1]);
-    update.extend_from_slice(&[0, 0, 0, 0]);
-    update.extend_from_slice(&pixel);
-    stream
-        .write_all(&update)
-        .await
-        .map_err(|error| error.to_string())
+    Ok(())
 }
 
 fn vnc_auth_response(challenge: &[u8; 16], password: &str) -> [u8; 16] {

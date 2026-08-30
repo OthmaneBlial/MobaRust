@@ -9,10 +9,12 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
+use std::io::Cursor;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use jpeg_decoder::{ColorTransform, Decoder, PixelFormat as JpegPixelFormat};
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential,
@@ -35,6 +37,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const VNC_INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const VNC_EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+const MAX_JPEG_BYTES: usize = 4 * 1024 * 1024;
 const VNC_TARGET_UNSUPPORTED: &str =
     "VNC experiment is restricted to a loopback IP until transport security is available";
 
@@ -685,9 +688,11 @@ impl Canvas {
                 self.copy_pixels(destination, source)?;
                 Ok(CanvasUpdate::FramebufferDirty)
             }
-            VncEvent::JpegImage(_, _) => Err(HelperProtocolError::Io(
-                "VNC JPEG rectangles are not enabled by this adapter".into(),
-            )),
+            VncEvent::JpegImage(rect, data) => {
+                let decoded = self.decode_jpeg(rect, &data)?;
+                self.copy_rect(rect, &decoded)?;
+                Ok(CanvasUpdate::FramebufferDirty)
+            }
             VncEvent::SetPixelFormat(_) | VncEvent::SetCursor(_, _) | VncEvent::Bell => {
                 Ok(CanvasUpdate::None)
             }
@@ -705,6 +710,63 @@ impl Canvas {
 
     fn is_resolution_boundary(event: &VncEvent) -> bool {
         matches!(event, VncEvent::SetResolution(_))
+    }
+
+    fn decode_jpeg(&self, rect: Rect, data: &[u8]) -> Result<Vec<u8>, HelperProtocolError> {
+        if data.len() > MAX_JPEG_BYTES {
+            return Err(HelperProtocolError::FrameTooLarge { bytes: data.len() });
+        }
+        self.check_rect(rect)?;
+
+        let expected_pixels = usize::from(rect.width)
+            .checked_mul(usize::from(rect.height))
+            .ok_or(HelperProtocolError::FrameTooLarge { bytes: usize::MAX })?;
+        let expected_rgba_bytes = expected_pixels
+            .checked_mul(4)
+            .ok_or(HelperProtocolError::FrameTooLarge { bytes: usize::MAX })?;
+        let mut decoder = Decoder::new(Cursor::new(data));
+        decoder.set_max_decoding_buffer_size(expected_rgba_bytes);
+        decoder.read_info().map_err(|_| invalid_jpeg_error())?;
+        let info = decoder.info().ok_or_else(invalid_jpeg_error)?;
+        if info.width != rect.width || info.height != rect.height {
+            return Err(invalid_jpeg_error());
+        }
+        match info.pixel_format {
+            JpegPixelFormat::RGB24 => decoder.set_color_transform(ColorTransform::RGB),
+            JpegPixelFormat::L8 => decoder.set_color_transform(ColorTransform::Grayscale),
+            JpegPixelFormat::L16 | JpegPixelFormat::CMYK32 => {
+                return Err(invalid_jpeg_error());
+            }
+        }
+
+        let decoded = decoder.decode().map_err(|_| invalid_jpeg_error())?;
+        let expected_decoded_bytes = expected_pixels
+            .checked_mul(info.pixel_format.pixel_bytes())
+            .ok_or(HelperProtocolError::FrameTooLarge { bytes: usize::MAX })?;
+        if decoded.len() != expected_decoded_bytes {
+            return Err(HelperProtocolError::InvalidFramebuffer {
+                expected: expected_decoded_bytes,
+                actual: decoded.len(),
+            });
+        }
+
+        let mut rgba = Vec::with_capacity(expected_rgba_bytes);
+        match info.pixel_format {
+            JpegPixelFormat::RGB24 => {
+                for pixel in decoded.chunks_exact(3) {
+                    rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0xff]);
+                }
+            }
+            JpegPixelFormat::L8 => {
+                for value in decoded {
+                    rgba.extend_from_slice(&[value, value, value, 0xff]);
+                }
+            }
+            JpegPixelFormat::L16 | JpegPixelFormat::CMYK32 => {
+                return Err(invalid_jpeg_error());
+            }
+        }
+        Ok(rgba)
     }
 
     fn copy_rect(&mut self, rect: Rect, data: &[u8]) -> Result<(), HelperProtocolError> {
@@ -776,6 +838,10 @@ impl Canvas {
             pixels: self.pixels.clone(),
         }
     }
+}
+
+fn invalid_jpeg_error() -> HelperProtocolError {
+    HelperProtocolError::Io("VNC JPEG rectangle is invalid or unsupported".into())
 }
 
 fn framebuffer_bytes(size: DisplaySize) -> Result<usize, HelperProtocolError> {
@@ -1006,6 +1072,7 @@ fn loopback_socket_address(host: &str, port: u16) -> Result<SocketAddr, &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn parser_accepts_loopback_metadata_without_secret_arguments() {
@@ -1275,6 +1342,85 @@ mod tests {
         let event = canvas.framebuffer_event();
         assert!(
             matches!(event, HelperEvent::Framebuffer { width: 320, height: 200, ref pixels } if pixels[..4] == [0x11, 0x22, 0x33, 0xff])
+        );
+    }
+
+    #[test]
+    fn canvas_decodes_bounded_jpeg_rectangles_to_rgba() {
+        const MALFORMED_JPEG: &[u8] = &[
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x00,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x0f, 0x4c, 0x61, 0x76, 0x63,
+            0x36, 0x33, 0x2e, 0x31, 0x2e, 0x31, 0x30, 0x31, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00,
+            0x08, 0x04, 0x04, 0x04, 0x04, 0x04, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06,
+            0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08,
+            0x08, 0x07, 0x07, 0x07, 0x06, 0x06, 0x07, 0x07, 0x08, 0x08, 0x08, 0x08, 0x09, 0x09,
+            0x0a, 0x0a, 0x0a, 0x0c, 0x0c, 0x0b, 0x0b, 0x0e, 0x0e, 0x0e, 0x11, 0x11, 0x14, 0xff,
+            0xc4, 0x00, 0x4d, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x07, 0x10,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11,
+            0x08, 0x00, 0x02, 0x00, 0x02, 0x03, 0x01, 0x12, 0x00, 0x02, 0x12, 0x00, 0x03, 0x12,
+            0x00, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f,
+            0x00, 0x8b, 0x00, 0x4d, 0x7f, 0x7f, 0xff, 0xd9,
+        ];
+        let jpeg_2x2 = base64::engine::general_purpose::STANDARD
+            .decode("/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAxAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAE0AAQEAAAAAAAAAAAAAAAAAAAAGAQEBAQAAAAAAAAAAAAAAAAAABgcQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAACAAIDARIAAhIAAxIA/9oADAMBAAIRAxEAPwCLEmN/H//Z")
+            .unwrap();
+        let size = DisplaySize {
+            width: 320,
+            height: 200,
+        };
+        let canvas = Canvas::new(size, true).unwrap();
+        let pixels = canvas
+            .decode_jpeg(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                },
+                &jpeg_2x2,
+            )
+            .unwrap();
+        assert_eq!(pixels.len(), 2 * 2 * 4);
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0xff));
+
+        let error = canvas
+            .decode_jpeg(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                MALFORMED_JPEG,
+            )
+            .unwrap_err();
+        assert!(matches!(error, HelperProtocolError::Io(message) if message.contains("JPEG")));
+    }
+
+    #[test]
+    fn canvas_rejects_oversized_jpeg_rectangles_before_decoding() {
+        let size = DisplaySize {
+            width: 320,
+            height: 200,
+        };
+        let canvas = Canvas::new(size, true).unwrap();
+        let error = canvas
+            .decode_jpeg(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                &vec![0; MAX_JPEG_BYTES + 1],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, HelperProtocolError::FrameTooLarge { bytes } if bytes == MAX_JPEG_BYTES + 1)
         );
     }
 

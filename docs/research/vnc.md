@@ -92,9 +92,10 @@ The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`
 RFB client behind the native helper contract. It negotiates RFB 3.8, supports
 no-auth and VNC-password negotiation through the credential pipe, requests an
 RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
-pointer, and bounded Latin-1 clipboard input. Unsupported JPEG rectangles and
-client-requested server-side resize are reported rather than simulated; a
-server-announced `DesktopSize` change is applied to the bounded canvas.
+pointer, bounded Latin-1 clipboard input, and Tight/JPEG rectangles through a
+bounded native decoder. Client-requested server-side resize is reported rather
+than simulated; a server-announced `DesktopSize` change is applied to the
+bounded canvas.
 
 `tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
 password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
@@ -196,9 +197,11 @@ clipboard backend. The VNC profile also offers three bounded quality policies:
 prefers ZRLE, `low-latency` prefers raw rectangles, and `low-bandwidth`
 also prefers ZRLE while reducing refresh frequency. Each policy selects a
 bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms respectively).
-Tight/JPEG is deliberately not requested while JPEG rectangle rendering is
-unsupported. These are client-side encoding preferences; they do not claim to
-change the VNC server resolution or invent transport encryption.
+Tight/JPEG is not currently advertised in the preference order while broader
+interoperability evidence is collected, but server-sent Tight/JPEG rectangles
+are decoded with bounds on compressed input, decoded dimensions, pixel format,
+and RGBA output size. These are client-side encoding preferences; they do not
+claim to change the VNC server resolution or invent transport encryption.
 
 The connected-session loop also puts a dedicated two-second deadline on each
 keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
