@@ -37,6 +37,101 @@ async fn helper_authenticates_with_vnc_password_fixture_over_loopback() {
     exercise_fixture(FixtureAuth::VncPassword, FIXTURE_PASSWORD).await;
 }
 
+#[tokio::test]
+async fn helper_reports_server_disconnect_during_negotiation() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        stream.write_all(b"RFB 003.008\n").await.unwrap();
+        drop(stream);
+    });
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new("fixture-secret"))
+        .await
+        .unwrap();
+
+    let mut saw_failed = false;
+    for _ in 0..4 {
+        let event = timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap();
+        if matches!(
+            event,
+            HelperEvent::State {
+                state: HelperState::Failed
+            }
+        ) {
+            saw_failed = true;
+            break;
+        }
+    }
+    assert!(saw_failed, "the helper did not report the RFB disconnect");
+    server_task.await.unwrap();
+    drop(stdin);
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new("fixture-secret"))
+        .await
+        .unwrap();
+    send_command(&mut stdin, HelperCommand::Stop).await;
+
+    let mut saw_stopped = false;
+    for _ in 0..4 {
+        let event = timeout(Duration::from_secs(2), next_event(&mut stdout))
+            .await
+            .unwrap();
+        if matches!(
+            event,
+            HelperEvent::State {
+                state: HelperState::Stopped
+            }
+        ) {
+            saw_stopped = true;
+            break;
+        }
+    }
+    assert!(
+        saw_stopped,
+        "the helper did not cancel negotiation promptly"
+    );
+    server_task.await.unwrap();
+    drop(stdin);
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 async fn exercise_fixture(auth: FixtureAuth, password: &str) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -166,6 +261,52 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
         .await
         .unwrap()
         .unwrap();
+}
+
+async fn spawn_helper(
+    port: u16,
+) -> (
+    tokio::process::Child,
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-vnc-helper"))
+        .args([
+            "--mobarust-protocol",
+            "vnc",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--width",
+            "320",
+            "--height",
+            "200",
+        ])
+        .env_remove("SSH_AUTH_SOCK")
+        .env_remove("SSH_AGENT_PID")
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_CONFIG_GLOBAL")
+        .env_remove("GIT_CONFIG_SYSTEM")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    assert!(matches!(
+        next_event(&mut stdout).await,
+        HelperEvent::Hello { version: 1 }
+    ));
+    assert!(matches!(
+        next_event(&mut stdout).await,
+        HelperEvent::State {
+            state: HelperState::Starting
+        }
+    ));
+    (child, stdin, stdout)
 }
 
 async fn send_command(stdin: &mut tokio::process::ChildStdin, command: HelperCommand) {

@@ -290,6 +290,7 @@ dependencies = [
  "mobarust-remote-desktop",
  "tokio",
  "vnc-rs",
+ "zeroize",
 ]
 
 [[package]]

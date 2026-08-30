@@ -23,6 +23,7 @@ use vnc::{
     ClientMouseEvent, PixelFormat, Rect, VncClient, VncConnector, VncEncoding, VncError, VncEvent,
     X11Event,
 };
+use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
@@ -143,38 +144,59 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
 ) -> Result<(), Box<dyn Error>> {
     display.validate()?;
     let address = format!("{}:{}", arguments.host, arguments.port);
-    let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(_)) | Err(_) => {
-            send_error(stdout, "VNC connection failed").await?;
-            write_state(stdout, HelperState::Failed).await?;
-            return Ok(());
-        }
+    let connect_future = async move {
+        let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(_)) | Err(_) => return Err("VNC connection failed"),
+        };
+
+        // vnc-rs 0.5.3 currently requires its auth callback to return an owned
+        // String. Keep the helper-owned source copy zeroizing for the whole
+        // callback lifetime; the upstream API remains a promotion gate until
+        // it can accept a zeroizing/borrowed credential type directly.
+        let password = Zeroizing::new(credential.password().to_owned());
+        let connector = VncConnector::new(stream)
+            .set_auth_method(async move { Ok::<String, VncError>(password.to_string()) })
+            .add_encoding(VncEncoding::Zrle)
+            .add_encoding(VncEncoding::CopyRect)
+            .add_encoding(VncEncoding::Raw)
+            .add_encoding(VncEncoding::CursorPseudo)
+            .add_encoding(VncEncoding::DesktopSizePseudo)
+            .allow_shared(true)
+            .set_pixel_format(PixelFormat::rgba())
+            .build()
+            .map_err(|_| "VNC client configuration failed")?;
+        let state = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
+            Ok(Ok(state)) => state,
+            Ok(Err(_)) | Err(_) => return Err("VNC authentication or negotiation failed"),
+        };
+        state
+            .finish()
+            .map_err(|_| "VNC protocol negotiation failed")
     };
-    let password = credential.password().to_owned();
-    let connector = VncConnector::new(stream)
-        .set_auth_method(async move { Ok::<String, VncError>(password) })
-        .add_encoding(VncEncoding::Zrle)
-        .add_encoding(VncEncoding::CopyRect)
-        .add_encoding(VncEncoding::Raw)
-        .add_encoding(VncEncoding::CursorPseudo)
-        .add_encoding(VncEncoding::DesktopSizePseudo)
-        .allow_shared(true)
-        .set_pixel_format(PixelFormat::rgba())
-        .build()?;
-    let client = match timeout(CONNECT_TIMEOUT, connector.try_start()).await {
-        Ok(Ok(state)) => match state.finish() {
-            Ok(client) => client,
-            Err(_) => {
-                send_error(stdout, "VNC protocol negotiation failed").await?;
-                write_state(stdout, HelperState::Failed).await?;
-                return Ok(());
+    tokio::pin!(connect_future);
+    let client = loop {
+        tokio::select! {
+            result = &mut connect_future => match result {
+                Ok(client) => break client,
+                Err(message) => {
+                    send_error(stdout, message).await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(());
+                }
+            },
+            incoming = incoming_rx.recv() => match incoming {
+                Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) | None => {
+                    write_state(stdout, HelperState::Stopped).await?;
+                    return Ok(());
+                }
+                Some(Incoming::Invalid) | Some(Incoming::Credential(_)) => {
+                    send_error(stdout, "invalid helper input").await?;
+                    write_state(stdout, HelperState::Failed).await?;
+                    return Ok(());
+                }
+                Some(Incoming::Command(_)) => {}
             }
-        },
-        Ok(Err(_)) | Err(_) => {
-            send_error(stdout, "VNC authentication or negotiation failed").await?;
-            write_state(stdout, HelperState::Failed).await?;
-            return Ok(());
         }
     };
     let mut canvas = Canvas::new(display)?;

@@ -36,6 +36,13 @@ evidence exist.
 - Windows, Linux, and macOS packaging/interoperability evidence;
 - dependency and license review.
 
+The isolated helper currently has loopback evidence for authentication,
+framebuffer, keyboard, pointer, clean stop, negotiation disconnect, and
+cooperative cancellation. Its dependency audit is clean. The pinned
+`vnc-rs 0.5.3` callback API still creates an owned password `String`; the
+helper zeroizes its source copy but this API limitation remains a promotion
+gate until an audited alternative is selected.
+
 Until those checks pass, MobaRust must not advertise VNC as implemented. A
 mock, screenshot, static framebuffer, or external viewer launch alone is not
 evidence of an embedded VNC client.
