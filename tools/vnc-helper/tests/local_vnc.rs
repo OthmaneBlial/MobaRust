@@ -408,6 +408,13 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
         },
     )
     .await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Clipboard {
+            text: "fixture clipboard".to_owned().into(),
+        },
+    )
+    .await;
 
     timeout(Duration::from_secs(3), server_task)
         .await
@@ -592,7 +599,8 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
     let mut saw_key = false;
     let mut saw_pointer = false;
     let mut saw_wheel = false;
-    while !(saw_key && saw_pointer && saw_wheel) {
+    let mut saw_clipboard = false;
+    while !(saw_key && saw_pointer && saw_wheel && saw_clipboard) {
         let mut kind = [0_u8; 1];
         timeout(Duration::from_secs(3), stream.read_exact(&mut kind))
             .await
@@ -642,6 +650,10 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
                     .read_exact(&mut text)
                     .await
                     .map_err(|error| error.to_string())?;
+                if text != b"fixture clipboard" {
+                    return Err("fixture received unexpected clipboard text".into());
+                }
+                saw_clipboard = true;
             }
             _ => return Err("fixture saw an unexpected client message".into()),
         }

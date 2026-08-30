@@ -82,8 +82,8 @@ server-side resize are reported rather than simulated.
 `tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
 password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
 fixture verifies security-type selection and the DES challenge response before
-checking framebuffer, explicit server-side resize rejection, key, pointer, and
-clean stop. The current Tauri UI is
+checking framebuffer, explicit server-side resize rejection, key, pointer,
+clipboard input, and clean stop. The current Tauri UI is
 wired to the parent
 supervisor/renderer and offers explicit user-triggered reconnect after helper
 failure, but this is not yet cross-platform interoperability or production
