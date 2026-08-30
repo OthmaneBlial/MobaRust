@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
 
 fn main() {
-    let command = std::env::args().nth(1).unwrap_or_else(|| "help".to_owned());
+    let mut arguments = std::env::args().skip(1);
+    let command = arguments.next().unwrap_or_else(|| "help".to_owned());
     let result = match command.as_str() {
         "check" => check(),
         "check-fuzz" => check_fuzz(),
@@ -17,6 +18,7 @@ fn main() {
         "package-check" => package_check(),
         "stage-helpers" => stage_helpers(),
         "pre-push-check" => pre_push_check(),
+        "verify-checksum" => verify_checksum_command(arguments.collect()),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
@@ -31,6 +33,9 @@ fn main() {
             );
             println!(
                 "cargo xtask pre-push-check    Audit the local Git payload without network access"
+            );
+            println!(
+                "cargo xtask verify-checksum <artifact-dir> <manifest>    Verify an explicit artifact checksum manifest"
             );
             Ok(())
         }
@@ -296,6 +301,36 @@ fn verify_current_platform_bundle() -> Result<(), String> {
     verify_checksum_manifest(&bundle_root, &artifact_root, &manifest_path)?;
     println!(
         "wrote and verified artifact checksum manifest: {}",
+        manifest_path.display()
+    );
+    Ok(())
+}
+
+fn verify_checksum_command(arguments: Vec<String>) -> Result<(), String> {
+    if arguments.len() != 2 {
+        return Err("usage: cargo xtask verify-checksum <artifact-dir> <manifest>".to_owned());
+    }
+
+    let artifact_root = PathBuf::from(&arguments[0]);
+    let manifest_path = PathBuf::from(&arguments[1]);
+    let bundle_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let manifest_metadata = fs::symlink_metadata(&manifest_path).map_err(|error| {
+        format!(
+            "could not inspect checksum manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    if !manifest_metadata.file_type().is_file() {
+        return Err(format!(
+            "checksum manifest must be a regular file: {}",
+            manifest_path.display()
+        ));
+    }
+
+    verify_checksum_manifest(bundle_root, &artifact_root, &manifest_path)?;
+    println!(
+        "verified checksum manifest for {}: {}",
+        artifact_root.display(),
         manifest_path.display()
     );
     Ok(())
@@ -841,6 +876,47 @@ mod tests {
         assert!(lines[1].ends_with("artifact/z.txt"));
 
         fs::remove_dir_all(root).expect("remove test artifact");
+    }
+
+    #[test]
+    fn explicit_checksum_command_rejects_tampering_and_unsafe_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-verify-checksum-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let artifact = root.join("artifact");
+        let manifest = root.join("MobaRust.sha256");
+        fs::create_dir_all(&artifact).expect("create test artifact");
+        fs::write(artifact.join("app.bin"), b"fixture").expect("write artifact");
+        write_checksum_manifest(&root, &artifact, &manifest).expect("write manifest");
+        verify_checksum_command(vec![
+            artifact.display().to_string(),
+            manifest.display().to_string(),
+        ])
+        .expect("verify explicit artifact");
+
+        fs::write(artifact.join("app.bin"), b"tampered").expect("tamper artifact");
+        let error = verify_checksum_command(vec![
+            artifact.display().to_string(),
+            manifest.display().to_string(),
+        ])
+        .expect_err("tampering must be rejected");
+        assert!(error.contains("checksum manifest changed"));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("outside"), artifact.join("escape"))
+                .expect("create fixture symlink");
+            let error = checksum_manifest_contents(&root, &artifact, &manifest)
+                .expect_err("artifact symlink must be rejected");
+            assert!(error.contains("unsupported symlink"));
+        }
+
+        fs::remove_dir_all(root).expect("remove checksum fixture");
     }
 
     #[test]

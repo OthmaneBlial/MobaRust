@@ -38,6 +38,18 @@ SHA-256 format accepted by both `sha256sum` and macOS `shasum`, and covers every
 regular file in the artifact scope. It is a packaging smoke test, not code-signing,
 notarization, or interoperability evidence.
 
+An already assembled artifact can be checked without rebuilding it:
+
+```text
+cargo xtask verify-checksum <artifact-dir> <manifest>
+```
+
+Both paths are explicit. The verifier requires a regular manifest file, rejects
+symlinks and unsupported file types anywhere in the artifact, and recomputes
+the complete deterministic manifest before reporting success. It proves local
+artifact integrity only; it is not a signature verifier and does not establish
+publisher authenticity.
+
 On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
 was created at `target/debug/bundle/macos/MobaRust.app`; its main executable
 and the staged VNC helper resource (`mobarust-vnc-helper`) were verified as
