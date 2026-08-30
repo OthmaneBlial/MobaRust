@@ -3608,8 +3608,50 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
 function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
-  const commands = quickActions.filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
-  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands" /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.map((action) => { const ActionIcon = action.icon; const run = action.label === "New local terminal" ? onNewTerminal : action.label === "Quick connect" ? onQuickConnect : action.label === "Open SFTP" ? onOpenFiles : action.label === "Settings" ? onOpenSettings : action.label === "Credential vault" ? onOpenCredentials : action.label === "Snippets" ? onOpenSnippets : action.label === "Macros" ? onOpenMacros : onClose; return <button key={action.label} className="palette-item" onClick={() => { run(); onClose(); }}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}<button className="palette-item" onClick={onToggleSidebar}><PanelLeftClose size={16} /><span>Toggle sidebar</span><kbd>⌘ B</kbd></button><div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
+  const [activeIndex, setActiveIndex] = useState(0);
+  const commands = [
+    ...quickActions
+      .filter((action) => action.label !== "Command palette")
+      .map((action) => ({
+        ...action,
+        run: action.label === "New local terminal" ? onNewTerminal
+          : action.label === "Quick connect" ? onQuickConnect
+            : action.label === "Open SFTP" ? onOpenFiles
+              : action.label === "Settings" ? onOpenSettings
+                : action.label === "Credential vault" ? onOpenCredentials
+                  : action.label === "Snippets" ? onOpenSnippets
+                    : action.label === "Macros" ? onOpenMacros
+                      : onClose,
+      })),
+    { label: "Toggle sidebar", hint: "⌘ B", icon: PanelLeftClose, run: onToggleSidebar },
+  ].filter((action) => action.label.toLowerCase().includes(query.trim().toLowerCase()));
+
+  useEffect(() => setActiveIndex(0), [query]);
+
+  const execute = (index: number) => {
+    const action = commands[index];
+    if (!action) return;
+    action.run();
+    onClose();
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => commands.length === 0 ? 0 : (index + 1) % commands.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => commands.length === 0 ? 0 : (index - 1 + commands.length) % commands.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      execute(activeIndex);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    }
+  };
+
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}><section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}><div className="palette-search"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} placeholder="Search commands" aria-label="Search commands" aria-controls="command-palette-list" aria-activedescendant={commands[activeIndex] ? `command-${activeIndex}` : undefined} /><kbd>ESC</kbd></div><div className="palette-section-label">Actions</div>{commands.length > 0 ? <div id="command-palette-list" role="listbox" aria-label="Available commands">{commands.map((action, index) => { const ActionIcon = action.icon; return <button key={action.label} id={`command-${index}`} type="button" role="option" aria-selected={index === activeIndex} className={`palette-item ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => execute(index)}><ActionIcon size={16} /><span>{action.label}</span><kbd>{action.hint}</kbd></button>; })}</div> : <div className="palette-empty">No matching commands</div>}<div className="palette-footer"><span>Navigate <b>↑ ↓</b></span><span>Run <b>↵</b></span><span>Close <b>esc</b></span></div></section></div>;
 }
 
 function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, onPortableSave, onPortableDelete }: { portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (credentialId: string, secret: string) => Promise<void>; onDelete: (credentialId: string) => Promise<void>; onPortableSave: (credentialId: string, secret: string) => Promise<void>; onPortableDelete: (credentialId: string) => Promise<void> }) {
