@@ -81,10 +81,11 @@ dynamic resize, and multi-monitor support on the target platforms.
 The isolated `tools/rdp-helper` adapter confirms that a Rust-native candidate
 can be placed behind the helper boundary with a reusable `RdpClient`, typed
 image output, keyboard/mouse/resize input, TLS/CredSSP configuration, and a
-zeroizing native credential frame. Its clipboard command is intentionally
-rejected until a user-controlled OS clipboard backend is wired. Audio requests
-are rejected at both the desktop boundary and helper boundary rather than
-silently ignored. This is still
+zeroizing native credential frame. Its clipboard policy is now explicit and
+opt-in: Windows can select IronRDP's native OS clipboard backend, while the
+helper rejects the opt-in before connecting on macOS/Linux until a reviewed
+platform adapter exists. Audio requests are rejected at both the desktop
+boundary and helper boundary rather than silently ignored. This is still
 not a production selection: cross-platform certificate fixture coverage,
 reconnect interoperability, audio, gateway behavior, packaging, and real
 Windows interoperability remain open gates. The helper now rebuilds a native
@@ -98,13 +99,16 @@ local validation.
 The candidate's `clipboard` feature was inspected locally at the pinned
 `ironrdp-client 0.1.0` source. `ClipboardType::Enable` uses IronRDP's native
 Windows clipboard implementation on Windows, but falls back to a stub backend
-on non-Windows platforms. Enabling the feature therefore would not provide a
-macOS/Linux clipboard bridge and would make the cross-platform contract
-misleading. MobaRust keeps `ClipboardType::Stub` for this helper and returns an
-explicit diagnostic for clipboard commands. A future implementation needs a
-reviewed per-platform OS clipboard adapter, bounded text handling, explicit
-user action for remote-to-local copies, and deterministic cleanup; it must not
-silently write remote content into the Mac clipboard.
+on non-Windows platforms. MobaRust therefore keeps clipboard disabled by
+default, passes an explicit `--clipboard-enabled` opt-in only for RDP, and
+selects `ClipboardType::Enable` only when that policy is requested. On
+macOS/Linux the helper rejects that opt-in before a connection attempt instead
+of silently claiming support. The Windows backend owns the OS clipboard
+exchange; the helper's clipboard command does not create a second clipboard
+authority or automatically write remote content into the Mac clipboard. A
+future implementation still needs reviewed macOS/Linux adapters, bounded text
+handling, explicit user action for remote-to-local copies, deterministic
+cleanup, and Windows interoperability evidence.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed

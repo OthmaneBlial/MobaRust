@@ -167,6 +167,7 @@ type RemoteDesktopConnectRequest = {
   height: number;
   colorDepth: number;
   audioEnabled: boolean;
+  clipboardEnabled: boolean;
   vncQuality: "balanced" | "low-latency" | "low-bandwidth";
   reconnectEnabled: boolean;
   reconnectAttempts: number;
@@ -377,6 +378,7 @@ type SavedSession = {
     height: number;
     color_depth: number;
     audio_enabled: boolean;
+    clipboard_enabled?: boolean;
     vnc_quality?: "balanced" | "low-latency" | "low-bandwidth";
     reconnect_enabled?: boolean;
     reconnect_attempts?: number;
@@ -1261,6 +1263,11 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     const sessionId = sessionIdRef.current;
     const text = event.clipboardData.getData("text/plain");
     if (!IS_TAURI || !sessionId || !text) return;
+    if (request.protocol === "rdp" && !request.clipboardEnabled) {
+      event.preventDefault();
+      setError("RDP clipboard redirection is disabled for this session.");
+      return;
+    }
     event.preventDefault();
     void invoke("remote_desktop_clipboard", { payload: { sessionId, text } }).catch((sendError) => setError(String(sendError)));
   };
@@ -2459,6 +2466,7 @@ function App() {
         height: profile.height,
         colorDepth: profile.color_depth,
         audioEnabled: profile.audio_enabled,
+        clipboardEnabled: profile.clipboard_enabled ?? false,
         vncQuality: profile.vnc_quality ?? "balanced",
         reconnectEnabled: profile.reconnect_enabled ?? true,
         reconnectAttempts: profile.reconnect_attempts ?? 3,
@@ -4576,6 +4584,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [desktopWidth, setDesktopWidth] = useState(String(session.remote_desktop_profile?.width ?? 1280));
   const [desktopHeight, setDesktopHeight] = useState(String(session.remote_desktop_profile?.height ?? 720));
   const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
+  const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState(session.remote_desktop_profile?.clipboard_enabled ?? false);
   const [vncQuality, setVncQuality] = useState<NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"]>(session.remote_desktop_profile?.vnc_quality ?? "balanced");
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(session.remote_desktop_profile?.reconnect_enabled ?? true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState(String(session.remote_desktop_profile?.reconnect_attempts ?? 3));
@@ -4638,6 +4647,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         height: desktopHeight,
         colorDepth: desktopColorDepth,
         vncQuality,
+        clipboardEnabled: desktopClipboardEnabled,
         reconnectEnabled: desktopReconnectEnabled,
         reconnectAttempts: desktopReconnectAttempts,
       });
@@ -4763,6 +4773,10 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
                 <option value="low-bandwidth">Low bandwidth</option>
               </select>
               <small>Controls client-side encoding preference and refresh cadence.</small>
+            </label>}
+            {session.protocol === "RDP" && <label className="quick-connect-wide quick-connect-check-row">
+              <input type="checkbox" checked={desktopClipboardEnabled} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
+              <span>Enable clipboard redirection <small>opt-in · native Windows backend; macOS/Linux remain unavailable</small></span>
             </label>}
             <label className="quick-connect-wide quick-connect-check-row">
               <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />
@@ -4965,6 +4979,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
   const [vncQuality, setVncQuality] = useState<RemoteDesktopConnectRequest["vncQuality"]>("balanced");
+  const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState(false);
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState("3");
   const [knownHostsPath, setKnownHostsPath] = useState("");
@@ -5005,6 +5020,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       setGatewayEndpoint("");
       setGatewayUsername("");
       setGatewayCredentialId("");
+      setDesktopClipboardEnabled(false);
       setDesktopReconnectEnabled(true);
       setDesktopReconnectAttempts("3");
       setUriError(null);
@@ -5082,6 +5098,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         height: Number(desktopHeight),
         colorDepth: Number(desktopColorDepth),
         audioEnabled: false,
+        clipboardEnabled: protocol === "rdp" && desktopClipboardEnabled,
         vncQuality,
         reconnectEnabled: desktopReconnectEnabled,
         reconnectAttempts: parsedReconnectAttempts,
@@ -5392,6 +5409,10 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     Quality
                     <select value={vncQuality} onChange={(event) => setVncQuality(event.target.value as RemoteDesktopConnectRequest["vncQuality"])}><option value="balanced">Balanced</option><option value="low-latency">Low latency</option><option value="low-bandwidth">Low bandwidth</option></select>
                     <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
+                  </label>}
+                  {protocol === "rdp" && <label className="quick-connect-wide quick-connect-check-row">
+                    <input type="checkbox" checked={desktopClipboardEnabled} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
+                    <span>Enable clipboard redirection <small>opt-in · native Windows backend; macOS/Linux remain unavailable</small></span>
                   </label>}
                   <label className="quick-connect-wide quick-connect-check-row">
                     <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />

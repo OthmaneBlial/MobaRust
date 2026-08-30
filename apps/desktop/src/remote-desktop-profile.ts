@@ -13,6 +13,7 @@ export type RemoteDesktopProfileValue = {
   height: number;
   color_depth: number;
   audio_enabled: false;
+  clipboard_enabled: boolean;
   vnc_quality: VncQuality;
   reconnect_enabled: boolean;
   reconnect_attempts: number;
@@ -27,6 +28,7 @@ export type RemoteDesktopProfileDraft = {
   height: string;
   colorDepth: string;
   vncQuality: string | undefined;
+  clipboardEnabled: boolean;
   reconnectEnabled: boolean;
   reconnectAttempts: string;
 };
@@ -135,6 +137,7 @@ export function parseRemoteDesktopProfile(
       height,
       color_depth: colorDepth,
       audio_enabled: false,
+      clipboard_enabled: protocol === "RDP" && (draft.clipboardEnabled ?? false),
       vnc_quality: vncQuality as VncQuality,
       reconnect_enabled: draft.reconnectEnabled ?? true,
       reconnect_attempts: reconnectAttempts,

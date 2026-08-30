@@ -1090,6 +1090,7 @@ fn session_save_remote_desktop(
             height: request.height,
             color_depth: request.color_depth,
             audio_enabled: request.audio_enabled,
+            clipboard_enabled: request.clipboard_enabled,
             vnc_quality: request.vnc_quality,
             reconnect_enabled: request.reconnect_enabled,
             reconnect_attempts: request.reconnect_attempts,

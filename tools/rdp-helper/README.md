@@ -42,6 +42,14 @@ configuration is opt-in and must be complete at the typed desktop boundary;
 it remains an experiment until real Gateway interoperability, platform trust
 fixtures, and the dependency audit are complete.
 
+RDP clipboard redirection is disabled by default and can be requested only by
+the explicit `--clipboard-enabled` argument from an opted-in profile. On
+Windows, this selects IronRDP's native OS clipboard backend. On macOS/Linux,
+the helper rejects the request before connecting because the pinned client
+falls back to a stub backend there. The WebView clipboard payload is not used
+as a second authority, and remote clipboard content is never written into the
+Mac clipboard automatically.
+
 The helper now accepts explicit hostname or IP metadata and passes it unchanged
 to the native TLS adapter, which owns DNS, SNI, and platform certificate
 verification. The same native `ServerName` parser rejects malformed targets

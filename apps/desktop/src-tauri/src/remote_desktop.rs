@@ -46,6 +46,8 @@ pub struct RemoteDesktopConnectRequest {
     pub vnc_quality: String,
     #[serde(default)]
     pub audio_enabled: bool,
+    #[serde(default)]
+    pub clipboard_enabled: bool,
     #[serde(default = "default_reconnect_enabled")]
     pub reconnect_enabled: bool,
     #[serde(default = "default_reconnect_attempts")]
@@ -146,6 +148,7 @@ impl RemoteDesktopManager {
             },
             color_depth: request.color_depth,
             audio_enabled: request.audio_enabled,
+            clipboard_enabled: request.clipboard_enabled,
             vnc_quality: request.vnc_quality,
             credential_ref: credential_id,
             reconnect_enabled: request.reconnect_enabled,
@@ -375,6 +378,9 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     }
     if request.protocol == DesktopProtocol::Rdp && request.audio_enabled {
         return Err("RDP audio redirection is not enabled in this helper".into());
+    }
+    if request.protocol == DesktopProtocol::Vnc && request.clipboard_enabled {
+        return Err("RDP clipboard settings are supported only for RDP".into());
     }
     if request.color_depth == 0 {
         return Err("remote desktop color depth is invalid".into());
@@ -665,6 +671,7 @@ mod tests {
             height: 768,
             color_depth: 32,
             audio_enabled: false,
+            clipboard_enabled: false,
             vnc_quality: "balanced".into(),
             reconnect_enabled: true,
             reconnect_attempts: DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,

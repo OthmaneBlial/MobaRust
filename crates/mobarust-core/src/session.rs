@@ -6,6 +6,7 @@ pub const MAX_SERVER_ALIVE_INTERVAL_SECONDS: u64 = 86_400;
 pub const DEFAULT_VNC_QUALITY: &str = "balanced";
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED: bool = true;
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 3;
+pub const DEFAULT_RDP_CLIPBOARD_ENABLED: bool = false;
 pub const MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 10;
 pub const MAX_SESSION_ENVIRONMENT_ENTRIES: usize = 64;
 pub const MAX_SESSION_ENVIRONMENT_NAME_BYTES: usize = 128;
@@ -194,6 +195,10 @@ pub struct RemoteDesktopProfile {
     pub height: u16,
     pub color_depth: u16,
     pub audio_enabled: bool,
+    /// RDP clipboard redirection is opt-in and currently has a native backend
+    /// only on Windows. Older profiles remain disabled by default.
+    #[serde(default)]
+    pub clipboard_enabled: bool,
     #[serde(default = "default_vnc_quality")]
     pub vnc_quality: String,
     #[serde(default = "default_remote_desktop_reconnect_enabled")]
@@ -240,6 +245,9 @@ impl RemoteDesktopProfile {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         if protocol == Protocol::Vnc && self.gateway.is_some() {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        if protocol == Protocol::Vnc && self.clipboard_enabled {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         Ok(())
@@ -695,6 +703,7 @@ mod tests {
             height: 800,
             color_depth: 32,
             audio_enabled: false,
+            clipboard_enabled: false,
             vnc_quality: "balanced".into(),
             reconnect_enabled: true,
             reconnect_attempts: 3,
@@ -722,6 +731,13 @@ mod tests {
         invalid_vnc_domain.domain = Some("LAB".into());
         assert_eq!(
             invalid_vnc_domain.validate_for_protocol(Protocol::Vnc),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+
+        let mut invalid_vnc_clipboard = profile.clone();
+        invalid_vnc_clipboard.clipboard_enabled = true;
+        assert_eq!(
+            invalid_vnc_clipboard.validate_for_protocol(Protocol::Vnc),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
 
@@ -762,6 +778,7 @@ mod tests {
             height: 800,
             color_depth: 32,
             audio_enabled: false,
+            clipboard_enabled: false,
             vnc_quality: "balanced".into(),
             reconnect_enabled: true,
             reconnect_attempts: 3,

@@ -44,6 +44,8 @@ const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const AUDIO_UNSUPPORTED: &str = "RDP audio redirection is not enabled in this helper";
+const CLIPBOARD_UNSUPPORTED: &str =
+    "RDP clipboard redirection requires the native Windows backend in this helper";
 const TLS_ENVIRONMENT_UNSUPPORTED: &str =
     "RDP helper refuses ambient TLS certificate override variables";
 
@@ -58,6 +60,7 @@ struct Arguments {
     display: DisplaySize,
     color_depth: u16,
     audio_requested: bool,
+    clipboard_enabled: bool,
     reconnect_enabled: bool,
     reconnect_attempts: u8,
 }
@@ -668,11 +671,18 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             )?;
             Ok(false)
         }
+        #[cfg(windows)]
         HelperCommand::Clipboard { .. } => {
-            // Clipboard needs a native OS backend and a user-controlled
-            // trust policy. This helper build keeps the RDP channel enabled
-            // for future wiring but does not silently bridge local clipboard
-            // contents.
+            // The Windows IronRDP backend observes the process' native OS
+            // clipboard and performs the CLIPRDR exchange. The helper command
+            // is intentionally a no-op so the WebView never becomes a second
+            // clipboard authority or causes an automatic local write.
+            Ok(false)
+        }
+        #[cfg(not(windows))]
+        HelperCommand::Clipboard { .. } => {
+            // Non-Windows platforms currently have no reviewed native backend
+            // in the pinned IronRDP client; keep the limitation explicit.
             send_error(
                 stdout,
                 "RDP clipboard redirection is not enabled in this helper build",
@@ -741,7 +751,11 @@ fn build_config(
         .with_credssp(true)
         .with_server_pointer(true)
         .with_pointer_software_rendering(true)
-        .with_clipboard(ClipboardType::Stub);
+        .with_clipboard(if arguments.clipboard_enabled {
+            ClipboardType::Enable
+        } else {
+            ClipboardType::Disable
+        });
     if let Some(domain) = arguments.domain.as_deref() {
         builder = builder.with_domain(domain);
     }
@@ -764,6 +778,9 @@ fn build_config(
 fn unsupported_option(arguments: &Arguments) -> Option<&'static str> {
     if arguments.audio_requested {
         return Some(AUDIO_UNSUPPORTED);
+    }
+    if arguments.clipboard_enabled && !cfg!(windows) {
+        return Some(CLIPBOARD_UNSUPPORTED);
     }
 
     // Hostnames and IP literals are accepted here because the patched native
@@ -913,6 +930,7 @@ where
     let mut height = 720u16;
     let mut color_depth = 32u16;
     let mut audio_requested = false;
+    let mut clipboard_enabled = false;
     let mut reconnect_enabled = DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED;
     let mut reconnect_attempts = DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS;
     let mut iterator = arguments.into_iter();
@@ -973,6 +991,7 @@ where
                 )?
             }
             "--audio" => audio_requested = true,
+            "--clipboard-enabled" => clipboard_enabled = true,
             "--reconnect-enabled" => reconnect_enabled = true,
             "--reconnect-disabled" => reconnect_enabled = false,
             "--reconnect-attempts" => {
@@ -1005,6 +1024,7 @@ where
         display: DisplaySize { width, height },
         color_depth,
         audio_requested,
+        clipboard_enabled,
         reconnect_enabled,
         reconnect_attempts,
     };
@@ -1340,6 +1360,7 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            clipboard_enabled: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };
@@ -1348,6 +1369,36 @@ mod tests {
         arguments.host = "192.0.2.10".into();
         assert_eq!(unsupported_option(&arguments), None);
         arguments.host = "localhost".into();
+        assert_eq!(unsupported_option(&arguments), None);
+    }
+
+    #[test]
+    fn clipboard_opt_in_requires_the_platform_backend() {
+        let mut arguments = Arguments {
+            host: "example.invalid".into(),
+            port: 3389,
+            username: "fixture-user".into(),
+            domain: None,
+            gateway_endpoint: None,
+            gateway_username: None,
+            display: DisplaySize {
+                width: 320,
+                height: 200,
+            },
+            color_depth: 32,
+            audio_requested: false,
+            clipboard_enabled: true,
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
+        };
+
+        if cfg!(windows) {
+            assert_eq!(unsupported_option(&arguments), None);
+        } else {
+            assert_eq!(unsupported_option(&arguments), Some(CLIPBOARD_UNSUPPORTED));
+        }
+
+        arguments.clipboard_enabled = false;
         assert_eq!(unsupported_option(&arguments), None);
     }
 
@@ -1366,6 +1417,7 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            clipboard_enabled: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };
@@ -1396,6 +1448,7 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            clipboard_enabled: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };
@@ -1561,6 +1614,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn clipboard_command_is_rejected_without_forwarding_remote_text() {
         let (input_tx, mut input_rx) = mpsc::unbounded_channel();
@@ -1774,6 +1828,7 @@ mod tests {
             },
             color_depth: 32,
             audio_requested: false,
+            clipboard_enabled: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };

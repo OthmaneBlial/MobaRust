@@ -154,6 +154,10 @@ pub struct HelperLaunchConfig {
     pub display: DisplaySize,
     pub color_depth: u16,
     pub audio_enabled: bool,
+    /// RDP clipboard redirection is opt-in. The helper only enables a native
+    /// OS backend on platforms where the candidate provides one.
+    #[serde(default)]
+    pub clipboard_enabled: bool,
     /// VNC encoding/refresh profile. Ignored by RDP helpers.
     pub vnc_quality: String,
     /// Opaque vault identifier. The secret value is never part of this type.
@@ -180,6 +184,7 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("display", &self.display)
             .field("color_depth", &self.color_depth)
             .field("audio_enabled", &self.audio_enabled)
+            .field("clipboard_enabled", &self.clipboard_enabled)
             .field("vnc_quality", &self.vnc_quality)
             .field("credential_ref", &"<opaque-reference>")
             .field("reconnect_enabled", &self.reconnect_enabled)
@@ -441,6 +446,9 @@ impl HelperLaunchConfig {
             }
             if self.audio_enabled {
                 arguments.push("--audio".into());
+            }
+            if self.clipboard_enabled {
+                arguments.push("--clipboard-enabled".into());
             }
             if let Some(endpoint) = self.gateway_endpoint.as_deref() {
                 arguments.extend(["--gateway-endpoint".into(), endpoint.into()]);
@@ -1163,6 +1171,7 @@ mod tests {
             },
             color_depth: 32,
             audio_enabled: false,
+            clipboard_enabled: false,
             vnc_quality: "balanced".into(),
             credential_ref: "credential:test-only".into(),
             reconnect_enabled: true,
@@ -1200,6 +1209,26 @@ mod tests {
             arguments
                 .iter()
                 .filter(|argument| *argument == "LAB")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn launch_arguments_include_only_the_explicit_rdp_clipboard_opt_in() {
+        let mut config = launch_config();
+        assert!(
+            !config
+                .process_arguments()
+                .contains(&"--clipboard-enabled".into())
+        );
+
+        config.clipboard_enabled = true;
+        let arguments = config.process_arguments();
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| argument.as_str() == "--clipboard-enabled")
                 .count(),
             1
         );

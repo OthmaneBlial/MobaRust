@@ -46,9 +46,11 @@ The vault crypto was not changed to accommodate the RDP experiment. Passwords
 must arrive through a protected native channel, never as process arguments,
 environment variables, logs, or frontend state. Trust/pinning policy,
 reconnect interoperability, clipboard, audio, Gateway trust/interoperability,
-packaging, and Windows interoperability are still release gates. The current
-helper deliberately reports clipboard input as unsupported rather than silently
-bridging the local clipboard. RDP target metadata is passed unchanged to the
+packaging, and Windows interoperability are still release gates. Clipboard is
+disabled by default and is an explicit RDP profile opt-in. When requested, the
+helper selects IronRDP's native Windows backend; macOS/Linux reject the opt-in
+before connecting until a reviewed platform adapter exists. The helper does
+not use the WebView payload as a second clipboard authority. RDP target metadata is passed unchanged to the
 native TLS boundary; the helper does not resolve targets in React or use a
 frontend-side trust decision. The same explicit-only rule applies to the
 Gateway endpoint and username. A Gateway credential reference is persisted as
@@ -60,10 +62,10 @@ The clipboard feature was checked against the pinned IronRDP source before
 making this boundary decision. `ClipboardType::Enable` selects a native
 `WinClipboard` backend on Windows, while the non-Windows implementation is a
 stub. The feature flag alone is therefore insufficient for the macOS and Linux
-targets. Keeping `ClipboardType::Stub` makes the limitation explicit and
-prevents a false cross-platform capability claim. Any future clipboard adapter
-must be platform-specific, user-controlled, bounded to safe text operations,
-and isolated from automatic local clipboard writes.
+targets. MobaRust uses `ClipboardType::Disable` by default and only passes the
+explicit `--clipboard-enabled` argument for an opted-in RDP profile. Any
+future clipboard adapter must be platform-specific, user-controlled, bounded
+to safe text operations, and isolated from automatic local clipboard writes.
 
 The helper now owns a bounded reconnect policy after an active-session loss:
 three attempts with exponential backoff, native credential reuse, and
