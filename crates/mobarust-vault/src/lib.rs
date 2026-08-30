@@ -261,6 +261,12 @@ struct PortablePayload {
     credentials: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Serialize)]
+struct PortablePayloadRef<'a> {
+    schema_version: u32,
+    credentials: BTreeMap<&'a str, &'a str>,
+}
+
 impl Drop for PortablePayload {
     fn drop(&mut self) {
         for secret in self.credentials.values_mut() {
@@ -408,19 +414,21 @@ impl PortableVault {
         for secret in self.entries.values() {
             validate_portable_secret(secret)?;
         }
-        let payload = PortablePayload {
+        // Serialize borrowed views of the in-memory entries. Building an
+        // owned payload here would create a second plaintext String for every
+        // credential before the zeroizing ciphertext buffer is produced.
+        let payload = PortablePayloadRef {
             schema_version: 1,
             credentials: self
                 .entries
                 .iter()
-                .map(|(id, secret)| (id.clone(), secret.as_str().to_owned()))
+                .map(|(id, secret)| (id.as_str(), secret.as_str()))
                 .collect(),
         };
         let plaintext = Zeroizing::new(
             serde_json::to_vec(&payload)
                 .map_err(|error| VaultError::PortableFormat(error.to_string()))?,
         );
-        drop(payload);
         if plaintext.len() > PORTABLE_MAX_FILE_BYTES - PORTABLE_HEADER_BYTES {
             return Err(VaultError::PortableFileTooLarge);
         }
