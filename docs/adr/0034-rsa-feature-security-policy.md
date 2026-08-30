@@ -8,8 +8,9 @@ Implemented in the main workspace.
 
 The local dependency audit on 2026-08-30 reported `RUSTSEC-2023-0071`
 (Marvin timing attack) for `rsa 0.10.0-rc.18`. The crate was pulled into the
-main application only by `russh`'s default RSA feature. The advisory has no
-fixed upgrade available in the selected dependency line.
+main application only by `russh`'s default RSA feature. The
+[RustSec advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+still has no patched release.
 
 MobaRust's saved-session contract requires a private-key reference, but does
 not require the legacy RSA algorithm specifically. Keeping the vulnerable
@@ -27,8 +28,11 @@ The isolated RDP helper has its own dependency lockfile and is not changed by
 this decision. Its dependency audit remains a separate release check. That
 audit currently reports the same Marvin advisory through
 `picky -> ironrdp-connector -> ironrdp-client`, so the RDP candidate is not
-staged into normal application bundles. It remains available for isolated,
-repository-local development checks only.
+staged into normal application bundles. Upstream's [CredSSP dependency cleanup
+issue](https://github.com/Devolutions/IronRDP/issues/1433) remains open, so
+there is no safe feature toggle in the selected connector that removes the
+chain today. It remains available for isolated, repository-local development
+checks only.
 
 ## Trade-off and migration
 
