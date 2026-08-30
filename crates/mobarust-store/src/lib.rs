@@ -23,6 +23,7 @@ const CURRENT_AUDIT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_AUDIT_EVENTS: usize = 1_000;
 const MAX_OPENSSH_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_LOCAL_STORE_FILE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_IMPORT_JSON_BYTES: usize = MAX_LOCAL_STORE_FILE_BYTES;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -33,6 +34,8 @@ pub enum StoreError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    #[error("session import exceeds the 64 MiB limit")]
+    SessionImportTooLarge,
     #[error("session store {path} uses unsupported schema version {version}")]
     UnsupportedSchema { path: PathBuf, version: u32 },
     #[error("saved session is invalid: {0}")]
@@ -52,6 +55,8 @@ pub enum StoreError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    #[error("settings import exceeds the 64 MiB limit")]
+    SettingsImportTooLarge,
     #[error("settings file {path} uses unsupported schema version {version}")]
     SettingsUnsupportedSchema { path: PathBuf, version: u32 },
     #[error("settings are invalid: {0}")]
@@ -598,6 +603,9 @@ impl SettingsStore {
     /// passed schema validation, and been durably persisted. A failed write
     /// restores the in-memory settings so callers never observe a half-import.
     pub fn import_json(&mut self, json: &str) -> Result<AppSettings, StoreError> {
+        if json.len() > MAX_IMPORT_JSON_BYTES {
+            return Err(StoreError::SettingsImportTooLarge);
+        }
         let path = PathBuf::from("<settings-import>");
         let file: SettingsFile =
             serde_json::from_str(json).map_err(|error| StoreError::SettingsDecode {
@@ -773,6 +781,9 @@ impl SessionStore {
     /// stable merge key; malformed or unknown-schema input fails before the
     /// current store is changed.
     pub fn import_json(&mut self, json: &str) -> Result<SessionImportReport, StoreError> {
+        if json.len() > MAX_IMPORT_JSON_BYTES {
+            return Err(StoreError::SessionImportTooLarge);
+        }
         let source = PathBuf::from("<session-import>");
         let file: StoreFile =
             serde_json::from_str(json).map_err(|decode_error| StoreError::Decode {
@@ -1572,6 +1583,18 @@ mod tests {
     }
 
     #[test]
+    fn session_import_rejects_an_oversized_payload_before_parsing() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let oversized = "x".repeat(super::MAX_IMPORT_JSON_BYTES + 1);
+
+        let error = store.import_json(&oversized).unwrap_err();
+        assert!(matches!(error, StoreError::SessionImportTooLarge));
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
     fn settings_round_trip_and_reset_are_durable() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("settings.json");
@@ -1649,6 +1672,18 @@ mod tests {
         let error = target.import_json(r#"{"schema_version":1,"settings":{},"secret":"nope"}"#);
         assert!(matches!(error, Err(StoreError::SettingsDecode { .. })));
         assert_eq!(target.get(), &settings);
+    }
+
+    #[test]
+    fn settings_import_rejects_an_oversized_payload_before_parsing() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let mut store = SettingsStore::open(&path).unwrap();
+        let oversized = "x".repeat(super::MAX_IMPORT_JSON_BYTES + 1);
+
+        let error = store.import_json(&oversized).unwrap_err();
+        assert!(matches!(error, StoreError::SettingsImportTooLarge));
+        assert_eq!(store.get(), &AppSettings::default());
     }
 
     #[test]
