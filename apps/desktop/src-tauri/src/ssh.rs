@@ -2,8 +2,8 @@ use mobarust_core::{
     MAX_SERVER_ALIVE_INTERVAL_SECONDS, TransferEvent, TransferLifecycle, TransferState,
 };
 use mobarust_ssh::{
-    HostKeyPolicy, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials, SshError,
-    SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
+    HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
+    SshCredentials, SshError, SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
 };
 use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ const SSH_RECONNECT_ATTEMPTS: u8 = 3;
 const X11_CHANNEL_LIMIT: usize = 8;
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshConnectRequest {
     pub host: String,
     pub port: u16,
@@ -64,7 +64,7 @@ pub struct SshConnectRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshX11Request {
     /// Explicit local display target, for example tcp://127.0.0.1:6000 or
     /// unix:///tmp/.X11-unix/X0. It is never inferred from the environment.
@@ -92,7 +92,7 @@ struct SshSessionEvent {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshJumpHostRequest {
     pub host: String,
     pub port: u16,
@@ -109,7 +109,7 @@ pub struct SshJumpHostRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "method", rename_all = "camelCase")]
+#[serde(tag = "method", rename_all = "camelCase", deny_unknown_fields)]
 pub enum SshAuthRequest {
     Agent,
     Password {
@@ -136,7 +136,7 @@ pub struct SshConnectResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshTransferRequest {
     pub remote_path: String,
     pub local_path: String,
@@ -163,7 +163,7 @@ pub struct SshTransferResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshLocalForwardRequest {
     #[serde(default = "default_bind_host")]
     pub bind_host: String,
@@ -173,7 +173,7 @@ pub struct SshLocalForwardRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshDynamicForwardRequest {
     #[serde(default = "default_bind_host")]
     pub bind_host: String,
@@ -181,7 +181,7 @@ pub struct SshDynamicForwardRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshRemoteForwardRequest {
     #[serde(default = "default_bind_host")]
     pub bind_host: String,
@@ -1373,7 +1373,10 @@ fn credentials_from_auth(
         SshAuthRequest::Password { credential_id } => {
             let id = CredentialId::new(credential_id.clone())?;
             let secret = vault.get(&id)?;
-            Ok(SshCredentials::password(username, secret.as_str()))
+            Ok(SshCredentials::password_secret(
+                username,
+                SshSecret::from_zeroizing(secret.into_zeroizing()),
+            ))
         }
         SshAuthRequest::PrivateKey {
             path,
@@ -1384,10 +1387,10 @@ fn credentials_from_auth(
                 .map(|credential_id| {
                     CredentialId::new(credential_id.clone())
                         .and_then(|id| vault.get(&id))
-                        .map(|secret| secret.as_str().to_owned())
+                        .map(|secret| SshSecret::from_zeroizing(secret.into_zeroizing()))
                 })
                 .transpose()?;
-            Ok(SshCredentials::private_key(
+            Ok(SshCredentials::private_key_secret(
                 username,
                 expand_user_path(path),
                 passphrase,
@@ -1396,9 +1399,9 @@ fn credentials_from_auth(
         SshAuthRequest::KeyboardInteractive { credential_id } => {
             let id = CredentialId::new(credential_id.clone())?;
             let secret = vault.get(&id)?;
-            Ok(SshCredentials::keyboard_interactive(
+            Ok(SshCredentials::keyboard_interactive_secret(
                 username,
-                secret.as_str(),
+                SshSecret::from_zeroizing(secret.into_zeroizing()),
             ))
         }
     }

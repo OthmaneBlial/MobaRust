@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
@@ -14,6 +14,7 @@ import { formatSessionEnvironment, parseSessionEnvironment } from "./session-env
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import {
   preserveRemoteDesktopError,
@@ -992,6 +993,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
+  const lastRemotePointerRef = useRef<RemoteDesktopPoint | null>(null);
+  const pressedRemoteKeysRef = useRef<Set<number>>(new Set());
+  const pointerQueueRef = useRef<RemoteDesktopPointerQueueItem[]>([]);
+  const pointerFlushActiveRef = useRef(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1008,12 +1013,12 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
     const sendResize = () => {
       if (request.protocol === "vnc") return;
-      const width = Math.max(320, Math.min(4096, Math.round(host.clientWidth)));
-      const height = Math.max(200, Math.min(4096, Math.round(host.clientHeight)));
-      setDimensions({ width, height });
+      const size = boundedRemoteDesktopSize(host.clientWidth, host.clientHeight);
+      if (!size) return;
+      setDimensions(size);
       const sessionId = sessionIdRef.current;
-      if (!IS_TAURI || !sessionId || width === 0 || height === 0) return;
-      void invoke("remote_desktop_resize", { sessionId, width, height }).catch(() => undefined);
+      if (!IS_TAURI || !sessionId) return;
+      void invoke("remote_desktop_resize", { sessionId, ...size }).catch(() => undefined);
     };
 
     const renderFramebuffer = (width: number, height: number, pixels: number[]) => {
@@ -1037,6 +1042,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       setRemoteClipboard(null);
       setClipboardCopied(false);
       setFullscreenError(null);
+      lastRemotePointerRef.current = null;
+      pressedRemoteKeysRef.current.clear();
+      pointerQueueRef.current = [];
       onStatusChange(workspaceId, "starting");
       if (!IS_TAURI) {
         setError(`${request.protocol.toUpperCase()} requires the desktop runtime; browser preview does not open remote hosts.`);
@@ -1088,6 +1096,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
     return () => {
       disposed = true;
+      lastRemotePointerRef.current = null;
+      pressedRemoteKeysRef.current.clear();
+      pointerQueueRef.current = [];
       observer.disconnect();
       document.removeEventListener("fullscreenchange", syncFullscreen);
       unlisten?.();
@@ -1134,26 +1145,86 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     const code = desktopKeyCode(request.protocol, event);
     if (!IS_TAURI || !sessionId || code === null) return;
     event.preventDefault();
+    pressedRemoteKeysRef.current = new Set(remoteDesktopKeyState([...pressedRemoteKeysRef.current], code, pressed));
     void invoke("remote_desktop_key", { sessionId, scancode: code, pressed }).catch((sendError) => setError(String(sendError)));
   };
 
-  const sendPointer = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+  const flushPointerQueue = useCallback(async () => {
+    if (pointerFlushActiveRef.current) return;
+    pointerFlushActiveRef.current = true;
+    try {
+      while (pointerQueueRef.current.length > 0) {
+        const item = pointerQueueRef.current.shift();
+        if (!item || item.command.sessionId !== sessionIdRef.current) continue;
+        try {
+          await invoke("remote_desktop_pointer", item.command);
+        } catch (sendError) {
+          pointerQueueRef.current = [];
+          setError(String(sendError));
+          break;
+        }
+      }
+    } finally {
+      pointerFlushActiveRef.current = false;
+    }
+  }, []);
+
+  const queuePointer = useCallback((command: { sessionId: string; x: number; y: number; buttons: number }, coalescible: boolean) => {
+    pointerQueueRef.current = enqueueRemoteDesktopPointer(pointerQueueRef.current, { command, coalescible });
+    if (!pointerFlushActiveRef.current) void flushPointerQueue();
+  }, [flushPointerQueue]);
+
+  const sendPointer = (event: ReactPointerEvent<HTMLCanvasElement>, coalescible = false) => {
     const sessionId = sessionIdRef.current;
     const canvas = canvasRef.current;
     if (!IS_TAURI || !sessionId || !canvas) return;
-    const bounds = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - bounds.left) * canvas.width / Math.max(bounds.width, 1))));
-    const y = Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - bounds.top) * canvas.height / Math.max(bounds.height, 1))));
-    void invoke("remote_desktop_pointer", { sessionId, x, y, buttons: event.buttons }).catch((sendError) => setError(String(sendError)));
+    const mapped = mapRemoteDesktopPoint(event.clientX, event.clientY, canvas.getBoundingClientRect(), canvas.width, canvas.height);
+    const point = remoteDesktopPointerPoint(mapped, lastRemotePointerRef.current, event.buttons);
+    if (!point) return;
+    if (mapped) lastRemotePointerRef.current = mapped;
+    const { x, y } = point;
+    queuePointer({ sessionId, x, y, buttons: event.buttons }, coalescible);
+    if (event.buttons === 0) lastRemotePointerRef.current = null;
   };
+
+  const capturePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sendPointer(event);
+  };
+
+  const releasePointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    sendPointer(event);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const releaseRemoteInput = useCallback(() => {
+    const sessionId = sessionIdRef.current;
+    const lastPointer = lastRemotePointerRef.current;
+    if (IS_TAURI && sessionId && lastPointer) {
+      queuePointer({ sessionId, ...lastPointer, buttons: 0 }, false);
+    }
+    if (IS_TAURI && sessionId) {
+      for (const scancode of pressedRemoteKeysRef.current) {
+        void invoke("remote_desktop_key", { sessionId, scancode, pressed: false }).catch((sendError) => setError(String(sendError)));
+      }
+    }
+    lastRemotePointerRef.current = null;
+    pressedRemoteKeysRef.current.clear();
+  }, [queuePointer]);
+
+  useEffect(() => {
+    window.addEventListener("blur", releaseRemoteInput);
+    return () => window.removeEventListener("blur", releaseRemoteInput);
+  }, [releaseRemoteInput]);
 
   const sendWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
     const sessionId = sessionIdRef.current;
     const canvas = canvasRef.current;
     if (!IS_TAURI || !sessionId || !canvas || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
-    const bounds = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - bounds.left) * canvas.width / Math.max(bounds.width, 1))));
-    const y = Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - bounds.top) * canvas.height / Math.max(bounds.height, 1))));
+    const point = mapRemoteDesktopPoint(event.clientX, event.clientY, canvas.getBoundingClientRect(), canvas.width, canvas.height);
+    if (!point) return;
+    const { x, y } = point;
     event.preventDefault();
     void invoke("remote_desktop_wheel", { sessionId, x, y, delta: event.deltaY > 0 ? 120 : -120 }).catch((sendError) => setError(String(sendError)));
   };
@@ -1167,7 +1238,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   };
 
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
-    <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onWheel={sendWheel} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
+    <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onPointerDown={capturePointer} onPointerUp={releasePointer} onPointerCancel={releasePointer} onPointerMove={(event) => event.buttons > 0 && sendPointer(event, true)} onWheel={sendWheel} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
     {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button><button type="button" className="outline-button" onClick={dismissRemoteClipboard}>Dismiss</button></div>}
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
@@ -3389,9 +3460,7 @@ function App() {
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <svg className="brand-symbol" viewBox="0 0 32 32">
-              <path d="M4 24V8L16 19L28 8V24" />
-              <circle cx="16" cy="19" r="2.1" />
-              <path d="M4 28H28" />
+              <path className="brand-glyph" d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z" />
             </svg>
           </div>
           <div>

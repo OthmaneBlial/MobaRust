@@ -22,6 +22,10 @@ pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 pub const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 pub const MAX_CREDENTIAL_BYTES: usize = 1024 * 1024;
+pub const MAX_HOST_BYTES: usize = 255;
+pub const MAX_USERNAME_BYTES: usize = 256;
+pub const MAX_DOMAIN_BYTES: usize = 255;
+pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +101,7 @@ impl fmt::Debug for HelperLaunchConfig {
 /// This type is deliberately separate from [`HelperCommand`]. It must not be
 /// serialized with ordinary control messages or placed in process arguments.
 /// The helper consumes it once to build the protocol client's native config.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelperCredential {
     password: Zeroizing<String>,
 }
@@ -107,6 +111,11 @@ impl HelperCredential {
         Self {
             password: Zeroizing::new(password.into()),
         }
+    }
+
+    /// Adopt a zeroizing native buffer without cloning its plaintext.
+    pub fn from_zeroizing(password: Zeroizing<String>) -> Self {
+        Self { password }
     }
 
     pub fn password(&self) -> &str {
@@ -136,6 +145,30 @@ struct CredentialEnvelope {
     credential: HelperCredential,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialEnvelopeRef<'a> {
+    version: u16,
+    credential: &'a HelperCredential,
+}
+
+fn validate_metadata(
+    field: &'static str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), HelperProtocolError> {
+    if value.len() > max_bytes {
+        return Err(HelperProtocolError::MetadataTooLarge {
+            field,
+            bytes: value.len(),
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(HelperProtocolError::MetadataContainsControl { field });
+    }
+    Ok(())
+}
+
 impl HelperLaunchConfig {
     pub fn validate(&self) -> Result<(), HelperProtocolError> {
         if self.program.as_os_str().is_empty() {
@@ -144,14 +177,26 @@ impl HelperLaunchConfig {
         if self.host.trim().is_empty() {
             return Err(HelperProtocolError::EmptyHost);
         }
+        validate_metadata("host", &self.host, MAX_HOST_BYTES)?;
         if self.port == 0 {
             return Err(HelperProtocolError::InvalidPort);
         }
         if self.username.trim().is_empty() && self.protocol == DesktopProtocol::Rdp {
             return Err(HelperProtocolError::EmptyUsername);
         }
+        validate_metadata("username", &self.username, MAX_USERNAME_BYTES)?;
         if self.credential_ref.trim().is_empty() && self.protocol == DesktopProtocol::Rdp {
             return Err(HelperProtocolError::EmptyCredentialReference);
+        }
+        if !self.credential_ref.trim().is_empty() {
+            validate_metadata(
+                "credential reference",
+                &self.credential_ref,
+                MAX_CREDENTIAL_REFERENCE_BYTES,
+            )?;
+        }
+        if let Some(domain) = self.domain.as_deref() {
+            validate_metadata("domain", domain, MAX_DOMAIN_BYTES)?;
         }
         if self.color_depth == 0 {
             return Err(HelperProtocolError::InvalidColorDepth);
@@ -200,7 +245,7 @@ impl HelperLaunchConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "payload", rename_all = "camelCase")]
 pub enum HelperCommand {
     Start {
@@ -509,6 +554,10 @@ pub enum HelperProtocolError {
     EmptyUsername,
     #[error("helper credential reference is empty")]
     EmptyCredentialReference,
+    #[error("helper {field} is too large")]
+    MetadataTooLarge { field: &'static str, bytes: usize },
+    #[error("helper {field} contains control characters")]
+    MetadataContainsControl { field: &'static str },
     #[error("helper color depth must be non-zero")]
     InvalidColorDepth,
     #[error("helper VNC quality is invalid")]
@@ -617,9 +666,9 @@ pub fn encode_credential_frame(
 ) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
     credential.validate()?;
 
-    encode_frame_zeroizing(&CredentialEnvelope {
+    encode_frame_zeroizing(&CredentialEnvelopeRef {
         version: WIRE_VERSION,
-        credential: credential.clone(),
+        credential,
     })
 }
 
@@ -952,6 +1001,43 @@ mod tests {
     }
 
     #[test]
+    fn launch_config_rejects_oversized_or_control_metadata() {
+        let mut config = launch_config();
+        config.host = "h".repeat(MAX_HOST_BYTES + 1);
+        assert!(matches!(
+            config.validate(),
+            Err(HelperProtocolError::MetadataTooLarge { field: "host", .. })
+        ));
+
+        let mut config = launch_config();
+        config.username = "u".repeat(MAX_USERNAME_BYTES + 1);
+        assert!(matches!(
+            config.validate(),
+            Err(HelperProtocolError::MetadataTooLarge {
+                field: "username",
+                ..
+            })
+        ));
+
+        let mut config = launch_config();
+        config.domain = Some(format!("LAB{}", '\n'));
+        assert!(matches!(
+            config.validate(),
+            Err(HelperProtocolError::MetadataContainsControl { field: "domain" })
+        ));
+
+        let mut config = launch_config();
+        config.credential_ref = "c".repeat(MAX_CREDENTIAL_REFERENCE_BYTES + 1);
+        assert!(matches!(
+            config.validate(),
+            Err(HelperProtocolError::MetadataTooLarge {
+                field: "credential reference",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn debug_output_redacts_credential_reference_and_clipboard_content() {
         let config = launch_config();
         let credential = HelperCredential::new("password-secret");
@@ -966,6 +1052,15 @@ mod tests {
         assert!(!format!("{event:?}").contains("clipboard-secret"));
         assert!(!format!("{credential:?}").contains("password-secret"));
         assert!(format!("{command:?}").contains("bytes"));
+    }
+
+    #[test]
+    fn helper_credential_adopts_a_zeroizing_buffer() {
+        let credential =
+            HelperCredential::from_zeroizing(zeroize::Zeroizing::new("fixture-password".into()));
+
+        assert_eq!(credential.password(), "fixture-password");
+        assert_eq!(format!("{credential:?}"), "HelperCredential(<redacted>)");
     }
 
     #[test]

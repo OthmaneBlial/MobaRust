@@ -622,7 +622,8 @@ fn forwards_an_explicit_x11_channel_to_a_loopback_display_fixture() {
         let (mut reader, writer) = shell.split();
         writer
             .write(
-                br#"python3 -c 'import os,socket; d=os.environ["DISPLAY"]; h,rest=d.rsplit(":",1); p=int(rest.split(".",1)[0])+6000; s=socket.create_connection((h,p),5); s.sendall(b"MOBARUST_X11_OK"); s.shutdown(socket.SHUT_WR); s.close()'
+            br#"python3 -c 'import os,socket; d=os.environ["DISPLAY"]; h,rest=d.rsplit(":",1); p=int(rest.split(".",1)[0])+6000; s=socket.create_connection((h,p),5); s.sendall(b"MOBARUST_X11_OK"); s.shutdown(socket.SHUT_WR); s.close()'
+sleep 1
 exit
 "#,
             )

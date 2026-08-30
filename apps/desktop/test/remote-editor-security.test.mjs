@@ -12,6 +12,15 @@ import {
 import { findTerminalHttpUrls } from "../src/terminal-links.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
 import { terminalFontSizeAfterZoom } from "../src/terminal-zoom.ts";
+import {
+  boundedRemoteDesktopSize,
+  enqueueRemoteDesktopPointer,
+  fittedRemoteViewport,
+  MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS,
+  mapRemoteDesktopPoint,
+  remoteDesktopKeyState,
+  remoteDesktopPointerPoint,
+} from "../src/remote-desktop-input.ts";
 import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
 import {
@@ -105,6 +114,65 @@ assert.equal(terminalFontSizeAfterZoom(8, "decrease"), 8);
 assert.equal(terminalFontSizeAfterZoom(32, "increase"), 32);
 assert.equal(terminalFontSizeAfterZoom(24, "reset"), 13);
 assert.equal(terminalFontSizeAfterZoom(Number.NaN, "increase"), 14);
+assert.deepEqual(fittedRemoteViewport(1920, 1080, { left: 100, top: 50, width: 800, height: 600 }), {
+  left: 100,
+  top: 125,
+  width: 800,
+  height: 450,
+  scale: 800 / 1920,
+});
+assert.deepEqual(
+  mapRemoteDesktopPoint(500, 350, { left: 100, top: 50, width: 800, height: 600 }, 1920, 1080),
+  { x: 960, y: 540 },
+);
+assert.equal(
+  mapRemoteDesktopPoint(500, 60, { left: 100, top: 50, width: 800, height: 600 }, 1920, 1080),
+  null,
+  "input in a top letterbox band must not reach the remote host",
+);
+assert.deepEqual(
+  mapRemoteDesktopPoint(500, 400, { left: 100, top: 50, width: 800, height: 600 }, 600, 1200),
+  { x: 300, y: 700 },
+);
+assert.equal(
+  mapRemoteDesktopPoint(Number.NaN, 400, { left: 100, top: 50, width: 800, height: 600 }, 600, 1200),
+  null,
+);
+assert.deepEqual(
+  remoteDesktopPointerPoint(null, { x: 300, y: 700 }, 0),
+  { x: 300, y: 700 },
+  "pointer release outside the painted image must use the last valid pixel",
+);
+assert.equal(
+  remoteDesktopPointerPoint(null, { x: 300, y: 700 }, 1),
+  null,
+  "a pressed pointer outside the painted image must not invent coordinates",
+);
+assert.equal(boundedRemoteDesktopSize(0, 0), null, "hidden panes must not trigger a resize");
+assert.deepEqual(boundedRemoteDesktopSize(1200.4, 799.6), { width: 1200, height: 800 });
+assert.deepEqual(boundedRemoteDesktopSize(80, 9000), { width: 320, height: 4096 });
+assert.deepEqual(remoteDesktopKeyState([], 30, true), [30]);
+assert.deepEqual(remoteDesktopKeyState([42, 30, 30], 30, true), [30, 42]);
+assert.deepEqual(remoteDesktopKeyState([30, 42], 30, false), [42]);
+const pointerItem = (x, coalescible, buttons = 1, sessionId = "session-a") => ({
+  command: { sessionId, x, y: 20, buttons },
+  coalescible,
+});
+let pointerQueue = enqueueRemoteDesktopPointer([], pointerItem(10, true));
+pointerQueue = enqueueRemoteDesktopPointer(pointerQueue, pointerItem(30, true));
+assert.deepEqual(pointerQueue.map(({ command }) => command.x), [30], "adjacent moves should keep only the newest coordinate");
+pointerQueue = enqueueRemoteDesktopPointer(pointerQueue, pointerItem(40, false));
+pointerQueue = enqueueRemoteDesktopPointer(pointerQueue, pointerItem(50, true));
+assert.deepEqual(pointerQueue.map(({ command }) => command.x), [30, 40, 50], "button transitions must preserve order");
+pointerQueue = enqueueRemoteDesktopPointer(pointerQueue, pointerItem(60, true, 1, "session-b"));
+assert.deepEqual(pointerQueue.map(({ command }) => command.x), [30, 40, 50, 60], "session changes must not coalesce");
+const saturatedPointerQueue = Array.from({ length: MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS }, (_, index) => pointerItem(index, false));
+const boundedPointerQueue = enqueueRemoteDesktopPointer(saturatedPointerQueue, pointerItem(999, true));
+assert.equal(boundedPointerQueue.length, MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS, "pointer backpressure must stay bounded");
+assert.equal(boundedPointerQueue.some(({ command }) => command.x === 999), false, "stale motion must be dropped when no motion slot is available");
+const releaseQueue = enqueueRemoteDesktopPointer(saturatedPointerQueue, pointerItem(1000, false, 0));
+assert.equal(releaseQueue.length, MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS, "release backpressure must stay bounded");
+assert.equal(releaseQueue.at(-1)?.command.buttons, 0, "a saturated queue must retain the final release event");
 assert.equal(sanitizeTerminalTitle("  app\u0007 · ready  "), "app · ready");
 assert.equal(sanitizeTerminalTitle("\u0000\u001b[31mremote\u001b[0m"), "[31mremote[0m");
 assert.equal(sanitizeTerminalTitle("x".repeat(MAX_TERMINAL_TITLE_LENGTH + 20)).length, MAX_TERMINAL_TITLE_LENGTH);

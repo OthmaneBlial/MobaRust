@@ -18,7 +18,9 @@ details.
 The first IPC contract will be versioned and minimal: start, stop, resize,
 keyboard, pointer, clipboard, connection state, framebuffer regions, and
 diagnostics. Credentials are sent through a protected native channel and never
-appear in process arguments, environment variables, or logs.
+appear in process arguments, environment variables, or logs. Credential frames
+are encoded by reference and the credential/clipboard command types are
+deliberately not cloneable, which reduces accidental plaintext duplication.
 
 ## Rationale
 

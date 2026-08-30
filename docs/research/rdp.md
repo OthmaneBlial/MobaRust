@@ -154,6 +154,37 @@ cooperative stop, bounded graceful shutdown, and forced termination fallback.
 The parent owns the helper process and reports a crash distinctly from a
 remote protocol failure.
 
+The desktop canvas uses a framebuffer-aware input map. When `object-fit:
+contain` adds letterbox bands, clicks and wheel events in those bands are
+discarded instead of being mapped to a misleading remote pixel. Pointer
+capture keeps drag events on the canvas, and a release/cancel outside the
+painted image reuses the last valid pixel to send an explicit `buttons: 0`.
+This is deterministic UI-boundary behavior; it does not replace real RDP
+interoperability testing.
+
+Dynamic resize measurements are also fail-closed: a hidden or zero-sized pane
+does not produce a synthetic minimum-size resize request, while visible sizes
+are rounded and bounded before they reach the native command boundary.
+
+Connection metadata is bounded before helper startup as well: host and domain
+are limited to 255 bytes, usernames to 256 bytes, and credential references to
+128 bytes. Control characters are rejected in the parent, shared helper
+contract, and helper argument parser, including credential references at the
+Tauri boundary before vault lookup. Rejections use stable generic messages;
+the submitted values are not echoed into diagnostics.
+
+When the desktop window loses focus, the UI releases the last captured pointer
+button and all tracked remote scancodes. This is a client-side safety release;
+the native helper still owns the actual protocol input and session shutdown.
+
+High-frequency pointer moves are coalesced only while adjacent and pending;
+pointer-down, pointer-up, cancel, and button-state transitions retain order.
+The browser-side queue is also capped at 128 items. When saturated, stale
+motion is evicted first; if only transitions remain, new non-release
+transitions are rejected and an explicit release replaces the oldest event.
+This keeps stale cursor positions from filling the native command queue without
+dropping the events that define a click or release.
+
 ## Acceptance gates
 
 Before calling RDP implemented, use a secure engine/backend to test a real

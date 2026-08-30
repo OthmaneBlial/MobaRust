@@ -98,28 +98,28 @@ struct AppSnapshot {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveSshSessionRequest {
     name: String,
     request: SshConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveSerialSessionRequest {
     name: String,
     request: SerialConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveTelnetSessionRequest {
     name: String,
     request: TelnetConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SaveRemoteDesktopSessionRequest {
     name: String,
     request: RemoteDesktopConnectRequest,
@@ -183,33 +183,33 @@ struct SshFingerprintRequest {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultPutRequest {
     credential_id: String,
     secret: Zeroizing<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultCredentialRequest {
     credential_id: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PortableVaultPassphraseRequest {
     passphrase: Zeroizing<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PortableVaultPutRequest {
     credential_id: String,
     secret: Zeroizing<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RemoteDesktopClipboardRequest {
     session_id: String,
     text: Zeroizing<String>,
@@ -1925,5 +1925,49 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn sensitive_ipc_payloads_reject_unknown_fields() {
+        let vault_payload = serde_json::json!({
+            "credentialId": "fixture-password",
+            "secret": "fixture-secret",
+            "extra": true
+        });
+        let error = match serde_json::from_value::<super::VaultPutRequest>(vault_payload) {
+            Err(error) => error,
+            Ok(_) => panic!("vault payload must reject unknown fields"),
+        };
+        assert!(error.to_string().contains("unknown field"));
+
+        let clipboard_payload = serde_json::json!({
+            "sessionId": "fixture-session",
+            "text": "fixture-text",
+            "extra": true
+        });
+        let error =
+            serde_json::from_value::<super::RemoteDesktopClipboardRequest>(clipboard_payload)
+                .expect_err("clipboard payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let session_payload = serde_json::json!({
+            "name": "fixture desktop",
+            "request": {
+                "protocol": "vnc",
+                "host": "127.0.0.1",
+                "port": 5900,
+                "username": "viewer",
+                "width": 1024,
+                "height": 768
+            },
+            "extra": true
+        });
+        let error =
+            match serde_json::from_value::<super::SaveRemoteDesktopSessionRequest>(session_payload)
+            {
+                Err(error) => error,
+                Ok(_) => panic!("saved remote-desktop payload must reject unknown fields"),
+            };
+        assert!(error.to_string().contains("unknown field"));
     }
 }

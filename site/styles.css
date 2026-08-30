@@ -27,9 +27,7 @@ button { font: inherit; }
 .brand { align-items: center; display: inline-flex; font-size: 17px; font-weight: 750; gap: 11px; letter-spacing: -.035em; }
 .brand-mark { color: var(--lime); display: inline-flex; height: 28px; width: 28px; }
 .brand-symbol { display: block; height: 100%; overflow: visible; width: 100%; }
-.brand-symbol path:first-child { fill: none; stroke: currentColor; stroke-linecap: square; stroke-linejoin: bevel; stroke-width: 2.8; }
-.brand-symbol circle { fill: var(--paper); stroke: currentColor; stroke-width: 1; }
-.brand-symbol path:last-child { fill: none; stroke: var(--amber); stroke-linecap: square; stroke-width: 1.6; }
+.brand-symbol .brand-glyph { fill: currentColor; }
 .site-nav { align-items: center; display: flex; gap: 27px; }
 .site-nav a { color: #aab5ad; font-size: 12px; letter-spacing: .02em; transition: color .2s ease; }
 .site-nav a:hover, .site-nav a:focus-visible { color: var(--paper); }

@@ -24,7 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirec
 use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -281,21 +281,20 @@ impl AsyncWrite for X11Stream {
 
 /// A password is intentionally not serializable or cloneable. The value is
 /// only borrowed across the native authentication call and is zeroized on drop.
-pub struct Secret(String);
+pub struct Secret(Zeroizing<String>);
 
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(Zeroizing::new(value.into()))
+    }
+
+    /// Adopt an already zeroizing native buffer without cloning its plaintext.
+    pub fn from_zeroizing(value: Zeroizing<String>) -> Self {
+        Self(value)
     }
 
     fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl Drop for Secret {
-    fn drop(&mut self) {
-        self.0.zeroize();
     }
 }
 
@@ -342,6 +341,13 @@ impl SshCredentials {
         }
     }
 
+    pub fn password_secret(username: impl Into<String>, password: Secret) -> Self {
+        Self::Password {
+            username: username.into(),
+            password,
+        }
+    }
+
     pub fn private_key(
         username: impl Into<String>,
         path: impl Into<PathBuf>,
@@ -351,6 +357,18 @@ impl SshCredentials {
             username: username.into(),
             path: path.into(),
             passphrase: passphrase.map(|value| Secret::new(value)),
+        }
+    }
+
+    pub fn private_key_secret(
+        username: impl Into<String>,
+        path: impl Into<PathBuf>,
+        passphrase: Option<Secret>,
+    ) -> Self {
+        Self::PrivateKey {
+            username: username.into(),
+            path: path.into(),
+            passphrase,
         }
     }
 
@@ -364,6 +382,13 @@ impl SshCredentials {
         Self::KeyboardInteractive {
             username: username.into(),
             response: Secret::new(response),
+        }
+    }
+
+    pub fn keyboard_interactive_secret(username: impl Into<String>, response: Secret) -> Self {
+        Self::KeyboardInteractive {
+            username: username.into(),
+            response,
         }
     }
 
@@ -2783,6 +2808,14 @@ mod tests {
         let debug = format!("{credentials:?}");
         assert!(debug.contains("ops"));
         assert!(!debug.contains("do-not-print-me"));
+    }
+
+    #[test]
+    fn ssh_secret_adopts_a_zeroizing_buffer_and_stays_redacted() {
+        let secret = Secret::from_zeroizing(Zeroizing::new("fixture-secret".to_owned()));
+
+        assert_eq!(secret.as_str(), "fixture-secret");
+        assert_eq!(format!("{secret:?}"), "<redacted>");
     }
 
     #[test]

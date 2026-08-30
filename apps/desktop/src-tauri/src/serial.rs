@@ -16,7 +16,7 @@ const OUTPUT_BATCH_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SerialConnectRequest {
     pub device: String,
     pub baud_rate: u32,

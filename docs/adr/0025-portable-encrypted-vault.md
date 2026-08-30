@@ -23,9 +23,10 @@ never persisted. The unlocked native vault retains only the derived key and
 zeroizing secret wrappers; lock drops the entire native vault state.
 
 Mutations use a private temporary file, `sync_all`, and atomic replacement. On
-Windows, the final replacement uses the OS replace-existing move primitive with
-write-through semantics instead of deleting `vault.bin` first. The backend
-refuses oversized files, oversized secrets, invalid credential IDs,
+Unix, the temporary vault file is created with owner-only mode `0600` before
+replacement. On Windows, the final replacement uses the OS replace-existing
+move primitive with write-through semantics instead of deleting `vault.bin`
+first. The backend refuses oversized files, oversized secrets, invalid credential IDs,
 unknown payload fields, unsupported schema versions, and tampered ciphertext.
 React receives only status, opaque IDs, and actionable errors. It does not
 receive a vault listing's secret values or a get-secret command.

@@ -16,8 +16,14 @@ crate owns access to the platform credential store through `keyring`:
 
 Passwords, private keys, passphrases, and tokens are never serialized into the
 session snapshot sent to React. Native operations receive a reference and load
-the secret only for the operation that needs it. Rust wrappers redact `Debug`
-output and zeroize owned in-memory strings on drop where possible.
+the secret only for the operation that needs it. Vault-owned buffers move into
+the SSH secret wrapper without an extra plaintext clone; both wrappers redact
+`Debug` output and zeroize owned in-memory strings on drop where possible. The
+third-party private-key parser remains a separate release-review boundary.
+Platform lookups and writes, portable-vault entries, and portable-vault
+passphrases are bounded to 1 MiB before backend use or key derivation to prevent
+accidental large secret allocations from becoming a native denial-of-service
+path.
 
 ## Consequences
 

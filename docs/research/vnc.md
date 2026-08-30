@@ -96,6 +96,30 @@ capability-dependent and is reported rather than simulated. The VNC canvas
 keeps the negotiated server resolution and scales it locally to the viewport,
 with that limitation shown in the overlay.
 
+The canvas input path accounts for that local scaling: the actual painted
+framebuffer rectangle is calculated inside the letterboxed viewport, so input
+in unused bands is not sent to the server. Pointer capture preserves drags
+that leave the canvas, while pointer release/cancel sends `buttons: 0` at the
+last valid remote pixel when necessary. The behavior is covered by
+deterministic frontend tests and remains separate from the still-open
+cross-platform interoperability gate.
+
+Window focus loss also triggers a bounded client-side release for the last
+pointer position and tracked keys, preventing a local focus transition from
+leaving remote input logically pressed.
+
+The parent and helper contract also bounds connection metadata before any
+helper process starts: hosts are limited to 255 bytes and usernames to 256
+bytes, with control characters rejected and invalid values reported without
+echoing their contents.
+
+Adjacent motion events are coalesced before crossing the Tauri boundary, while
+button transitions and releases remain ordered. The browser-side queue is
+capped at 128 items and evicts motion before transitions; a saturated queue
+keeps an explicit release as its final safety event. This is a local
+backpressure measure for the framebuffer UI, not a claim about VNC network
+throughput.
+
 The helper now also reports a server disconnect during negotiation and can
 cooperatively cancel a stalled RFB negotiation as soon as `Stop` arrives,
 rather than waiting for the connection timeout. Its helper-owned source copy of

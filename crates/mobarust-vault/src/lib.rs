@@ -28,7 +28,7 @@ const PORTABLE_HEADER_BYTES: usize =
     PORTABLE_MAGIC.len() + PORTABLE_SALT_BYTES + PORTABLE_NONCE_BYTES;
 const PORTABLE_MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const PORTABLE_MAX_CREDENTIALS: usize = 4096;
-const PORTABLE_MAX_SECRET_BYTES: usize = 1024 * 1024;
+pub const MAX_SECRET_BYTES: usize = 1024 * 1024;
 const PORTABLE_ARGON_MEMORY_KIB: u32 = 64 * 1024;
 const PORTABLE_ARGON_ITERATIONS: u32 = 3;
 const PORTABLE_ARGON_PARALLELISM: u32 = 1;
@@ -88,6 +88,13 @@ impl SecretMaterial {
         Self(value)
     }
 
+    /// Move the owned secret buffer to another native secret boundary without
+    /// cloning its plaintext. The source is left with an empty zeroizing
+    /// buffer before its drop handler runs.
+    pub fn into_zeroizing(mut self) -> Zeroizing<String> {
+        std::mem::replace(&mut self.0, Zeroizing::new(String::new()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -119,6 +126,8 @@ pub enum VaultError {
     PortableCredentialLimit,
     #[error("portable vault credential secret is too large")]
     PortableSecretTooLarge,
+    #[error("credential secret is too large")]
+    SecretTooLarge,
     #[error("portable vault credential is missing: {0}")]
     PortableCredentialMissing(String),
     #[error("portable vault passphrase is incorrect or the file is corrupt")]
@@ -169,6 +178,7 @@ impl PlatformVault {
         credential_id: &CredentialId,
         secret: &SecretMaterial,
     ) -> Result<(), VaultError> {
+        validate_secret_size(secret)?;
         let entry = keyring::Entry::new(&self.service, credential_id.as_str())?;
         entry.set_password(secret.as_str())?;
         Ok(())
@@ -177,7 +187,9 @@ impl PlatformVault {
     pub fn get(&self, credential_id: &CredentialId) -> Result<SecretMaterial, VaultError> {
         let entry = keyring::Entry::new(&self.service, credential_id.as_str())?;
         let value = entry.get_password()?;
-        Ok(SecretMaterial::new(value))
+        let secret = SecretMaterial::new(value);
+        validate_secret_size(&secret)?;
+        Ok(secret)
     }
 
     pub fn delete(&self, credential_id: &CredentialId) -> Result<(), VaultError> {
@@ -433,8 +445,15 @@ fn validate_portable_secret(secret: &SecretMaterial) -> Result<(), VaultError> {
     if secret.as_str().is_empty() {
         return Err(VaultError::EmptyPassphrase);
     }
-    if secret.as_str().len() > PORTABLE_MAX_SECRET_BYTES {
+    if secret.as_str().len() > MAX_SECRET_BYTES {
         return Err(VaultError::PortableSecretTooLarge);
+    }
+    Ok(())
+}
+
+fn validate_secret_size(secret: &SecretMaterial) -> Result<(), VaultError> {
+    if secret.as_str().len() > MAX_SECRET_BYTES {
+        return Err(VaultError::SecretTooLarge);
     }
     Ok(())
 }
@@ -446,6 +465,7 @@ fn derive_portable_key(
     if passphrase.as_str().is_empty() {
         return Err(VaultError::EmptyPassphrase);
     }
+    validate_secret_size(passphrase)?;
     let params = Params::new(
         PORTABLE_ARGON_MEMORY_KIB,
         PORTABLE_ARGON_ITERATIONS,
@@ -581,7 +601,10 @@ fn ensure_portable_path_is_safe(path: &Path, allow_missing: bool) -> Result<bool
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialId, PlatformVault, PortableVault, SecretMaterial, VaultError};
+    use super::{
+        CredentialId, MAX_SECRET_BYTES, PlatformVault, PortableVault, SecretMaterial, VaultError,
+        validate_secret_size,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -597,6 +620,37 @@ mod tests {
     fn secret_debug_is_redacted() {
         let secret = SecretMaterial::new("do-not-log-this");
         assert_eq!(format!("{secret:?}"), "SecretMaterial(<redacted>)");
+    }
+
+    #[test]
+    fn secret_material_can_move_its_owned_buffer_without_cloning() {
+        let secret =
+            SecretMaterial::from_zeroizing(zeroize::Zeroizing::new("fixture-secret".to_owned()));
+        let moved = secret.into_zeroizing();
+
+        assert_eq!(&*moved, "fixture-secret");
+    }
+
+    #[test]
+    fn secret_material_has_a_bounded_native_size() {
+        let oversized = SecretMaterial::new("s".repeat(MAX_SECRET_BYTES + 1));
+        assert!(matches!(
+            validate_secret_size(&oversized),
+            Err(VaultError::SecretTooLarge)
+        ));
+    }
+
+    #[test]
+    fn portable_vault_rejects_an_oversized_passphrase_before_derivation() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("portable-vault.bin");
+        let passphrase = SecretMaterial::new("p".repeat(MAX_SECRET_BYTES + 1));
+
+        assert!(matches!(
+            PortableVault::create(&path, &passphrase),
+            Err(VaultError::SecretTooLarge)
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -640,6 +694,19 @@ mod tests {
             PortableVault::open(&path, &SecretMaterial::new("wrong-passphrase")),
             Err(VaultError::PortableAuthenticationFailed)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn portable_vault_file_is_owner_read_write_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("portable-vault.bin");
+        PortableVault::create(&path, &SecretMaterial::new("fixture-passphrase")).unwrap();
+
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

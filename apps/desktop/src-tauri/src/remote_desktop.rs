@@ -1,6 +1,7 @@
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
-    HelperSupervisor, decode_event_frame, encode_command_frame, read_frame,
+    HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
+    MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ const HELPER_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const COMMAND_CAPACITY: usize = 32;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteDesktopConnectRequest {
     pub protocol: DesktopProtocol,
     pub host: String,
@@ -89,7 +90,7 @@ impl RemoteDesktopManager {
         } else {
             let id = CredentialId::new(&credential_id).map_err(|error| error.to_string())?;
             let secret = resolver.get(&id).map_err(|error| error.to_string())?;
-            HelperCredential::new(secret.as_str())
+            HelperCredential::from_zeroizing(secret.into_zeroizing())
         };
         let config = HelperLaunchConfig {
             program,
@@ -229,12 +230,14 @@ pub fn helper_program(app: &AppHandle, protocol: DesktopProtocol) -> Result<Path
 }
 
 pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<(), String> {
-    if request.host.trim().is_empty()
-        || request.host.chars().any(char::is_control)
-        || request.port == 0
-    {
+    if request.host.trim().is_empty() || request.port == 0 {
         return Err("remote desktop host and port are invalid".into());
     }
+    validate_metadata(
+        &request.host,
+        MAX_HOST_BYTES,
+        "remote desktop host is invalid",
+    )?;
     if matches!(
         request.protocol,
         DesktopProtocol::Rdp | DesktopProtocol::Vnc
@@ -245,16 +248,20 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
         );
     }
     if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
+        || request.username.len() > MAX_USERNAME_BYTES
         || request.username.chars().any(char::is_control)
     {
         return Err("remote desktop username is invalid".into());
     }
-    if request
-        .domain
-        .as_deref()
-        .is_some_and(|domain| domain.chars().any(char::is_control))
-    {
-        return Err("remote desktop domain is invalid".into());
+    if let Some(domain) = request.domain.as_deref() {
+        validate_metadata(domain, MAX_DOMAIN_BYTES, "remote desktop domain is invalid")?;
+    }
+    if let Some(credential_id) = request.credential_id.as_deref() {
+        validate_metadata(
+            credential_id,
+            MAX_CREDENTIAL_REFERENCE_BYTES,
+            "remote desktop credential reference is invalid",
+        )?;
     }
     if request.protocol == DesktopProtocol::Rdp && request.audio_enabled {
         return Err("RDP audio redirection is not enabled in this helper".into());
@@ -274,6 +281,13 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     }
     .validate()
     .map_err(|error| error.to_string())
+}
+
+fn validate_metadata(value: &str, max_bytes: usize, message: &str) -> Result<(), String> {
+    if value.len() > max_bytes || value.chars().any(char::is_control) {
+        return Err(message.into());
+    }
+    Ok(())
 }
 
 fn is_loopback_ip_literal(value: &str) -> bool {
@@ -410,6 +424,7 @@ fn should_report_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
+        MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
         RemoteDesktopConnectRequest, should_report_unexpected_helper_exit, validate_request,
     };
     use mobarust_remote_desktop::DesktopProtocol;
@@ -476,5 +491,58 @@ mod tests {
             let error = validate_request(&request).unwrap_err();
             assert!(error.contains("loopback"));
         }
+    }
+
+    #[test]
+    fn parent_boundary_rejects_oversized_connection_metadata() {
+        let mut host_request = request(DesktopProtocol::Vnc, "fixture-user");
+        host_request.host = "1".repeat(MAX_HOST_BYTES + 1);
+        assert_eq!(
+            validate_request(&host_request).unwrap_err(),
+            "remote desktop host is invalid"
+        );
+
+        let mut username_request = request(DesktopProtocol::Rdp, "fixture-user");
+        username_request.username = "u".repeat(MAX_USERNAME_BYTES + 1);
+        assert_eq!(
+            validate_request(&username_request).unwrap_err(),
+            "remote desktop username is invalid"
+        );
+
+        let mut domain_request = request(DesktopProtocol::Rdp, "fixture-user");
+        domain_request.domain = Some("d".repeat(MAX_DOMAIN_BYTES + 1));
+        assert_eq!(
+            validate_request(&domain_request).unwrap_err(),
+            "remote desktop domain is invalid"
+        );
+
+        let mut credential_request = request(DesktopProtocol::Rdp, "fixture-user");
+        credential_request.credential_id = Some("c".repeat(MAX_CREDENTIAL_REFERENCE_BYTES + 1));
+        assert_eq!(
+            validate_request(&credential_request).unwrap_err(),
+            "remote desktop credential reference is invalid"
+        );
+
+        credential_request.credential_id = Some("credential\nreference".into());
+        assert_eq!(
+            validate_request(&credential_request).unwrap_err(),
+            "remote desktop credential reference is invalid"
+        );
+    }
+
+    #[test]
+    fn parent_request_rejects_unknown_fields() {
+        let payload = serde_json::json!({
+            "protocol": "vnc",
+            "host": "127.0.0.1",
+            "port": 5900,
+            "username": "viewer",
+            "width": 1024,
+            "height": 768,
+            "unexpected": "must not cross the IPC boundary"
+        });
+        let error = serde_json::from_value::<RemoteDesktopConnectRequest>(payload)
+            .expect_err("unknown fields must be rejected");
+        assert!(error.to_string().contains("unknown field"));
     }
 }

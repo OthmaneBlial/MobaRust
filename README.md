@@ -125,6 +125,7 @@ Read the [safe testing policy](docs/security/safe-testing.md), [threat model](do
 - [X11 strategy](docs/research/x11.md)
 - [Remote editor decision](docs/adr/0022-bounded-remote-text-editor.md)
 - [Keyboard shortcuts](docs/keyboard-shortcuts.md)
+- [Hardware and interoperability test matrix](docs/testing/hardware-interoperability.md)
 - [Release and packaging notes](docs/release/packaging.md)
 
 ## Contributing

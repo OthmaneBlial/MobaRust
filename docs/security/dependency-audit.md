@@ -20,7 +20,7 @@ not a production RDP claim. Its separate lockfile and audit are intentional.
 
 ```text
 cargo audit --no-fetch
-cargo audit --no-fetch --manifest-path tools/vnc-helper/Cargo.toml
+cargo audit --no-fetch --file tools/vnc-helper/Cargo.lock
 cargo audit --no-fetch --file tools/rdp-helper/Cargo.lock
 ```
 

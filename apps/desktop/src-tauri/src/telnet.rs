@@ -15,7 +15,7 @@ const PENDING_OUTPUT_CHUNKS: usize = 32;
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TelnetConnectRequest {
     pub host: String,
     pub port: u16,

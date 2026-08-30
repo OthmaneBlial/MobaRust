@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
-    HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, decode_command_frame,
-    decode_credential_frame, read_frame, write_event_frame,
+    HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
+    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, read_frame,
+    write_event_frame,
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -700,6 +701,7 @@ where
                 host = Some(validated_text(
                     "host",
                     &next_argument(&mut iterator, "--host")?,
+                    MAX_HOST_BYTES,
                 )?)
             }
             "--port" => port = Some(parse_u16("port", &next_argument(&mut iterator, "--port")?)?),
@@ -707,6 +709,7 @@ where
                 username = Some(validated_text(
                     "username",
                     &next_argument(&mut iterator, "--username")?,
+                    MAX_USERNAME_BYTES,
                 )?)
             }
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
@@ -800,8 +803,8 @@ fn parse_u16(name: &str, value: &str) -> Result<u16, ArgumentError> {
         })
 }
 
-fn validated_text(name: &str, value: &str) -> Result<String, ArgumentError> {
-    if value.trim().is_empty() || value.chars().any(char::is_control) {
+fn validated_text(name: &str, value: &str, max_bytes: usize) -> Result<String, ArgumentError> {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         return Err(ArgumentError(format!("invalid {name}")));
     }
     Ok(value.to_owned())
@@ -895,6 +898,22 @@ mod tests {
         let error = parse_arguments(["--password=fixture-secret".to_owned()]).unwrap_err();
         assert_eq!(error.to_string(), "unknown helper argument");
         assert!(!error.to_string().contains("fixture-secret"));
+    }
+
+    #[test]
+    fn parser_rejects_oversized_metadata_without_echoing_input() {
+        let oversized_host = "h".repeat(MAX_HOST_BYTES + 1);
+        let error = parse_arguments(vec![
+            "--mobarust-protocol".into(),
+            "vnc".into(),
+            "--host".into(),
+            oversized_host.clone(),
+            "--port".into(),
+            "5900".into(),
+        ])
+        .unwrap_err();
+        assert_eq!(error.to_string(), "invalid host");
+        assert!(!error.to_string().contains(&oversized_host));
     }
 
     #[test]
