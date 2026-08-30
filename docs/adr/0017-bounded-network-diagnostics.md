@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted and implemented for native TCP checks, bounded port-range scans, and
-desktop DNS/TCP/port-scan command and UI wiring. Additional diagnostics remain
-pending.
+Accepted and implemented for native TCP checks, bounded port-range scans,
+desktop DNS/TCP/port-scan command and UI wiring, and the bounded platform
+`ping`/`traceroute` surface.
 
 ## Decision
 
@@ -15,10 +15,10 @@ The range is limited to 4096 ports and concurrency to 128 tasks. Cancellation
 is represented by a native watch receiver; cancellation aborts and joins
 outstanding tasks before returning.
 
-The first surface intentionally covers only TCP reachability and bounded port
-status (`open`, `closed`, or `timed-out`). DNS resolution is exposed as a
-separate bounded primitive. Ping, traceroute, and fingerprint inspection need
-their own platform and permission review before being presented in the UI.
+The surface covers TCP reachability, bounded port status (`open`, `closed`, or
+`timed-out`), DNS resolution, and explicit platform-native ping/traceroute
+commands. Ping and traceroute have their own platform and permission review;
+fingerprint inspection remains a separate native capability.
 
 Diagnostic failures exposed to the UI use stable categories rather than raw
 OS resolver, process, or task text. This keeps local paths, command details,
@@ -31,6 +31,7 @@ actionable distinctions such as DNS failure, timeout, and process failure.
 - no default target or default range;
 - no unbounded task fan-out;
 - no shell invocation for TCP checks;
+- no unbounded native diagnostic stdout buffering;
 - no automatic recurring scan;
 - no claim that a TCP result proves a service is safe or authenticated.
 

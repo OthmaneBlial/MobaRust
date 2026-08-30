@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, lookup_host};
 use tokio::process::Command;
 use tokio::sync::watch;
@@ -22,6 +23,7 @@ const MAX_CONCURRENCY: usize = 128;
 const MAX_TRACE_HOPS: u8 = 32;
 const MAX_TRACE_LINES: usize = 64;
 const MAX_TRACE_LINE_BYTES: usize = 256;
+const MAX_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum NetworkDiagnosticError {
@@ -39,6 +41,8 @@ pub enum NetworkDiagnosticError {
     Worker,
     #[error("network diagnostic process failed")]
     Process,
+    #[error("network diagnostic output exceeded the safety limit")]
+    OutputTooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,14 +362,14 @@ async fn run_diagnostic_command(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| NetworkDiagnosticError::Process)?;
-    let mut output = Box::pin(child.wait_with_output());
+    let mut output = Box::pin(read_bounded_command_output(child));
     let mut deadline = Box::pin(tokio::time::sleep(timeout));
     let mut cancellation_closed = false;
 
     loop {
         tokio::select! {
             result = &mut output => {
-                return result.map_err(|_| NetworkDiagnosticError::Process);
+                return result;
             }
             changed = cancellation.changed(), if !cancellation_closed => {
                 match changed {
@@ -377,6 +381,43 @@ async fn run_diagnostic_command(
             _ = &mut deadline => return Err(NetworkDiagnosticError::Timeout),
         }
     }
+}
+
+/// Read command output through a bounded pipe. Truncating after
+/// `wait_with_output` is too late: a broken or unexpectedly verbose system
+/// utility could already have forced an unbounded allocation in the native
+/// process. Reading one byte beyond the limit lets this function distinguish a
+/// complete result from an overflow, then kills and reaps the child.
+async fn read_bounded_command_output(
+    mut child: tokio::process::Child,
+) -> Result<Output, NetworkDiagnosticError> {
+    let stdout = child.stdout.take().ok_or(NetworkDiagnosticError::Process)?;
+    let mut bytes = Vec::with_capacity(MAX_DIAGNOSTIC_OUTPUT_BYTES.min(8192));
+    let limit = u64::try_from(MAX_DIAGNOSTIC_OUTPUT_BYTES)
+        .expect("diagnostic output limit fits in u64")
+        .saturating_add(1);
+    let mut limited_stdout = stdout.take(limit);
+    let read_result = limited_stdout.read_to_end(&mut bytes).await;
+
+    // Some platform pipes report a read error when a producer is terminated
+    // while the bounded reader is at its limit. The byte count is the
+    // authoritative signal in that case; do not turn a controlled overflow
+    // into an opaque process error.
+    if bytes.len() > MAX_DIAGNOSTIC_OUTPUT_BYTES {
+        let _ = child.kill().await;
+        return Err(NetworkDiagnosticError::OutputTooLarge);
+    }
+    read_result.map_err(|_| NetworkDiagnosticError::Process)?;
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|_| NetworkDiagnosticError::Process)?;
+    Ok(Output {
+        status,
+        stdout: bytes,
+        stderr: Vec::new(),
+    })
 }
 
 #[cfg(unix)]
@@ -489,14 +530,39 @@ mod tests {
             NetworkDiagnosticError::Resolution,
             NetworkDiagnosticError::Worker,
             NetworkDiagnosticError::Process,
+            NetworkDiagnosticError::OutputTooLarge,
         ];
         let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(messages[0], "DNS lookup failed");
         assert_eq!(messages[1], "network diagnostic worker failed");
         assert_eq!(messages[2], "network diagnostic process failed");
+        assert_eq!(
+            messages[3],
+            "network diagnostic output exceeded the safety limit"
+        );
         assert!(messages.iter().all(|message| {
             !message.contains("/Users/") && !message.contains("private-host-detail")
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_process_output_is_bounded_before_buffering() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (_sender, mut cancellation) = watch::channel(false);
+            let result = run_diagnostic_command(
+                "/bin/sh",
+                vec!["-c".into(), "while :; do printf x; done".into()],
+                Duration::from_secs(5),
+                &mut cancellation,
+            )
+            .await;
+            assert!(
+                matches!(result, Err(NetworkDiagnosticError::OutputTooLarge)),
+                "unexpected diagnostic result: {result:?}"
+            );
+        });
     }
 
     #[test]

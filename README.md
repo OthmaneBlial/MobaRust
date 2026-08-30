@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-2ea44f?style=flat-square" alt="Apache 2.0 license" /></a>
+  <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2ea44f.svg?style=flat-square" alt="Apache-2.0 license" /></a>
   <a href="https://github.com/OthmaneBlial/MobaRust/stargazers"><img src="https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&label=stars" alt="GitHub stars" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
   <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
@@ -81,7 +81,7 @@ The table below makes the current boundary explicit. “Verified locally” mean
 | **Session manager** | Saved profiles, folders, tags, favorites, recents, fast search, OpenSSH config import, jump-host chains, typed settings, and secret-free export |
 | **SSH tunnels** | Local forwarding, remote forwarding, bounded dynamic SOCKS5, explicit lifecycle state, stop controls, and cancellable clients |
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup on close/EOF, explicit PowerShell/cmd/Unix shell targets, and WSL foundations |
-| **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, one-shot or opt-in low-frequency remote monitoring, privacy-conscious audit history, and sanitized diagnostic export |
+| **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, bounded network diagnostics, bounded port checks, one-shot or opt-in low-frequency remote monitoring, privacy-conscious audit history, and sanitized diagnostic export |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
 | **RDP** | Isolated native candidate with framebuffer, protocol-aware bounded keyboard/mouse input, coalesced dynamic resize requests, lifecycle work, explicit hostname/IP and Gateway metadata, separate role-tagged native credential handoff, platform certificate validation, bounded configurable reconnect, an opt-in Windows-native clipboard path, a typed runtime capability report, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, Gateway trust/interoperability, macOS/Linux clipboard backends, audio, and production packaging remain open |
 | **VNC** | Native helper with local RFB fixtures, authentication, raw/copy/Tight-JPEG framebuffer updates, bounded keyboard/mouse input with Unicode-to-X11 keysym mapping, explicit clipboard opt-in enforced at both native boundaries, scaling, quality profiles, bounded configurable reconnect, cancellation, and clean shutdown; broader interoperability remains open |
