@@ -203,7 +203,13 @@ fn package_check() -> Result<(), String> {
         ["tauri", "build", "--debug", "--no-sign", "--bundles", "app"],
         Some("apps/desktop"),
     )?;
-    verify_current_platform_bundle()
+    verify_current_platform_bundle()?;
+    let executable = if cfg!(windows) {
+        "target/debug/mobarust.exe"
+    } else {
+        "target/debug/mobarust"
+    };
+    benchmark_app(vec![executable.to_owned()])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

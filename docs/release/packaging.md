@@ -38,6 +38,13 @@ SHA-256 format accepted by both `sha256sum` and macOS `shasum`, and covers every
 regular file in the artifact scope. It is a packaging smoke test, not code-signing,
 notarization, or interoperability evidence.
 
+After the bundle layout is verified, `package-check` also runs the built
+`mobarust --version` path five times through the repository-bounded startup
+probe. This confirms that the packaged executable can take its minimal CLI
+path without opening a window, contacting a network, or initializing the
+application data stores. It reports process-launch timing and binary size; it
+does not replace full GUI startup, clean-install, or cross-platform evidence.
+
 An already assembled artifact can be checked without rebuilding it:
 
 ```text
