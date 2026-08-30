@@ -39,6 +39,7 @@ The first working slice provides:
 - bounded recursive SFTP upload/download with streaming file bodies, progress, cancellation, symlink refusal, and atomic per-file commits;
 - terminal multiline paste is intercepted and confirmed visibly before it is sent to a remote or local shell;
 - typed non-secret settings are persisted separately with validation, atomic writes, reset, safe import/export, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
+- a configurable, persisted keyboard shortcut system with platform-aware `Mod` handling, collision validation, command-palette actions, pane focus/split controls, and an unconditional Escape safety cancel; see [keyboard shortcuts](docs/keyboard-shortcuts.md);
 - a secret-free snippet library with tags, validated `${variable}` placeholders, rendered preview, and explicit manual clipboard copy (never automatic execution);
 - a bounded macro runner and explicit broadcast-input mode with typed actions, target preflight, visible progress, cooperative cancellation, and an `Esc` emergency disable;
 - deliberate terminal macro recording with bounded capture, editor review, and selectable before-run or per-action approval;

@@ -1363,6 +1363,25 @@ mod tests {
     }
 
     #[test]
+    fn settings_without_keyboard_section_use_safe_defaults() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"settings":{"terminal":{"scrollbackLines":6000}}}"#,
+        )
+        .unwrap();
+
+        let store = SettingsStore::open(&path).unwrap();
+        assert_eq!(store.get().terminal.scrollback_lines, 6_000);
+        assert_eq!(
+            store.get().keyboard,
+            mobarust_core::KeyboardSettings::default()
+        );
+        assert_eq!(store.get().keyboard.command_palette, "Mod+Shift+P");
+    }
+
+    #[test]
     fn settings_export_import_is_secret_free_and_rejects_invalid_payloads() {
         let directory = tempdir().unwrap();
         let source_path = directory.path().join("source-settings.json");
