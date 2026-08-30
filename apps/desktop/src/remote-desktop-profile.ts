@@ -37,6 +37,15 @@ export type RemoteDesktopProfileParseResult =
   | { ok: true; profile: RemoteDesktopProfileValue }
   | { ok: false; error: string };
 
+/**
+ * The pinned RDP candidate has a native OS clipboard backend only on Windows.
+ * Keep this decision in a small, testable helper so profile forms do not offer
+ * an action that the current native helper will reject on macOS or Linux.
+ */
+export function supportsNativeRdpClipboard(platform: string | undefined = typeof navigator === "undefined" ? undefined : navigator.platform): boolean {
+  return typeof platform === "string" && /^win/i.test(platform);
+}
+
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 16_384;
 const MIN_HEIGHT = 200;

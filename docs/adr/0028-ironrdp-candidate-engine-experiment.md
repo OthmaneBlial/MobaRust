@@ -73,6 +73,14 @@ cooperative cancellation during the delay. This is lifecycle hardening only;
 the separate local/Windows fixture must prove that a real RDP session recovers
 before the feature can be promoted.
 
+After each helper start, the native boundary reports the actual candidate
+capabilities: the Windows clipboard backend is available only on Windows,
+audio is unavailable, 16/32-bit color are supported, Gateway metadata is
+accepted, and display resizing is exposed by the RDP candidate. The parent
+forwards this report to the UI so unsupported controls can be disabled before
+a user attempts an operation. This report is capability metadata, not
+interoperability evidence.
+
 The published `ironrdp-tls 0.2.2` implementation was audited locally after the
 initial experiment. Its `native-tls` builder calls
 `danger_accept_invalid_certs(true)` and disables SNI; its published Rustls path

@@ -10,7 +10,7 @@ import {
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
 import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
-import { parseRemoteDesktopProfile } from "./remote-desktop-profile";
+import { parseRemoteDesktopProfile, supportsNativeRdpClipboard } from "./remote-desktop-profile";
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
@@ -179,10 +179,21 @@ type RemoteDesktopConnectResponse = {
   host: string;
 };
 
+type RemoteDesktopCapabilities = {
+  protocol: DesktopProtocol;
+  clipboard: boolean;
+  audio: boolean;
+  serverResize: boolean;
+  localScaling: boolean;
+  gateway: boolean;
+  colorDepths: number[];
+};
+
 type RemoteDesktopEvent = {
   sessionId: string;
   event:
     | { event: "hello"; payload: { version: number } }
+    | { event: "capabilities"; payload: { capabilities: RemoteDesktopCapabilities } }
     | { event: "state"; payload: { state: "created" | "starting" | "ready" | "active" | "reconnecting" | "stopping" | "stopped" | "crashed" | "failed" } }
     | { event: "framebuffer"; payload: { width: number; height: number; pixels: number[] } }
     | { event: "clipboard"; payload: { text: string } }
@@ -1016,6 +1027,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const [capabilities, setCapabilities] = useState<RemoteDesktopCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: request.width, height: request.height });
   const [remoteClipboard, setRemoteClipboard] = useState<string | null>(null);
@@ -1069,6 +1081,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
     const boot = async () => {
       setError(null);
+      setCapabilities(null);
       setRemoteClipboard(null);
       setClipboardCopied(false);
       setFullscreenError(null);
@@ -1085,6 +1098,13 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
         unlisten = await listen<RemoteDesktopEvent>("remote-desktop://event", (event) => {
           if (event.payload.sessionId !== sessionIdRef.current) return;
           const helperEvent = event.payload.event;
+          if (helperEvent.event === "capabilities") {
+            if (helperEvent.payload.capabilities.protocol !== request.protocol) {
+              setErrorAndFail("The remote desktop helper reported the wrong protocol.");
+              return;
+            }
+            setCapabilities(helperEvent.payload.capabilities);
+          }
           if (helperEvent.event === "state") {
             if (helperEvent.payload.state === "ready" || helperEvent.payload.state === "active") {
               setError(null);
@@ -1278,7 +1298,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
     <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
-    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{request.protocol === "vnc" && <small>Server resolution is unchanged · viewport scaling is local</small>}</div>
+    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{capabilities && <small>{capabilities.clipboard ? "Clipboard available" : "Clipboard unavailable"} · {capabilities.serverResize ? "server resize" : "local scaling"}{capabilities.gateway ? " · Gateway" : ""}</small>}{request.protocol === "vnc" && <small>Server resolution is unchanged · viewport scaling is local</small>}</div>
   </div>;
 }
 
@@ -4576,6 +4596,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const isSsh = session.protocol === "SSH";
   const isLocal = session.protocol === "LOCAL";
   const isRemoteDesktop = session.protocol === "RDP" || session.protocol === "VNC";
+  const nativeRdpClipboardAvailable = session.protocol === "RDP" && supportsNativeRdpClipboard();
   const supportsStartup = isSsh || isLocal;
   const [desktopDomain, setDesktopDomain] = useState(session.remote_desktop_profile?.domain ?? "");
   const [gatewayEndpoint, setGatewayEndpoint] = useState(session.remote_desktop_profile?.gateway?.endpoint ?? "");
@@ -4584,7 +4605,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [desktopWidth, setDesktopWidth] = useState(String(session.remote_desktop_profile?.width ?? 1280));
   const [desktopHeight, setDesktopHeight] = useState(String(session.remote_desktop_profile?.height ?? 720));
   const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
-  const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState(session.remote_desktop_profile?.clipboard_enabled ?? false);
+  const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState((session.remote_desktop_profile?.clipboard_enabled ?? false) && nativeRdpClipboardAvailable);
   const [vncQuality, setVncQuality] = useState<NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"]>(session.remote_desktop_profile?.vnc_quality ?? "balanced");
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(session.remote_desktop_profile?.reconnect_enabled ?? true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState(String(session.remote_desktop_profile?.reconnect_attempts ?? 3));
@@ -4775,8 +4796,8 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
               <small>Controls client-side encoding preference and refresh cadence.</small>
             </label>}
             {session.protocol === "RDP" && <label className="quick-connect-wide quick-connect-check-row">
-              <input type="checkbox" checked={desktopClipboardEnabled} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
-              <span>Enable clipboard redirection <small>opt-in · native Windows backend; macOS/Linux remain unavailable</small></span>
+              <input type="checkbox" checked={desktopClipboardEnabled} disabled={!nativeRdpClipboardAvailable} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
+              <span>Enable clipboard redirection <small>{nativeRdpClipboardAvailable ? "opt-in · native Windows backend" : "Windows only · unavailable in this build"}</small></span>
             </label>}
             <label className="quick-connect-wide quick-connect-check-row">
               <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />
@@ -5004,6 +5025,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [parity, setParity] = useState<SerialConnectRequest["parity"]>("none");
   const [flowControl, setFlowControl] = useState<SerialConnectRequest["flowControl"]>("none");
   const [lineEnding, setLineEnding] = useState<SerialConnectRequest["lineEnding"]>("cr-lf");
+  const nativeRdpClipboardAvailable = supportsNativeRdpClipboard();
 
   const applyUri = () => {
     try {
@@ -5411,8 +5433,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
                   </label>}
                   {protocol === "rdp" && <label className="quick-connect-wide quick-connect-check-row">
-                    <input type="checkbox" checked={desktopClipboardEnabled} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
-                    <span>Enable clipboard redirection <small>opt-in · native Windows backend; macOS/Linux remain unavailable</small></span>
+                    <input type="checkbox" checked={desktopClipboardEnabled} disabled={!nativeRdpClipboardAvailable} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
+                    <span>Enable clipboard redirection <small>{nativeRdpClipboardAvailable ? "opt-in · native Windows backend" : "Windows only · unavailable in this build"}</small></span>
                   </label>}
                   <label className="quick-connect-wide quick-connect-check-row">
                     <input type="checkbox" checked={desktopReconnectEnabled} onChange={(event) => setDesktopReconnectEnabled(event.target.checked)} />

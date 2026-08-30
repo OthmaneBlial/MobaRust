@@ -103,6 +103,15 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
             state: HelperState::Ready
         }
     ));
+    assert!(matches!(
+        next_event(&mut stdout, "capabilities").await,
+        HelperEvent::Capabilities { capabilities }
+            if capabilities.protocol == mobarust_remote_desktop::DesktopProtocol::Rdp
+                && capabilities.color_depths == vec![16, 32]
+                && !capabilities.audio
+                && capabilities.gateway
+                && capabilities.clipboard == cfg!(windows)
+    ));
 
     let mut terminal_state = None;
     for _ in 0..4 {

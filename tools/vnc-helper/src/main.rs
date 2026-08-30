@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
-    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperCredentialKind,
-    HelperEvent, HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES,
-    MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame,
+    DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential,
+    HelperCredentialKind, HelperEvent, HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES,
+    MAX_FRAME_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame,
     decode_credential_frame, write_event_frame,
 };
 use tokio::io::AsyncWrite;
@@ -223,6 +223,13 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     loop {
         let mut canvas = Canvas::new(display)?;
         write_state(stdout, HelperState::Ready).await?;
+        write_event_frame(
+            stdout,
+            &HelperEvent::Capabilities {
+                capabilities: HelperCapabilities::vnc(),
+            },
+        )
+        .await?;
 
         match run_connected_vnc_session(
             &client,

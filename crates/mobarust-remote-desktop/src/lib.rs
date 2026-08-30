@@ -80,6 +80,62 @@ pub struct DisplaySize {
     pub height: u16,
 }
 
+/// Capabilities reported by the helper that is actually running.
+///
+/// The desktop UI may know the requested protocol, but only the native helper
+/// knows which backend was compiled for the current platform. Reporting this
+/// explicitly keeps unsupported operations visible instead of silently
+/// treating a protocol feature flag as proof that a backend exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelperCapabilities {
+    pub protocol: DesktopProtocol,
+    pub clipboard: bool,
+    pub audio: bool,
+    pub server_resize: bool,
+    pub local_scaling: bool,
+    pub gateway: bool,
+    pub color_depths: Vec<u16>,
+}
+
+impl HelperCapabilities {
+    pub fn rdp() -> Self {
+        Self {
+            protocol: DesktopProtocol::Rdp,
+            clipboard: cfg!(windows),
+            audio: false,
+            server_resize: true,
+            local_scaling: true,
+            gateway: true,
+            color_depths: vec![16, 32],
+        }
+    }
+
+    pub fn vnc() -> Self {
+        Self {
+            protocol: DesktopProtocol::Vnc,
+            clipboard: true,
+            audio: false,
+            server_resize: false,
+            local_scaling: true,
+            gateway: false,
+            color_depths: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), HelperProtocolError> {
+        if self.color_depths.len() > 8 {
+            return Err(HelperProtocolError::CapabilitiesTooLarge {
+                count: self.color_depths.len(),
+            });
+        }
+        if let Some(&depth) = self.color_depths.iter().find(|depth| **depth == 0) {
+            return Err(HelperProtocolError::InvalidCapabilityColorDepth { depth });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReconnectPolicy {
@@ -562,6 +618,9 @@ pub enum HelperEvent {
     Hello {
         version: u16,
     },
+    Capabilities {
+        capabilities: HelperCapabilities,
+    },
     State {
         state: HelperState,
     },
@@ -585,6 +644,16 @@ impl fmt::Debug for HelperEvent {
             Self::Hello { version } => formatter
                 .debug_struct("Hello")
                 .field("version", version)
+                .finish(),
+            Self::Capabilities { capabilities } => formatter
+                .debug_struct("Capabilities")
+                .field("protocol", &capabilities.protocol)
+                .field("clipboard", &capabilities.clipboard)
+                .field("audio", &capabilities.audio)
+                .field("server_resize", &capabilities.server_resize)
+                .field("local_scaling", &capabilities.local_scaling)
+                .field("gateway", &capabilities.gateway)
+                .field("color_depths", &capabilities.color_depths)
                 .finish(),
             Self::State { state } => formatter
                 .debug_struct("State")
@@ -619,6 +688,7 @@ impl HelperEvent {
             Self::Hello { version } if *version != WIRE_VERSION => {
                 Err(HelperProtocolError::UnsupportedVersion(*version))
             }
+            Self::Capabilities { capabilities } => capabilities.validate(),
             Self::Framebuffer {
                 width,
                 height,
@@ -798,6 +868,10 @@ pub enum HelperProtocolError {
     UnsupportedRdpColorDepth { depth: u16 },
     #[error("helper VNC quality is invalid")]
     InvalidVncQuality,
+    #[error("helper capability list is too large: {count} entries")]
+    CapabilitiesTooLarge { count: usize },
+    #[error("helper capability color depth must be non-zero: {depth}")]
+    InvalidCapabilityColorDepth { depth: u16 },
     #[error("helper reconnect attempts {attempts} exceed the safety limit")]
     InvalidReconnectAttempts { attempts: u8 },
     #[error("invalid display size {width}x{height}")]
@@ -1497,6 +1571,50 @@ mod tests {
         assert!(matches!(
             decode_command_frame(&frame[..frame.len() - 1]),
             Err(HelperProtocolError::TruncatedFrame { .. })
+        ));
+    }
+
+    #[test]
+    fn helper_capabilities_round_trip_and_describe_platform_limits() {
+        let rdp = HelperCapabilities::rdp();
+        assert_eq!(rdp.protocol, DesktopProtocol::Rdp);
+        assert_eq!(rdp.clipboard, cfg!(windows));
+        assert!(!rdp.audio);
+        assert!(rdp.server_resize);
+        assert!(rdp.gateway);
+        assert_eq!(rdp.color_depths, vec![16, 32]);
+
+        let vnc = HelperCapabilities::vnc();
+        assert_eq!(vnc.protocol, DesktopProtocol::Vnc);
+        assert!(vnc.clipboard);
+        assert!(!vnc.server_resize);
+        assert!(vnc.local_scaling);
+        assert!(!vnc.gateway);
+
+        let frame = encode_event_frame(&HelperEvent::Capabilities {
+            capabilities: rdp.clone(),
+        })
+        .unwrap();
+        assert_eq!(
+            decode_event_frame(&frame).unwrap(),
+            HelperEvent::Capabilities { capabilities: rdp }
+        );
+    }
+
+    #[test]
+    fn helper_capabilities_reject_invalid_depth_metadata() {
+        let mut invalid_depth = HelperCapabilities::vnc();
+        invalid_depth.color_depths = vec![0];
+        assert!(matches!(
+            invalid_depth.validate(),
+            Err(HelperProtocolError::InvalidCapabilityColorDepth { depth: 0 })
+        ));
+
+        let mut too_many = HelperCapabilities::vnc();
+        too_many.color_depths = (1..=9).collect();
+        assert!(matches!(
+            too_many.validate(),
+            Err(HelperProtocolError::CapabilitiesTooLarge { count: 9 })
         ));
     }
 

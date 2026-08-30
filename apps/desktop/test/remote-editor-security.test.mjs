@@ -5,7 +5,10 @@ import {
   isLoopbackIpLiteral,
 } from "../src/connection-safety.ts";
 import { parseQuickConnectUri } from "../src/connection-uri.ts";
-import { parseRemoteDesktopProfile } from "../src/remote-desktop-profile.ts";
+import {
+  parseRemoteDesktopProfile,
+  supportsNativeRdpClipboard,
+} from "../src/remote-desktop-profile.ts";
 import {
   formatSessionEnvironment,
   parseSessionEnvironment,
@@ -70,6 +73,10 @@ assert.equal(
 );
 assert.equal(experimentalDesktopTargetError("vnc", "::1"), null);
 assert.equal(experimentalDesktopTargetError("ssh", "example.invalid"), null);
+assert.equal(supportsNativeRdpClipboard("Win32"), true);
+assert.equal(supportsNativeRdpClipboard("MacIntel"), false);
+assert.equal(supportsNativeRdpClipboard("Linux x86_64"), false);
+assert.equal(supportsNativeRdpClipboard(undefined), false);
 
 assert.deepEqual(
   parseRemoteDesktopProfile("RDP", {

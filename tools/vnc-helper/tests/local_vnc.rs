@@ -370,22 +370,37 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
         .await
         .unwrap();
 
+    let mut saw_capabilities = false;
     let mut saw_framebuffer = false;
     for _ in 0..8 {
-        if matches!(
-            timeout(Duration::from_secs(3), next_event(&mut stdout))
-                .await
-                .unwrap(),
+        match timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap()
+        {
+            HelperEvent::Capabilities { capabilities }
+                if capabilities.protocol == DesktopProtocol::Vnc
+                    && capabilities.clipboard
+                    && !capabilities.server_resize
+                    && capabilities.local_scaling
+                    && !capabilities.gateway =>
+            {
+                saw_capabilities = true;
+            }
             HelperEvent::Framebuffer {
                 width: 320,
                 height: 200,
-                ref pixels
-            } if pixels[..4] == [0x11, 0x22, 0x33, 0xff]
-        ) {
-            saw_framebuffer = true;
-            break;
+                ref pixels,
+            } if pixels[..4] == [0x11, 0x22, 0x33, 0xff] => {
+                saw_framebuffer = true;
+                break;
+            }
+            _ => {}
         }
     }
+    assert!(
+        saw_capabilities,
+        "the helper did not report VNC capabilities"
+    );
     assert!(saw_framebuffer, "the helper did not become active");
 
     send_command(&mut stdin, HelperCommand::Stop).await;

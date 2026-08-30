@@ -25,11 +25,11 @@ use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
-    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperCredentialKind,
-    HelperEvent, HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES,
-    MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy,
-    decode_command_frame, decode_credential_frame, rdp_scancode_parts, validate_gateway_endpoint,
-    validate_rdp_color_depth, write_event_frame,
+    DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential,
+    HelperCredentialKind, HelperEvent, HelperProtocolError, HelperState, MAX_DOMAIN_BYTES,
+    MAX_FRAME_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
+    ReconnectPolicy, decode_command_frame, decode_credential_frame, rdp_scancode_parts,
+    validate_gateway_endpoint, validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -383,6 +383,13 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
     let mut startup_pending = true;
 
     write_state(stdout, HelperState::Ready).await?;
+    write_event_frame(
+        stdout,
+        &HelperEvent::Capabilities {
+            capabilities: HelperCapabilities::rdp(),
+        },
+    )
+    .await?;
 
     loop {
         tokio::select! {

@@ -108,7 +108,10 @@ exchange; the helper's clipboard command does not create a second clipboard
 authority or automatically write remote content into the Mac clipboard. A
 future implementation still needs reviewed macOS/Linux adapters, bounded text
 handling, explicit user action for remote-to-local copies, deterministic
-cleanup, and Windows interoperability evidence.
+cleanup, and Windows interoperability evidence. The helper now emits a typed
+capability report after `Ready`; the parent forwards it to the UI, which can
+show the actual platform backend and disable unsupported clipboard actions
+before a user attempts them.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed

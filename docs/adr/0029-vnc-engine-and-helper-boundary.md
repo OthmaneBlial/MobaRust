@@ -57,6 +57,13 @@ requested until JPEG rectangle rendering is implemented. The policy is
 persisted as session metadata with a compatibility default for older profiles;
 it does not expose a secret or alter the server-side display mode.
 
+After the helper reaches `Ready`, it reports its native capability set through
+the shared event contract: text clipboard is available, server-side resize is
+not, local scaling is available, and Gateway/audio are unavailable. The parent
+forwards this metadata to the UI so the visible behavior matches the helper
+that is actually running. This does not replace the required cross-platform
+interoperability evidence.
+
 The candidate is currently restricted to local fixtures: both the helper and
 the Tauri parent accept only literal loopback IP targets (`127.0.0.1` or `::1`)
 and reject hostnames and other addresses before opening a socket. This fail-
