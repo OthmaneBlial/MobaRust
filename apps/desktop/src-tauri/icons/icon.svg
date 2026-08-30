@@ -1,5 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="28" fill="#0b100f"/>
-  <path d="M28 91V59h13v32H28Zm24 0V40h13v51H52Zm24 0V27h13v64H76Z" fill="#e8b45c"/>
-  <path d="M28 101h61" stroke="#9bc48a" stroke-width="5" stroke-linecap="square"/>
+  <defs>
+    <linearGradient id="mark" x1="24" y1="40" x2="103" y2="83" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d6f36a"/>
+      <stop offset="1" stop-color="#9bc48a"/>
+    </linearGradient>
+    <linearGradient id="surface" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18231b"/>
+      <stop offset="1" stop-color="#0b100f"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="29" fill="#080c0a"/>
+  <rect x="10" y="10" width="108" height="108" rx="24" fill="url(#surface)" stroke="#334438" stroke-width="2"/>
+  <path d="M25 83V40L64 75L103 40V83" fill="none" stroke="url(#mark)" stroke-width="10" stroke-linecap="square" stroke-linejoin="bevel"/>
+  <circle cx="64" cy="75" r="6" fill="#f4f1e8" stroke="#d6f36a" stroke-width="3"/>
+  <path d="M25 98H103" stroke="#e8b45c" stroke-width="5" stroke-linecap="square"/>
+  <path d="M84 98H94" stroke="#f4f1e8" stroke-width="5" stroke-linecap="square"/>
 </svg>

@@ -3388,9 +3388,11 @@ function App() {
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
-            <span />
-            <span />
-            <span />
+            <svg className="brand-symbol" viewBox="0 0 32 32">
+              <path d="M4 24V8L16 19L28 8V24" />
+              <circle cx="16" cy="19" r="2.1" />
+              <path d="M4 28H28" />
+            </svg>
           </div>
           <div>
             <div className="brand-name">MobaRust</div>
