@@ -225,17 +225,20 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
         .await?
         {
             RdpAttemptOutcome::Stopped | RdpAttemptOutcome::Fatal => return Ok(()),
-            RdpAttemptOutcome::Lost { reason, was_active } => {
-                if was_active {
-                    reconnect_attempt = 0;
-                }
-                if reconnect_attempt >= MAX_RECONNECT_ATTEMPTS {
+            RdpAttemptOutcome::Lost {
+                reason,
+                reconnect_established,
+            } => {
+                if let Some(next_attempt) =
+                    next_reconnect_attempt(reconnect_attempt, reconnect_established)
+                {
+                    write_state(stdout, HelperState::Reconnecting).await?;
+                    reconnect_attempt = next_attempt;
+                } else {
                     send_error(stdout, reason).await?;
                     write_state(stdout, HelperState::Failed).await?;
                     return Ok(());
                 }
-                write_state(stdout, HelperState::Reconnecting).await?;
-                reconnect_attempt = reconnect_attempt.saturating_add(1);
             }
         }
     }
@@ -244,7 +247,7 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
 enum RdpAttemptOutcome {
     Lost {
         reason: &'static str,
-        was_active: bool,
+        reconnect_established: bool,
     },
     Fatal,
     Stopped,
@@ -297,7 +300,7 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                 if policy.reconnecting {
                     return Ok(RdpAttemptOutcome::Lost {
                         reason: "RDP connection timed out",
-                        was_active: false,
+                        reconnect_established: false,
                     });
                 }
                 send_error(stdout, "RDP connection timed out").await?;
@@ -354,11 +357,19 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                     Some(RdpOutputEvent::ConnectionFailure(error)) => {
                         if active_sent {
                             stop_client(&input_tx, &mut client_task).await;
-                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                            return Ok(lost_outcome(
+                                "RDP connection was lost",
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         if policy.reconnecting {
                             stop_client(&input_tx, &mut client_task).await;
-                            return Ok(RdpAttemptOutcome::Lost { reason: rdp_failure_message(&error), was_active: false });
+                            return Ok(lost_outcome(
+                                rdp_failure_message(&error),
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         send_error(stdout, rdp_failure_message(&error)).await?;
                         stop_client(&input_tx, &mut client_task).await;
@@ -372,10 +383,18 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                     Some(RdpOutputEvent::Terminated(Err(_))) => {
                         if active_sent {
                             stop_client(&input_tx, &mut client_task).await;
-                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP session ended unexpectedly", was_active: true });
+                            return Ok(lost_outcome(
+                                "RDP session ended unexpectedly",
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         if policy.reconnecting {
-                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP session terminated unexpectedly", was_active: false });
+                            return Ok(lost_outcome(
+                                "RDP session terminated unexpectedly",
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         send_error(stdout, "RDP session terminated unexpectedly").await?;
                         write_state(stdout, HelperState::Failed).await?;
@@ -389,10 +408,18 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                     }
                     None => {
                         if active_sent {
-                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                            return Ok(lost_outcome(
+                                "RDP connection was lost",
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         if policy.reconnecting {
-                            return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: false });
+                            return Ok(lost_outcome(
+                                "RDP connection was lost",
+                                active_sent,
+                                policy.reconnecting,
+                            ));
                         }
                         write_state(stdout, HelperState::Crashed).await?;
                         return Ok(RdpAttemptOutcome::Fatal);
@@ -401,10 +428,18 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
             }
             result = &mut client_task => {
                 if active_sent {
-                    return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: true });
+                    return Ok(lost_outcome(
+                        "RDP connection was lost",
+                        active_sent,
+                        policy.reconnecting,
+                    ));
                 }
                 if policy.reconnecting {
-                    return Ok(RdpAttemptOutcome::Lost { reason: "RDP connection was lost", was_active: false });
+                    return Ok(lost_outcome(
+                        "RDP connection was lost",
+                        active_sent,
+                        policy.reconnecting,
+                    ));
                 }
                 if result.is_err() {
                     send_error(stdout, "RDP helper engine stopped unexpectedly").await?;
@@ -420,6 +455,18 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
 
 fn reconnect_delay(attempt: u8) -> Duration {
     RECONNECT_INITIAL_BACKOFF.saturating_mul(1_u32 << u32::from(attempt.min(10)))
+}
+
+fn next_reconnect_attempt(current: u8, reconnect_established: bool) -> Option<u8> {
+    let completed_attempts = if reconnect_established { 0 } else { current };
+    (completed_attempts < MAX_RECONNECT_ATTEMPTS).then_some(completed_attempts + 1)
+}
+
+fn lost_outcome(reason: &'static str, active_sent: bool, reconnecting: bool) -> RdpAttemptOutcome {
+    RdpAttemptOutcome::Lost {
+        reason,
+        reconnect_established: active_sent && reconnecting,
+    }
 }
 
 async fn wait_rdp_reconnect_backoff<W: AsyncWrite + Unpin>(
@@ -941,6 +988,15 @@ mod tests {
         assert_eq!(reconnect_delay(1), Duration::from_millis(500));
         assert_eq!(reconnect_delay(2), Duration::from_secs(1));
         assert!(reconnect_delay(10) >= reconnect_delay(2));
+    }
+
+    #[test]
+    fn reconnect_budget_is_bounded_until_a_retry_reaches_active() {
+        assert_eq!(next_reconnect_attempt(0, false), Some(1));
+        assert_eq!(next_reconnect_attempt(1, false), Some(2));
+        assert_eq!(next_reconnect_attempt(2, false), Some(3));
+        assert_eq!(next_reconnect_attempt(3, false), None);
+        assert_eq!(next_reconnect_attempt(3, true), Some(1));
     }
 
     #[tokio::test]
