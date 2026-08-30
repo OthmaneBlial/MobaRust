@@ -43,6 +43,11 @@ cooperative cancellation, connected-session loss, and bounded reconnect
 attempts, including a bounded client-to-server clipboard message. A reconnect
 keeps the helper process and credential handoff inside the native boundary; it
 does not expose the password to the parent or React.
+
+The loopback fixture also sends maximum-width pointer and wheel coordinates
+after a `DesktopSize` resize and verifies that the socket receives the last
+valid pixel of the resized framebuffer. This is integration evidence for the
+helper boundary, while cross-platform interoperability remains open.
 Its dependency audit is clean. The pinned
 `vnc-rs 0.5.3` callback API still requires an owned password `String`; the
 helper moves its zeroizing source buffer into that one value without an

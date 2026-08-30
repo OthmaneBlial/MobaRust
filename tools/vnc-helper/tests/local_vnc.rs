@@ -897,8 +897,8 @@ async fn exercise_fixture_with_quality(
     send_command(
         &mut stdin,
         HelperCommand::Pointer {
-            x: 12,
-            y: 18,
+            x: u16::MAX,
+            y: u16::MAX,
             buttons: 1,
         },
     )
@@ -906,8 +906,8 @@ async fn exercise_fixture_with_quality(
     send_command(
         &mut stdin,
         HelperCommand::Wheel {
-            x: 12,
-            y: 18,
+            x: u16::MAX,
+            y: u16::MAX,
             delta: 120,
         },
     )
@@ -1230,6 +1230,18 @@ async fn run_fixture(
                     .read_exact(&mut payload)
                     .await
                     .map_err(|error| error.to_string())?;
+                let x = u16::from_be_bytes([payload[1], payload[2]]);
+                let y = u16::from_be_bytes([payload[3], payload[4]]);
+                if (x, y)
+                    != (
+                        RESIZED_FIXTURE_SIZE.width - 1,
+                        RESIZED_FIXTURE_SIZE.height - 1,
+                    )
+                {
+                    return Err(format!(
+                        "fixture received out-of-bounds pointer coordinates: ({x},{y})"
+                    ));
+                }
                 if payload[0] == 0b0000_0001 {
                     saw_pointer = true;
                 }
