@@ -14,7 +14,7 @@ import { formatSessionEnvironment, parseSessionEnvironment } from "./session-env
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
-import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, rdpExtendedScancode, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
+import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import {
   preserveRemoteDesktopError,
@@ -1157,7 +1157,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
   const sendKey = (event: ReactKeyboardEvent<HTMLCanvasElement>, pressed: boolean) => {
     const sessionId = sessionIdRef.current;
-    const code = desktopKeyCode(request.protocol, event);
+    const code = remoteDesktopKeyCode(request.protocol, event.code, event.key);
     if (!IS_TAURI || !sessionId || code === null) return;
     event.preventDefault();
     pressedRemoteKeysRef.current = new Set(remoteDesktopKeyState([...pressedRemoteKeysRef.current], code, pressed));
@@ -1260,21 +1260,6 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
     <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{request.protocol === "vnc" && <small>Server resolution is unchanged · viewport scaling is local</small>}</div>
   </div>;
-}
-
-function desktopKeyCode(protocol: DesktopProtocol, event: ReactKeyboardEvent<HTMLCanvasElement>): number | null {
-  if (protocol === "vnc") {
-    const special: Record<string, number> = { Enter: 0xff0d, Escape: 0xff1b, Backspace: 0xff08, Tab: 0xff09, Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, Meta: 0xffe7, ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54, Delete: 0xffff, Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56 };
-    return special[event.key] ?? (event.key.length === 1 ? event.key.codePointAt(0) ?? null : null);
-  }
-  const scanCodes: Record<string, number> = {
-    KeyA: 0x1e, KeyB: 0x30, KeyC: 0x2e, KeyD: 0x20, KeyE: 0x12, KeyF: 0x21, KeyG: 0x22, KeyH: 0x23, KeyI: 0x17, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, KeyM: 0x32, KeyN: 0x31, KeyO: 0x18, KeyP: 0x19, KeyQ: 0x10, KeyR: 0x13, KeyS: 0x1f, KeyT: 0x14, KeyU: 0x16, KeyV: 0x2f, KeyW: 0x11, KeyX: 0x2d, KeyY: 0x15, KeyZ: 0x2c,
-    Digit0: 0x0b, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06, Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a,
-    Enter: 0x1c, Escape: 0x01, Backspace: 0x0e, Tab: 0x0f, Space: 0x39, Minus: 0x0c, Equal: 0x0d, BracketLeft: 0x1a, BracketRight: 0x1b, Backslash: 0x2b, Semicolon: 0x27, Quote: 0x28, Comma: 0x33, Period: 0x34, Slash: 0x35,
-    ShiftLeft: 0x2a, ShiftRight: 0x36, ControlLeft: 0x1d, ControlRight: rdpExtendedScancode(0x1d), AltLeft: 0x38, AltRight: rdpExtendedScancode(0x38), ArrowUp: rdpExtendedScancode(0x48), ArrowDown: rdpExtendedScancode(0x50), ArrowLeft: rdpExtendedScancode(0x4b), ArrowRight: rdpExtendedScancode(0x4d), Delete: rdpExtendedScancode(0x53), Home: rdpExtendedScancode(0x47), End: rdpExtendedScancode(0x4f), PageUp: rdpExtendedScancode(0x49), PageDown: rdpExtendedScancode(0x51),
-    F1: 0x3b, F2: 0x3c, F3: 0x3d, F4: 0x3e, F5: 0x3f, F6: 0x40, F7: 0x41, F8: 0x42, F9: 0x43, F10: 0x44, F11: 0x57, F12: 0x58,
-  };
-  return scanCodes[event.code] ?? null;
 }
 
 function TerminalLayoutView({
