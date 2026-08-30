@@ -154,6 +154,7 @@ impl RemoteDesktopManager {
         );
         let sessions = Arc::clone(&self.sessions);
         let reader_session_id = session_id.clone();
+        let reader_supervisor = Arc::clone(&supervisor);
         let writer_app = app.clone();
         let writer_session_id = session_id.clone();
         let writer_supervisor = Arc::clone(&supervisor);
@@ -164,6 +165,7 @@ impl RemoteDesktopManager {
             stdout,
             sessions,
             stop_requested,
+            reader_supervisor,
         ));
         tokio::spawn(write_helper_commands(
             writer_app,
@@ -411,6 +413,7 @@ async fn read_helper_events(
     mut stdout: impl tokio::io::AsyncRead + Unpin,
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
     stop_requested: Arc<AtomicBool>,
+    supervisor: Arc<Mutex<HelperSupervisor>>,
 ) {
     loop {
         let frame = match read_frame(&mut stdout).await {
@@ -483,6 +486,10 @@ async fn read_helper_events(
             break;
         }
     }
+    // EOF and protocol errors can happen while the child still owns the
+    // other side of the pipe. Reuse the same bounded wait/kill/reap path as a
+    // user-initiated stop before dropping the supervisor.
+    let _ = supervisor.lock().await.stop(HELPER_GRACE_PERIOD).await;
     sessions.lock().await.remove(&session_id);
 }
 

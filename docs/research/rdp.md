@@ -175,6 +175,11 @@ redacted diagnostic, transitions the session to `Crashed`, and invokes the same
 bounded helper stop/reap path. This keeps local IPC failure visible without
 echoing technical error details or secrets into the UI.
 
+The parent reader also invokes that same bounded stop/reap path after EOF or a
+malformed event, so an exited or wedged helper is not left behind when its
+session is removed. This is lifecycle hardening, not evidence of a real RDP
+server connection.
+
 The desktop canvas uses a framebuffer-aware input map. When `object-fit:
 contain` adds letterbox bands, clicks and wheel events in those bands are
 discarded instead of being mapped to a misleading remote pixel. Pointer

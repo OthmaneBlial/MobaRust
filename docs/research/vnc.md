@@ -79,6 +79,10 @@ fails, the desktop boundary emits a stable redacted diagnostic, transitions
 the session to `Crashed`, and invokes bounded helper stop/reap cleanup without
 echoing technical error details or secrets into the UI.
 
+The parent reader also invokes bounded stop/reap cleanup after EOF or a
+malformed event before removing the session, so a VNC helper cannot outlive a
+failed native pipe. This remains local lifecycle evidence only.
+
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`
