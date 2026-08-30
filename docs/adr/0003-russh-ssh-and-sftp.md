@@ -8,7 +8,7 @@ Accepted for the SSH foundation; the UI adapter and jump-host layer remain follo
 
 Use the actively maintained `russh` transport and `russh-sftp` subsystem from a dedicated `mobarust-ssh` crate. Rust owns TCP connection setup, host-key verification, authentication, PTY channel setup, SFTP I/O, lifecycle state, and timeout handling.
 
-The default host-key policy reads OpenSSH `known_hosts` and rejects unknown keys. A pinned SHA-256 fingerprint is an explicit alternative for a user-confirmed key. Unknown keys return the observed fingerprint so the UI can build a deliberate confirmation flow later; there is no silent trust-on-first-use path.
+An explicitly supplied host-key policy reads OpenSSH `known_hosts` and rejects unknown keys. A pinned SHA-256 fingerprint is an explicit alternative for a user-confirmed key. With neither option, MobaRust rejects the observed key without reading `~/.ssh/known_hosts`; there is no silent trust-on-first-use path. Unknown keys return the observed fingerprint so the UI can build a deliberate confirmation flow later.
 
 SFTP file movement uses `tokio::io::copy` between async readers and writers. The API never reads a complete remote file into a `Vec<u8>`. Dropping a cancelled future releases the in-flight operation; a transfer manager will add visible cancellation and bounded concurrency above this primitive.
 

@@ -16,6 +16,9 @@ configuration.
 - OpenSSH import requires an explicit path and never falls back to
   `~/.ssh/config`; tests and development runs must use a repository fixture or
   an isolated temporary file.
+- SSH connection setup never falls back to `~/.ssh/known_hosts`. An explicit
+  known-hosts path or pinned fingerprint is required for trust; otherwise the
+  observed key is rejected without reading a personal file.
 - RDP/VNC tests use protocol-independent fixtures or an explicitly approved
   disposable server. The isolated RDP helper can be compiled and exercised on
   EOF without opening a socket; the VNC integration fixture binds only to

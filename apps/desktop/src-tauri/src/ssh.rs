@@ -1377,7 +1377,9 @@ fn host_key_policy_for(
             SshManagerError::InvalidRequest("pinned fingerprint cannot be empty".into()),
         ),
         (None, Some(fingerprint)) => Ok(HostKeyPolicy::PinnedFingerprint(fingerprint.clone())),
-        (None, None) => Ok(HostKeyPolicy::default()),
+        // Do not infer ~/.ssh/known_hosts. A user may opt into an explicit
+        // path above, or deliberately pin the observed fingerprint.
+        (None, None) => Ok(HostKeyPolicy::RejectUnknown),
     }
 }
 

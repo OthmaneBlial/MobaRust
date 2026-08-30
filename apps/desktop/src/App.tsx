@@ -4624,8 +4624,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     </>
                   )}
                   <label className="quick-connect-wide">
-                    Known hosts path <span className="optional">optional</span>
-                    <input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="Default: ~/.ssh/known_hosts" />
+                    Known hosts path <span className="optional">optional · explicit only</span>
+                    <input value={knownHostsPath} onChange={(event) => setKnownHostsPath(event.target.value)} placeholder="/path/to/known_hosts" />
+                    <small>Empty means unknown host keys are rejected without reading ~/.ssh/known_hosts.</small>
                   </label>
                   <label className="quick-connect-wide">
                     Pinned SHA-256 fingerprint <span className="optional">optional</span>

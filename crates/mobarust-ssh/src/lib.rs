@@ -25,20 +25,20 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostKeyPolicy {
     /// Match against the OpenSSH known_hosts format. Unknown keys are rejected.
     KnownHosts(PathBuf),
     /// Match one operator-confirmed SHA-256 fingerprint.
     PinnedFingerprint(String),
+    /// Reject every key unless the caller explicitly supplies a trust source.
+    /// This keeps the native transport from discovering a user's files.
+    RejectUnknown,
 }
 
 impl Default for HostKeyPolicy {
     fn default() -> Self {
-        let path = std::env::home_dir()
-            .map(|home| home.join(".ssh").join("known_hosts"))
-            .unwrap_or_else(|| PathBuf::from(".ssh/known_hosts"));
-        Self::KnownHosts(path)
+        Self::RejectUnknown
     }
 }
 
@@ -445,6 +445,7 @@ impl client::Handler for ClientHandler {
                 russh::keys::check_known_hosts_path(&self.host, self.port, &public_key, path)
                     .map_err(anyhow::Error::from)
             }
+            HostKeyPolicy::RejectUnknown => Ok(false),
         }
     }
 
@@ -2532,6 +2533,15 @@ mod tests {
     }
 
     #[test]
+    fn default_host_key_policy_never_discovers_a_personal_file() {
+        assert_eq!(HostKeyPolicy::default(), HostKeyPolicy::RejectUnknown);
+        assert_eq!(
+            accepted_fingerprint(&HostKeyPolicy::RejectUnknown, "SHA256:any"),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn known_hosts_policy_accepts_a_recorded_key_only() {
         let directory = tempfile::tempdir().unwrap();
         let known_hosts = directory.path().join("known_hosts");
@@ -2739,6 +2749,7 @@ mod tests {
         match policy {
             HostKeyPolicy::PinnedFingerprint(expected) => Some(expected == fingerprint),
             HostKeyPolicy::KnownHosts(_) => None,
+            HostKeyPolicy::RejectUnknown => Some(false),
         }
     }
 }
