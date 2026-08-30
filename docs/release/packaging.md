@@ -23,9 +23,18 @@ dependency is not cached. The generated files must never be committed.
 step. `cargo xtask check` remains the normal validation command and does not
 turn the application into portable mode.
 
-`cargo xtask package-check` builds an unsigned current-platform debug `.app`
-bundle and verifies that the Tauri resource step completes. It is a packaging
-smoke test, not code-signing, notarization, or interoperability evidence.
+`cargo xtask package-check` builds an unsigned current-platform debug app
+bundle and verifies that the Tauri resource step completes. On macOS it also
+checks the app executable and both native helper resources are regular files
+inside the bundle. It is a packaging smoke test, not code-signing,
+notarization, or interoperability evidence.
+
+On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
+was created at `target/debug/bundle/macos/MobaRust.app`; its main executable and
+both staged helper resources (`mobarust-rdp-helper` and `mobarust-vnc-helper`)
+were verified as executable Mach-O arm64 files. This is repository-local
+assembly evidence only; it does not prove a clean install, notarization, or
+remote-desktop interoperability.
 
 ## Distribution matrix
 
@@ -33,7 +42,7 @@ smoke test, not code-signing, notarization, or interoperability evidence.
 | --- | --- | --- | --- |
 | Windows x64 | Required on Windows | Pending real Windows build | Pending owner certificate |
 | Linux x64 | Required on Linux | Pending distro/package checks | Pending signing policy |
-| macOS ARM64 | Builds on this host when staged | Pending notarized artifact | Pending Developer ID/notarization |
+| macOS ARM64 | Local unsigned `.app` smoke test passed; clean install pending | Pending notarized artifact | Pending Developer ID/notarization |
 | Windows ARM64 | Cross-build/toolchain required | Pending | Pending |
 | Linux ARM64 | Cross-build/toolchain required | Pending | Pending |
 | macOS x64 | Cross-build/toolchain required | Pending | Pending |

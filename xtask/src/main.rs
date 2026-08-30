@@ -17,7 +17,7 @@ fn main() {
             println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
             println!("cargo xtask benchmark    Run synthetic local performance probes");
             println!(
-                "cargo xtask package-check    Build an unsigned current-platform Tauri app bundle"
+                "cargo xtask package-check    Build and inspect an unsigned current-platform Tauri app bundle"
             );
             println!(
                 "cargo xtask stage-helpers    Build and stage ignored desktop helper resources"
@@ -95,7 +95,55 @@ fn package_check() -> Result<(), String> {
         "pnpm",
         ["tauri", "build", "--debug", "--no-sign", "--bundles", "app"],
         Some("apps/desktop"),
-    )
+    )?;
+    verify_current_platform_bundle()
+}
+
+fn verify_current_platform_bundle() -> Result<(), String> {
+    let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "xtask manifest has no repository parent".to_owned())?
+        .to_path_buf();
+    let bundle_root = repository_root.join("target/debug/bundle");
+    if !bundle_root.is_dir() {
+        return Err(format!(
+            "Tauri completed without a bundle directory: {}",
+            bundle_root.display()
+        ));
+    }
+
+    if cfg!(target_os = "macos") {
+        let bundle = bundle_root.join("macos/MobaRust.app");
+        let executable = bundle.join("Contents/MacOS/mobarust");
+        if !executable.is_file() {
+            return Err(format!(
+                "macOS bundle executable is missing: {}",
+                executable.display()
+            ));
+        }
+        for helper in ["mobarust-rdp-helper", "mobarust-vnc-helper"] {
+            let path = bundle.join("Contents/Resources/helpers").join(helper);
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!(
+                    "could not inspect bundled helper {}: {error}",
+                    path.display()
+                )
+            })?;
+            if !metadata.file_type().is_file() {
+                return Err(format!(
+                    "bundled helper is not a regular file: {}",
+                    path.display()
+                ));
+            }
+        }
+        println!("verified macOS app bundle and native helper resources");
+    } else {
+        println!(
+            "verified current-platform Tauri bundle directory: {}",
+            bundle_root.display()
+        );
+    }
+    Ok(())
 }
 
 fn benchmark() -> Result<(), String> {
