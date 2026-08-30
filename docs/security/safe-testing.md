@@ -80,6 +80,10 @@ cargo xtask benchmark
 It uses in-memory fixtures only; it does not open sockets or inspect local
 configuration, credentials, SSH directories, or attached devices.
 
+The native logger writes no log file by default. Test and development output is
+kept on the child process stderr, with credential fields represented only by a
+redacted marker.
+
 The helper EOF smoke test below emits its native handshake and exits without
 connecting:
 

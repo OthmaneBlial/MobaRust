@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod logging;
 mod network;
 mod remote_desktop;
 mod serial;
@@ -183,6 +184,11 @@ struct CredentialResolver {
 
 impl CredentialLookup for CredentialResolver {
     fn get(&self, credential_id: &CredentialId) -> Result<SecretMaterial, VaultError> {
+        tracing::trace!(
+            target: "mobarust::security",
+            operation = "credential_lookup",
+            credential_ref = ?logging::REDACTED,
+        );
         let portable = self.portable.lock().map_err(|_| {
             VaultError::PortableStateUnavailable("credential lookup lock poisoned".into())
         })?;
@@ -1421,6 +1427,17 @@ fn terminal_spawn(
     rows: u16,
     target: terminal::LocalTerminalTarget,
 ) -> Result<String, String> {
+    let target_kind = match &target {
+        terminal::LocalTerminalTarget::Default => "default",
+        terminal::LocalTerminalTarget::Wsl { .. } => "wsl",
+    };
+    tracing::debug!(
+        target: "mobarust::terminal",
+        operation = "spawn",
+        target_kind,
+        cols,
+        rows,
+    );
     manager
         .spawn(app, cols, rows, target)
         .map_err(|error| error.to_string())
@@ -1428,6 +1445,11 @@ fn terminal_spawn(
 
 #[tauri::command]
 async fn terminal_list_wsl() -> Result<Vec<String>, String> {
+    tracing::debug!(
+        target: "mobarust::terminal",
+        operation = "wsl_discovery",
+        platform = std::env::consts::OS,
+    );
     terminal::list_wsl_distributions()
         .await
         .map_err(|error| error.to_string())
@@ -1473,6 +1495,12 @@ fn detect_portable_data_dir() -> Option<PathBuf> {
 }
 
 fn main() {
+    logging::init();
+    tracing::info!(
+        target: "mobarust::runtime",
+        event = "runtime_start",
+        platform = std::env::consts::OS,
+    );
     tauri::Builder::default()
         .manage(TerminalManager::default())
         .manage(SshManager::default())

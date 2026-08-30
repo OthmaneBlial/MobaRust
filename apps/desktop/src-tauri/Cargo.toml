@@ -25,5 +25,7 @@ serde_json.workspace = true
 tauri = { version = "2.8", features = [] }
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
 zeroize = { workspace = true, features = ["serde"] }

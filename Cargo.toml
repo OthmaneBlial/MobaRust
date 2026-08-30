@@ -33,4 +33,6 @@ russh = { version = "0.63.1", default-features = true }
 russh-sftp = "2.4.0"
 serialport = { version = "4.7", default-features = false }
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 zeroize = "1.8"
