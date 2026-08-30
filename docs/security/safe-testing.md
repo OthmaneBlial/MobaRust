@@ -58,6 +58,18 @@ The default local quality command is repository-scoped:
 cargo xtask check
 ```
 
+Before a user-authenticated push, the repository-only payload audit can be run
+without contacting GitHub:
+
+```text
+cargo xtask pre-push-check
+```
+
+It verifies `main`, both staged and unstaged Git whitespace checks, the ignored
+`base/` boundary, the absence of GitHub workflow files, credential-like paths,
+and private-key PEM markers in the index. It reports the local
+`origin/main...HEAD` comparison but never invokes `git push`.
+
 All of its validation subprocesses also remove ambient SSH-agent, askpass, Git
 SSH configuration, Cargo Git transport, `NETRC`, `SSLKEYLOGFILE`, and TLS
 certificate override variables (`SSL_CERT_FILE`/`SSL_CERT_DIR`).

@@ -16,6 +16,7 @@ fn main() {
         "benchmark" => benchmark(),
         "package-check" => package_check(),
         "stage-helpers" => stage_helpers(),
+        "pre-push-check" => pre_push_check(),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
@@ -27,6 +28,9 @@ fn main() {
             );
             println!(
                 "cargo xtask stage-helpers    Build and stage ignored desktop helper resources"
+            );
+            println!(
+                "cargo xtask pre-push-check    Audit the local Git payload without network access"
             );
             Ok(())
         }
@@ -134,6 +138,120 @@ fn package_check() -> Result<(), String> {
         Some("apps/desktop"),
     )?;
     verify_current_platform_bundle()
+}
+
+fn pre_push_check() -> Result<(), String> {
+    let branch = git_output(&["branch", "--show-current"])?;
+    if !branch.status.success() || branch.stdout.trim() != "main" {
+        return Err(format!(
+            "push audit requires branch main, found {:?}",
+            branch.stdout.trim()
+        ));
+    }
+
+    for check in [
+        &["diff", "--check"][..],
+        &["diff", "--cached", "--check"][..],
+    ] {
+        let output = git_output(check)?;
+        if !output.status.success() {
+            return Err(format!(
+                "Git whitespace check failed: {}",
+                output.stderr.trim()
+            ));
+        }
+    }
+
+    let ignored = git_output(&["check-ignore", "--quiet", "base/"])?;
+    if !ignored.status.success() {
+        return Err("base/ is not ignored; refusing push audit".into());
+    }
+
+    if Path::new(".github/workflows").exists() {
+        return Err(".github/workflows exists; refusing push audit".into());
+    }
+
+    let tracked = git_output(&["ls-files"])?;
+    let untracked = git_output(&["ls-files", "--others", "--exclude-standard"])?;
+    for path in tracked.stdout.lines().chain(untracked.stdout.lines()) {
+        if suspicious_credential_path(path) {
+            return Err(format!(
+                "credential-like path is present in the local Git scope: {path}"
+            ));
+        }
+    }
+
+    let private_markers = git_output(&[
+        "grep",
+        "--cached",
+        "-I",
+        "-n",
+        "-E",
+        "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
+        "--",
+    ])?;
+    if private_markers.status.success() {
+        return Err("private-key marker found in the Git index; refusing push audit".into());
+    }
+    if private_markers.status.code() != Some(1) {
+        return Err(format!(
+            "could not inspect the Git index for private-key markers: {}",
+            private_markers.stderr.trim()
+        ));
+    }
+
+    let ahead = git_output(&["rev-list", "--left-right", "--count", "origin/main...HEAD"])?;
+    if !ahead.status.success() {
+        return Err(format!(
+            "could not inspect the local origin/main comparison: {}",
+            ahead.stderr.trim()
+        ));
+    }
+    println!(
+        "pre-push audit passed: branch=main, base=ignored, private-key markers=none, commits={}",
+        ahead.stdout.trim()
+    );
+    Ok(())
+}
+
+struct GitOutput {
+    status: ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn git_output(args: &[&str]) -> Result<GitOutput, String> {
+    let isolated_home = create_sanitized_test_home()?;
+    let mut command = Command::new("git");
+    sanitize_process_environment(&mut command);
+    apply_isolated_home(&mut command, &isolated_home);
+    command.args(args);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not start git: {error}"));
+    let cleanup = fs::remove_dir_all(&isolated_home)
+        .map_err(|error| format!("could not remove temporary Git home: {error}"));
+    cleanup?;
+    let output = output?;
+    Ok(GitOutput {
+        status: output.status,
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+fn suspicious_credential_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let file_name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    file_name == ".env"
+        || file_name.starts_with(".env.")
+        || matches!(
+            file_name,
+            "id_rsa" | "id_ed25519" | "id_ecdsa" | "known_hosts" | "authorized_keys"
+        )
+        || file_name.ends_with(".pem")
+        || file_name.ends_with(".p12")
+        || file_name.ends_with(".pfx")
 }
 
 fn verify_current_platform_bundle() -> Result<(), String> {
@@ -774,6 +892,30 @@ mod tests {
             Some(PathBuf::from("/fixture/cache/pnpm"))
         );
         fs::remove_dir_all(root).expect("remove metadata fixture");
+    }
+
+    #[test]
+    fn suspicious_credential_paths_are_rejected_without_matching_documentation() {
+        for path in [
+            ".env",
+            "local/.env.test",
+            "keys/id_ed25519",
+            "certs/server.pem",
+            "backup/archive.p12",
+            "windows/cert.pfx",
+            "ssh/known_hosts",
+            "ssh/authorized_keys",
+        ] {
+            assert!(suspicious_credential_path(path), "{path}");
+        }
+        for path in [
+            "docs/security/threat-model.md",
+            "docs/release/packaging.md",
+            "src/credential-vault.rs",
+            "fixtures/README.md",
+        ] {
+            assert!(!suspicious_credential_path(path), "{path}");
+        }
     }
 
     #[test]
