@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, mpsc};
@@ -586,11 +586,14 @@ enum HelperFrameReadError {
 
 async fn read_next_helper_frame<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
-    handshake_pending: bool,
-    handshake_timeout: Duration,
+    handshake_deadline: Option<Instant>,
 ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, HelperFrameReadError> {
-    if handshake_pending {
-        tokio::time::timeout(handshake_timeout, read_frame(reader))
+    if let Some(deadline) = handshake_deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(HelperFrameReadError::HandshakeTimeout);
+        }
+        tokio::time::timeout(remaining, read_frame(reader))
             .await
             .map_err(|_| HelperFrameReadError::HandshakeTimeout)?
             .map_err(|_| HelperFrameReadError::Protocol)
@@ -615,11 +618,11 @@ async fn read_helper_events(
         capabilities,
     } = context;
     let mut progress = HelperEventProgress::default();
+    let handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
     loop {
         let frame = match read_next_helper_frame(
             &mut stdout,
-            !progress.capabilities_seen,
-            HELPER_HANDSHAKE_TIMEOUT,
+            (!progress.capabilities_seen).then_some(handshake_deadline),
         )
         .await
         {
@@ -868,7 +871,7 @@ mod tests {
         MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, WIRE_VERSION, encode_event_frame,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio::io::AsyncWriteExt;
 
     #[test]
@@ -884,7 +887,10 @@ mod tests {
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_millis(100),
-            read_next_helper_frame(&mut reader, true, Duration::from_millis(10)),
+            read_next_helper_frame(
+                &mut reader,
+                Some(Instant::now() + Duration::from_millis(10)),
+            ),
         )
         .await
         .expect("handshake read must return within the test deadline")
@@ -902,17 +908,21 @@ mod tests {
         })
         .unwrap();
         writer.write_all(&hello).await.unwrap();
+        let deadline = Instant::now() + Duration::from_millis(10);
         assert!(
-            read_next_helper_frame(&mut reader, true, Duration::from_millis(10))
+            read_next_helper_frame(&mut reader, Some(deadline))
                 .await
                 .unwrap()
                 .is_some()
         );
 
-        let error = read_next_helper_frame(&mut reader, true, Duration::from_millis(10))
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let started = Instant::now();
+        let error = read_next_helper_frame(&mut reader, Some(deadline))
             .await
             .unwrap_err();
         assert_eq!(error, HelperFrameReadError::HandshakeTimeout);
+        assert!(started.elapsed() < Duration::from_millis(10));
     }
 
     #[test]
