@@ -485,8 +485,10 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
         .await
         .unwrap();
 
-    let mut saw_active_frame = false;
-    for _ in 0..8 {
+    let mut saw_active = false;
+    let mut saw_framebuffer = false;
+    let mut saw_remote_clipboard = false;
+    for _ in 0..12 {
         let event = match timeout(Duration::from_secs(3), next_event(&mut stdout)).await {
             Ok(event) => event,
             Err(_) => {
@@ -500,17 +502,27 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
                 state: HelperState::Active
             }
         ) {
-            saw_active_frame = true;
+            saw_active = true;
         }
         if matches!(event, HelperEvent::Framebuffer { width: 320, height: 200, ref pixels } if pixels[..4] == [0x11, 0x22, 0x33, 0xff])
         {
-            saw_active_frame = true;
+            saw_framebuffer = true;
+        }
+        if matches!(event, HelperEvent::Clipboard { ref text } if text.as_str() == "remote fixture clipboard")
+        {
+            saw_remote_clipboard = true;
+        }
+        if saw_active && saw_framebuffer && saw_remote_clipboard {
             break;
         }
     }
     assert!(
-        saw_active_frame,
+        saw_active && saw_framebuffer,
         "the helper did not emit a real framebuffer event"
+    );
+    assert!(
+        saw_remote_clipboard,
+        "the helper did not forward the server clipboard event"
     );
 
     send_command(
@@ -762,6 +774,15 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
     update.extend_from_slice(&[0x11, 0x22, 0x33, 0xff]);
     stream
         .write_all(&update)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let remote_clipboard = b"remote fixture clipboard";
+    let mut cut_text = vec![3_u8, 0, 0, 0];
+    cut_text.extend_from_slice(&(remote_clipboard.len() as u32).to_be_bytes());
+    cut_text.extend_from_slice(remote_clipboard);
+    stream
+        .write_all(&cut_text)
         .await
         .map_err(|error| error.to_string())?;
 
