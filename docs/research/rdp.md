@@ -102,8 +102,9 @@ Windows clipboard implementation on Windows, but falls back to a stub backend
 on non-Windows platforms. MobaRust therefore keeps clipboard disabled by
 default, passes an explicit `--clipboard-enabled` opt-in only for RDP, and
 selects `ClipboardType::Enable` only when that policy is requested. On
-macOS/Linux the helper rejects that opt-in before a connection attempt instead
-of silently claiming support. The Windows backend owns the OS clipboard
+macOS/Linux the native parent rejects that opt-in before launching a helper,
+with the helper retaining the same defense in depth instead of silently
+claiming support. The Windows backend owns the OS clipboard
 exchange; the helper's clipboard command does not create a second clipboard
 authority or automatically write remote content into the Mac clipboard. A
 future implementation still needs reviewed macOS/Linux adapters, bounded text

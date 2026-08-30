@@ -403,6 +403,9 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     if request.audio_enabled {
         return Err("remote desktop audio redirection is not enabled in this helper".into());
     }
+    if request.protocol == DesktopProtocol::Rdp && request.clipboard_enabled && !cfg!(windows) {
+        return Err("RDP clipboard redirection requires the native Windows backend".into());
+    }
     if request.protocol == DesktopProtocol::Vnc && request.clipboard_enabled {
         return Err("RDP clipboard settings are supported only for RDP".into());
     }
@@ -851,6 +854,15 @@ mod tests {
         request.audio_enabled = true;
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("audio"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn parent_boundary_rejects_rdp_clipboard_before_helper_launch() {
+        let mut request = request(DesktopProtocol::Rdp, "Administrator");
+        request.clipboard_enabled = true;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("Windows"));
     }
 
     #[test]
