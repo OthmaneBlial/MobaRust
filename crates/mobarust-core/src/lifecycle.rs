@@ -84,9 +84,10 @@ impl ConnectionLifecycle {
             (ConnectionState::Connected, ConnectionEvent::ConnectionLost) => {
                 ConnectionState::Reconnecting
             }
-            (ConnectionState::Reconnecting, ConnectionEvent::BeginReconnect) => {
-                ConnectionState::Connecting
-            }
+            (
+                ConnectionState::Reconnecting | ConnectionState::Failed,
+                ConnectionEvent::BeginReconnect,
+            ) => ConnectionState::Connecting,
             (ConnectionState::Connected, ConnectionEvent::DisconnectRequested)
             | (ConnectionState::Connecting, ConnectionEvent::DisconnectRequested)
             | (ConnectionState::Authenticating, ConnectionEvent::DisconnectRequested)
@@ -160,6 +161,25 @@ mod tests {
             ConnectionEvent::BeginAuthentication,
             ConnectionEvent::AuthenticationSucceeded,
             ConnectionEvent::ConnectionLost,
+            ConnectionEvent::BeginReconnect,
+            ConnectionEvent::BeginAuthentication,
+            ConnectionEvent::AuthenticationSucceeded,
+        ] {
+            lifecycle.apply(event).unwrap();
+        }
+
+        assert_eq!(lifecycle.state(), ConnectionState::Connected);
+    }
+
+    #[test]
+    fn a_failed_connection_can_be_retried_explicitly() {
+        let mut lifecycle = ConnectionLifecycle::new();
+        for event in [
+            ConnectionEvent::BeginConnect,
+            ConnectionEvent::BeginAuthentication,
+            ConnectionEvent::AuthenticationSucceeded,
+            ConnectionEvent::ConnectionLost,
+            ConnectionEvent::Fail,
             ConnectionEvent::BeginReconnect,
             ConnectionEvent::BeginAuthentication,
             ConnectionEvent::AuthenticationSucceeded,

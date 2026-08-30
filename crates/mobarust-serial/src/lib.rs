@@ -363,6 +363,7 @@ impl SerialConnection {
             .expect("serial lifecycle lock poisoned")
             .apply(ConnectionEvent::BeginReconnect)
             .map_err(|_| SerialError::Lifecycle)?;
+        self.take_port()?;
         let options = self.options.clone();
         let open_options = options.clone();
         let worker = tokio::task::spawn_blocking(move || open_port(&open_options));

@@ -1,4 +1,4 @@
-use mobarust_core::OutputBatcher;
+use mobarust_core::{ConnectionState, OutputBatcher};
 use mobarust_serial::{
     SerialConnection, SerialDataBits, SerialFlowControl, SerialOptions, SerialParity,
     SerialStopBits,
@@ -39,6 +39,7 @@ pub struct SerialConnectResponse {
 #[serde(rename_all = "camelCase")]
 enum SerialSessionState {
     Connected,
+    Reconnecting,
     Disconnected,
     Failed,
 }
@@ -67,6 +68,7 @@ struct SerialClosedEvent {
 
 enum SerialCommand {
     Write(Vec<u8>),
+    Reconnect,
     Close,
 }
 
@@ -162,6 +164,13 @@ impl SerialManager {
             .map_err(|_| SerialManagerError::Closed)
     }
 
+    pub async fn reconnect(&self, terminal_id: &str) -> Result<(), SerialManagerError> {
+        self.sender(terminal_id)?
+            .send(SerialCommand::Reconnect)
+            .await
+            .map_err(|_| SerialManagerError::Closed)
+    }
+
     pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SerialManagerError> {
         let mut sessions = self
             .sessions
@@ -246,7 +255,7 @@ async fn run_serial_session(
     let mut output_batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
     let reason = 'session: loop {
         tokio::select! {
-            read = connection.read(16 * 1024) => {
+            read = connection.read(16 * 1024), if connection.state() == ConnectionState::Connected => {
                 match read {
                     Ok(bytes) if bytes.is_empty() => continue,
                     Ok(bytes) => {
@@ -259,6 +268,10 @@ async fn run_serial_session(
                     }
                     Err(error) => {
                         let reason = error.to_string();
+                        if matches!(error, mobarust_serial::SerialError::DeviceDisconnected { .. }) {
+                            manager.emit_state(&app, &terminal_id, SerialSessionState::Reconnecting, Some(reason));
+                            continue 'session;
+                        }
                         manager.emit_state(&app, &terminal_id, SerialSessionState::Failed, Some(reason.clone()));
                         break 'session reason;
                     }
@@ -273,8 +286,26 @@ async fn run_serial_session(
                         }
                         if let Err(error) = connection.write(&data).await {
                             let reason = error.to_string();
+                            if matches!(error, mobarust_serial::SerialError::DeviceDisconnected { .. }) {
+                                manager.emit_state(&app, &terminal_id, SerialSessionState::Reconnecting, Some(reason));
+                                continue 'session;
+                            }
+                            if connection.state() != ConnectionState::Connected {
+                                manager.emit_state(&app, &terminal_id, SerialSessionState::Failed, Some(reason));
+                                continue 'session;
+                            }
                             manager.emit_state(&app, &terminal_id, SerialSessionState::Failed, Some(reason.clone()));
                             break 'session reason;
+                        }
+                    }
+                    Some(SerialCommand::Reconnect) => {
+                        if connection.state() == ConnectionState::Connected {
+                            continue 'session;
+                        }
+                        manager.emit_state(&app, &terminal_id, SerialSessionState::Reconnecting, None);
+                        match connection.reconnect().await {
+                            Ok(()) => manager.emit_state(&app, &terminal_id, SerialSessionState::Connected, None),
+                            Err(error) => manager.emit_state(&app, &terminal_id, SerialSessionState::Failed, Some(error.to_string())),
                         }
                     }
                     Some(SerialCommand::Close) | None => {

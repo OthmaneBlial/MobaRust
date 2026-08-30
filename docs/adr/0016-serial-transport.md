@@ -40,8 +40,10 @@ driver timeout plus an operation guard. A broken pipe, not-connected, missing
 device, or unexpected EOF is surfaced as a distinct recoverable device-loss
 error and moves a connected session into `Reconnecting`. Explicit close and
 cancel drop the native port handle and use the shared lifecycle state machine.
-Reconnect is explicit and bounded; there is no aggressive background probing
-of hardware. The Tauri manager owns one typed session command channel per
+Reconnect is explicit and bounded: the visible `serial_reconnect` command
+performs one reopen attempt, preserves the terminal identity, and leaves a
+failed attempt retryable without background probing of hardware. The Tauri
+manager owns one typed session command channel per
 connection, batches output, retains a small bounded pre-attach buffer, and
 emits `serial://state`, `serial://output`, and `serial://closed` events. The
 React shell only sends typed connection parameters and terminal input; the

@@ -1499,6 +1499,17 @@ async fn serial_close(
 }
 
 #[tauri::command]
+async fn serial_reconnect(
+    manager: State<'_, SerialManager>,
+    terminal_id: String,
+) -> Result<(), String> {
+    manager
+        .reconnect(&terminal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: tauri::AppHandle,
     manager: State<'_, TerminalManager>,
@@ -1715,6 +1726,7 @@ fn main() {
             serial_write,
             serial_attach,
             serial_close,
+            serial_reconnect,
             terminal_spawn,
             terminal_list_wsl,
             terminal_write,
