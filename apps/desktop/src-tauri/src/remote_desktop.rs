@@ -2,7 +2,7 @@ use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
     HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
     MAX_HOST_BYTES, MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
-    write_frame_with_timeout,
+    validate_rdp_color_depth, write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -297,6 +297,9 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     if request.color_depth == 0 {
         return Err("remote desktop color depth is invalid".into());
     }
+    if request.protocol == DesktopProtocol::Rdp {
+        validate_rdp_color_depth(request.color_depth).map_err(|error| error.to_string())?;
+    }
     if !matches!(
         request.vnc_quality.as_str(),
         "balanced" | "low-latency" | "low-bandwidth"
@@ -584,6 +587,14 @@ mod tests {
         request.audio_enabled = true;
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("audio"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_unsupported_rdp_color_depth() {
+        let mut request = request(DesktopProtocol::Rdp, "Administrator");
+        request.color_depth = 24;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("16 or 32"));
     }
 
     #[test]

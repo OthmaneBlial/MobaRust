@@ -162,6 +162,13 @@ would exceed the bounded IPC frame budget. This happens before helper launch
 and before a resize reaches the client input queue, so an oversized request
 cannot turn into an avoidable native allocation or a late serialization error.
 
+The pinned IronRDP client accepts only 16-bit and 32-bit color depth values.
+MobaRust now validates that capability in the shared launch contract, at the
+Tauri request boundary, and again in the helper argument parser. An unsupported
+value such as 24-bit therefore fails locally with an actionable error before a
+process starts; this is capability validation, not evidence of production RDP
+interoperability.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

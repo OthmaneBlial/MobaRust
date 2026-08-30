@@ -28,7 +28,7 @@ use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
     MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, read_frame,
-    write_event_frame,
+    validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -879,9 +879,8 @@ where
         .display
         .validate()
         .map_err(|error| ArgumentError(error.to_string()))?;
-    if arguments.color_depth != 16 && arguments.color_depth != 32 {
-        return Err(ArgumentError("color depth must be 16 or 32".into()));
-    }
+    validate_rdp_color_depth(arguments.color_depth)
+        .map_err(|error| ArgumentError(error.to_string()))?;
     Ok(arguments)
 }
 
@@ -978,6 +977,28 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "invalid host");
         assert!(!error.to_string().contains(&oversized_host));
+    }
+
+    #[test]
+    fn parser_rejects_unsupported_color_depth() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--color-depth",
+                "24",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("16 or 32"));
     }
 
     #[test]

@@ -28,6 +28,19 @@ pub const MAX_DOMAIN_BYTES: usize = 255;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 pub const HELPER_PIPE_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Validate the color depths supported by the pinned RDP candidate.
+///
+/// This is intentionally shared by the Tauri boundary, supervisor, and
+/// helper parser so an unsupported depth cannot travel farther than the
+/// earliest validation layer.
+pub fn validate_rdp_color_depth(depth: u16) -> Result<(), HelperProtocolError> {
+    if matches!(depth, 16 | 32) {
+        Ok(())
+    } else {
+        Err(HelperProtocolError::UnsupportedRdpColorDepth { depth })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WireEnvelope<T> {
@@ -210,6 +223,9 @@ impl HelperLaunchConfig {
         }
         if self.color_depth == 0 {
             return Err(HelperProtocolError::InvalidColorDepth);
+        }
+        if self.protocol == DesktopProtocol::Rdp {
+            validate_rdp_color_depth(self.color_depth)?;
         }
         if self.protocol == DesktopProtocol::Vnc
             && !matches!(
@@ -580,6 +596,8 @@ pub enum HelperProtocolError {
     MetadataContainsControl { field: &'static str },
     #[error("helper color depth must be non-zero")]
     InvalidColorDepth,
+    #[error("helper RDP color depth {depth} is unsupported; use 16 or 32")]
+    UnsupportedRdpColorDepth { depth: u16 },
     #[error("helper VNC quality is invalid")]
     InvalidVncQuality,
     #[error("invalid display size {width}x{height}")]
@@ -1032,6 +1050,21 @@ mod tests {
             config.validate(),
             Err(HelperProtocolError::InvalidVncQuality)
         );
+    }
+
+    #[test]
+    fn rdp_color_depth_is_validated_before_process_start() {
+        let mut config = launch_config();
+        config.color_depth = 24;
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::UnsupportedRdpColorDepth { depth: 24 })
+        );
+
+        for depth in [16, 32] {
+            config.color_depth = depth;
+            config.validate().unwrap();
+        }
     }
 
     #[test]
