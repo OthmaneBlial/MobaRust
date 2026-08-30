@@ -126,25 +126,25 @@ struct SaveRemoteDesktopSessionRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ImportOpenSshRequest {
     path: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ImportSessionRequest {
     json: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ImportSettingsRequest {
     json: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuditRecordRequest {
     kind: AuditEventKind,
     session_id: Option<SessionId>,
@@ -152,14 +152,14 @@ struct AuditRecordRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NetworkResolveRequest {
     host: String,
     timeout_ms: u64,
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NetworkTcpCheckRequest {
     host: String,
     port: u16,
@@ -167,7 +167,7 @@ struct NetworkTcpCheckRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NetworkTracerouteRequest {
     host: String,
     timeout_ms: u64,
@@ -175,7 +175,7 @@ struct NetworkTracerouteRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SshFingerprintRequest {
     host: String,
     port: u16,
@@ -1968,6 +1968,79 @@ mod tests {
                 Err(error) => error,
                 Ok(_) => panic!("saved remote-desktop payload must reject unknown fields"),
             };
+        assert!(error.to_string().contains("unknown field"));
+
+        let import_open_ssh_payload = serde_json::json!({
+            "path": "fixture-config",
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::ImportOpenSshRequest>(import_open_ssh_payload)
+            .expect_err("OpenSSH import payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let import_session_payload = serde_json::json!({
+            "json": "{}",
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::ImportSessionRequest>(import_session_payload)
+            .expect_err("session import payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let import_settings_payload = serde_json::json!({
+            "json": "{}",
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::ImportSettingsRequest>(import_settings_payload)
+            .expect_err("settings import payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let audit_payload = serde_json::json!({
+            "kind": "sessionOpened",
+            "sessionId": null,
+            "protocol": "SSH",
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::AuditRecordRequest>(audit_payload)
+            .expect_err("audit payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let resolve_payload = serde_json::json!({
+            "host": "127.0.0.1",
+            "timeoutMs": 1000,
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::NetworkResolveRequest>(resolve_payload)
+            .expect_err("network resolve payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let tcp_check_payload = serde_json::json!({
+            "host": "127.0.0.1",
+            "port": 22,
+            "timeoutMs": 1000,
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::NetworkTcpCheckRequest>(tcp_check_payload)
+            .expect_err("TCP check payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let traceroute_payload = serde_json::json!({
+            "host": "127.0.0.1",
+            "timeoutMs": 1000,
+            "maxHops": 4,
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::NetworkTracerouteRequest>(traceroute_payload)
+            .expect_err("traceroute payload must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+
+        let fingerprint_payload = serde_json::json!({
+            "host": "127.0.0.1",
+            "port": 22,
+            "timeoutMs": 1000,
+            "extra": true
+        });
+        let error = serde_json::from_value::<super::SshFingerprintRequest>(fingerprint_payload)
+            .expect_err("fingerprint payload must reject unknown fields");
         assert!(error.to_string().contains("unknown field"));
     }
 }
