@@ -24,6 +24,8 @@ use uuid::Uuid;
 const COMMAND_CAPACITY: usize = 64;
 const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
+const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
+const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2100,6 +2102,22 @@ async fn run_transfer(
     let _ = lifecycle.apply(TransferEvent::Start);
     manager.emit_transfer(&app, job.event(0, None, lifecycle.state(), None));
 
+    let mut last_progress_at = Instant::now();
+    let mut last_progress_bytes = 0_u64;
+    let mut emit_progress = |bytes, total| {
+        transferred = bytes;
+        total_bytes = total;
+        if should_emit_transfer_progress(
+            bytes,
+            total,
+            Instant::now(),
+            &mut last_progress_at,
+            &mut last_progress_bytes,
+        ) {
+            manager.emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
+        }
+    };
+
     let result = match (&job.protocol, &job.direction) {
         (TransferProtocol::Sftp, TransferDirection::Download) => {
             run_download(
@@ -2109,12 +2127,7 @@ async fn run_transfer(
                 job.overwrite,
                 job.recursive,
                 &mut cancel,
-                |bytes, total| {
-                    transferred = bytes;
-                    total_bytes = total;
-                    manager
-                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
-                },
+                &mut emit_progress,
             )
             .await
         }
@@ -2126,12 +2139,7 @@ async fn run_transfer(
                 job.overwrite,
                 job.recursive,
                 &mut cancel,
-                |bytes, total| {
-                    transferred = bytes;
-                    total_bytes = total;
-                    manager
-                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
-                },
+                &mut emit_progress,
             )
             .await
         }
@@ -2143,12 +2151,7 @@ async fn run_transfer(
                 job.overwrite,
                 job.recursive,
                 &mut cancel,
-                |bytes, total| {
-                    transferred = bytes;
-                    total_bytes = total;
-                    manager
-                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
-                },
+                &mut emit_progress,
             )
             .await
         }
@@ -2160,12 +2163,7 @@ async fn run_transfer(
                 job.overwrite,
                 job.recursive,
                 &mut cancel,
-                |bytes, total| {
-                    transferred = bytes;
-                    total_bytes = total;
-                    manager
-                        .emit_transfer(&app, job.event(bytes, total, TransferState::Running, None));
-                },
+                &mut emit_progress,
             )
             .await
         }
@@ -3084,6 +3082,27 @@ fn transfer_metrics(
     (Some(bytes_per_second), eta_seconds)
 }
 
+fn should_emit_transfer_progress(
+    bytes_transferred: u64,
+    total_bytes: Option<u64>,
+    now: Instant,
+    last_emitted_at: &mut Instant,
+    last_emitted_bytes: &mut u64,
+) -> bool {
+    let initial = bytes_transferred == 0 && *last_emitted_bytes == 0;
+    let completed = total_bytes.is_some_and(|total| bytes_transferred >= total);
+    let byte_threshold =
+        bytes_transferred.saturating_sub(*last_emitted_bytes) >= TRANSFER_PROGRESS_MIN_BYTES;
+    let time_threshold = now.duration_since(*last_emitted_at) >= TRANSFER_PROGRESS_MIN_INTERVAL;
+    if initial || completed || byte_threshold || time_threshold {
+        *last_emitted_at = now;
+        *last_emitted_bytes = bytes_transferred;
+        true
+    } else {
+        false
+    }
+}
+
 fn default_terminal_cols() -> u32 {
     120
 }
@@ -3099,10 +3118,10 @@ fn default_terminal_rows() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        SshTransferRequest, TransferProtocol, remote_child_path, transfer_metrics,
-        validate_transfer_component,
+        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, remote_child_path,
+        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn recursive_remote_paths_keep_root_boundaries() {
@@ -3154,5 +3173,40 @@ mod tests {
             transfer_metrics(0, Some(100), Duration::from_secs(1)),
             (None, None)
         );
+    }
+
+    #[test]
+    fn transfer_progress_is_throttled_but_emits_initial_and_completion_events() {
+        let start = Instant::now();
+        let mut last_at = start;
+        let mut last_bytes = 0;
+        assert!(should_emit_transfer_progress(
+            0,
+            Some(100),
+            start,
+            &mut last_at,
+            &mut last_bytes,
+        ));
+        assert!(!should_emit_transfer_progress(
+            1,
+            Some(100),
+            start + Duration::from_millis(10),
+            &mut last_at,
+            &mut last_bytes,
+        ));
+        assert!(should_emit_transfer_progress(
+            1,
+            Some(100),
+            start + TRANSFER_PROGRESS_MIN_INTERVAL,
+            &mut last_at,
+            &mut last_bytes,
+        ));
+        assert!(should_emit_transfer_progress(
+            100,
+            Some(100),
+            start + Duration::from_millis(110),
+            &mut last_at,
+            &mut last_bytes,
+        ));
     }
 }

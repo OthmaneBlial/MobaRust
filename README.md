@@ -15,7 +15,7 @@ The first working slice provides:
 - an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
 - SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, modification/ownership metadata, explicit remote-path copy, and confirmed POSIX permission changes;
 - a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
-- a global transfer-manager view that aggregates SFTP/SCP jobs across SSH sessions, exposes source/destination paths, progress, native speed and ETA estimates, explicit retry with overwrite confirmation, and cancellation;
+- a global transfer-manager view that aggregates SFTP/SCP jobs across SSH sessions, exposes source/destination paths, throttled progress, native speed and ETA estimates, explicit retry with overwrite confirmation, and cancellation;
 - a native Telnet transport and Quick Connect path with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, resize support, and a local TCP fixture; Telnet is clearly unencrypted;
 - a native serial transport primitive with explicit line parameters, bounded driver I/O, line-ending framing, and recoverable device-loss errors; hardware access is explicit and not exercised by tests;
 - an explicit serial-port refresh action and secret-free saved serial profiles that can be reopened with their line parameters;
