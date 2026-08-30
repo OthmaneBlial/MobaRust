@@ -28,7 +28,7 @@ pub const MAX_DOMAIN_BYTES: usize = 255;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WireEnvelope<T> {
     pub version: u16,
     pub payload: T,
@@ -42,6 +42,7 @@ pub enum DesktopProtocol {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DisplaySize {
     pub width: u16,
     pub height: u16,
@@ -60,7 +61,7 @@ impl DisplaySize {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelperLaunchConfig {
     pub program: PathBuf,
     pub protocol: DesktopProtocol,
@@ -102,6 +103,7 @@ impl fmt::Debug for HelperLaunchConfig {
 /// serialized with ordinary control messages or placed in process arguments.
 /// The helper consumes it once to build the protocol client's native config.
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HelperCredential {
     password: Zeroizing<String>,
 }
@@ -139,7 +141,7 @@ impl fmt::Debug for HelperCredential {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CredentialEnvelope {
     version: u16,
     credential: HelperCredential,
@@ -246,7 +248,12 @@ impl HelperLaunchConfig {
 }
 
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "command", content = "payload", rename_all = "camelCase")]
+#[serde(
+    tag = "command",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
 pub enum HelperCommand {
     Start {
         protocol: DesktopProtocol,
@@ -329,7 +336,12 @@ impl HelperCommand {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "event", content = "payload", rename_all = "camelCase")]
+#[serde(
+    tag = "event",
+    content = "payload",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
 pub enum HelperEvent {
     Hello {
         version: u16,
@@ -1121,6 +1133,63 @@ mod tests {
             decode_command_frame(&frame),
             Err(HelperProtocolError::UnsupportedVersion(version)) if version == WIRE_VERSION + 1
         ));
+    }
+
+    #[test]
+    fn frames_reject_unknown_fields_at_each_ipc_layer() {
+        let command_envelope = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "payload": { "command": "stop" },
+            "unknown": true
+        }))
+        .unwrap();
+        assert!(decode_command_frame(&command_envelope).is_err());
+
+        let command_payload = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "payload": {
+                "command": "resize",
+                "payload": {
+                    "display": { "width": 1024, "height": 768 },
+                    "unknown": true
+                }
+            }
+        }))
+        .unwrap();
+        assert!(decode_command_frame(&command_payload).is_err());
+
+        let credential_envelope = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "credential": { "password": "fixture-password" },
+            "unknown": true
+        }))
+        .unwrap();
+        assert!(decode_credential_frame(&credential_envelope).is_err());
+
+        let credential_payload = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "credential": { "password": "fixture-password", "unknown": true }
+        }))
+        .unwrap();
+        assert!(decode_credential_frame(&credential_payload).is_err());
+
+        let event_envelope = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "payload": { "event": "state", "payload": { "state": "ready" } },
+            "unknown": true
+        }))
+        .unwrap();
+        assert!(decode_event_frame(&event_envelope).is_err());
+
+        let event_payload = encode_frame(&serde_json::json!({
+            "version": WIRE_VERSION,
+            "payload": {
+                "event": "state",
+                "payload": { "state": "ready", "unknown": true }
+            }
+        }))
+        .unwrap();
+        assert!(decode_event_frame(&event_payload).is_err());
     }
 
     #[test]
