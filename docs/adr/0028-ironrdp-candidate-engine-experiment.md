@@ -26,8 +26,11 @@ the `rustls`/`clipboard` features. A repository-local compatibility crate at
 IronRDP while delegating certificate verification to the platform verifier.
 The helper:
 
-- accepts only host metadata in process arguments;
-- receives the password through the versioned zeroizing native-pipe frame;
+- accepts only connection and explicit RD Gateway metadata in process
+  arguments;
+- receives the session password through a versioned zeroizing native-pipe
+  frame, and an optional Gateway password through a separate role-tagged
+  zeroizing native-pipe frame;
 - constructs an IronRDP `ConfigBuilder` with TLS and CredSSP enabled;
 - maps real IronRDP image, keyboard, mouse, resize, lifecycle, and clean-stop
   events to the helper contract;
@@ -42,12 +45,16 @@ The helper:
 The vault crypto was not changed to accommodate the RDP experiment. Passwords
 must arrive through a protected native channel, never as process arguments,
 environment variables, logs, or frontend state. Trust/pinning policy,
-reconnect interoperability, clipboard, audio, gateway support, packaging, and
-Windows interoperability are still release gates. The current helper
-deliberately reports clipboard input as unsupported rather than silently
+reconnect interoperability, clipboard, audio, Gateway trust/interoperability,
+packaging, and Windows interoperability are still release gates. The current
+helper deliberately reports clipboard input as unsupported rather than silently
 bridging the local clipboard. RDP target metadata is passed unchanged to the
 native TLS boundary; the helper does not resolve targets in React or use a
-frontend-side trust decision.
+frontend-side trust decision. The same explicit-only rule applies to the
+Gateway endpoint and username. A Gateway credential reference is persisted as
+non-secret session metadata, but the corresponding secret is resolved only in
+the native boundary and never placed in argv, logs, ordinary profile JSON, or
+the React state.
 
 The clipboard feature was checked against the pinned IronRDP source before
 making this boundary decision. `ClipboardType::Enable` selects a native
@@ -72,9 +79,11 @@ crate replaces that behavior with `rustls-platform-verifier` and SNI. This is
 a security improvement for the isolated candidate, not production evidence:
 the helper accepts hostname/IP metadata only through that native verification
 path and remains excluded from normal bundles until real certificate fixtures,
-Windows interoperability, dependency audit, and packaging checks pass. RD
-Gateway remains deferred until its separate transport path has the same trust
-policy.
+Windows interoperability, dependency audit, and packaging checks pass. The
+isolated candidate now selects IronRDP's Gateway transport only when complete
+explicit Gateway metadata and a second native credential frame are present;
+this proves configuration and secret-boundary plumbing, not a real Gateway
+server or cross-platform trust result.
 
 The helper enforces a fail-closed trust boundary at runtime: it rejects
 inherited `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` settings, then
@@ -126,6 +135,7 @@ The helper's real connection path is still exercised only against a dedicated
 fixture when one is available.
 
 The next gate is a disposable local/Windows RDP fixture, with a real
-framebuffer and controlled input, including a real loss and recovery cycle.
+framebuffer and controlled input, including a real loss and recovery cycle,
+followed by Gateway-specific trust and interoperability checks.
 Until that evidence and packaging exist, the UI must not advertise RDP as
 implemented.
