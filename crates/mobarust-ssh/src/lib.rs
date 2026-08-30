@@ -53,6 +53,8 @@ pub enum SshError {
     Timeout,
     #[error("SSH private key could not be loaded: {0}")]
     PrivateKey(#[source] russh::keys::Error),
+    #[error("SSH private key algorithm is unsupported: {0}")]
+    UnsupportedKeyAlgorithm(String),
     #[error("SSH known_hosts check failed: {0}")]
     KnownHosts(#[source] russh::keys::Error),
     #[error("SSH transport failed: {0}")]
@@ -1567,7 +1569,7 @@ async fn authenticate(
             passphrase,
         } => {
             let key = russh::keys::load_secret_key(&path, passphrase.as_ref().map(Secret::as_str))
-                .map_err(SshError::PrivateKey)?;
+                .map_err(map_private_key_error)?;
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
@@ -1582,6 +1584,18 @@ async fn authenticate(
         SshCredentials::KeyboardInteractive { username, response } => {
             authenticate_keyboard_interactive(handle, username, response).await
         }
+    }
+}
+
+fn map_private_key_error(error: russh::keys::Error) -> SshError {
+    match error {
+        russh::keys::Error::UnsupportedKeyType {
+            key_type_string, ..
+        } => SshError::UnsupportedKeyAlgorithm(key_type_string),
+        russh::keys::Error::UnknownAlgorithm(algorithm) => {
+            SshError::UnsupportedKeyAlgorithm(algorithm.to_string())
+        }
+        error => SshError::PrivateKey(error),
     }
 }
 
@@ -2561,6 +2575,21 @@ mod tests {
         let debug = format!("{credentials:?}");
         assert!(debug.contains("ops"));
         assert!(!debug.contains("do-not-print-me"));
+    }
+
+    #[test]
+    fn unsupported_private_key_algorithm_is_actionable_without_raw_material() {
+        let error = map_private_key_error(russh::keys::Error::UnsupportedKeyType {
+            key_type_string: "RSA".into(),
+            key_type_raw: b"private-key-bytes-must-not-escape".to_vec(),
+        });
+
+        assert!(matches!(error, SshError::UnsupportedKeyAlgorithm(ref value) if value == "RSA"));
+        assert_eq!(
+            error.to_string(),
+            "SSH private key algorithm is unsupported: RSA"
+        );
+        assert!(!error.to_string().contains("private-key-bytes"));
     }
 
     #[test]

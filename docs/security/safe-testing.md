@@ -84,6 +84,27 @@ The native logger writes no log file by default. Test and development output is
 kept on the child process stderr, with credential fields represented only by a
 redacted marker.
 
+The dependency audit is also local and read-only when run with the cached
+advisory database:
+
+```text
+cargo audit --no-fetch
+```
+
+It does not inspect SSH files, the SSH agent, Keychain entries, or remote
+hosts. RSA support is disabled in the main SSH dependency until its known
+Marvin timing advisory has a maintained fixed implementation.
+
+The isolated RDP candidate has a separate lockfile and is audited separately:
+
+```text
+cargo audit --no-fetch --file tools/rdp-helper/Cargo.lock
+```
+
+At present this intentionally reports `RUSTSEC-2023-0071` through IronRDP's
+pinned `picky` chain; the candidate is therefore not staged into normal
+bundles.
+
 The helper EOF smoke test below emits its native handshake and exits without
 connecting:
 

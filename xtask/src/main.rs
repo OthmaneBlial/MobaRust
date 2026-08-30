@@ -42,15 +42,17 @@ fn stage_helpers() -> Result<(), String> {
     fs::create_dir_all(&staging_directory)
         .map_err(|error| format!("could not create helper staging directory: {error}"))?;
     let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
-    let helpers = [
-        ("tools/rdp-helper/Cargo.toml", "mobarust-rdp-helper"),
-        ("tools/vnc-helper/Cargo.toml", "mobarust-vnc-helper"),
-    ];
+    // The isolated IronRDP candidate currently pulls rsa 0.10.0-rc.18 through
+    // picky and fails the local RUSTSEC-2023-0071 audit. Keep it available for
+    // isolated development checks, but never put that candidate in a normal
+    // application bundle until its dependency chain is fixed and re-audited.
+    let helpers = [("tools/vnc-helper/Cargo.toml", "mobarust-vnc-helper")];
+    remove_unshippable_rdp_helper(&staging_directory, executable_suffix)?;
 
     for (manifest, binary) in helpers {
         let manifest_path = repository_root.join(manifest);
         let status = Command::new("cargo")
-            .args(["build", "--release", "--manifest-path"])
+            .args(["build", "--locked", "--release", "--manifest-path"])
             .arg(&manifest_path)
             .current_dir(&repository_root)
             .status()
@@ -90,6 +92,27 @@ fn stage_helpers() -> Result<(), String> {
     Ok(())
 }
 
+fn remove_unshippable_rdp_helper(
+    staging_directory: &std::path::Path,
+    executable_suffix: &str,
+) -> Result<(), String> {
+    let path = staging_directory.join(format!("mobarust-rdp-helper{executable_suffix}"));
+    match fs::remove_file(&path) {
+        Ok(()) => println!(
+            "removed unshippable experimental RDP helper {}",
+            path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "could not remove unshippable experimental RDP helper {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn package_check() -> Result<(), String> {
     run(
         "pnpm",
@@ -121,27 +144,30 @@ fn verify_current_platform_bundle() -> Result<(), String> {
                 executable.display()
             ));
         }
-        for helper in ["mobarust-rdp-helper", "mobarust-vnc-helper"] {
-            let path = bundle.join("Contents/Resources/helpers").join(helper);
-            let metadata = fs::symlink_metadata(&path).map_err(|error| {
-                format!(
-                    "could not inspect bundled helper {}: {error}",
-                    path.display()
-                )
-            })?;
-            if !metadata.file_type().is_file() {
-                return Err(format!(
-                    "bundled helper is not a regular file: {}",
-                    path.display()
-                ));
-            }
-        }
+        verify_bundled_helper(&bundle, "mobarust-vnc-helper")?;
         println!("verified macOS app bundle and native helper resources");
     } else {
         println!(
             "verified current-platform Tauri bundle directory: {}",
             bundle_root.display()
         );
+    }
+    Ok(())
+}
+
+fn verify_bundled_helper(bundle: &std::path::Path, helper: &str) -> Result<(), String> {
+    let path = bundle.join("Contents/Resources/helpers").join(helper);
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        format!(
+            "could not inspect bundled helper {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "bundled helper is not a regular file: {}",
+            path.display()
+        ));
     }
     Ok(())
 }
@@ -162,11 +188,12 @@ fn benchmark() -> Result<(), String> {
 
 fn check() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
-    run_sanitized_test("cargo", ["test", "--workspace"], None)?;
+    run_sanitized_test("cargo", ["test", "--locked", "--workspace"], None)?;
     run(
         "cargo",
         [
             "clippy",
+            "--locked",
             "--workspace",
             "--all-targets",
             "--",
@@ -203,13 +230,19 @@ fn check_rdp_helper() -> Result<(), String> {
     )?;
     run_sanitized_test(
         "cargo",
-        ["test", "--manifest-path", "tools/rdp-helper/Cargo.toml"],
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            "tools/rdp-helper/Cargo.toml",
+        ],
         None,
     )?;
     run(
         "cargo",
         [
             "clippy",
+            "--locked",
             "--manifest-path",
             "tools/rdp-helper/Cargo.toml",
             "--all-targets",
@@ -235,13 +268,19 @@ fn check_vnc_helper() -> Result<(), String> {
     )?;
     run_sanitized_test(
         "cargo",
-        ["test", "--manifest-path", "tools/vnc-helper/Cargo.toml"],
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            "tools/vnc-helper/Cargo.toml",
+        ],
         None,
     )?;
     run(
         "cargo",
         [
             "clippy",
+            "--locked",
             "--manifest-path",
             "tools/vnc-helper/Cargo.toml",
             "--all-targets",

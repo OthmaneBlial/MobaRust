@@ -11,6 +11,11 @@ is accepted only as a zeroizing framed native-pipe payload. It does not read
 or contact a host until a caller sends both an explicit `Start` command and a
 credential frame.
 
+This candidate is not staged into normal application bundles. Its separate
+lockfile currently fails the local audit because IronRDP's pinned `picky`
+dependency chain includes `rsa 0.10.0-rc.18` (`RUSTSEC-2023-0071`). It must
+pass a fresh audit before packaging or production claims.
+
 Safe local checks:
 
 ```text

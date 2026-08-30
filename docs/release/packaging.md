@@ -1,8 +1,10 @@
 # Desktop packaging boundary
 
-MobaRust packages the native RDP and VNC helpers as isolated resources. The
-desktop process resolves them from its Tauri resource directory and never
-launches a helper from an arbitrary user-provided path.
+MobaRust packages the native VNC helper as an isolated resource. The desktop
+process resolves it from its Tauri resource directory and never launches a
+helper from an arbitrary user-provided path. The IronRDP candidate remains an
+isolated development helper and is deliberately excluded from normal bundles
+until its dependency audit is clean.
 
 ## Local staging
 
@@ -12,8 +14,8 @@ From `apps/desktop`, the Tauri build hook runs:
 sh ../../tools/prepare-desktop.sh
 ```
 
-That command builds the two separate helper workspaces in release mode and
-copies only their current-platform executables into the ignored
+That command builds the VNC helper workspace in release mode and copies only
+its current-platform executable into the ignored
 `apps/desktop/src-tauri/helpers/` directory. Staging is repository-scoped and
 does not start an application protocol session, read credentials, or inspect
 personal configuration. Cargo may use its configured package registry when a
@@ -30,11 +32,12 @@ inside the bundle. It is a packaging smoke test, not code-signing,
 notarization, or interoperability evidence.
 
 On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
-was created at `target/debug/bundle/macos/MobaRust.app`; its main executable and
-both staged helper resources (`mobarust-rdp-helper` and `mobarust-vnc-helper`)
-were verified as executable Mach-O arm64 files. This is repository-local
-assembly evidence only; it does not prove a clean install, notarization, or
-remote-desktop interoperability.
+was created at `target/debug/bundle/macos/MobaRust.app`; its main executable
+and the staged VNC helper resource (`mobarust-vnc-helper`) were verified as
+executable Mach-O arm64 files. The RDP candidate was intentionally not staged
+because its separate lockfile currently fails the RSA timing-advisory audit.
+This is repository-local assembly evidence only; it does not prove a clean
+install, notarization, or remote-desktop interoperability.
 
 ## Distribution matrix
 

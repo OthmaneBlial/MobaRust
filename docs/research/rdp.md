@@ -59,6 +59,13 @@ The first experiment should package a pinned FreeRDP client helper and expose a
 small versioned IPC protocol. The Rust-side contract is now captured in
 `mobarust-remote-desktop` and `docs/adr/0013-remote-desktop-helper-wire-contract.md`:
 
+Packaging is currently gated: the isolated IronRDP candidate fails the
+separate dependency audit because its pinned `picky` chain contains
+`rsa 0.10.0-rc.18` (`RUSTSEC-2023-0071`). The candidate remains available for
+repository-local checks but is not staged into normal application bundles.
+Reconsider packaging only after selecting a maintained, audited engine or
+dependency path.
+
 ```text
 MobaRust Rust core
   -> start / configure / resize / key / pointer / clipboard / stop

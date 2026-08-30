@@ -29,7 +29,9 @@ thiserror = "2.0"
 uuid = { version = "1.18", features = ["serde", "v4"] }
 anyhow = "1.0"
 encoding_rs = "0.8"
-russh = { version = "0.63.1", default-features = true }
+# Keep RSA disabled until russh provides a fixed implementation for the
+# Marvin timing advisory (RUSTSEC-2023-0071). Ed25519/ECDSA remain enabled.
+russh = { version = "0.63.1", default-features = false, features = ["aws-lc-rs", "flate2"] }
 russh-sftp = "2.4.0"
 serialport = { version = "4.7", default-features = false }
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }

@@ -56,14 +56,16 @@ The first working slice provides:
   credential material, and it is not included in session exports.
 - explicit-path-only OpenSSH import; MobaRust never falls back to reading
   `~/.ssh/config` automatically.
-- a Tauri packaging hook that stages the isolated RDP/VNC helpers as ignored
-  native resources; signing, clean-install, and cross-platform evidence remain
-  explicit release gates.
+- a Tauri packaging hook that stages only the audited VNC helper as an ignored
+  native resource; the isolated RDP candidate remains excluded until its
+  dependency audit is clean. Signing, clean-install, and cross-platform
+  evidence remain explicit release gates.
 - a versioned, bounded RDP/VNC helper-process contract with lifecycle and
   redaction tests, plus isolated IronRDP and `vnc-rs` adapter experiments under
   `tools/rdp-helper` and `tools/vnc-helper`; current-platform debug packaging
-  stages them as ignored resources, but they are not production desktop
-  clients until signing, clean-install, and interoperability gates pass; VNC
+  stages only the VNC helper as an ignored resource, while the RDP candidate is
+  held back pending a clean dependency audit. Neither is a production desktop
+  client until signing, clean-install, and interoperability gates pass; VNC
   clipboard updates require an explicit local copy action and are never copied
   automatically.
 
