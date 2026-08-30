@@ -92,6 +92,7 @@ non-regular files, so a bundle entry cannot redirect packaging outside the
 repository-owned artifact tree. The package contains:
 
 * MobaRust.app
+* LICENSE, containing the complete Apache License 2.0 terms for redistribution
 * MobaRust.app/Contents/MacOS/portable.flag, beside the macOS executable
 * PORTABLE-UNSIGNED.txt
 * MobaRust.sha256, covering the extracted package contents

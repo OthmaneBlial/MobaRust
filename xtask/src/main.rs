@@ -402,6 +402,10 @@ fn portable_check() -> Result<(), String> {
         .map_err(|error| format!("could not create portable package directory: {error}"))?;
 
     copy_regular_tree(&bundle, &package_directory.join("MobaRust.app"))?;
+    copy_regular_tree(
+        &repository_root.join("LICENSE"),
+        &package_directory.join("LICENSE"),
+    )?;
     fs::write(
         package_directory.join("MobaRust.app/Contents/MacOS/portable.flag"),
         b"",
@@ -647,6 +651,7 @@ fn validate_portable_archive_listing(listing: &str, package_name: &str) -> Resul
 
     for required in [
         package_name.to_owned(),
+        format!("{package_name}/LICENSE"),
         format!("{package_name}/PORTABLE-UNSIGNED.txt"),
         format!("{package_name}/MobaRust.sha256"),
         format!("{package_name}/MobaRust.app/Contents/MacOS/mobarust"),
@@ -1654,10 +1659,17 @@ mod tests {
     fn portable_archive_listing_rejects_escape_and_requires_runtime_entries() {
         let package_name = "MobaRust-macos-arm64";
         let valid = format!(
-            "{package_name}/\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/MacOS/portable.flag\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
+            "{package_name}/\n{package_name}/LICENSE\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/MacOS/portable.flag\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
         );
         validate_portable_archive_listing(&valid, package_name)
             .expect("complete portable listing should pass");
+
+        let error = validate_portable_archive_listing(
+            &valid.replace(&format!("{package_name}/LICENSE\n"), ""),
+            package_name,
+        )
+        .expect_err("portable archive must include the project license");
+        assert!(error.contains("required entry") && error.contains("/LICENSE"));
 
         let error = validate_portable_archive_listing(
             &format!("{package_name}/\n{package_name}/../escape"),
