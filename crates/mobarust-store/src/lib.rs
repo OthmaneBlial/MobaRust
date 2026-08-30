@@ -27,85 +27,122 @@ const MAX_IMPORT_JSON_BYTES: usize = MAX_LOCAL_STORE_FILE_BYTES;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("could not read session store {path}: {source}")]
-    Read { path: PathBuf, source: io::Error },
-    #[error("session store {path} contains invalid data: {source}")]
+    #[error("could not read session store")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("session store contains invalid data")]
     Decode {
         path: PathBuf,
+        #[source]
         source: serde_json::Error,
     },
     #[error("session import exceeds the 64 MiB limit")]
     SessionImportTooLarge,
-    #[error("session store {path} uses unsupported schema version {version}")]
+    #[error("session store uses an unsupported schema version {version}")]
     UnsupportedSchema { path: PathBuf, version: u32 },
     #[error("saved session is invalid: {0}")]
     InvalidSession(#[from] mobarust_core::SessionValidationError),
-    #[error("could not serialize session store: {0}")]
-    Encode(serde_json::Error),
-    #[error("could not write session store {path}: {source}")]
-    Write { path: PathBuf, source: io::Error },
-    #[error("could not read OpenSSH config {path}: {source}")]
-    ImportRead { path: PathBuf, source: io::Error },
-    #[error("OpenSSH config is too large (maximum 1 MiB): {0}")]
+    #[error("could not serialize session store")]
+    Encode(#[source] serde_json::Error),
+    #[error("could not write session store")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not read OpenSSH config")]
+    ImportRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("OpenSSH config is too large (maximum 1 MiB)")]
     ImportTooLarge(PathBuf),
-    #[error("OpenSSH config path is not a regular file: {0}")]
+    #[error("OpenSSH config path is not a regular file")]
     ImportPathUnsafe(PathBuf),
-    #[error("settings file {path} contains invalid data: {source}")]
+    #[error("settings file contains invalid data")]
     SettingsDecode {
         path: PathBuf,
+        #[source]
         source: serde_json::Error,
     },
     #[error("settings import exceeds the 64 MiB limit")]
     SettingsImportTooLarge,
-    #[error("settings file {path} uses unsupported schema version {version}")]
+    #[error("settings file uses an unsupported schema version {version}")]
     SettingsUnsupportedSchema { path: PathBuf, version: u32 },
     #[error("settings are invalid: {0}")]
     InvalidSettings(#[from] mobarust_core::SettingsValidationError),
-    #[error("could not serialize settings: {0}")]
-    SettingsEncode(serde_json::Error),
-    #[error("could not write settings file {path}: {source}")]
-    SettingsWrite { path: PathBuf, source: io::Error },
+    #[error("could not serialize settings")]
+    SettingsEncode(#[source] serde_json::Error),
+    #[error("could not write settings file")]
+    SettingsWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("snippet is invalid: {0}")]
     InvalidSnippet(#[from] mobarust_core::SnippetValidationError),
-    #[error("snippet file {path} contains invalid data: {source}")]
+    #[error("snippet file contains invalid data")]
     SnippetDecode {
         path: PathBuf,
+        #[source]
         source: serde_json::Error,
     },
-    #[error("snippet file {path} uses unsupported schema version {version}")]
+    #[error("snippet file uses an unsupported schema version {version}")]
     SnippetUnsupportedSchema { path: PathBuf, version: u32 },
-    #[error("could not serialize snippets: {0}")]
-    SnippetEncode(serde_json::Error),
-    #[error("could not write snippet file {path}: {source}")]
-    SnippetWrite { path: PathBuf, source: io::Error },
+    #[error("could not serialize snippets")]
+    SnippetEncode(#[source] serde_json::Error),
+    #[error("could not write snippet file")]
+    SnippetWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("macro is invalid: {0}")]
     InvalidMacro(#[from] mobarust_core::MacroValidationError),
-    #[error("macro file {path} contains invalid data: {source}")]
+    #[error("macro file contains invalid data")]
     MacroDecode {
         path: PathBuf,
+        #[source]
         source: serde_json::Error,
     },
-    #[error("macro file {path} uses unsupported schema version {version}")]
+    #[error("macro file uses an unsupported schema version {version}")]
     MacroUnsupportedSchema { path: PathBuf, version: u32 },
-    #[error("could not serialize macros: {0}")]
-    MacroEncode(serde_json::Error),
-    #[error("could not write macro file {path}: {source}")]
-    MacroWrite { path: PathBuf, source: io::Error },
-    #[error("could not read audit file {path}: {source}")]
-    AuditRead { path: PathBuf, source: io::Error },
-    #[error("audit file {path} contains invalid data: {source}")]
+    #[error("could not serialize macros")]
+    MacroEncode(#[source] serde_json::Error),
+    #[error("could not write macro file")]
+    MacroWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not read audit file")]
+    AuditRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("audit file contains invalid data")]
     AuditDecode {
         path: PathBuf,
+        #[source]
         source: serde_json::Error,
     },
-    #[error("audit file {path} uses unsupported schema version {version}")]
+    #[error("audit file uses an unsupported schema version {version}")]
     AuditUnsupportedSchema { path: PathBuf, version: u32 },
     #[error("audit history cannot contain more than {MAX_AUDIT_EVENTS} events")]
     AuditTooLarge,
-    #[error("could not serialize audit file: {0}")]
-    AuditEncode(serde_json::Error),
-    #[error("could not write audit file {path}: {source}")]
-    AuditWrite { path: PathBuf, source: io::Error },
+    #[error("could not serialize audit file")]
+    AuditEncode(#[source] serde_json::Error),
+    #[error("could not write audit file")]
+    AuditWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1199,6 +1236,105 @@ mod tests {
         RdpGatewayProfile, RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
     };
     use tempfile::tempdir;
+
+    #[test]
+    fn persistence_errors_redact_paths_and_os_details_from_display() {
+        let private_path = PathBuf::from("/Users/example/.ssh/private-key");
+        let invalid_json = || {
+            serde_json::from_str::<serde_json::Value>("{invalid-json")
+                .expect_err("fixture must be invalid")
+        };
+        let io_error = || io::Error::other(format!("raw OS detail at {private_path:?}"));
+        let errors = vec![
+            StoreError::Read {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::Decode {
+                path: private_path.clone(),
+                source: invalid_json(),
+            },
+            StoreError::UnsupportedSchema {
+                path: private_path.clone(),
+                version: 99,
+            },
+            StoreError::Write {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::ImportRead {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::ImportTooLarge(private_path.clone()),
+            StoreError::ImportPathUnsafe(private_path.clone()),
+            StoreError::SettingsDecode {
+                path: private_path.clone(),
+                source: invalid_json(),
+            },
+            StoreError::SettingsUnsupportedSchema {
+                path: private_path.clone(),
+                version: 99,
+            },
+            StoreError::SettingsWrite {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::SnippetDecode {
+                path: private_path.clone(),
+                source: invalid_json(),
+            },
+            StoreError::SnippetUnsupportedSchema {
+                path: private_path.clone(),
+                version: 99,
+            },
+            StoreError::SnippetWrite {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::MacroDecode {
+                path: private_path.clone(),
+                source: invalid_json(),
+            },
+            StoreError::MacroUnsupportedSchema {
+                path: private_path.clone(),
+                version: 99,
+            },
+            StoreError::MacroWrite {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::AuditRead {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+            StoreError::AuditDecode {
+                path: private_path.clone(),
+                source: invalid_json(),
+            },
+            StoreError::AuditUnsupportedSchema {
+                path: private_path.clone(),
+                version: 99,
+            },
+            StoreError::AuditWrite {
+                path: private_path.clone(),
+                source: io_error(),
+            },
+        ];
+
+        for error in errors {
+            let display = error.to_string();
+            assert!(!display.contains(private_path.to_string_lossy().as_ref()));
+            assert!(!display.contains("raw OS detail"));
+            assert!(!display.contains("private-key"));
+        }
+
+        let error = StoreError::Read {
+            path: private_path.clone(),
+            source: io_error(),
+        };
+        assert!(std::error::Error::source(&error).is_some());
+    }
 
     fn assert_private_file_permissions(path: &Path) {
         #[cfg(unix)]

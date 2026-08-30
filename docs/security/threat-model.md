@@ -34,7 +34,7 @@ This document describes the security boundary for the first vertical slice and t
 | Remote content execution | Terminal output and PTY titles are rendered as bounded terminal/display text only; URL detection accepts bounded HTTP(S) links without embedded credentials, and opening one requires explicit user confirmation. No remote text becomes HTML or an automatic navigation. |
 | Saved startup command execution | Startup commands are optional, bounded session configuration, validated natively, and documented as shell input on SSH connect or after explicit confirmation for a saved local profile. They are not silently derived from remote content or snippets. |
 | Webview script injection | The Tauri CSP disallows `unsafe-eval`, objects, and framing; remote output is escaped before any non-terminal rendering. |
-| IPC abuse | Use typed, narrow commands with validation. Do not expose `execute_anything(command: String)`. Native PTY/WSL errors keep underlying OS paths and process details out of their user-facing display text. |
+| IPC abuse | Use typed, narrow commands with validation. Do not expose `execute_anything(command: String)`. Native PTY/WSL, persistence, and vault errors keep underlying paths and raw OS/backend details out of their user-facing display text. |
 | X11 display/cookie exposure | X11 is opt-in and requires an explicit TCP/Unix display target. Rust generates the temporary forwarding cookie, keeps display bytes native, caps channels, and never reads or exposes `DISPLAY`/`.Xauthority` automatically. |
 
 ## Audit history boundary

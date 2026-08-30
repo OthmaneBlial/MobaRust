@@ -119,7 +119,7 @@ impl Drop for SecretMaterial {
 pub enum VaultError {
     #[error("credential reference must contain only letters, numbers, '.', '_' or '-'")]
     InvalidCredentialId,
-    #[error("native credential store error: {0}")]
+    #[error("native credential store error")]
     Backend(#[from] keyring::Error),
     #[error("portable vault passphrase cannot be empty")]
     EmptyPassphrase,
@@ -135,21 +135,25 @@ pub enum VaultError {
     PortableCredentialMissing(String),
     #[error("portable vault passphrase is incorrect or the file is corrupt")]
     PortableAuthenticationFailed,
-    #[error("portable vault format is invalid: {0}")]
+    #[error("portable vault format is invalid")]
     PortableFormat(String),
-    #[error("portable vault key derivation failed: {0}")]
+    #[error("portable vault key derivation failed")]
     PortableKeyDerivation(#[source] argon2::Error),
     #[error("portable vault encryption failed")]
     PortableEncryption,
-    #[error("portable vault randomness failed: {0}")]
+    #[error("portable vault randomness failed")]
     PortableRandomness(#[source] getrandom::Error),
-    #[error("portable vault file operation failed for {path}: {source}")]
-    PortableIo { path: PathBuf, source: io::Error },
-    #[error("portable vault already exists: {0}")]
+    #[error("portable vault file operation failed")]
+    PortableIo {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("portable vault already exists")]
     PortableAlreadyExists(PathBuf),
-    #[error("portable vault path is not a regular file: {0}")]
+    #[error("portable vault path is not a regular file")]
     PortablePathUnsafe(PathBuf),
-    #[error("portable vault state is unavailable: {0}")]
+    #[error("portable vault state is unavailable")]
     PortableStateUnavailable(String),
 }
 
@@ -677,6 +681,35 @@ mod tests {
     fn secret_debug_is_redacted() {
         let secret = SecretMaterial::new("do-not-log-this");
         assert_eq!(format!("{secret:?}"), "SecretMaterial(<redacted>)");
+    }
+
+    #[test]
+    fn vault_errors_redact_paths_and_backend_details_from_display() {
+        let private_path = std::path::PathBuf::from("/Users/example/.ssh/private-key");
+        let errors = [
+            VaultError::PortableFormat(format!("parser saw {private_path:?}")),
+            VaultError::PortableIo {
+                path: private_path.clone(),
+                source: std::io::Error::other(format!("raw OS detail at {private_path:?}")),
+            },
+            VaultError::PortableAlreadyExists(private_path.clone()),
+            VaultError::PortablePathUnsafe(private_path.clone()),
+            VaultError::PortableStateUnavailable(format!("backend detail at {private_path:?}")),
+        ];
+
+        for error in errors {
+            let display = error.to_string();
+            assert!(!display.contains(private_path.to_string_lossy().as_ref()));
+            assert!(!display.contains("raw OS detail"));
+            assert!(!display.contains("backend detail"));
+            assert!(!display.contains("private-key"));
+        }
+
+        let error = VaultError::PortableIo {
+            path: private_path,
+            source: std::io::Error::other("fixture OS detail"),
+        };
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

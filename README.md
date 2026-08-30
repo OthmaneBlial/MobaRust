@@ -102,7 +102,7 @@ MobaRust is designed for operators who cannot afford an accidental production ac
 - credentials are resolved inside the native boundary when possible;
 - helper processes receive secrets through native channels, never command-line arguments;
 - passwords, private keys, tokens, and sensitive environment values are redacted from logs;
-- native terminal errors do not echo local paths or raw process details;
+- native terminal, persistence, and vault errors do not echo local paths or raw OS/backend details;
 - broadcast input requires explicit target selection and has an emergency disable path;
 - pasted multiline shell commands are not automatically executed;
 - network work uses operation-specific timeouts, cancellation, and bounded retries;
