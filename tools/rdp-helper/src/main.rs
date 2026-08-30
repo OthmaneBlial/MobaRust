@@ -962,6 +962,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clipboard_command_is_rejected_without_forwarding_remote_text() {
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let mut current_display = DisplaySize {
+            width: 640,
+            height: 480,
+        };
+        let mut last_buttons = 0;
+        let mut client_task = tokio::spawn(async {});
+
+        assert!(
+            !handle_command(
+                HelperCommand::Clipboard {
+                    text: "remote-secret-text".to_owned().into(),
+                },
+                &input_tx,
+                &mut current_display,
+                &mut last_buttons,
+                &mut writer,
+                &mut client_task,
+            )
+            .await
+            .unwrap()
+        );
+
+        let frame = read_frame(&mut reader).await.unwrap().unwrap();
+        let event = mobarust_remote_desktop::decode_event_frame(&frame).unwrap();
+        assert!(matches!(
+            event,
+            HelperEvent::Diagnostic { message, .. }
+                if message == "RDP clipboard redirection is not enabled in this helper build"
+        ));
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn stalled_loopback_handshake_is_aborted_by_the_startup_timeout() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
