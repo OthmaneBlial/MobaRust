@@ -54,6 +54,8 @@ assert.equal(vncKeysymForText("ab"), null);
 assert.equal(isMultilineTerminalPaste("single line"), false);
 assert.equal(isMultilineTerminalPaste("first\nsecond"), true);
 assert.equal(isMultilineTerminalPaste("first\rsecond"), true);
+assert.equal(isMultilineTerminalPaste("first\u2028second"), true);
+assert.equal(isMultilineTerminalPaste("first\u2029second"), true);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", true), true);
 assert.equal(shouldConfirmTerminalPaste("single line", true), false);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", false), false);

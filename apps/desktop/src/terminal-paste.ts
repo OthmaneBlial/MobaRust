@@ -1,6 +1,6 @@
-/** Return true when clipboard text contains a shell line boundary. */
+/** Return true when clipboard text contains a shell or Unicode line boundary. */
 export function isMultilineTerminalPaste(data: string): boolean {
-  return data.includes("\n") || data.includes("\r");
+  return /[\r\n\u2028\u2029]/u.test(data);
 }
 
 /**
