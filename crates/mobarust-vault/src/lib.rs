@@ -531,7 +531,7 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], VaultError> {
 /// reported length; otherwise a hostile portable file can turn an input limit
 /// into an allocation-after-read denial of service.
 fn read_portable_file(path: &Path) -> Result<Vec<u8>, VaultError> {
-    let file = fs::File::open(path).map_err(|source| VaultError::PortableIo {
+    let file = open_portable_file(path).map_err(|source| VaultError::PortableIo {
         path: path.to_path_buf(),
         source,
     })?;
@@ -557,6 +557,22 @@ fn read_portable_file(path: &Path) -> Result<Vec<u8>, VaultError> {
         return Err(VaultError::PortableFileTooLarge);
     }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn open_portable_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path)
+}
+
+#[cfg(not(unix))]
+fn open_portable_file(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {

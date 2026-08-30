@@ -31,6 +31,11 @@ unknown payload fields, unsupported schema versions, and tampered ciphertext.
 React receives only status, opaque IDs, and actionable errors. It does not
 receive a vault listing's secret values or a get-secret command.
 
+On Unix, vault reads also open with no-follow and nonblocking flags so a local
+path swap cannot redirect the read through a symlink or leave the native
+operation waiting on a special file. Other platforms retain the regular-file
+check and bounded read path while using their native file-opening semantics.
+
 ## Consequences
 
 Portable operation works without silently replacing the platform keyring, but

@@ -3028,6 +3028,7 @@ dependencies = [
  "argon2",
  "getrandom 0.4.3",
  "keyring",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
