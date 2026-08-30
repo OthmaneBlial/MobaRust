@@ -38,7 +38,7 @@ evidence exist.
 - dependency and license review.
 
 The isolated helper currently has loopback evidence for authentication,
-framebuffer, keyboard, pointer, clean stop, negotiation disconnect,
+framebuffer, bounded keyboard/pointer input, clean stop, negotiation disconnect,
 cooperative cancellation, connected-session loss, and bounded reconnect
 attempts, including a bounded client-to-server clipboard message. A reconnect
 keeps the helper process and credential handoff inside the native boundary; it
@@ -69,6 +69,11 @@ The candidate is currently restricted to local fixtures: both the helper and
 the Tauri parent accept only literal loopback IP targets (`127.0.0.1` or `::1`)
 and reject hostnames and other addresses before opening a socket. This fail-
 closed rule remains until an audited transport-security strategy is selected.
+
+Pointer and wheel coordinates are clamped to the active framebuffer dimensions
+inside the helper. This protects delayed input events that arrive after a
+server-announced resize and keeps protocol coordinates within the negotiated
+surface.
 
 Until those checks pass, MobaRust must not advertise VNC as implemented. A
 mock, screenshot, static framebuffer, or external viewer launch alone is not

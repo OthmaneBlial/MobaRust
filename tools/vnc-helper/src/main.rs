@@ -428,7 +428,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        match handle_command(client, command, stdout, clipboard_enabled).await {
+                        match handle_command(client, command, canvas.size, stdout, clipboard_enabled).await {
                             Ok(true) => {
                                 close_vnc_client(client).await;
                                 write_state(stdout, HelperState::Stopped).await?;
@@ -520,6 +520,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
 async fn handle_command<W: AsyncWrite + Unpin>(
     client: &VncClient,
     command: HelperCommand,
+    display: DisplaySize,
     stdout: &mut W,
     clipboard_enabled: bool,
 ) -> Result<bool, Box<dyn Error>> {
@@ -543,6 +544,7 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Pointer { x, y, buttons } => {
+            let (x, y) = bounded_vnc_point(x, y, display);
             send_vnc_input(
                 client.input(X11Event::PointerEvent(ClientMouseEvent::from((
                     x, y, buttons,
@@ -554,6 +556,7 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Wheel { x, y, delta } => {
+            let (x, y) = bounded_vnc_point(x, y, display);
             let button = if delta.is_negative() {
                 0b0000_1000
             } else {
@@ -643,6 +646,16 @@ fn wheel_steps(delta: i16) -> u32 {
     (i32::from(delta).unsigned_abs() + 59)
         .div_euclid(120)
         .clamp(1, 8)
+}
+
+/// Keep pointer coordinates inside the framebuffer currently owned by the
+/// helper. The browser normally maps into this range, but a delayed event can
+/// cross a server-announced resize boundary; clamping preserves releases.
+fn bounded_vnc_point(x: u16, y: u16, display: DisplaySize) -> (u16, u16) {
+    (
+        x.min(display.width.saturating_sub(1)),
+        y.min(display.height.saturating_sub(1)),
+    )
 }
 
 enum CanvasUpdate {
@@ -1459,6 +1472,16 @@ mod tests {
         assert_eq!(wheel_steps(-240), 2);
         assert_eq!(wheel_steps(16), 1);
         assert_eq!(wheel_steps(16 * 120), 8);
+    }
+
+    #[test]
+    fn pointer_coordinates_are_clamped_to_the_current_framebuffer() {
+        let display = DisplaySize {
+            width: 1280,
+            height: 720,
+        };
+        assert_eq!(bounded_vnc_point(0, 0, display), (0, 0));
+        assert_eq!(bounded_vnc_point(65_535, 65_535, display), (1279, 719));
     }
 
     #[tokio::test]
