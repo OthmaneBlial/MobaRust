@@ -234,6 +234,7 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
             stdout,
             incoming_rx,
             quality_refresh_interval(&arguments.quality),
+            arguments.clipboard_enabled,
         )
         .await?
         {
@@ -414,6 +415,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
     refresh_interval: Duration,
+    clipboard_enabled: bool,
 ) -> Result<ConnectedOutcome, Box<dyn Error>> {
     let mut active_sent = false;
     let mut last_refresh = Instant::now();
@@ -423,7 +425,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        match handle_command(client, command, stdout).await {
+                        match handle_command(client, command, stdout, clipboard_enabled).await {
                             Ok(true) => {
                                 close_vnc_client(client).await;
                                 write_state(stdout, HelperState::Stopped).await?;
@@ -500,6 +502,7 @@ async fn handle_command<W: AsyncWrite + Unpin>(
     client: &VncClient,
     command: HelperCommand,
     stdout: &mut W,
+    clipboard_enabled: bool,
 ) -> Result<bool, Box<dyn Error>> {
     match command {
         HelperCommand::Stop => Ok(true),
@@ -556,12 +559,8 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Clipboard { text } => {
-            if text.len() > MAX_CLIPBOARD_BYTES || !text.chars().all(|value| value as u32 <= 0xff) {
-                send_error(
-                    stdout,
-                    "VNC clipboard text is outside the Latin-1 safety limit",
-                )
-                .await?;
+            if let Err(message) = validate_clipboard_input(&text, clipboard_enabled) {
+                send_error(stdout, message).await?;
             } else {
                 send_vnc_input(
                     client.input(X11Event::CopyText(text.to_string())),
@@ -574,6 +573,16 @@ async fn handle_command<W: AsyncWrite + Unpin>(
         }
         HelperCommand::Start { .. } => Ok(false),
     }
+}
+
+fn validate_clipboard_input(text: &str, clipboard_enabled: bool) -> Result<(), &'static str> {
+    if !clipboard_enabled {
+        return Err("VNC clipboard input is disabled without explicit opt-in");
+    }
+    if text.len() > MAX_CLIPBOARD_BYTES || !text.chars().all(|value| value as u32 <= 0xff) {
+        return Err("VNC clipboard text is outside the Latin-1 safety limit");
+    }
+    Ok(())
 }
 
 async fn send_vnc_input<F>(
@@ -1010,6 +1019,19 @@ mod tests {
         )
         .unwrap();
         assert!(arguments.clipboard_enabled);
+    }
+
+    #[test]
+    fn clipboard_input_requires_explicit_opt_in_before_native_forwarding() {
+        assert_eq!(
+            validate_clipboard_input("must stay native", false),
+            Err("VNC clipboard input is disabled without explicit opt-in")
+        );
+        assert!(validate_clipboard_input("approved fixture text", true).is_ok());
+        assert_eq!(
+            validate_clipboard_input("\u{100}", true),
+            Err("VNC clipboard text is outside the Latin-1 safety limit")
+        );
     }
 
     #[test]
