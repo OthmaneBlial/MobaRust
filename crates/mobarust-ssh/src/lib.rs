@@ -51,6 +51,14 @@ pub enum SshError {
     KeyboardInteractiveEchoPrompt,
     #[error("SSH connection timed out")]
     Timeout,
+    #[error("SSH host could not be resolved")]
+    DnsFailure,
+    #[error("SSH connection was refused")]
+    ConnectionRefused,
+    #[error("SSH host is unreachable")]
+    HostUnreachable,
+    #[error("SSH network connection failed")]
+    ConnectionFailed,
     #[error("SSH private key could not be loaded: {0}")]
     PrivateKey(#[source] russh::keys::Error),
     #[error("SSH private key algorithm is unsupported: {0}")]
@@ -1549,8 +1557,35 @@ fn map_connect_result(
             {
                 return Err(SshError::HostKeyRejected { fingerprint });
             }
-            Err(SshError::Handshake(error.to_string()))
+            Err(map_connect_error(error))
         }
+    }
+}
+
+fn map_connect_error(error: anyhow::Error) -> SshError {
+    if let Some(error) = error.downcast_ref::<std::io::Error>() {
+        return map_io_connect_error(error);
+    }
+    if let Some(error) = error.downcast_ref::<russh::Error>() {
+        return match error {
+            russh::Error::IO(error) => map_io_connect_error(error),
+            russh::Error::ConnectionTimeout => SshError::Timeout,
+            russh::Error::HUP | russh::Error::Disconnect => SshError::ConnectionFailed,
+            _ => SshError::Handshake("SSH handshake failed".into()),
+        };
+    }
+    SshError::Handshake("SSH handshake failed".into())
+}
+
+fn map_io_connect_error(error: &std::io::Error) -> SshError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => SshError::DnsFailure,
+        std::io::ErrorKind::ConnectionRefused => SshError::ConnectionRefused,
+        std::io::ErrorKind::NetworkUnreachable | std::io::ErrorKind::HostUnreachable => {
+            SshError::HostUnreachable
+        }
+        std::io::ErrorKind::TimedOut => SshError::Timeout,
+        _ => SshError::ConnectionFailed,
     }
 }
 
@@ -2590,6 +2625,26 @@ mod tests {
             "SSH private key algorithm is unsupported: RSA"
         );
         assert!(!error.to_string().contains("private-key-bytes"));
+    }
+
+    #[test]
+    fn connect_errors_are_typed_without_raw_details() {
+        assert!(matches!(
+            map_connect_error(anyhow::Error::new(std::io::Error::from(
+                std::io::ErrorKind::ConnectionRefused
+            ))),
+            SshError::ConnectionRefused
+        ));
+        assert_eq!(
+            map_connect_error(anyhow::Error::new(russh::Error::ConnectionTimeout)).to_string(),
+            "SSH connection timed out"
+        );
+
+        let error = map_connect_error(anyhow::Error::new(std::io::Error::other(
+            "personal-host-detail",
+        )));
+        assert_eq!(error.to_string(), "SSH network connection failed");
+        assert!(!error.to_string().contains("personal-host-detail"));
     }
 
     #[test]
