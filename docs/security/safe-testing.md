@@ -114,6 +114,13 @@ cargo run --manifest-path tools/rdp-helper/Cargo.toml -- \
   --username fixture-user < /dev/null
 ```
 
+`cargo xtask check` also gives each test subprocess an ephemeral `HOME` and
+isolated XDG configuration/data/cache directories (and the corresponding
+Windows profile variables). The normal Cargo and rustup caches remain available
+for build performance, but application tests cannot resolve a personal home
+configuration through the subprocess environment. The temporary directory is
+created with a unique process/time name and removed after each child exits.
+
 These guarantees cover MobaRust's test behavior. They cannot protect secrets
 from a fully compromised operating system, a malicious process with the same
 user privileges, or an operator who explicitly exports or pastes a secret.

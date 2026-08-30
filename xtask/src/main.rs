@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     let command = std::env::args().nth(1).unwrap_or_else(|| "help".to_owned());
@@ -312,20 +313,28 @@ fn run<const N: usize>(
     }
 }
 
-/// Run tests without inheriting ambient SSH agents or Git SSH configuration.
-///
-/// This is intentionally narrower than changing HOME: Cargo and rustup still
-/// need their normal toolchain/cache locations, while protocol fixtures must
-/// never accidentally discover a user's agent or personal Git configuration.
+/// Run tests without inheriting personal process, Git, or home-directory
+/// configuration.
 fn run_sanitized_test<const N: usize>(
     program: &str,
     args: [&str; N],
     directory: Option<&str>,
 ) -> Result<(), String> {
+    let test_home = create_sanitized_test_home()?;
     let mut command = Command::new(program);
     command.args(args);
     if let Some(directory) = directory {
         command.current_dir(directory);
+    }
+    command.env("HOME", &test_home);
+    command.env("XDG_CONFIG_HOME", test_home.join("config"));
+    command.env("XDG_DATA_HOME", test_home.join("data"));
+    command.env("XDG_CACHE_HOME", test_home.join("cache"));
+    #[cfg(windows)]
+    {
+        command.env("USERPROFILE", &test_home);
+        command.env("APPDATA", test_home.join("data"));
+        command.env("LOCALAPPDATA", test_home.join("cache"));
     }
 
     for variable in [
@@ -346,12 +355,42 @@ fn run_sanitized_test<const N: usize>(
         if cfg!(windows) { "NUL" } else { "/dev/null" },
     );
 
-    let status: ExitStatus = command
+    let status = command
         .status()
-        .map_err(|error| format!("could not start {program}: {error}"))?;
+        .map_err(|error| format!("could not start {program}: {error}"));
+    let cleanup = fs::remove_dir_all(&test_home)
+        .map_err(|error| format!("could not remove temporary test home: {error}"));
+    cleanup?;
+    let status: ExitStatus = status?;
     if status.success() {
         Ok(())
     } else {
         Err(format!("{program} exited with {status}"))
     }
+}
+
+fn create_sanitized_test_home() -> Result<PathBuf, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?
+        .as_nanos();
+    let test_home = std::env::temp_dir().join(format!(
+        "mobarust-safe-test-home-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&test_home).map_err(|error| {
+        format!(
+            "could not create isolated test home {}: {error}",
+            test_home.display()
+        )
+    })?;
+    for directory in ["config", "data", "cache"] {
+        if let Err(error) = fs::create_dir(test_home.join(directory)) {
+            let _ = fs::remove_dir_all(&test_home);
+            return Err(format!(
+                "could not create isolated test directory {directory}: {error}"
+            ));
+        }
+    }
+    Ok(test_home)
 }
