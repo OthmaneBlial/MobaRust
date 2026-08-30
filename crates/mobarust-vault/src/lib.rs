@@ -512,8 +512,11 @@ fn decode_portable_entries(
     }
     let mut entries = BTreeMap::new();
     for (id, secret) in credentials {
+        // Take ownership of the deserialized secret under a zeroizing guard
+        // before validating the unrelated identifier. Otherwise an invalid
+        // ID could make this String leave the loop through `?` un scrubbed.
+        let secret = SecretMaterial::from_zeroizing(Zeroizing::new(secret));
         let credential_id = CredentialId::new(id)?;
-        let secret = SecretMaterial::new(secret);
         validate_portable_secret(&secret)?;
         entries.insert(credential_id.to_string(), secret);
     }
@@ -611,7 +614,7 @@ fn ensure_portable_path_is_safe(path: &Path, allow_missing: bool) -> Result<bool
 mod tests {
     use super::{
         CredentialId, MAX_SECRET_BYTES, PlatformVault, PortableVault, SecretMaterial, VaultError,
-        validate_secret_size,
+        decode_portable_entries, validate_secret_size,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -750,6 +753,16 @@ mod tests {
         assert!(matches!(
             PortableVault::create(&path, &SecretMaterial::new("fixture-passphrase")),
             Err(VaultError::PortablePathUnsafe(rejected)) if rejected == path
+        ));
+    }
+
+    #[test]
+    fn portable_decoder_rejects_invalid_ids_after_adopting_zeroizing_secrets() {
+        let plaintext = br#"{"schema_version":1,"credentials":{"invalid/id":"fixture-secret"}}"#;
+
+        assert!(matches!(
+            decode_portable_entries(plaintext),
+            Err(VaultError::InvalidCredentialId)
         ));
     }
 
