@@ -215,21 +215,27 @@ impl TerminalManager {
             .slave
             .spawn_command(command)
             .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
-        let mut writer = pair
-            .master
-            .take_writer()
-            .map_err(|error| TerminalError::Open(anyhow::anyhow!(error)))?;
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = cleanup_child(child.as_mut());
+                return Err(TerminalError::Open(anyhow::anyhow!(error)));
+            }
+        };
+        let mut writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = cleanup_child(child.as_mut());
+                return Err(TerminalError::Open(anyhow::anyhow!(error)));
+            }
+        };
         if let Some(startup_command) = startup_command {
             let startup_result = writer
                 .write_all(startup_command.as_bytes())
                 .and_then(|()| writer.write_all(b"\r"))
                 .and_then(|()| writer.flush());
             if let Err(error) = startup_result {
-                let _ = child.kill();
+                let _ = cleanup_child(child.as_mut());
                 return Err(TerminalError::Io(error));
             }
         }
@@ -247,10 +253,18 @@ impl TerminalManager {
 
         let manager = self.clone();
         let terminal_id = id.clone();
-        thread::Builder::new()
+        if let Err(error) = thread::Builder::new()
             .name(format!("mobarust-pty-{id}"))
             .spawn(move || stream_output(app, manager, terminal_id, reader))
-            .map_err(TerminalError::Io)?;
+        {
+            // The session is inserted before the stream worker starts so the
+            // worker can race safely with an immediate close. If the OS
+            // refuses the worker, take the session back and reap its child
+            // instead of leaving a native process behind.
+            let _ = self.take_session(&id);
+            let _ = cleanup_session(&session);
+            return Err(TerminalError::Io(error));
+        }
 
         Ok(id)
     }
@@ -280,32 +294,9 @@ impl TerminalManager {
 
     pub fn close(&self, id: &str) -> Result<(), TerminalError> {
         let session = self
-            .sessions
-            .lock()
-            .expect("terminal session map poisoned")
-            .remove(id)
+            .take_session(id)
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))?;
-        let mut child = session.child.lock().expect("terminal child poisoned");
-        if child.try_wait().map_err(TerminalError::Io)?.is_some() {
-            return Ok(());
-        }
-
-        // A PTY close is cooperative at the application boundary but must
-        // still reap the native child. Treat a process that exited during the
-        // race between try_wait and kill as already closed, then wait once so
-        // no zombie or unreaped helper remains behind.
-        match child.kill() {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // The child can exit between try_wait and kill. Waiting here
-                // still reaps that child instead of abandoning the cleanup.
-                child.wait().map_err(TerminalError::Wait)?;
-                return Ok(());
-            }
-            Err(error) => return Err(TerminalError::Io(error)),
-        }
-        child.wait().map_err(TerminalError::Wait)?;
-        Ok(())
+        cleanup_session(&session)
     }
 
     fn session(&self, id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
@@ -316,6 +307,44 @@ impl TerminalManager {
             .cloned()
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))
     }
+
+    fn take_session(&self, id: &str) -> Option<Arc<TerminalSession>> {
+        self.sessions
+            .lock()
+            .expect("terminal session map poisoned")
+            .remove(id)
+    }
+}
+
+/// Stop and reap a native PTY child exactly once after its session has been
+/// removed from the manager. This is shared by explicit close, worker-start
+/// failure, and reader EOF so every local process has a deterministic owner.
+fn cleanup_session(session: &TerminalSession) -> Result<(), TerminalError> {
+    let mut child = session.child.lock().expect("terminal child poisoned");
+    cleanup_child(child.as_mut())
+}
+
+fn cleanup_child(child: &mut dyn portable_pty::Child) -> Result<(), TerminalError> {
+    if child.try_wait().map_err(TerminalError::Io)?.is_some() {
+        return Ok(());
+    }
+
+    // A PTY close is cooperative at the application boundary but must still
+    // reap the native child. Treat a process that exited during the race
+    // between try_wait and kill as already closed, then wait once so no
+    // zombie or unreaped helper remains behind.
+    match child.kill() {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The child can exit between try_wait and kill. Waiting here still
+            // reaps that child instead of abandoning the cleanup.
+            child.wait().map_err(TerminalError::Wait)?;
+            return Ok(());
+        }
+        Err(error) => return Err(TerminalError::Io(error)),
+    }
+    child.wait().map_err(TerminalError::Wait)?;
+    Ok(())
 }
 
 fn validate_wsl_distribution(distribution: &str) -> Result<String, TerminalError> {
@@ -429,6 +458,7 @@ fn stream_output<R: Read + Send + 'static>(
         });
 
     if reader_thread.is_err() {
+        cleanup_stream_session(&manager, &terminal_id);
         let _ = app.emit(
             "terminal://closed",
             TerminalClosed {
@@ -461,6 +491,7 @@ fn stream_output<R: Read + Send + 'static>(
         }
     }
 
+    cleanup_stream_session(&manager, &terminal_id);
     let _ = app.emit(
         "terminal://closed",
         TerminalClosed {
@@ -468,6 +499,15 @@ fn stream_output<R: Read + Send + 'static>(
         },
     );
     manager.remove(&terminal_id);
+}
+
+fn cleanup_stream_session(manager: &TerminalManager, terminal_id: &str) {
+    if let Some(session) = manager.take_session(terminal_id) {
+        // The stream has ended, so an otherwise-live child no longer has a
+        // usable terminal. Reuse the same bounded kill-and-reap policy as an
+        // explicit close; there is no silent orphan path on reader EOF.
+        let _ = cleanup_session(&session);
+    }
 }
 
 fn emit_chunk(app: &AppHandle, terminal_id: &str, bytes: Vec<u8>) {
@@ -482,10 +522,7 @@ fn emit_chunk(app: &AppHandle, terminal_id: &str, bytes: Vec<u8>) {
 
 impl TerminalManager {
     fn remove(&self, id: &str) {
-        self.sessions
-            .lock()
-            .expect("terminal session map poisoned")
-            .remove(id);
+        let _ = self.take_session(id);
     }
 }
 
@@ -603,6 +640,49 @@ mod tests {
                 .sessions
                 .lock()
                 .expect("lock cleanup sessions after close")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn stream_cleanup_takes_and_reaps_a_running_pty_child() {
+        let system = portable_pty::native_pty_system();
+        let pair = system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open stream cleanup pty");
+        let writer = pair
+            .master
+            .take_writer()
+            .expect("take stream cleanup writer");
+        let child = pair
+            .slave
+            .spawn_command(long_running_fixture_command())
+            .expect("spawn stream cleanup fixture");
+        let manager = TerminalManager::default();
+        manager
+            .sessions
+            .lock()
+            .expect("lock stream cleanup sessions")
+            .insert(
+                "stream-cleanup-fixture".into(),
+                Arc::new(TerminalSession {
+                    master: Mutex::new(pair.master),
+                    writer: Mutex::new(writer),
+                    child: Mutex::new(child),
+                }),
+            );
+
+        cleanup_stream_session(&manager, "stream-cleanup-fixture");
+        assert!(
+            manager
+                .sessions
+                .lock()
+                .expect("lock stream cleanup sessions after cleanup")
                 .is_empty()
         );
     }

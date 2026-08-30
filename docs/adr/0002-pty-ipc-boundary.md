@@ -29,6 +29,9 @@ HTML, a command, or an unbounded stream of frontend work.
 - A noisy process cannot create an unbounded IPC queue.
 - Small reads are delayed by at most one batching window, preserving interactive feel while avoiding one event per character.
 - The bounded channel creates backpressure at the native reader; future SSH adapters should reuse the same policy.
+- The output worker removes and terminates/reaps the native child on reader
+  EOF or worker-start failure before emitting the closed event; explicit Close
+  uses the same cleanup function, so no PTY path silently abandons a child.
 - The first release can measure batch size and latency independently from terminal rendering.
 
 ## Follow-up probes

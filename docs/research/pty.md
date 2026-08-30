@@ -17,6 +17,14 @@ checks the same contract on every supported desktop target:
 - on explicit close, terminate a still-running child and reap it within the
   native close operation; a child that already exited is treated as closed.
 
+The same cleanup rule applies when the output reader reaches EOF or cannot
+start: the manager removes the session, terminates a still-live child, and
+waits for it before publishing the closed event. If the stream worker itself
+cannot be created, the just-opened session is taken back and cleaned up before
+the spawn error is returned. This keeps process ownership deterministic across
+Unix and Windows even when the terminal disappears before the user clicks
+Close.
+
 The fixture command is explicit and platform-specific: `/bin/sh -c ...` on
 Unix and `cmd.exe /C ...` on Windows. The product launch contract now also
 accepts only typed shell choices: `powershell.exe`/`cmd.exe` on Windows and
