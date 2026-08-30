@@ -217,6 +217,7 @@ impl RemoteDesktopManager {
             sessions,
             stop_requested,
             reader_supervisor,
+            request.protocol,
         ));
         tokio::spawn(write_helper_commands(
             writer_app,
@@ -515,6 +516,7 @@ async fn read_helper_events(
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
     stop_requested: Arc<AtomicBool>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
+    expected_protocol: DesktopProtocol,
 ) {
     loop {
         let frame = match read_frame(&mut stdout).await {
@@ -575,6 +577,26 @@ async fn read_helper_events(
                 break;
             }
         };
+        if !helper_event_matches_protocol(&event, expected_protocol) {
+            if claim_unexpected_helper_exit(&stop_requested) {
+                emit_helper_event(
+                    &app,
+                    &session_id,
+                    HelperEvent::Diagnostic {
+                        level: mobarust_remote_desktop::DiagnosticLevel::Error,
+                        message: "remote desktop helper reported an incompatible protocol".into(),
+                    },
+                );
+                emit_helper_event(
+                    &app,
+                    &session_id,
+                    HelperEvent::State {
+                        state: mobarust_remote_desktop::HelperState::Failed,
+                    },
+                );
+            }
+            break;
+        }
         emit_helper_event(&app, &session_id, event.clone());
         if matches!(
             event,
@@ -594,6 +616,13 @@ async fn read_helper_events(
     // user-initiated stop before dropping the supervisor.
     let _ = supervisor.lock().await.stop(HELPER_GRACE_PERIOD).await;
     sessions.lock().await.remove(&session_id);
+}
+
+fn helper_event_matches_protocol(event: &HelperEvent, expected: DesktopProtocol) -> bool {
+    match event {
+        HelperEvent::Capabilities { capabilities } => capabilities.protocol == expected,
+        _ => true,
+    }
 }
 
 fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
@@ -616,12 +645,12 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 mod tests {
     use super::{
         MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, claim_unexpected_helper_exit, helper_input_failure_message,
-        validate_helper_resource, validate_request,
+        RemoteDesktopConnectRequest, claim_unexpected_helper_exit, helper_event_matches_protocol,
+        helper_input_failure_message, validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{
-        DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperProtocolError,
-        MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+        DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
+        HelperEvent, HelperProtocolError, HelperState, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -650,6 +679,35 @@ mod tests {
             helper_input_failure_message(&HelperProtocolError::Io("private helper detail".into()));
         assert_eq!(message, "remote desktop helper input pipe failed");
         assert!(!message.contains("private helper detail"));
+    }
+
+    #[test]
+    fn helper_capability_protocol_must_match_the_requested_protocol() {
+        let rdp_capabilities = HelperEvent::Capabilities {
+            capabilities: HelperCapabilities::rdp(),
+        };
+        assert!(helper_event_matches_protocol(
+            &rdp_capabilities,
+            DesktopProtocol::Rdp
+        ));
+        assert!(!helper_event_matches_protocol(
+            &rdp_capabilities,
+            DesktopProtocol::Vnc
+        ));
+
+        let vnc_capabilities = HelperEvent::Capabilities {
+            capabilities: HelperCapabilities::vnc(),
+        };
+        assert!(helper_event_matches_protocol(
+            &vnc_capabilities,
+            DesktopProtocol::Vnc
+        ));
+        assert!(helper_event_matches_protocol(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            DesktopProtocol::Rdp
+        ));
     }
 
     fn request(protocol: DesktopProtocol, username: &str) -> RemoteDesktopConnectRequest {
