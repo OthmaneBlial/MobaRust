@@ -157,6 +157,11 @@ handler before enqueueing it into IronRDP. Invalid dimensions therefore cannot
 mutate the remembered display size or reach the engine even if a future caller
 invokes the handler outside the already-validating wire decoder.
 
+The shared helper contract also rejects a display whose raw RGBA framebuffer
+would exceed the bounded IPC frame budget. This happens before helper launch
+and before a resize reaches the client input queue, so an oversized request
+cannot turn into an avoidable native allocation or a late serialization error.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

@@ -57,6 +57,13 @@ impl DisplaySize {
                 height: self.height,
             });
         }
+        let bytes = usize::from(self.width)
+            .checked_mul(usize::from(self.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(HelperProtocolError::FrameTooLarge { bytes: usize::MAX })?;
+        if bytes > MAX_FRAME_BYTES {
+            return Err(HelperProtocolError::FrameTooLarge { bytes });
+        }
         Ok(())
     }
 }
@@ -1236,6 +1243,14 @@ mod tests {
         assert!(matches!(
             invalid.validate(),
             Err(HelperProtocolError::InvalidDisplaySize { .. })
+        ));
+        let oversized_display = DisplaySize {
+            width: 4096,
+            height: 2048,
+        };
+        assert!(matches!(
+            oversized_display.validate(),
+            Err(HelperProtocolError::FrameTooLarge { .. })
         ));
         assert!(matches!(
             HelperCommand::Wheel {
