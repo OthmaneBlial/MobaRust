@@ -940,6 +940,16 @@ mod tests {
     use super::*;
     use mobarust_remote_desktop::read_frame;
 
+    #[cfg(target_os = "macos")]
+    struct TemporaryFixtureDirectory(std::path::PathBuf);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for TemporaryFixtureDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn parser_accepts_only_non_secret_metadata() {
         let arguments = parse_arguments(
@@ -1358,6 +1368,95 @@ mod tests {
         assert_eq!(current_display.width, 640);
         assert_eq!(current_display.height, 480);
         assert!(input_rx.try_recv().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn platform_tls_rejects_a_self_signed_loopback_certificate() {
+        let fixture_directory = std::env::temp_dir().join(format!(
+            "mobarust-rdp-tls-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is before the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&fixture_directory).expect("create disposable TLS fixture directory");
+        let _cleanup = TemporaryFixtureDirectory(fixture_directory.clone());
+        let certificate = fixture_directory.join("server-cert.pem");
+        let private_key = fixture_directory.join("server-key.pem");
+
+        let generated = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-subj",
+                "/CN=example.invalid",
+                "-days",
+                "1",
+                "-keyout",
+            ])
+            .arg(&private_key)
+            .arg("-out")
+            .arg(&certificate)
+            .output()
+            .expect("openssl is required for the macOS TLS fixture");
+        assert!(
+            generated.status.success(),
+            "openssl could not create the fixture certificate"
+        );
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("reserve a disposable loopback TLS port");
+        let port = listener
+            .local_addr()
+            .expect("read disposable loopback TLS port")
+            .port();
+        drop(listener);
+
+        let mut server = std::process::Command::new("openssl")
+            .args(["s_server", "-quiet", "-accept"])
+            .arg(port.to_string())
+            .args(["-cert"])
+            .arg(&certificate)
+            .args(["-key"])
+            .arg(&private_key)
+            .args(["-naccept", "1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start the disposable OpenSSL TLS fixture");
+
+        let stream = match tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                    break stream;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        {
+            Ok(stream) => stream,
+            Err(_) => {
+                let _ = server.kill();
+                let _ = server.wait();
+                panic!("the disposable TLS fixture did not accept a loopback connection");
+            }
+        };
+
+        let result = ironrdp_tls::upgrade(stream, "example.invalid").await;
+        let _ = server.kill();
+        let _ = server.wait();
+        assert!(
+            result.is_err(),
+            "the platform verifier accepted a self-signed certificate"
+        );
     }
 
     #[tokio::test]

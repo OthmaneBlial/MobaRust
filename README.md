@@ -69,7 +69,7 @@ The table below makes the current boundary explicit. “Implemented” means rep
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, and WSL foundations |
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
-| **RDP** | Isolated native candidate with framebuffer/input/lifecycle work, explicit hostname/IP target metadata, platform certificate validation, and local process tests; mature-engine integration, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
+| **RDP** | Isolated native candidate with framebuffer/input/lifecycle work, explicit hostname/IP target metadata, platform certificate validation, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, gateway, audio, clipboard, and production packaging remain open |
 | **VNC** | Native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, cancellation, and clean shutdown; broader interoperability remains open |
 | **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server remains a separate research and packaging decision |
 
@@ -105,7 +105,7 @@ Read the [threat model](docs/security/threat-model.md) and [safe testing policy]
 
 The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
 
-The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; real Windows/Linux interoperability, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
+The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; a macOS-only TLS fixture now proves that an untrusted self-signed certificate is rejected, while real Windows/Linux interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
 
 The next gates are visible in the [roadmap](ROADMAP.md):
 
@@ -151,6 +151,18 @@ cargo xtask pre-push-check
 The validation path uses isolated home/XDG directories, repository-owned or disposable fixture paths, and loopback-only protocol servers. It does **not** need your personal `~/.ssh`, GitHub keys, Keychain, SSH agent, real hosts, or attached hardware.
 
 `package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. They do not claim notarization, cross-platform release support, or RDP/VNC interoperability.
+
+On macOS, the isolated RDP trust fixture can be run explicitly:
+
+```bash
+cargo test --locked --manifest-path tools/rdp-helper/Cargo.toml \
+  platform_tls_rejects_a_self_signed_loopback_certificate -- --nocapture
+```
+
+It creates only a short-lived synthetic certificate and key in a disposable
+temporary directory, connects only to `127.0.0.1`, and verifies that the
+platform trust verifier rejects the certificate. Windows/Linux certificate
+store fixtures and real RDP-server interoperability remain future gates.
 
 The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first. This does not make RDP production-ready, bypass its dependency audit, or provide Windows/Linux interoperability evidence.
 

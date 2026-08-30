@@ -85,7 +85,7 @@ zeroizing native credential frame. Its clipboard command is intentionally
 rejected until a user-controlled OS clipboard backend is wired. Audio requests
 are rejected at both the desktop boundary and helper boundary rather than
 silently ignored. This is still
-not a production selection: certificate fixture coverage, reconnect
+not a production selection: cross-platform certificate fixture coverage, reconnect
 interoperability, audio, gateway behavior, packaging, and real Windows
 interoperability remain open gates. The helper now rebuilds a native RDP client
 after an active-session loss with three bounded exponential-backoff attempts;
@@ -114,7 +114,7 @@ experiment now patches that dependency inside its isolated workspace with
 `ironrdp-tls-validated`, a small compatibility crate that uses Rustls, platform
 certificate verification, and SNI. This improves the candidate's trust
 behavior but does not establish production interoperability: certificate
-fixtures, Windows evidence, dependency audit, and packaging gates remain. RDP
+fixtures beyond the macOS local rejection proof, Windows evidence, dependency audit, and packaging gates remain. RDP
 hostname/IP metadata is now allowed only through this native verification path;
 RD Gateway remains deferred until its separate transport path has the same
 trust evidence.
@@ -128,9 +128,20 @@ without echoing the submitted value. Invalid or untrusted certificates are
 rejected. Local tests still use only disposable loopback listeners and never
 contact a real remote host.
 
+The macOS-only
+`platform_tls_rejects_a_self_signed_loopback_certificate` test adds a concrete
+trust-store proof: it creates a short-lived synthetic self-signed certificate,
+serves it through a disposable OpenSSL process on `127.0.0.1`, and verifies
+that the platform verifier rejects it for the matching server name. The test
+does not read personal certificates or contact a remote host. It proves the
+TLS trust decision only; it is not RDP-server interoperability evidence.
+Equivalent Windows/Linux certificate-store fixtures and real RDP-server
+testing remain open.
+
 Real-server promotion remains a hard gate, not a missing preference in the UI:
-MobaRust still needs deterministic certificate fixtures, an audited dependency
-chain, and Windows interoperability evidence. The local Rustls verifier adds
+MobaRust still needs deterministic cross-platform certificate fixtures, an
+audited dependency chain, and Windows interoperability evidence. The local
+Rustls verifier adds
 platform trust-store and packaging surface on Windows, macOS, and Linux; that
 must be included in the future distribution matrix. No TLS key-log output or
 ambient certificate override is allowed during local experiments.

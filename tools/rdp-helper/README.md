@@ -43,6 +43,13 @@ invalid certificates fail closed. This candidate behavior is still subject to
 real interoperability, dependency, and packaging evidence; local tests
 continue to use only disposable loopback fixtures.
 
+On macOS, `platform_tls_rejects_a_self_signed_loopback_certificate` generates a
+short-lived synthetic certificate and key, serves it with a disposable local
+OpenSSL fixture, and verifies that the platform trust verifier rejects it. The
+test does not read personal certificates or contact a remote host. Equivalent
+Windows/Linux certificate-store fixtures remain pending, and this test proves
+TLS trust rejection only—not compatibility with a real RDP server.
+
 Promotion requires an audited engine/backend with real certificate-chain and
 hostname validation (or an explicit, reviewed pinning policy), deterministic
 certificate fixtures, and Windows interoperability evidence. The candidate
