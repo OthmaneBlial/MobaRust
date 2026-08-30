@@ -146,6 +146,10 @@ pub struct JumpHostRecord {
     pub known_hosts_path: Option<String>,
     #[serde(default)]
     pub pinned_fingerprint: Option<String>,
+    /// SSH keepalive interval in seconds for this hop. `None` or `Some(0)`
+    /// disables it.
+    #[serde(default)]
+    pub server_alive_interval: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +267,12 @@ impl SessionRecord {
         validate_auth_method(&self.auth)?;
         for jump_host in &self.jump_host_profiles {
             validate_auth_method(&jump_host.auth)?;
+            if jump_host
+                .server_alive_interval
+                .is_some_and(|seconds| seconds > MAX_SERVER_ALIVE_INTERVAL_SECONDS)
+            {
+                return Err(SessionValidationError::InvalidServerAliveInterval);
+            }
         }
         match (self.protocol, &self.serial_profile) {
             (Protocol::Serial, Some(profile)) => profile.validate()?,

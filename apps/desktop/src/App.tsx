@@ -331,6 +331,7 @@ type SavedJumpHost = {
   username: string;
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
+  server_alive_interval?: number | null;
   auth: SavedAuth;
 };
 
@@ -463,6 +464,7 @@ type SshJumpHostRequest = {
   auth: SshAuthRequest;
   knownHostsPath?: string;
   pinnedFingerprint?: string;
+  serverAliveInterval?: number;
 };
 
 type SshConnectResponse = {
@@ -3341,6 +3343,7 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
         auth: jumpAuth,
         knownHostsPath: jump.known_hosts_path ?? undefined,
         pinnedFingerprint: jump.pinned_fingerprint ?? undefined,
+        serverAliveInterval: jump.server_alive_interval ?? undefined,
       };
     })
     : undefined;
@@ -3362,6 +3365,7 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
         auth: jumpRequest.auth,
         knownHostsPath: jumpRequest.knownHostsPath,
         pinnedFingerprint: jumpRequest.pinnedFingerprint,
+        serverAliveInterval: jumpRequest.serverAliveInterval,
       });
     }
   }

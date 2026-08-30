@@ -1203,6 +1203,7 @@ mod tests {
             },
             known_hosts_path: None,
             pinned_fingerprint: Some("SHA256:test".into()),
+            server_alive_interval: Some(15),
         }];
         store.save(session.clone()).unwrap();
 

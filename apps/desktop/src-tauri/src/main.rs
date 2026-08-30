@@ -842,6 +842,7 @@ fn session_save_ssh(
                     auth,
                     known_hosts_path: jump.known_hosts_path,
                     pinned_fingerprint: jump.pinned_fingerprint,
+                    server_alive_interval: jump.server_alive_interval,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?,

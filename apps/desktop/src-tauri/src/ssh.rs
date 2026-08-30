@@ -94,6 +94,10 @@ pub struct SshJumpHostRequest {
     pub known_hosts_path: Option<String>,
     #[serde(default)]
     pub pinned_fingerprint: Option<String>,
+    /// OpenSSH `ServerAliveInterval` value in seconds for this hop. Zero
+    /// disables it.
+    #[serde(default)]
+    pub server_alive_interval: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1298,7 +1302,7 @@ async fn connect_transport(
             port: jump.port,
             host_key_policy,
             timeout: Duration::from_secs(12),
-            keepalive_interval: None,
+            keepalive_interval: server_alive_interval_duration(jump.server_alive_interval)?,
             credentials,
             x11: None,
         });
