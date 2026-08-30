@@ -520,6 +520,7 @@ type SshTransferEvent = {
   protocol: TransferProtocol;
   source: string;
   destination: string;
+  recursive: boolean;
   bytesTransferred: number;
   totalBytes?: number | null;
   bytesPerSecond?: number | null;
@@ -2164,6 +2165,34 @@ function App() {
     }
   }, [remotePath, remoteSessionId]);
 
+  const retryTransfer = useCallback(async (transfer: SshTransferEvent) => {
+    if (!IS_TAURI) {
+      setConnectionError("Transfer retry requires the desktop runtime.");
+      return;
+    }
+    const remotePath = transfer.direction === "download" ? transfer.source : transfer.destination;
+    const localPath = transfer.direction === "download" ? transfer.destination : transfer.source;
+    const overwrite = window.confirm(`Retry this transfer and allow replacing the destination?\n\n${remotePath}`);
+    if (!overwrite) return;
+    const command = transfer.direction === "download" ? "ssh_download" : "ssh_upload";
+    try {
+      await invoke(command, {
+        terminalId: transfer.terminalId,
+        request: {
+          remotePath,
+          localPath,
+          protocol: transfer.protocol,
+          overwrite: true,
+          recursive: transfer.recursive,
+        },
+      });
+      setConnectionError(null);
+      setSessionNotice(`Retry queued for ${remotePath}.`);
+    } catch (error) {
+      setConnectionError(`Transfer retry failed: ${String(error)}`);
+    }
+  }, []);
+
   const createRemoteDirectory = useCallback(async () => {
     if (!remoteSessionId) return;
     const defaultPath = remotePath === "." ? "./new-folder" : `${remotePath.replace(/\/$/, "")}/new-folder`;
@@ -2931,13 +2960,13 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} />
+                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "transfers" ? (
-                <TransferManagerView transfers={transfers} onCancelTransfer={cancelTransfer} />
+                <TransferManagerView transfers={transfers} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} fingerprint={networkFingerprint} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onInspectFingerprint={inspectNetworkHostKey} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
@@ -3088,7 +3117,7 @@ function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, on
   return <div className={`session-row ${active ? "active" : ""}`}><button className="session-row-main" onClick={onSelect}><span className={`session-icon ${type === "LOCAL" ? "local" : "remote"}`}>{type === "LOCAL" ? <TerminalIcon size={14} /> : <Server size={14} />}</span><span className="session-copy"><strong>{name}</strong><small>{detail}</small></span><span className={`session-type ${type === "LOCAL" ? "local-type" : ""}`}>{type}</span></button><div className="session-row-actions">{onEdit && <button className="session-action" onClick={onEdit} aria-label={`Edit ${name}`} title="Edit session"><Pencil size={12} /></button>}{onDelete && <button className="session-action danger" onClick={onDelete} aria-label={`Delete ${name}`} title="Delete session"><Trash2 size={12} /></button>}<button className={`session-favorite ${favorite ? "selected" : ""}`} onClick={onToggleFavorite} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`} title={favorite ? "Remove from favorites" : "Add to favorites"}><Star size={13} fill={favorite ? "currentColor" : "none"} /></button></div></div>;
 }
 
-function RemoteFilesView({ entries, path, status, error, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onSetPermissions, onCopyPath, onEdit, onCancelTransfer }: {
+function RemoteFilesView({ entries, path, status, error, transfers, onOpenTerminal, onNavigate, onDownload, onUpload, onCreateDirectory, onRename, onDelete, onSetPermissions, onCopyPath, onEdit, onCancelTransfer, onRetryTransfer }: {
   entries: RemoteEntry[];
   path: string;
   status: "idle" | "loading" | "ready" | "error";
@@ -3105,6 +3134,7 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
   onCopyPath: (entry: RemoteEntry) => void;
   onEdit: (entry: RemoteEntry) => void;
   onCancelTransfer: (transferId: string) => void;
+  onRetryTransfer: (transfer: SshTransferEvent) => void;
 }) {
   const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
   const [sort, setSort] = useState<RemoteFileSort>("name");
@@ -3149,7 +3179,7 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
       </div>)}
       {status === "ready" && entries.length === 0 && <div className="remote-files-empty">This directory is empty.</div>}
     </div>
-    {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />}
+    {transfers.length > 0 && <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} onRetryTransfer={onRetryTransfer} />}
     <div className="remote-files-note">SFTP is the default and supports bounded recursive transfers. SCP is available for single-file compatibility transfers; directories always use SFTP. Individual files commit from temporary local or remote paths, and cancellation never presents a partial local file as complete.</div>
   </section>;
 }
@@ -3296,22 +3326,23 @@ function highlightRemoteCode(value: string, language: RemoteEditorLanguage): str
   return escaped.replace(keyPattern, '$1<span class="remote-editor-token-key">$2</span>');
 }
 
-function TransferManagerView({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {
+function TransferManagerView({ transfers, onCancelTransfer, onRetryTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void; onRetryTransfer: (transfer: SshTransferEvent) => void }) {
   const active = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const completed = transfers.filter((transfer) => transfer.state === "completed").length;
   return <section className="transfer-manager" aria-label="Global transfer manager">
     <div className="transfer-manager-heading"><div><span className="eyebrow">WORKSPACE / TRANSFERS</span><strong>Global transfer manager</strong><p>All SFTP and SCP jobs share one bounded queue. Each job can be cancelled without presenting a partial file as complete.</p></div><div className="transfer-manager-summary"><span><b>{active}</b> active</span><span><b>{completed}</b> completed</span><span><b>{transfers.length}</b> retained</span></div></div>
     <div className="transfer-manager-meta"><span>Latest jobs across every SSH session</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded concurrency</span></div>
-    <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />
+    <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} onRetryTransfer={onRetryTransfer} />
     <div className="transfer-manager-note">Transfers are retained in memory for the current application run. Source and destination paths are displayed for operator review; secrets are never included in transfer events.</div>
   </section>;
 }
 
-function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {
+function TransferPanel({ transfers, onCancelTransfer, onRetryTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void; onRetryTransfer: (transfer: SshTransferEvent) => void }) {
   return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER QUEUE</span><span>{transfers.length} retained</span></div>{transfers.length === 0 && <div className="transfer-empty"><ArrowDownToLine size={20} /><strong>No transfers yet</strong><span>Start an upload or download from a connected SSH session. Jobs will appear here across all sessions.</span></div>}{transfers.slice().reverse().map((transfer) => {
     const percent = transfer.totalBytes && transfer.totalBytes > 0 ? Math.min(100, Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)) : null;
     const active = !["completed", "cancelled", "failed"].includes(transfer.state);
-    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}{transfer.bytesPerSecond ? ` · ${formatBytesPerSecond(transfer.bytesPerSecond)}` : ""}{active && transfer.etaSeconds != null ? ` · ETA ${formatTransferEta(transfer.etaSeconds)}` : ""}</small><small className="transfer-paths" title={`${transfer.source} → ${transfer.destination}`}>{transfer.source} → {transfer.destination}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
+    const retryable = transfer.state === "failed" || transfer.state === "cancelled";
+    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}{transfer.bytesPerSecond ? ` · ${formatBytesPerSecond(transfer.bytesPerSecond)}` : ""}{active && transfer.etaSeconds != null ? ` · ETA ${formatTransferEta(transfer.etaSeconds)}` : ""}</small><small className="transfer-paths" title={`${transfer.source} → ${transfer.destination}`}>{transfer.source} → {transfer.destination}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active ? <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button> : retryable ? <button className="transfer-cancel" onClick={() => onRetryTransfer(transfer)} aria-label="Retry transfer" title="Retry transfer"><RefreshCw size={14} /></button> : null}</div>;
   })}</section>;
 }
 

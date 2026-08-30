@@ -63,15 +63,19 @@ trusting a frontend-provided file type; deleting the remote root is rejected.
 - claiming recursive transfer, pause/resume, drag-and-drop, or remote editing
   before their cancellation and conflict semantics are implemented.
 
-## Follow-ups
-
-- recursive jobs with per-item conflict decisions;
-- native file/directory picker integration;
-- retry policy with preserved transfer identity;
-- pause/resume where the protocol and remote semantics support it;
-- remote editing with modification detection and atomic upload.
-
 The browser now exposes server-provided mode, UID/GID, and owner/group metadata
 when available. A chmod action accepts only a validated octal mode and requires
 an explicit confirmation before sending a typed native SFTP metadata request;
 it never builds a shell command.
+
+Failed and cancelled transfer rows expose an explicit retry action. Retrying
+creates a new bounded job and transfer ID, reuses only the non-secret source,
+destination, protocol, and recursive flag, and asks for destination overwrite
+confirmation again.
+
+## Follow-ups
+
+- recursive jobs with per-item conflict decisions;
+- native file/directory picker integration;
+- pause/resume where the protocol and remote semantics support it;
+- remote editing with modification detection and atomic upload.
