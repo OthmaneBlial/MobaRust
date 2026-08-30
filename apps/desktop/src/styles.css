@@ -87,6 +87,8 @@ button:not(:disabled) { cursor: pointer; }
 .transfer-protocol-select { display: flex; flex-direction: column; gap: 4px; color: var(--faint); font-family: var(--mono); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
 .transfer-protocol-select select { height: 29px; padding: 0 7px; border: 1px solid var(--line); outline: 0; background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 9px; letter-spacing: 0; text-transform: none; }
 .transfer-protocol-select select:focus { border-color: rgba(232, 180, 92, .6); }
+.remote-files-hidden { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; color: var(--muted); font-family: var(--mono); font-size: 8px; text-transform: uppercase; white-space: nowrap; }
+.remote-files-hidden input { width: 13px; height: 13px; margin: 0; accent-color: var(--amber); }
 .remote-files-error { display: flex; align-items: flex-start; gap: 8px; padding: 10px 16px; border-bottom: 1px solid rgba(238, 141, 120, .22); background: rgba(238, 141, 120, .07); color: var(--coral); font-family: var(--mono); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
 .remote-file-row { display: flex; align-items: stretch; gap: 0; padding: 0; }
 .remote-file-main { display: grid; grid-template-columns: 25px minmax(0, 1fr) 100px; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 42px; padding: 0 8px; border: 0; border-bottom: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
@@ -157,9 +159,24 @@ button:not(:disabled) { cursor: pointer; }
 .transfer-row-copy strong, .transfer-row-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transfer-row-copy strong { color: var(--text); font-family: var(--mono); font-size: 9px; font-weight: 400; }
 .transfer-row-copy small { margin-top: 3px; color: var(--faint); font-family: var(--mono); font-size: 8px; }
+.transfer-row-copy .transfer-paths { color: var(--muted); }
 .transfer-row-copy .transfer-error { color: var(--coral); white-space: normal; }
 .transfer-progress { height: 3px; margin-top: 7px; overflow: hidden; background: rgba(193, 214, 195, .1); }
 .transfer-progress span { display: block; height: 100%; background: var(--amber); transition: width .18s ease; }
+.transfer-manager { border: 1px solid var(--line-strong); background: rgba(16, 22, 21, .78); }
+.transfer-manager-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; min-height: 112px; padding: 18px 16px; border-bottom: 1px solid var(--line); }
+.transfer-manager-heading > div:first-child { display: flex; flex-direction: column; gap: 8px; }
+.transfer-manager-heading strong { color: var(--text); font-size: 17px; letter-spacing: -.03em; }
+.transfer-manager-heading p { max-width: 560px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.transfer-manager-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.transfer-manager-summary span { padding: 6px 8px; border: 1px solid var(--line); color: var(--faint); font-family: var(--mono); font-size: 8px; text-transform: uppercase; white-space: nowrap; }
+.transfer-manager-summary b { color: var(--amber); font-weight: 400; }
+.transfer-manager-meta { display: flex; justify-content: space-between; padding: 10px 16px; color: var(--faint); font-family: var(--mono); font-size: 9px; }
+.transfer-manager-note { padding: 11px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 9px; line-height: 1.45; }
+.transfer-empty { display: flex; min-height: 255px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 30px; color: var(--faint); text-align: center; }
+.transfer-empty svg { color: var(--amber); }
+.transfer-empty strong { color: var(--text); font-size: 13px; }
+.transfer-empty span { max-width: 380px; font-size: 10px; line-height: 1.5; }
 .transfer-cancel { display: grid; flex: 0 0 27px; place-items: center; width: 27px; height: 27px; border: 1px solid transparent; background: transparent; color: var(--faint); }
 .spin { animation: transfer-spin 1s linear infinite; }
 @keyframes transfer-spin { to { transform: rotate(360deg); } }
@@ -310,6 +327,7 @@ button:not(:disabled) { cursor: pointer; }
 
 @media (max-width: 1200px) { .workspace { padding-left: 25px; padding-right: 25px; }.workspace-grid { grid-template-columns: minmax(0, 1fr) 215px; gap: 16px; }.context-metrics { gap: 8px; }.terminal-chip { display: none; } }
 @media (max-width: 720px) { .snippet-layout, .macro-layout, .help-grid { grid-template-columns: 1fr; }.snippet-list, .macro-list { padding-right: 0; padding-bottom: 12px; border-right: 0; border-bottom: 1px solid var(--line); max-height: 170px; overflow: auto; }.snippet-form-row, .snippet-variable-grid { grid-template-columns: 1fr; }.snippet-form-footer { align-items: flex-start; flex-direction: column; }.snippet-form-footer > div { width: 100%; justify-content: flex-end; }.broadcast-banner, .macro-run-banner, .macro-recording-banner { align-items: flex-start; flex-wrap: wrap; }.broadcast-banner button, .macro-run-banner button, .macro-recording-banner button { margin-left: 25px; }.diagnostics-target { grid-template-columns: 1fr 1fr; }.diagnostics-target .diagnostics-host { grid-column: 1 / -1; }.diagnostics-actions { flex-wrap: wrap; justify-content: flex-start; }.diagnostics-trace-options { justify-content: flex-start; }.diagnostics-results { grid-template-columns: 1fr; }.settings-grid, .settings-vault-grid { grid-template-columns: 1fr; }.settings-vault-actions { grid-column: auto; justify-content: flex-start; } }
+@media (max-width: 720px) { .transfer-manager-heading, .transfer-manager-meta { align-items: stretch; flex-direction: column; }.transfer-manager-summary { justify-content: flex-start; } }
 @media (max-width: 720px) { .remote-monitor-toolbar, .remote-monitor-actions { align-items: flex-start; flex-direction: column; }.remote-monitor-actions { width: 100%; }.remote-monitor-actions .primary-button { width: 100%; justify-content: center; }.remote-monitor-identity, .remote-monitor-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .remote-editor-toolbar, .remote-editor-search, .remote-editor-meta { align-items: stretch; flex-direction: column; }.remote-editor-search input, .remote-editor-meta select { width: 100%; }.remote-editor-search .outline-button { justify-content: center; }.remote-editor-meta { align-items: flex-start; } }
 @media (max-width: 720px) { .remote-files-toolbar { align-items: stretch; flex-direction: column; gap: 14px; }.remote-files-toolbar-actions { align-items: stretch !important; flex-direction: column !important; }.remote-files-toolbar-actions .outline-button, .remote-files-toolbar-actions .transfer-protocol-select { justify-content: center; width: 100%; } }

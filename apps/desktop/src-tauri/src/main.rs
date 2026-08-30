@@ -384,6 +384,18 @@ fn session_set_favorite(
 }
 
 #[tauri::command]
+fn session_touch(
+    store: State<'_, Mutex<SessionStore>>,
+    session_id: SessionId,
+) -> Result<bool, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .touch(session_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn settings_get(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings, String> {
     store
         .lock()
@@ -681,6 +693,7 @@ fn session_save_ssh(
         port,
         username: Some(username),
         auth,
+        last_used_at: None,
         known_hosts_path,
         pinned_fingerprint,
         folder: Some("Remote sessions".into()),
@@ -753,6 +766,7 @@ fn session_save_serial(
         port: 0,
         username: None,
         auth: AuthMethod::None,
+        last_used_at: None,
         known_hosts_path: None,
         pinned_fingerprint: None,
         folder: Some("Serial devices".into()),
@@ -821,6 +835,7 @@ fn session_save_remote_desktop(
         port: request.port,
         username: (!request.username.trim().is_empty()).then_some(request.username),
         auth,
+        last_used_at: None,
         known_hosts_path: None,
         pinned_fingerprint: None,
         folder: Some("Remote desktops".into()),
@@ -1420,6 +1435,7 @@ fn main() {
             session_export,
             session_import,
             session_set_favorite,
+            session_touch,
             settings_get,
             settings_save,
             settings_reset,

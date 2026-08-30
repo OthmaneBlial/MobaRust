@@ -13,7 +13,9 @@ The first working slice provides:
 - password, private-key, agent, and bounded keyboard-interactive SSH authentication, with credential references resolved only in Rust;
 - a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
 - an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
+- SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, and modification metadata;
 - a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
+- a global transfer-manager view that aggregates SFTP/SCP jobs across SSH sessions, exposes source/destination paths and progress, and keeps cancellation explicit;
 - a native Telnet transport and Quick Connect path with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, resize support, and a local TCP fixture; Telnet is clearly unencrypted;
 - a native serial transport primitive with explicit line parameters, bounded driver I/O, line-ending framing, and recoverable device-loss errors; hardware access is explicit and not exercised by tests;
 - an explicit serial-port refresh action and secret-free saved serial profiles that can be reopened with their line parameters;
@@ -26,7 +28,7 @@ The first working slice provides:
 - a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
 - a stateful connection/session model with explicit lifecycle transitions;
 - a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
-- favorite and tag-aware session organization with secret-free MobaRust catalog import/export;
+- favorite, tag-aware, and durable recent-session organization with secret-free MobaRust catalog import/export;
 - explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
 - real SSH jump-host chaining through native `direct-tcpip` streams, with saved hop descriptors and imported `ProxyJump` alias resolution when matching profiles exist;
 - bounded SSH shell reconnection with explicit reconnecting/failed state events and preserved terminal identity;

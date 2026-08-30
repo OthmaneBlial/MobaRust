@@ -47,7 +47,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-type View = "terminal" | "files" | "tunnels" | "monitor" | "diagnostics";
+type View = "terminal" | "files" | "tunnels" | "monitor" | "diagnostics" | "transfers";
 
 type AppSettings = {
   general: {
@@ -252,6 +252,7 @@ type SessionListItem = {
   active: boolean;
   favorite: boolean;
   tags: string[];
+  lastUsedAt?: number | null;
 };
 
 type SavedSession = {
@@ -261,6 +262,7 @@ type SavedSession = {
   hostname: string;
   port: number;
   username?: string | null;
+  last_used_at?: number | null;
   known_hosts_path?: string | null;
   pinned_fingerprint?: string | null;
   folder: string | null;
@@ -502,6 +504,7 @@ type RemoteMonitorSnapshot = {
 };
 
 type TransferProtocol = "sftp" | "scp";
+type RemoteFileSort = "name" | "type" | "size" | "modified";
 
 type TransferState = "queued" | "preparing" | "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
 
@@ -559,6 +562,7 @@ type PingResult = {
   host: string;
   reachable: boolean;
   elapsedMs: number;
+  last_used_at?: number | null;
 };
 
 type TracerouteResult = {
@@ -578,9 +582,9 @@ type NetworkDiagnosticEvent = {
 };
 
 const previewSessions: SessionListItem[] = [
-  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", folder: "Local terminals", active: true, favorite: true, tags: ["local"] },
-  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", folder: "Production", active: false, favorite: true, tags: ["production"] },
-  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"] },
+  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", folder: "Local terminals", active: true, favorite: true, tags: ["local"], lastUsedAt: 3 },
+  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", folder: "Production", active: false, favorite: true, tags: ["production"], lastUsedAt: 2 },
+  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"], lastUsedAt: 1 },
 ];
 
 const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
@@ -1038,6 +1042,7 @@ function App() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
+  const [recentOnly, setRecentOnly] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
   const [macros, setMacros] = useState<MacroRecord[]>([]);
@@ -1820,6 +1825,15 @@ function App() {
     }
   }, [refreshSavedSessions]);
 
+  const touchSavedSession = useCallback((sessionId: string) => {
+    if (!IS_TAURI) return;
+    void invoke<boolean>("session_touch", { sessionId })
+      .then((touched) => {
+        if (touched) refreshSavedSessions();
+      })
+      .catch(() => undefined);
+  }, [refreshSavedSessions]);
+
   const saveEditedSession = useCallback(async (session: SavedSession) => {
     if (!IS_TAURI) return;
     try {
@@ -1845,6 +1859,7 @@ function App() {
   }, [editingSession?.id, refreshSavedSessions]);
 
   const connectSavedSession = useCallback((session: SavedSession) => {
+    touchSavedSession(session.id);
     if (session.protocol === "SERIAL") {
       const profile = session.serial_profile;
       if (!profile) {
@@ -1894,7 +1909,7 @@ function App() {
       return;
     }
     void connectSsh(request, false);
-  }, [connectRemoteDesktop, connectSerial, connectSsh, savedSessions]);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
     const targets = [...new Set(targetIds)].map((workspaceId) => ({
@@ -2716,8 +2731,8 @@ function App() {
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
-    return matchesSearch && (!favoritesOnly || session.favorite);
-  });
+    return matchesSearch && (!favoritesOnly || session.favorite) && (!recentOnly || session.lastUsedAt != null);
+  }).sort((first, second) => (second.lastUsedAt ?? 0) - (first.lastUsedAt ?? 0));
   const localSessionCount = filteredSessions.filter((session) => session.type === "LOCAL").length;
   const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
@@ -2786,12 +2801,13 @@ function App() {
 
           <nav className="sidebar-nav" aria-label="Workspace navigation">
             <div className="nav-section-label">Workspace</div>
-            <button className={`nav-item ${!favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(false)}><LayoutDashboard size={15} /> Overview <span className="nav-count">{sessionRows.length}</span></button>
-            <button className={`nav-item ${favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(true)}><Star size={15} /> Favorites <span className="nav-count">{sessionRows.filter((session) => session.favorite).length}</span></button>
+            <button className={`nav-item ${!favoritesOnly && !recentOnly ? "active" : ""}`} onClick={() => { setFavoritesOnly(false); setRecentOnly(false); }}><LayoutDashboard size={15} /> Overview <span className="nav-count">{sessionRows.length}</span></button>
+            <button className={`nav-item ${favoritesOnly && !recentOnly ? "active" : ""}`} onClick={() => { setFavoritesOnly(true); setRecentOnly(false); }}><Star size={15} /> Favorites <span className="nav-count">{sessionRows.filter((session) => session.favorite).length}</span></button>
+            <button className={`nav-item ${recentOnly ? "active" : ""}`} onClick={() => { setFavoritesOnly(false); setRecentOnly(true); }}><Activity size={15} /> Recent <span className="nav-count">{sessionRows.filter((session) => session.lastUsedAt != null).length}</span></button>
           </nav>
 
           <div className="session-list">
-            <div className="list-heading"><span>{favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
+            <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
               <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
@@ -2822,7 +2838,7 @@ function App() {
             <button className={`nav-item ${activeView === "diagnostics" ? "active" : ""}`} onClick={() => setActiveView("diagnostics")}><Activity size={15} /> Network diagnostics</button>
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className={`nav-item ${activeView === "monitor" ? "active" : ""}`} onClick={() => setActiveView("monitor")} disabled={!remoteSessionId || remoteProtocol !== "ssh"} title={remoteSessionId && remoteProtocol === "ssh" ? "Collect a one-shot SSH system snapshot" : "Open an SSH session first"}><Gauge size={15} /> Remote monitor</button>
-            <button className="nav-item" onClick={() => { setActiveView("files"); if (!remoteSessionId || remoteProtocol !== "ssh") setQuickConnectOpen(true); }}><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
+            <button className={`nav-item ${activeView === "transfers" ? "active" : ""}`} onClick={() => setActiveView("transfers")}><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
         </aside>
 
@@ -2856,6 +2872,7 @@ function App() {
                 <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
                 {remoteSessionId && remoteProtocol === "ssh" && <button className={activeView === "monitor" ? "selected" : ""} onClick={() => setActiveView("monitor")} role="tab" aria-selected={activeView === "monitor"}><Gauge size={15} /> Monitor</button>}
                 <button className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
+                <button className={activeView === "transfers" ? "selected" : ""} onClick={() => setActiveView("transfers")} role="tab" aria-selected={activeView === "transfers"}><ArrowDownToLine size={15} /> Transfers <span className="tab-badge">{activeTransferCount}</span></button>
               </div>
 
               {activeView === "terminal" ? (
@@ -2877,6 +2894,8 @@ function App() {
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
+              ) : activeView === "transfers" ? (
+                <TransferManagerView transfers={transfers} onCancelTransfer={cancelTransfer} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} fingerprint={networkFingerprint} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onInspectFingerprint={inspectNetworkHostKey} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
@@ -3004,14 +3023,14 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
 
 function toSessionListItem(session: SavedSession): SessionListItem {
   if (session.protocol === "LOCAL") {
-    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", folder: session.folder ?? "Local terminals", active: true, favorite: session.favorite, tags: session.tags };
+    return { id: session.id, name: session.name, detail: "zsh · localhost", type: "LOCAL", folder: session.folder ?? "Local terminals", active: true, favorite: session.favorite, tags: session.tags, lastUsedAt: session.last_used_at };
   }
   if (session.protocol === "SERIAL" && session.serial_profile) {
-    return { id: session.id, name: session.name, detail: `${session.serial_profile.device} · ${session.serial_profile.baud_rate}`, type: session.protocol, folder: session.folder ?? "Serial devices", active: false, favorite: session.favorite, tags: session.tags };
+    return { id: session.id, name: session.name, detail: `${session.serial_profile.device} · ${session.serial_profile.baud_rate}`, type: session.protocol, folder: session.folder ?? "Serial devices", active: false, favorite: session.favorite, tags: session.tags, lastUsedAt: session.last_used_at };
   }
   const user = session.username ? `${session.username}@` : "";
   const port = session.port && session.port !== 22 ? `:${session.port}` : "";
-  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, folder: session.folder ?? "Unfiled", active: false, favorite: session.favorite, tags: session.tags };
+  return { id: session.id, name: session.name, detail: `${user}${session.hostname}${port}`, type: session.protocol, folder: session.folder ?? "Unfiled", active: false, favorite: session.favorite, tags: session.tags, lastUsedAt: session.last_used_at };
 }
 
 function groupSessionsByFolder(sessions: SessionListItem[]): Array<[string, SessionListItem[]]> {
@@ -3044,25 +3063,38 @@ function RemoteFilesView({ entries, path, status, error, transfers, onOpenTermin
   onCancelTransfer: (transferId: string) => void;
 }) {
   const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
+  const [sort, setSort] = useState<RemoteFileSort>("name");
+  const [showHidden, setShowHidden] = useState(true);
   const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
+  const visibleEntries = entries
+    .filter((entry) => showHidden || !entry.name.startsWith("."))
+    .slice()
+    .sort((first, second) => {
+      if (sort === "type" && first.isDirectory !== second.isDirectory) return first.isDirectory ? -1 : 1;
+      if (sort === "size" && first.size !== second.size) return second.size > first.size ? 1 : -1;
+      if (sort === "modified" && first.modifiedUnixSeconds !== second.modifiedUnixSeconds) return (second.modifiedUnixSeconds ?? 0) > (first.modifiedUnixSeconds ?? 0) ? 1 : -1;
+      return first.name.localeCompare(second.name, undefined, { sensitivity: "base", numeric: true });
+    });
   return <section className="remote-files" aria-label="Remote files">
       <div className="remote-files-toolbar">
       <div><span className="eyebrow">SFTP / BROWSER</span><strong>{path}</strong></div>
       <div className="remote-files-toolbar-actions">
         <button className="outline-button" onClick={onOpenTerminal}><TerminalIcon size={14} /> Open terminal</button>
         <label className="transfer-protocol-select">Transport<select aria-label="Transfer transport" value={transferProtocol} onChange={(event) => setTransferProtocol(event.target.value as TransferProtocol)}><option value="sftp">SFTP · recommended</option><option value="scp">SCP · legacy files</option></select></label>
+        <label className="transfer-protocol-select">Sort<select aria-label="Sort remote files" value={sort} onChange={(event) => setSort(event.target.value as RemoteFileSort)}><option value="name">Name</option><option value="type">Type</option><option value="size">Size</option><option value="modified">Modified</option></select></label>
+        <label className="remote-files-hidden"><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Hidden</label>
         <button className="outline-button" onClick={onCreateDirectory}><FolderPlus size={14} /> New folder</button>
         <button className="outline-button" onClick={() => onUpload(transferProtocol)}><Upload size={14} /> Upload</button>
         <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
       </div>
     </div>
-    <div className="remote-files-meta"><span>{status === "ready" ? `${entries.length} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded transfers</span></div>
+    <div className="remote-files-meta"><span>{status === "ready" ? `${visibleEntries.length}${visibleEntries.length === entries.length ? "" : ` of ${entries.length}`} entries` : status === "error" ? "Unable to list directory" : "Streaming directory listing"}</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded transfers</span></div>
     {error && <div className="remote-files-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
     <div className="remote-files-list">
       <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
-      {entries.map((entry) => <div className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path}>
+      {visibleEntries.map((entry) => <div className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path}>
         <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
-          <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? "directory" : formatBytes(entry.size)}</small>
+          <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{entry.isDirectory ? `directory · ${formatRemoteModified(entry.modifiedUnixSeconds)}` : `${formatBytes(entry.size)} · ${formatRemoteModified(entry.modifiedUnixSeconds)}`}</small>
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
         {!entry.isDirectory && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
@@ -3218,11 +3250,22 @@ function highlightRemoteCode(value: string, language: RemoteEditorLanguage): str
   return escaped.replace(keyPattern, '$1<span class="remote-editor-token-key">$2</span>');
 }
 
+function TransferManagerView({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {
+  const active = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
+  const completed = transfers.filter((transfer) => transfer.state === "completed").length;
+  return <section className="transfer-manager" aria-label="Global transfer manager">
+    <div className="transfer-manager-heading"><div><span className="eyebrow">WORKSPACE / TRANSFERS</span><strong>Global transfer manager</strong><p>All SFTP and SCP jobs share one bounded queue. Each job can be cancelled without presenting a partial file as complete.</p></div><div className="transfer-manager-summary"><span><b>{active}</b> active</span><span><b>{completed}</b> completed</span><span><b>{transfers.length}</b> retained</span></div></div>
+    <div className="transfer-manager-meta"><span>Latest jobs across every SSH session</span><span className="remote-files-safe"><ShieldCheck size={13} /> Native transport · bounded concurrency</span></div>
+    <TransferPanel transfers={transfers} onCancelTransfer={onCancelTransfer} />
+    <div className="transfer-manager-note">Transfers are retained in memory for the current application run. Source and destination paths are displayed for operator review; secrets are never included in transfer events.</div>
+  </section>;
+}
+
 function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {
-  return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER MANAGER</span><span>{transfers.length} recent</span></div>{transfers.slice().reverse().map((transfer) => {
+  return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER QUEUE</span><span>{transfers.length} retained</span></div>{transfers.length === 0 && <div className="transfer-empty"><ArrowDownToLine size={20} /><strong>No transfers yet</strong><span>Start an upload or download from a connected SSH session. Jobs will appear here across all sessions.</span></div>}{transfers.slice().reverse().map((transfer) => {
     const percent = transfer.totalBytes && transfer.totalBytes > 0 ? Math.min(100, Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)) : null;
     const active = !["completed", "cancelled", "failed"].includes(transfer.state);
-    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
+    return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}</small><small className="transfer-paths" title={`${transfer.source} → ${transfer.destination}`}>{transfer.source} → {transfer.destination}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active && <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button>}</div>;
   })}</section>;
 }
 
@@ -3347,6 +3390,12 @@ function NetworkDiagnosticsView({ host, port, timeout, status, addresses, result
     </section>
     <div className="diagnostics-note"><ShieldCheck size={14} /><span>Safety boundary: target, range, hop limit, concurrency, timeout, and action are explicit. SSH key inspection uses no credentials, agent, personal key, or known_hosts file; results are diagnostics only.</span></div>
   </section>;
+}
+
+function formatRemoteModified(seconds?: number | null) {
+  if (seconds == null || !Number.isFinite(seconds)) return "modified unknown";
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? "modified unknown" : `modified ${date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })}`;
 }
 
 function formatBytes(bytes: number) {

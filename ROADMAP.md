@@ -41,7 +41,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Native jump-host chain transport with host-key policy per hop
 - [x] Bounded shell reconnect attempts with explicit lifecycle telemetry
 - [x] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles when matching saved hop records exist
-- [x] Session tags, search, favorites, and secret-free MobaRust import/export
+- [x] Session tags, search, favorites, recents, and secret-free MobaRust import/export
 - [x] Session folders and metadata-only profile editing/deletion
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction

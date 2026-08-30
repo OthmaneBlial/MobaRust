@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use mobarust_core::{
     AppSettings, AuthMethod, MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
@@ -532,6 +533,27 @@ impl SessionStore {
         Ok(true)
     }
 
+    pub fn touch(&mut self, id: SessionId) -> Result<bool, StoreError> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.touch_at(id, timestamp)
+    }
+
+    pub fn touch_at(&mut self, id: SessionId, timestamp: u64) -> Result<bool, StoreError> {
+        let previous = self.sessions.clone();
+        let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) else {
+            return Ok(false);
+        };
+        session.last_used_at = Some(timestamp);
+        if let Err(error) = self.persist() {
+            self.sessions = previous;
+            return Err(error);
+        }
+        Ok(true)
+    }
+
     /// Serializes only the versioned session catalog. The format contains
     /// credential references, never credential material.
     pub fn export_json(&self) -> Result<String, StoreError> {
@@ -658,6 +680,7 @@ impl SessionStore {
                     key_ref,
                     credential_ref: None,
                 }),
+                last_used_at: None,
                 known_hosts_path: None,
                 pinned_fingerprint: None,
                 folder: Some("Imported / OpenSSH".into()),
@@ -859,6 +882,7 @@ mod tests {
             auth: AuthMethod::Password {
                 credential_ref: "session-password".into(),
             },
+            last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
             folder: Some("Production".into()),
@@ -980,6 +1004,7 @@ mod tests {
         let session = remote_session();
         let mut serialized = serde_json::to_value(&session).unwrap();
         let object = serialized.as_object_mut().unwrap();
+        object.remove("last_used_at");
         object.remove("known_hosts_path");
         object.remove("pinned_fingerprint");
         let file = serde_json::json!({ "schema_version": 1, "sessions": [serialized] });
@@ -988,6 +1013,7 @@ mod tests {
         let reopened = SessionStore::open(&path).unwrap();
         assert_eq!(reopened.list()[0].known_hosts_path, None);
         assert_eq!(reopened.list()[0].pinned_fingerprint, None);
+        assert_eq!(reopened.list()[0].last_used_at, None);
     }
 
     #[test]
@@ -1014,6 +1040,27 @@ mod tests {
         assert!(!store.set_favorite(SessionId::new(), true).unwrap());
         let reopened = SessionStore::open(&path).unwrap();
         assert!(reopened.list()[0].favorite);
+    }
+
+    #[test]
+    fn recent_session_timestamps_are_durable_and_unknown_ids_are_safe() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let first = remote_session();
+        let first_id = first.id;
+        let second = remote_session();
+        let second_id = second.id;
+        store.save(first).unwrap();
+        store.save(second).unwrap();
+
+        assert!(store.touch_at(first_id, 10).unwrap());
+        assert!(store.touch_at(second_id, 20).unwrap());
+        assert!(!store.touch_at(SessionId::new(), 30).unwrap());
+
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(reopened.list()[0].last_used_at, Some(10));
+        assert_eq!(reopened.list()[1].last_used_at, Some(20));
     }
 
     #[test]

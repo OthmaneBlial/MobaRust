@@ -133,6 +133,8 @@ pub struct SessionRecord {
     pub username: Option<String>,
     pub auth: AuthMethod,
     #[serde(default)]
+    pub last_used_at: Option<u64>,
+    #[serde(default)]
     pub known_hosts_path: Option<String>,
     #[serde(default)]
     pub pinned_fingerprint: Option<String>,
@@ -182,6 +184,7 @@ impl SessionRecord {
             port: 0,
             username: None,
             auth: AuthMethod::None,
+            last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
             folder: Some("Local terminals".into()),
@@ -285,6 +288,7 @@ mod tests {
             port: 0,
             username: Some("ops".into()),
             auth: AuthMethod::Agent,
+            last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
             folder: None,
