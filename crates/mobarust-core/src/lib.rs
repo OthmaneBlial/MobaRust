@@ -21,8 +21,8 @@ pub use session::{
     MAX_SESSION_ENVIRONMENT_ENTRIES, MAX_SESSION_ENVIRONMENT_NAME_BYTES,
     MAX_SESSION_ENVIRONMENT_TOTAL_BYTES, MAX_SESSION_ENVIRONMENT_VALUE_BYTES,
     MAX_SESSION_STARTUP_COMMAND_BYTES, MAX_SESSION_STARTUP_DIRECTORY_BYTES, Protocol,
-    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord, SessionValidationError,
-    TelnetProfile, validate_session_environment, validate_session_startup,
+    RdpGatewayProfile, RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord,
+    SessionValidationError, TelnetProfile, validate_session_environment, validate_session_startup,
 };
 pub use settings::{
     AppSettings, AppearanceSettings, GeneralSettings, KeyboardSettings, NetworkSettings,

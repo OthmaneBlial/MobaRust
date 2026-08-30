@@ -83,6 +83,7 @@ assert.deepEqual(
     ok: true,
     profile: {
       domain: "WORKGROUP",
+      gateway: null,
       width: 1920,
       height: 1080,
       color_depth: 32,
@@ -105,6 +106,7 @@ assert.deepEqual(
     ok: true,
     profile: {
       domain: null,
+      gateway: null,
       width: 1280,
       height: 720,
       color_depth: 24,
@@ -143,6 +145,7 @@ assert.deepEqual(
   }).profile,
   {
     domain: null,
+    gateway: null,
     width: 1280,
     height: 720,
     color_depth: 32,
@@ -151,6 +154,36 @@ assert.deepEqual(
     reconnect_enabled: false,
     reconnect_attempts: 10,
   },
+);
+assert.deepEqual(
+  parseRemoteDesktopProfile("RDP", {
+    domain: "",
+    gatewayEndpoint: "rdg.example.com:443",
+    gatewayUsername: "gateway-user",
+    gatewayCredentialRef: "rdg-password",
+    width: "1280",
+    height: "720",
+    colorDepth: "32",
+    vncQuality: "balanced",
+  }).profile.gateway,
+  {
+    endpoint: "rdg.example.com:443",
+    username: "gateway-user",
+    credential_ref: "rdg-password",
+  },
+);
+assert.match(
+  parseRemoteDesktopProfile("RDP", {
+    domain: "",
+    gatewayEndpoint: "rdg.example.com",
+    gatewayUsername: "gateway-user",
+    gatewayCredentialRef: "rdg-password",
+    width: "1280",
+    height: "720",
+    colorDepth: "32",
+    vncQuality: "balanced",
+  }).error,
+  /gateway endpoint/,
 );
 assert.match(
   parseRemoteDesktopProfile("VNC", { domain: "", width: "1280", height: "720", colorDepth: "24", vncQuality: "balanced", reconnectAttempts: "11" }).error,

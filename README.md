@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>One focused desktop workspace for every machine you operate.</strong><br />
+  <strong>The remote-work control room for people who operate systems.</strong><br />
   SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations — built with Rust and Tauri.
 </p>
 
@@ -52,7 +52,7 @@ Save a host once, organize it into folders, add tags and notes, mark favorites, 
 
 Snippets support descriptions, tags, and variables such as `${host}`, `${port}`, and `${username}`. Preview and edit before sending. Macros remain visible and cancellable. Multi-exec requires explicit target selection, shows a strong broadcast indicator, and provides an emergency disable path.
 
-The best first use case is everyday SSH and SFTP work. RDP, VNC, integrated X11, signed distribution, and complete cross-platform evidence are deliberately still on the roadmap.
+The best first use case is everyday SSH and SFTP work. RDP and VNC are real isolated candidates, while integrated X11, signed distribution, and complete cross-platform evidence remain deliberately on the roadmap.
 
 ## An open alternative to the closed all-in-one toolbox
 
@@ -79,7 +79,7 @@ The table below makes the current boundary explicit. “Verified locally” mean
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup, explicit PowerShell/cmd/Unix shell targets, and WSL foundations |
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
-| **RDP** | Isolated native candidate with framebuffer, protocol-aware keyboard/mouse input, lifecycle work, explicit hostname/IP target metadata, platform certificate validation, bounded configurable reconnect, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, gateway, audio, clipboard, and production packaging remain open |
+| **RDP** | Isolated native candidate with framebuffer, protocol-aware keyboard/mouse input, lifecycle work, explicit hostname/IP and Gateway metadata, separate role-tagged native credential handoff, platform certificate validation, bounded configurable reconnect, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, Gateway trust/interoperability, audio, clipboard, and production packaging remain open |
 | **VNC** | Native helper with local RFB fixtures, authentication, framebuffer updates, protocol-aware keyboard/mouse input, clipboard, scaling, quality profiles, bounded configurable reconnect, cancellation, and clean shutdown; broader interoperability remains open |
 | **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server remains a separate research and packaging decision |
 

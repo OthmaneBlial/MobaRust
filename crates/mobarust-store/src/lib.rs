@@ -1278,6 +1278,7 @@ mod tests {
         };
         session.remote_desktop_profile = Some(RemoteDesktopProfile {
             domain: None,
+            gateway: None,
             width: 1280,
             height: 800,
             color_depth: 32,
@@ -1441,6 +1442,7 @@ mod tests {
         session.protocol = Protocol::Vnc;
         session.remote_desktop_profile = Some(RemoteDesktopProfile {
             domain: None,
+            gateway: None,
             width: 1280,
             height: 800,
             color_depth: 32,

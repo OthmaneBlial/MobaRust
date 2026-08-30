@@ -159,6 +159,9 @@ type RemoteDesktopConnectRequest = {
   port: number;
   username: string;
   domain?: string;
+  gatewayEndpoint?: string;
+  gatewayUsername?: string;
+  gatewayCredentialId?: string;
   credentialId?: string;
   width: number;
   height: number;
@@ -365,6 +368,11 @@ type SavedSession = {
   jump_host_profiles?: SavedJumpHost[];
   remote_desktop_profile?: {
     domain?: string | null;
+    gateway?: {
+      endpoint: string;
+      username: string;
+      credential_ref: string;
+    } | null;
     width: number;
     height: number;
     color_depth: number;
@@ -2443,6 +2451,9 @@ function App() {
         port: session.port,
         username: session.username ?? "",
         domain: profile.domain ?? undefined,
+        gatewayEndpoint: profile.gateway?.endpoint ?? undefined,
+        gatewayUsername: profile.gateway?.username ?? undefined,
+        gatewayCredentialId: profile.gateway?.credential_ref ?? undefined,
         credentialId,
         width: profile.width,
         height: profile.height,
@@ -4559,6 +4570,9 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const isRemoteDesktop = session.protocol === "RDP" || session.protocol === "VNC";
   const supportsStartup = isSsh || isLocal;
   const [desktopDomain, setDesktopDomain] = useState(session.remote_desktop_profile?.domain ?? "");
+  const [gatewayEndpoint, setGatewayEndpoint] = useState(session.remote_desktop_profile?.gateway?.endpoint ?? "");
+  const [gatewayUsername, setGatewayUsername] = useState(session.remote_desktop_profile?.gateway?.username ?? "");
+  const [gatewayCredentialRef, setGatewayCredentialRef] = useState(session.remote_desktop_profile?.gateway?.credential_ref ?? "");
   const [desktopWidth, setDesktopWidth] = useState(String(session.remote_desktop_profile?.width ?? 1280));
   const [desktopHeight, setDesktopHeight] = useState(String(session.remote_desktop_profile?.height ?? 720));
   const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
@@ -4617,6 +4631,9 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
     if (isRemoteDesktop) {
       const parsedProfile = parseRemoteDesktopProfile(session.protocol === "RDP" ? "RDP" : "VNC", {
         domain: desktopDomain,
+        gatewayEndpoint,
+        gatewayUsername,
+        gatewayCredentialRef,
         width: desktopWidth,
         height: desktopHeight,
         colorDepth: desktopColorDepth,
@@ -4706,6 +4723,22 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
               <input value={desktopDomain} onChange={(event) => setDesktopDomain(event.target.value)} placeholder="WORKGROUP" />
               <small>Passed as RDP session metadata; credentials remain opaque references.</small>
             </label>}
+            {session.protocol === "RDP" && <>
+              <label>
+                Gateway endpoint <span className="optional">optional · host:port</span>
+                <input value={gatewayEndpoint} onChange={(event) => setGatewayEndpoint(event.target.value)} placeholder="rdg.example.com:443" />
+                <small>Explicit RDS gateway only; no ambient system gateway settings are read.</small>
+              </label>
+              <label>
+                Gateway username <span className="optional">required with gateway</span>
+                <input value={gatewayUsername} onChange={(event) => setGatewayUsername(event.target.value)} placeholder="gateway-user" />
+              </label>
+              <label className="quick-connect-wide">
+                Gateway credential reference <span className="optional">required with gateway</span>
+                <input value={gatewayCredentialRef} onChange={(event) => setGatewayCredentialRef(event.target.value)} placeholder="rdg-password" autoComplete="off" />
+                <small>Separate opaque vault reference; it is delivered in a distinct native credential frame.</small>
+              </label>
+            </>}
             <label>
               Width
               <input type="number" min="320" max="16384" value={desktopWidth} onChange={(event) => setDesktopWidth(event.target.value)} />
@@ -4925,6 +4958,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [passphraseCredentialId, setPassphraseCredentialId] = useState("");
   const [credentialId, setCredentialId] = useState("");
   const [domain, setDomain] = useState("");
+  const [gatewayEndpoint, setGatewayEndpoint] = useState("");
+  const [gatewayUsername, setGatewayUsername] = useState("");
+  const [gatewayCredentialId, setGatewayCredentialId] = useState("");
   const [desktopWidth, setDesktopWidth] = useState("1280");
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
@@ -4966,6 +5002,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       setKeyPath("");
       setPassphraseCredentialId("");
       setDomain("");
+      setGatewayEndpoint("");
+      setGatewayUsername("");
+      setGatewayCredentialId("");
       setDesktopReconnectEnabled(true);
       setDesktopReconnectAttempts("3");
       setUriError(null);
@@ -5035,6 +5074,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         port: Number(port),
         username: username.trim() || (protocol === "vnc" ? "viewer" : ""),
         domain: domain.trim() || undefined,
+        gatewayEndpoint: protocol === "rdp" ? gatewayEndpoint.trim() || undefined : undefined,
+        gatewayUsername: protocol === "rdp" ? gatewayUsername.trim() || undefined : undefined,
+        gatewayCredentialId: protocol === "rdp" ? gatewayCredentialId.trim() || undefined : undefined,
         credentialId: credentialId.trim() || undefined,
         width: Number(desktopWidth),
         height: Number(desktopHeight),
@@ -5313,6 +5355,22 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     Domain <span className="optional">optional</span>
                     <input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="WORKGROUP" />
                   </label>}
+                  {protocol === "rdp" && <>
+                    <label>
+                      Gateway endpoint <span className="optional">optional · host:port</span>
+                      <input value={gatewayEndpoint} onChange={(event) => setGatewayEndpoint(event.target.value)} placeholder="rdg.example.com:443" />
+                      <small>Explicit RDS gateway only; system gateway settings are never discovered.</small>
+                    </label>
+                    <label>
+                      Gateway username <span className="optional">required with gateway</span>
+                      <input value={gatewayUsername} onChange={(event) => setGatewayUsername(event.target.value)} placeholder="gateway-user" />
+                    </label>
+                    <label className="quick-connect-wide">
+                      Gateway credential reference <span className="optional">required with gateway</span>
+                      <input value={gatewayCredentialId} onChange={(event) => setGatewayCredentialId(event.target.value)} placeholder="rdg-password" autoComplete="off" />
+                      <small>Separate opaque vault reference; the secret is sent only through the native helper pipe.</small>
+                    </label>
+                  </>}
                   <label className="quick-connect-wide">
                     Credential reference <span className="optional">{protocol === "vnc" ? "optional for no-auth" : "required"}</span>
                     <input required={protocol === "rdp"} value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder={protocol === "rdp" ? "windows-admin-password" : "vnc-password"} />

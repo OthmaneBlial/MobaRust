@@ -68,7 +68,7 @@ Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
 ## Later protocol adapters
 
 - [x] RDP/VNC helper-boundary research and versioned Rust-side contract
-- [x] Isolated IronRDP helper with native credential handoff, lifecycle, input, and framebuffer bridge
+- [x] Isolated IronRDP helper with native session and RD Gateway credential handoff, lifecycle, input, and framebuffer bridge
 - [ ] Real FreeRDP integration with a controlled helper and Windows evidence
 - [ ] Real VNC integration with a mature engine and local/manual fixtures
 - [x] Native Telnet transport with bounded negotiation and a local TCP fixture

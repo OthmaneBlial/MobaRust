@@ -4,6 +4,11 @@ export type VncQuality = "balanced" | "low-latency" | "low-bandwidth";
 
 export type RemoteDesktopProfileValue = {
   domain: string | null;
+  gateway: {
+    endpoint: string;
+    username: string;
+    credential_ref: string;
+  } | null;
   width: number;
   height: number;
   color_depth: number;
@@ -15,6 +20,9 @@ export type RemoteDesktopProfileValue = {
 
 export type RemoteDesktopProfileDraft = {
   domain: string;
+  gatewayEndpoint?: string;
+  gatewayUsername?: string;
+  gatewayCredentialRef?: string;
   width: string;
   height: string;
   colorDepth: string;
@@ -33,6 +41,9 @@ const MIN_HEIGHT = 200;
 const MAX_HEIGHT = 16_384;
 const MAX_COLOR_DEPTH = 65_535;
 const MAX_RECONNECT_ATTEMPTS = 10;
+const MAX_GATEWAY_ENDPOINT = 512;
+const MAX_GATEWAY_USERNAME = 256;
+const MAX_CREDENTIAL_REFERENCE = 128;
 
 function containsControlCharacter(value: string): boolean {
   return [...value].some((character) => {
@@ -49,6 +60,9 @@ export function parseRemoteDesktopProfile(
   const height = Number(draft.height);
   const colorDepth = Number(draft.colorDepth);
   const domain = draft.domain.trim() || null;
+  const gatewayEndpoint = draft.gatewayEndpoint?.trim() || "";
+  const gatewayUsername = draft.gatewayUsername?.trim() || "";
+  const gatewayCredentialRef = draft.gatewayCredentialRef?.trim() || "";
   const vncQuality = draft.vncQuality ?? "balanced";
   const reconnectAttempts = Number(draft.reconnectAttempts ?? 3);
 
@@ -82,6 +96,24 @@ export function parseRemoteDesktopProfile(
     return { ok: false, error: "RDP domain must not contain control characters." };
   }
 
+  const gatewayFieldsPresent = Boolean(gatewayEndpoint || gatewayUsername || gatewayCredentialRef);
+  if (gatewayFieldsPresent && protocol !== "RDP") {
+    return { ok: false, error: "RDP gateway settings are supported only for RDP." };
+  }
+  if (gatewayFieldsPresent) {
+    const endpointMatch = gatewayEndpoint.match(/^\[([^\]]+)\]:(\d+)$/) ?? gatewayEndpoint.match(/^([^:[\]]+):(\d+)$/);
+    const endpointPort = endpointMatch ? Number(endpointMatch[2]) : 0;
+    if (!endpointMatch || endpointPort < 1 || endpointPort > 65535 || gatewayEndpoint.length > MAX_GATEWAY_ENDPOINT || containsControlCharacter(gatewayEndpoint)) {
+      return { ok: false, error: "RDP gateway endpoint must be a bounded host:port target." };
+    }
+    if (!gatewayUsername || gatewayUsername.length > MAX_GATEWAY_USERNAME || containsControlCharacter(gatewayUsername)) {
+      return { ok: false, error: "RDP gateway username is invalid." };
+    }
+    if (!gatewayCredentialRef || gatewayCredentialRef.length > MAX_CREDENTIAL_REFERENCE || containsControlCharacter(gatewayCredentialRef)) {
+      return { ok: false, error: "RDP gateway credential reference is invalid." };
+    }
+  }
+
   if (!Number.isInteger(reconnectAttempts) || reconnectAttempts < 0 || reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
     return { ok: false, error: "Reconnect attempts must be between 0 and 10." };
   }
@@ -94,6 +126,11 @@ export function parseRemoteDesktopProfile(
     ok: true,
     profile: {
       domain: protocol === "RDP" ? domain : null,
+      gateway: gatewayFieldsPresent ? {
+        endpoint: gatewayEndpoint,
+        username: gatewayUsername,
+        credential_ref: gatewayCredentialRef,
+      } : null,
       width,
       height,
       color_depth: colorDepth,

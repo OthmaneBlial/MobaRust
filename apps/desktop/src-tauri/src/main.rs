@@ -10,7 +10,8 @@ mod terminal;
 
 use mobarust_core::{
     AppSettings, AuditEvent, AuditEventKind, AuthMethod, JumpHostRecord, Protocol,
-    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord, TelnetProfile,
+    RdpGatewayProfile, RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord,
+    TelnetProfile,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_remote_desktop::HelperCommand;
@@ -1072,6 +1073,19 @@ fn session_save_remote_desktop(
         telnet_profile: None,
         remote_desktop_profile: Some(RemoteDesktopProfile {
             domain: request.domain,
+            gateway: match (
+                request.gateway_endpoint,
+                request.gateway_username,
+                request.gateway_credential_id,
+            ) {
+                (Some(endpoint), Some(username), Some(credential_ref)) => Some(RdpGatewayProfile {
+                    endpoint,
+                    username,
+                    credential_ref,
+                }),
+                (None, None, None) => None,
+                _ => return Err("RDP gateway settings are incomplete".into()),
+            },
             width: request.width,
             height: request.height,
             color_depth: request.color_depth,

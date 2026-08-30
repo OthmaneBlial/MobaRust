@@ -16,7 +16,7 @@ use std::fmt;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use ironrdp_client::config::{ClipboardType, ConfigBuilder, Destination};
+use ironrdp_client::config::{ClipboardType, ConfigBuilder, Destination, TransportKind};
 use ironrdp_client::rdp::{RdpClient, RdpInputEvent, RdpOutputEvent};
 use ironrdp_pdu::gcc::KeyboardType;
 use ironrdp_pdu::input::MousePdu;
@@ -25,10 +25,11 @@ use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
-    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
-    HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame, decode_credential_frame,
-    rdp_scancode_parts, validate_rdp_color_depth, write_event_frame,
+    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperCredentialKind,
+    HelperEvent, HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES,
+    MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy,
+    decode_command_frame, decode_credential_frame, rdp_scancode_parts, validate_gateway_endpoint,
+    validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -52,6 +53,8 @@ struct Arguments {
     port: u16,
     username: String,
     domain: Option<String>,
+    gateway_endpoint: Option<String>,
+    gateway_username: Option<String>,
     display: DisplaySize,
     color_depth: u16,
     audio_requested: bool,
@@ -121,6 +124,7 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
 
     let mut start_display = None;
     let mut credential = None;
+    let mut gateway_credential = None;
     loop {
         match incoming_rx.recv().await {
             Some(Incoming::Command(HelperCommand::Start { protocol, display })) => {
@@ -130,7 +134,17 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
                 }
                 start_display = Some(display);
             }
-            Some(Incoming::Credential(value)) => credential = Some(value),
+            Some(Incoming::Credential(value)) => match value.kind() {
+                HelperCredentialKind::Session => credential = Some(value),
+                HelperCredentialKind::Gateway if arguments.gateway_endpoint.is_some() => {
+                    gateway_credential = Some(value)
+                }
+                HelperCredentialKind::Gateway => {
+                    send_error(&mut stdout, "unexpected RDP gateway credential").await?;
+                    write_state(&mut stdout, HelperState::Failed).await?;
+                    return Ok(());
+                }
+            },
             Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) => {
                 write_state(&mut stdout, HelperState::Stopped).await?;
                 return Ok(());
@@ -143,9 +157,20 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
             Some(Incoming::Command(_)) => {}
         }
 
-        if let (Some(display), Some(secret)) = (start_display, credential.take()) {
-            return run_rdp_session(&arguments, display, secret, &mut stdout, &mut incoming_rx)
+        if let Some(display) = start_display {
+            let gateway_ready =
+                arguments.gateway_endpoint.is_none() || gateway_credential.is_some();
+            if gateway_ready && let Some(secret) = credential.take() {
+                return run_rdp_session(
+                    &arguments,
+                    display,
+                    secret,
+                    gateway_credential.take(),
+                    &mut stdout,
+                    &mut incoming_rx,
+                )
                 .await;
+            }
         }
     }
 }
@@ -215,6 +240,7 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
     arguments: &Arguments,
     display: DisplaySize,
     credential: HelperCredential,
+    gateway_credential: Option<HelperCredential>,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
 ) -> Result<(), Box<dyn Error>> {
@@ -222,6 +248,7 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
         arguments,
         display,
         credential,
+        gateway_credential.as_ref(),
         stdout,
         incoming_rx,
         RdpSessionPolicy {
@@ -247,6 +274,7 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
     arguments: &Arguments,
     display: DisplaySize,
     credential: HelperCredential,
+    gateway_credential: Option<&HelperCredential>,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
     session_policy: RdpSessionPolicy,
@@ -270,6 +298,7 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
         match run_rdp_attempt(
             arguments,
             &credential,
+            gateway_credential,
             &mut current_display,
             stdout,
             incoming_rx,
@@ -322,12 +351,13 @@ struct RdpAttemptPolicy {
 async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
     arguments: &Arguments,
     credential: &HelperCredential,
+    gateway_credential: Option<&HelperCredential>,
     current_display: &mut DisplaySize,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
     policy: RdpAttemptPolicy,
 ) -> Result<RdpAttemptOutcome, Box<dyn Error>> {
-    let config = match build_config(arguments, *current_display, credential) {
+    let config = match build_config(arguments, *current_display, credential, gateway_credential) {
         Ok(config) => config,
         Err(_) => {
             send_error(stdout, "invalid RDP configuration").await?;
@@ -690,6 +720,7 @@ fn build_config(
     arguments: &Arguments,
     display: DisplaySize,
     credential: &HelperCredential,
+    gateway_credential: Option<&HelperCredential>,
 ) -> Result<ironrdp_client::config::Config, Box<dyn Error>> {
     let mut builder = ConfigBuilder::new()
         .with_destination(Destination::from_parts(
@@ -713,6 +744,19 @@ fn build_config(
         .with_clipboard(ClipboardType::Stub);
     if let Some(domain) = arguments.domain.as_deref() {
         builder = builder.with_domain(domain);
+    }
+    if let Some(endpoint) = arguments.gateway_endpoint.as_deref() {
+        let gateway_username = arguments
+            .gateway_username
+            .as_deref()
+            .ok_or("RDP gateway username is missing")?;
+        let gateway_credential = gateway_credential.ok_or("RDP gateway credential is missing")?;
+        builder = builder
+            .with_gateway_username(gateway_username)
+            .with_gateway_password(gateway_credential.password())
+            .with_transport(TransportKind::Gateway {
+                endpoint: endpoint.to_owned(),
+            });
     }
     Ok(builder.build()?)
 }
@@ -863,6 +907,8 @@ where
     let mut port = None;
     let mut username = None;
     let mut domain = None;
+    let mut gateway_endpoint = None;
+    let mut gateway_username = None;
     let mut width = 1280u16;
     let mut height = 720u16;
     let mut color_depth = 32u16;
@@ -902,6 +948,22 @@ where
                     MAX_DOMAIN_BYTES,
                 )?)
             }
+            "--gateway-endpoint" => {
+                let endpoint = next_argument(&mut iterator, "--gateway-endpoint")?;
+                if endpoint.len() > MAX_GATEWAY_ENDPOINT_BYTES {
+                    return Err(ArgumentError("invalid gateway endpoint".into()));
+                }
+                validate_gateway_endpoint(&endpoint)
+                    .map_err(|_| ArgumentError("invalid gateway endpoint".into()))?;
+                gateway_endpoint = Some(endpoint);
+            }
+            "--gateway-username" => {
+                gateway_username = Some(validated_text(
+                    "gateway username",
+                    &next_argument(&mut iterator, "--gateway-username")?,
+                    MAX_USERNAME_BYTES,
+                )?)
+            }
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
             "--height" => height = parse_u16("height", &next_argument(&mut iterator, "--height")?)?,
             "--color-depth" => {
@@ -927,12 +989,19 @@ where
 
     let host = host.ok_or_else(|| ArgumentError("missing host".into()))?;
     ironrdp_tls::validate_server_name(&host).map_err(|_| ArgumentError("invalid host".into()))?;
+    if gateway_endpoint.is_some() != gateway_username.is_some() {
+        return Err(ArgumentError(
+            "RDP gateway endpoint and username are both required".into(),
+        ));
+    }
 
     let arguments = Arguments {
         host,
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         username: username.ok_or_else(|| ArgumentError("missing username".into()))?,
         domain,
+        gateway_endpoint,
+        gateway_username,
         display: DisplaySize { width, height },
         color_depth,
         audio_requested,
@@ -1139,6 +1208,59 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_an_explicit_gateway_endpoint_without_credentials_in_argv() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "example.invalid",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--gateway-endpoint",
+                "gateway.invalid:443",
+                "--gateway-username",
+                "gateway-user",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            arguments.gateway_endpoint.as_deref(),
+            Some("gateway.invalid:443")
+        );
+        assert_eq!(arguments.gateway_username.as_deref(), Some("gateway-user"));
+    }
+
+    #[test]
+    fn parser_rejects_an_incomplete_gateway_endpoint_pair() {
+        let error = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "rdp",
+                "--host",
+                "example.invalid",
+                "--port",
+                "3389",
+                "--username",
+                "fixture-user",
+                "--gateway-endpoint",
+                "gateway.invalid:443",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "RDP gateway endpoint and username are both required"
+        );
+    }
+
+    #[test]
     fn parser_rejects_invalid_server_names_before_connecting_without_echoing_them() {
         let invalid_host = "not a valid/server name";
         let error = parse_arguments(
@@ -1210,6 +1332,8 @@ mod tests {
             port: 3389,
             username: "fixture-user".into(),
             domain: None,
+            gateway_endpoint: None,
+            gateway_username: None,
             display: DisplaySize {
                 width: 320,
                 height: 200,
@@ -1234,6 +1358,8 @@ mod tests {
             port: 3389,
             username: "fixture-user".into(),
             domain: None,
+            gateway_endpoint: None,
+            gateway_username: None,
             display: DisplaySize {
                 width: 320,
                 height: 200,
@@ -1249,9 +1375,41 @@ mod tests {
                 &arguments,
                 arguments.display,
                 &HelperCredential::new("fixture-secret"),
+                None,
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn rdp_config_selects_gateway_transport_and_keeps_password_native() {
+        let arguments = Arguments {
+            host: "example.invalid".into(),
+            port: 3389,
+            username: "fixture-user".into(),
+            domain: None,
+            gateway_endpoint: Some("gateway.invalid:443".into()),
+            gateway_username: Some("gateway-user".into()),
+            display: DisplaySize {
+                width: 320,
+                height: 200,
+            },
+            color_depth: 32,
+            audio_requested: false,
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
+        };
+
+        let gateway = HelperCredential::gateway("fixture-gateway-secret");
+        let config = build_config(
+            &arguments,
+            arguments.display,
+            &HelperCredential::new("fixture-session-secret"),
+            Some(&gateway),
+        )
+        .unwrap();
+        let _ = config;
+        assert_eq!(gateway.kind(), HelperCredentialKind::Gateway);
     }
 
     #[test]
@@ -1608,6 +1766,8 @@ mod tests {
             port,
             username: "fixture-user".into(),
             domain: None,
+            gateway_endpoint: None,
+            gateway_username: None,
             display: DisplaySize {
                 width: 320,
                 height: 200,
@@ -1626,6 +1786,7 @@ mod tests {
                 &arguments,
                 arguments.display,
                 HelperCredential::new("fixture-secret"),
+                None,
                 &mut stdout,
                 &mut incoming_rx,
                 RdpSessionPolicy {

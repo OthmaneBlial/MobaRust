@@ -2,9 +2,9 @@ use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
     HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
-    MAX_HOST_BYTES, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy,
-    decode_event_frame, encode_command_frame, read_frame, validate_rdp_color_depth,
-    write_frame_with_timeout,
+    MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
+    MAX_USERNAME_BYTES, ReconnectPolicy, decode_event_frame, encode_command_frame, read_frame,
+    validate_gateway_endpoint, validate_rdp_color_depth, write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,12 @@ pub struct RemoteDesktopConnectRequest {
     pub username: String,
     #[serde(default)]
     pub domain: Option<String>,
+    #[serde(default)]
+    pub gateway_endpoint: Option<String>,
+    #[serde(default)]
+    pub gateway_username: Option<String>,
+    #[serde(default)]
+    pub gateway_credential_id: Option<String>,
     #[serde(default)]
     pub credential_id: Option<String>,
     pub width: u16,
@@ -96,6 +102,12 @@ impl RemoteDesktopManager {
             .unwrap_or_default()
             .trim()
             .to_owned();
+        let gateway_credential_id = request
+            .gateway_credential_id
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
         let credential = if credential_id.is_empty() {
             if request.protocol == DesktopProtocol::Rdp {
                 return Err("RDP requires a saved credential reference".into());
@@ -106,6 +118,17 @@ impl RemoteDesktopManager {
             let secret = resolver.get(&id).map_err(|error| error.to_string())?;
             HelperCredential::from_zeroizing(secret.into_zeroizing())
         };
+        let gateway_credential = if gateway_credential_id.is_empty() {
+            None
+        } else {
+            let id =
+                CredentialId::new(&gateway_credential_id).map_err(|error| error.to_string())?;
+            let secret = resolver.get(&id).map_err(|error| error.to_string())?;
+            Some(HelperCredential::from_zeroizing_with_kind(
+                mobarust_remote_desktop::HelperCredentialKind::Gateway,
+                secret.into_zeroizing(),
+            ))
+        };
         let config = HelperLaunchConfig {
             program,
             protocol: request.protocol,
@@ -113,6 +136,10 @@ impl RemoteDesktopManager {
             port: request.port,
             username: request.username,
             domain: request.domain,
+            gateway_endpoint: request.gateway_endpoint,
+            gateway_username: request.gateway_username,
+            gateway_credential_ref: (!gateway_credential_id.is_empty())
+                .then_some(gateway_credential_id),
             display: DisplaySize {
                 width: request.width,
                 height: request.height,
@@ -136,6 +163,12 @@ impl RemoteDesktopManager {
             return Err(error.to_string());
         }
         if let Err(error) = supervisor.send_credentials(&credential).await {
+            let _ = supervisor.stop(HELPER_GRACE_PERIOD).await;
+            return Err(error.to_string());
+        }
+        if let Some(gateway_credential) = gateway_credential.as_ref()
+            && let Err(error) = supervisor.send_credentials(gateway_credential).await
+        {
             let _ = supervisor.stop(HELPER_GRACE_PERIOD).await;
             return Err(error.to_string());
         }
@@ -295,6 +328,43 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
     }
     if let Some(domain) = request.domain.as_deref() {
         validate_metadata(domain, MAX_DOMAIN_BYTES, "remote desktop domain is invalid")?;
+    }
+    let gateway_fields_present = request.gateway_endpoint.is_some()
+        || request.gateway_username.is_some()
+        || request.gateway_credential_id.is_some();
+    if request.protocol != DesktopProtocol::Rdp && gateway_fields_present {
+        return Err("RDP gateway settings are supported only for RDP".into());
+    }
+    if gateway_fields_present {
+        let endpoint = request
+            .gateway_endpoint
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "RDP gateway endpoint is required".to_owned())?;
+        if endpoint.len() > MAX_GATEWAY_ENDPOINT_BYTES {
+            return Err("RDP gateway endpoint is invalid".into());
+        }
+        validate_gateway_endpoint(endpoint).map_err(|error| error.to_string())?;
+        let username = request
+            .gateway_username
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "RDP gateway username is required".to_owned())?;
+        validate_metadata(
+            username,
+            MAX_USERNAME_BYTES,
+            "RDP gateway username is invalid",
+        )?;
+        let credential_id = request
+            .gateway_credential_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "RDP gateway credential reference is required".to_owned())?;
+        validate_metadata(
+            credential_id,
+            MAX_CREDENTIAL_REFERENCE_BYTES,
+            "RDP gateway credential reference is invalid",
+        )?;
     }
     if let Some(credential_id) = request.credential_id.as_deref() {
         validate_metadata(
@@ -587,6 +657,9 @@ mod tests {
             },
             username: username.into(),
             domain: None,
+            gateway_endpoint: None,
+            gateway_username: None,
+            gateway_credential_id: None,
             credential_id: None,
             width: 1024,
             height: 768,
@@ -639,6 +712,34 @@ mod tests {
         let mut request = request(DesktopProtocol::Rdp, "fixture-user");
         request.host = "example.invalid".into();
         validate_request(&request).unwrap();
+    }
+
+    #[test]
+    fn parent_boundary_requires_complete_gateway_metadata() {
+        let mut request = request(DesktopProtocol::Rdp, "fixture-user");
+        request.gateway_endpoint = Some("gateway.invalid:443".into());
+        request.gateway_username = Some("gateway-user".into());
+        request.gateway_credential_id = Some("gateway-password".into());
+        validate_request(&request).unwrap();
+
+        request.gateway_credential_id = None;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("credential"));
+
+        request.gateway_credential_id = Some("gateway-password".into());
+        request.gateway_endpoint = Some("gateway.invalid".into());
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("endpoint"));
+    }
+
+    #[test]
+    fn parent_boundary_rejects_gateway_metadata_for_vnc() {
+        let mut request = request(DesktopProtocol::Vnc, "viewer");
+        request.gateway_endpoint = Some("gateway.invalid:443".into());
+        request.gateway_username = Some("gateway-user".into());
+        request.gateway_credential_id = Some("gateway-password".into());
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("only for RDP"));
     }
 
     #[test]

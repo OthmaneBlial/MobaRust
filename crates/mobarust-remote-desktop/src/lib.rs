@@ -25,6 +25,7 @@ pub const MAX_CREDENTIAL_BYTES: usize = 1024 * 1024;
 pub const MAX_HOST_BYTES: usize = 255;
 pub const MAX_USERNAME_BYTES: usize = 256;
 pub const MAX_DOMAIN_BYTES: usize = 255;
+pub const MAX_GATEWAY_ENDPOINT_BYTES: usize = 512;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED: bool = true;
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 3;
@@ -142,6 +143,14 @@ pub struct HelperLaunchConfig {
     pub port: u16,
     pub username: String,
     pub domain: Option<String>,
+    /// Explicit RDS gateway endpoint, including its port. Gateway credentials
+    /// are still delivered through a separate native credential frame.
+    #[serde(default)]
+    pub gateway_endpoint: Option<String>,
+    #[serde(default)]
+    pub gateway_username: Option<String>,
+    #[serde(default)]
+    pub gateway_credential_ref: Option<String>,
     pub display: DisplaySize,
     pub color_depth: u16,
     pub audio_enabled: bool,
@@ -165,6 +174,9 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("domain", &self.domain)
+            .field("gateway_endpoint", &self.gateway_endpoint)
+            .field("gateway_username", &self.gateway_username)
+            .field("gateway_credential_ref", &"<opaque-reference>")
             .field("display", &self.display)
             .field("color_depth", &self.color_depth)
             .field("audio_enabled", &self.audio_enabled)
@@ -176,6 +188,19 @@ impl fmt::Debug for HelperLaunchConfig {
     }
 }
 
+/// Identifies which native protocol credential a helper frame carries.
+///
+/// Keeping the purpose on the frame prevents a gateway password from being
+/// accidentally consumed as the target-session password when a connection
+/// needs two independent authentication steps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HelperCredentialKind {
+    #[default]
+    Session,
+    Gateway,
+}
+
 /// A password delivered only over the native helper pipe.
 ///
 /// This type is deliberately separate from [`HelperCommand`]. It must not be
@@ -184,19 +209,43 @@ impl fmt::Debug for HelperLaunchConfig {
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HelperCredential {
+    #[serde(default)]
+    kind: HelperCredentialKind,
     password: Zeroizing<String>,
 }
 
 impl HelperCredential {
     pub fn new(password: impl Into<String>) -> Self {
+        Self::with_kind(HelperCredentialKind::Session, password)
+    }
+
+    pub fn gateway(password: impl Into<String>) -> Self {
+        Self::with_kind(HelperCredentialKind::Gateway, password)
+    }
+
+    fn with_kind(kind: HelperCredentialKind, password: impl Into<String>) -> Self {
         Self {
+            kind,
             password: Zeroizing::new(password.into()),
         }
     }
 
     /// Adopt a zeroizing native buffer without cloning its plaintext.
     pub fn from_zeroizing(password: Zeroizing<String>) -> Self {
-        Self { password }
+        Self::from_zeroizing_with_kind(HelperCredentialKind::Session, password)
+    }
+
+    /// Adopt a zeroizing native buffer for a specific native authentication
+    /// role without cloning its plaintext.
+    pub fn from_zeroizing_with_kind(
+        kind: HelperCredentialKind,
+        password: Zeroizing<String>,
+    ) -> Self {
+        Self { kind, password }
+    }
+
+    pub fn kind(&self) -> HelperCredentialKind {
+        self.kind
     }
 
     pub fn password(&self) -> &str {
@@ -250,6 +299,35 @@ fn validate_metadata(
     Ok(())
 }
 
+pub fn validate_gateway_endpoint(value: &str) -> Result<(), HelperProtocolError> {
+    validate_metadata("gateway endpoint", value, MAX_GATEWAY_ENDPOINT_BYTES)?;
+    let (host, port) = if let Some(rest) = value.strip_prefix('[') {
+        let Some(close) = rest.find(']') else {
+            return Err(HelperProtocolError::InvalidGatewayEndpoint);
+        };
+        let host = &rest[..close];
+        let Some(port) = rest
+            .get(close + 1..)
+            .and_then(|value| value.strip_prefix(':'))
+        else {
+            return Err(HelperProtocolError::InvalidGatewayEndpoint);
+        };
+        (host, port)
+    } else {
+        let Some((host, port)) = value.rsplit_once(':') else {
+            return Err(HelperProtocolError::InvalidGatewayEndpoint);
+        };
+        if host.contains(':') {
+            return Err(HelperProtocolError::InvalidGatewayEndpoint);
+        }
+        (host, port)
+    };
+    if host.trim().is_empty() || port.parse::<u16>().ok().is_none_or(|port| port == 0) {
+        return Err(HelperProtocolError::InvalidGatewayEndpoint);
+    }
+    Ok(())
+}
+
 impl HelperLaunchConfig {
     pub fn validate(&self) -> Result<(), HelperProtocolError> {
         if self.program.as_os_str().is_empty() {
@@ -278,6 +356,36 @@ impl HelperLaunchConfig {
         }
         if let Some(domain) = self.domain.as_deref() {
             validate_metadata("domain", domain, MAX_DOMAIN_BYTES)?;
+        }
+        let gateway_fields_present = self.gateway_endpoint.is_some()
+            || self.gateway_username.is_some()
+            || self.gateway_credential_ref.is_some();
+        if self.protocol != DesktopProtocol::Rdp && gateway_fields_present {
+            return Err(HelperProtocolError::GatewayOnlyForRdp);
+        }
+        if gateway_fields_present {
+            let endpoint = self
+                .gateway_endpoint
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(HelperProtocolError::MissingGatewayField)?;
+            validate_gateway_endpoint(endpoint)?;
+            let username = self
+                .gateway_username
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(HelperProtocolError::MissingGatewayField)?;
+            validate_metadata("gateway username", username, MAX_USERNAME_BYTES)?;
+            let credential_ref = self
+                .gateway_credential_ref
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(HelperProtocolError::MissingGatewayField)?;
+            validate_metadata(
+                "gateway credential reference",
+                credential_ref,
+                MAX_CREDENTIAL_REFERENCE_BYTES,
+            )?;
         }
         if self.color_depth == 0 {
             return Err(HelperProtocolError::InvalidColorDepth);
@@ -333,6 +441,12 @@ impl HelperLaunchConfig {
             }
             if self.audio_enabled {
                 arguments.push("--audio".into());
+            }
+            if let Some(endpoint) = self.gateway_endpoint.as_deref() {
+                arguments.extend(["--gateway-endpoint".into(), endpoint.into()]);
+            }
+            if let Some(username) = self.gateway_username.as_deref() {
+                arguments.extend(["--gateway-username".into(), username.into()]);
             }
         } else {
             arguments.extend(["--quality".into(), self.vnc_quality.clone()]);
@@ -664,6 +778,12 @@ pub enum HelperProtocolError {
     MetadataTooLarge { field: &'static str, bytes: usize },
     #[error("helper {field} contains control characters")]
     MetadataContainsControl { field: &'static str },
+    #[error("RDP gateway settings are supported only for RDP")]
+    GatewayOnlyForRdp,
+    #[error("RDP gateway settings require an endpoint, username, and credential reference")]
+    MissingGatewayField,
+    #[error("RDP gateway endpoint must be an explicit host:port target")]
+    InvalidGatewayEndpoint,
     #[error("helper color depth must be non-zero")]
     InvalidColorDepth,
     #[error("helper RDP color depth {depth} is unsupported; use 16 or 32")]
@@ -1034,6 +1154,9 @@ mod tests {
             port: 3389,
             username: "operator".into(),
             domain: Some("LAB".into()),
+            gateway_endpoint: None,
+            gateway_username: None,
+            gateway_credential_ref: None,
             display: DisplaySize {
                 width: 1280,
                 height: 800,
@@ -1079,6 +1202,52 @@ mod tests {
                 .filter(|argument| *argument == "LAB")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn gateway_arguments_expose_only_non_secret_metadata() {
+        let mut config = launch_config();
+        config.gateway_endpoint = Some("gateway.example:443".into());
+        config.gateway_username = Some("gateway-user".into());
+        config.gateway_credential_ref = Some("gateway-secret-ref".into());
+
+        config.validate().unwrap();
+        let arguments = config.process_arguments();
+        assert!(arguments.contains(&"--gateway-endpoint".into()));
+        assert!(arguments.contains(&"gateway.example:443".into()));
+        assert!(arguments.contains(&"--gateway-username".into()));
+        assert!(arguments.contains(&"gateway-user".into()));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("gateway-secret-ref"))
+        );
+        assert!(!format!("{config:?}").contains("gateway-secret-ref"));
+    }
+
+    #[test]
+    fn gateway_settings_require_complete_rdp_metadata() {
+        let mut config = launch_config();
+        config.gateway_endpoint = Some("gateway.example:443".into());
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::MissingGatewayField)
+        );
+
+        config.gateway_username = Some("gateway-user".into());
+        config.gateway_credential_ref = Some("gateway-secret-ref".into());
+        config.protocol = DesktopProtocol::Vnc;
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::GatewayOnlyForRdp)
+        );
+
+        config.protocol = DesktopProtocol::Rdp;
+        config.gateway_endpoint = Some("gateway.example".into());
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::InvalidGatewayEndpoint)
         );
     }
 
@@ -1240,6 +1409,16 @@ mod tests {
         assert_eq!(decoded.password(), "fixture-only-password");
         assert!(decode_command_frame(&frame).is_err());
         assert!(!format!("{credential:?}").contains("fixture-only-password"));
+    }
+
+    #[test]
+    fn credential_frames_preserve_gateway_purpose_without_exposing_secret() {
+        let credential = HelperCredential::gateway("fixture-gateway-password");
+        let frame = encode_credential_frame(&credential).unwrap();
+        let decoded = decode_credential_frame(&frame).unwrap();
+        assert_eq!(decoded.kind(), HelperCredentialKind::Gateway);
+        assert_eq!(decoded.password(), "fixture-gateway-password");
+        assert!(!format!("{decoded:?}").contains("fixture-gateway-password"));
     }
 
     #[tokio::test]

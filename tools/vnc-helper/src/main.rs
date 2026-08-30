@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 
 use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
-    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
-    HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame, decode_credential_frame,
-    write_event_frame,
+    DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperCredentialKind,
+    HelperEvent, HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES,
+    MAX_HOST_BYTES, MAX_USERNAME_BYTES, ReconnectPolicy, decode_command_frame,
+    decode_credential_frame, write_event_frame,
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -111,7 +111,14 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
                 }
                 start_display = Some(display);
             }
-            Some(Incoming::Credential(value)) => credential = Some(value),
+            Some(Incoming::Credential(value)) if value.kind() == HelperCredentialKind::Session => {
+                credential = Some(value)
+            }
+            Some(Incoming::Credential(_)) => {
+                send_error(&mut stdout, "unexpected VNC gateway credential").await?;
+                write_state(&mut stdout, HelperState::Failed).await?;
+                return Ok(());
+            }
             Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) => {
                 write_state(&mut stdout, HelperState::Stopped).await?;
                 return Ok(());

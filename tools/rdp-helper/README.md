@@ -32,8 +32,15 @@ workspace with `ironrdp-tls-validated`, a small compatibility crate that uses
 Rustls, SNI, and `rustls-platform-verifier`. This improves the candidate's
 trust behavior but is not production evidence: RDP hostname/IP targets are
 accepted only through this native platform-verification path, and the helper
-remains excluded from normal bundles. RD Gateway is also deferred until its
-separate transport path has the same trust policy.
+remains excluded from normal bundles.
+
+The candidate also supports explicit RD Gateway metadata
+(`--gateway-endpoint` and `--gateway-username`). The gateway password is sent
+separately from the session password as a role-tagged zeroizing native-pipe
+frame. Neither secret is accepted in argv or written to logs. Gateway
+configuration is opt-in and must be complete at the typed desktop boundary;
+it remains an experiment until real Gateway interoperability, platform trust
+fixtures, and the dependency audit are complete.
 
 The helper now accepts explicit hostname or IP metadata and passes it unchanged
 to the native TLS adapter, which owns DNS, SNI, and platform certificate

@@ -13,6 +13,8 @@ pub const MAX_SESSION_ENVIRONMENT_VALUE_BYTES: usize = 4096;
 pub const MAX_SESSION_ENVIRONMENT_TOTAL_BYTES: usize = 64 * 1024;
 pub const MAX_SESSION_STARTUP_DIRECTORY_BYTES: usize = 4096;
 pub const MAX_SESSION_STARTUP_COMMAND_BYTES: usize = 16 * 1024;
+pub const MAX_RDP_GATEWAY_ENDPOINT_BYTES: usize = 512;
+pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 
 fn default_vnc_quality() -> String {
     DEFAULT_VNC_QUALITY.into()
@@ -137,8 +139,57 @@ impl TelnetProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RdpGatewayProfile {
+    pub endpoint: String,
+    pub username: String,
+    pub credential_ref: String,
+}
+
+impl RdpGatewayProfile {
+    pub fn validate(&self) -> Result<(), SessionValidationError> {
+        let valid_metadata = |value: &str, max_bytes: usize| {
+            !value.trim().is_empty()
+                && value.len() <= max_bytes
+                && !value.chars().any(char::is_control)
+        };
+        let (host, port) = if let Some(rest) = self.endpoint.strip_prefix('[') {
+            let Some(close) = rest.find(']') else {
+                return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+            };
+            let Some(port) = rest
+                .get(close + 1..)
+                .and_then(|value| value.strip_prefix(':'))
+            else {
+                return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+            };
+            (&rest[..close], port)
+        } else {
+            let Some((host, port)) = self.endpoint.rsplit_once(':') else {
+                return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+            };
+            if host.contains(':') {
+                return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+            }
+            (host, port)
+        };
+        if !valid_metadata(&self.endpoint, MAX_RDP_GATEWAY_ENDPOINT_BYTES)
+            || host.trim().is_empty()
+            || port.parse::<u16>().ok().is_none_or(|port| port == 0)
+            || !valid_metadata(&self.username, 256)
+            || !valid_metadata(&self.credential_ref, MAX_CREDENTIAL_REFERENCE_BYTES)
+        {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemoteDesktopProfile {
     pub domain: Option<String>,
+    #[serde(default)]
+    pub gateway: Option<RdpGatewayProfile>,
     pub width: u16,
     pub height: u16,
     pub color_depth: u16,
@@ -168,6 +219,9 @@ impl RemoteDesktopProfile {
         {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
+        if let Some(gateway) = self.gateway.as_ref() {
+            gateway.validate()?;
+        }
         Ok(())
     }
 
@@ -183,6 +237,9 @@ impl RemoteDesktopProfile {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         if protocol == Protocol::Vnc && self.domain.is_some() {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        if protocol == Protocol::Vnc && self.gateway.is_some() {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         Ok(())
@@ -633,6 +690,7 @@ mod tests {
     fn remote_desktop_profile_rejects_unsafe_dimensions() {
         let profile = RemoteDesktopProfile {
             domain: Some("LAB".into()),
+            gateway: None,
             width: 1280,
             height: 800,
             color_depth: 32,
@@ -687,6 +745,39 @@ mod tests {
         invalid_quality.vnc_quality = "unbounded".into();
         assert_eq!(
             invalid_quality.validate(),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+    }
+
+    #[test]
+    fn rdp_gateway_profile_is_bounded_and_protocol_scoped() {
+        let mut profile = RemoteDesktopProfile {
+            domain: Some("LAB".into()),
+            gateway: Some(RdpGatewayProfile {
+                endpoint: "gateway.example:443".into(),
+                username: "gateway-user".into(),
+                credential_ref: "gateway-password".into(),
+            }),
+            width: 1280,
+            height: 800,
+            color_depth: 32,
+            audio_enabled: false,
+            vnc_quality: "balanced".into(),
+            reconnect_enabled: true,
+            reconnect_attempts: 3,
+        };
+        profile.validate_for_protocol(Protocol::Rdp).unwrap();
+        assert_eq!(
+            profile.validate_for_protocol(Protocol::Vnc),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+
+        profile.gateway.as_mut().unwrap().endpoint = "[::1]:443".into();
+        profile.validate_for_protocol(Protocol::Rdp).unwrap();
+
+        profile.gateway.as_mut().unwrap().endpoint = "gateway.example".into();
+        assert_eq!(
+            profile.validate(),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
     }

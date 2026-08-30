@@ -117,9 +117,16 @@ experiment now patches that dependency inside its isolated workspace with
 certificate verification, and SNI. This improves the candidate's trust
 behavior but does not establish production interoperability: certificate
 fixtures beyond the macOS local rejection proof, Windows evidence, dependency audit, and packaging gates remain. RDP
-hostname/IP metadata is now allowed only through this native verification path;
-RD Gateway remains deferred until its separate transport path has the same
-trust evidence.
+hostname/IP metadata is now allowed only through this native verification path.
+
+The isolated candidate also accepts an explicit RD Gateway endpoint and
+username, and routes a separate opaque gateway credential reference to the
+helper as a role-tagged zeroizing native frame. The IronRDP transport selects
+gateway mode only from that explicit metadata; no gateway secret is placed in
+argv, logs, ordinary profile JSON, or frontend state. This is a local
+architecture and boundary increment, not gateway interoperability evidence:
+the trust policy, dependency audit, Windows/Linux validation, and real Gateway
+server checks remain open.
 
 The helper fails closed at runtime for unsafe trust configuration: it rejects
 inherited `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` settings before a
