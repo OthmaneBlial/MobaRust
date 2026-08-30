@@ -26,10 +26,13 @@ step. `cargo xtask check` remains the normal validation command and does not
 turn the application into portable mode.
 
 `cargo xtask package-check` builds an unsigned current-platform debug app
-bundle and verifies that the Tauri resource step completes. On macOS it also
-checks the app executable and the shippable VNC helper resource is a regular
-file inside the bundle, while asserting that the unshippable RDP candidate is
-absent. It writes a `MobaRust.sha256` manifest beside the generated
+bundle and verifies that the Tauri resource step completes. The bundle
+configuration includes the versioned MobaRust mark from
+`apps/desktop/src-tauri/icons/icon.png`, so the application icon is generated
+into the platform bundle rather than remaining a source-only asset. On macOS
+it also checks the app executable and the shippable VNC helper resource is a
+regular file inside the bundle, while asserting that the unshippable RDP
+candidate is absent. It writes a `MobaRust.sha256` manifest beside the generated
 bundle and verifies it immediately; the manifest uses the portable two-space
 SHA-256 format accepted by both `sha256sum` and macOS `shasum`, and covers every
 regular file in the artifact scope. It is a packaging smoke test, not code-signing,
