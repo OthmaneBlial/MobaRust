@@ -41,8 +41,9 @@ messages before a process is started:
   silently discarding data;
 - the parent requires `Hello` as the first event and rejects duplicate
   handshakes or active data that arrives before a validated capability report;
-- the parent applies a five-second deadline to the first helper frame, turning
-  a silent helper into a failed session and reusing the bounded stop/reap path;
+- the parent applies a five-second deadline until the helper has completed its
+  `Hello` and capability-report handshake, turning a silent or half-started
+  helper into a failed session and reusing the bounded stop/reap path;
 - the parent stores the requested protocol policy with each live session and
   rejects protocol-unsupported commands before they enter the helper queue;
   VNC server resize is rejected, clipboard input requires explicit session

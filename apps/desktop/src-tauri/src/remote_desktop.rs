@@ -618,7 +618,7 @@ async fn read_helper_events(
     loop {
         let frame = match read_next_helper_frame(
             &mut stdout,
-            !progress.hello_seen,
+            !progress.capabilities_seen,
             HELPER_HANDSHAKE_TIMEOUT,
         )
         .await
@@ -865,10 +865,11 @@ mod tests {
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
         HelperCommand, HelperEvent, HelperProtocolError, HelperState,
-        MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, WIRE_VERSION,
+        MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, WIRE_VERSION, encode_event_frame,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn normal_helper_exit_claims_the_single_failure_path() {
@@ -891,6 +892,27 @@ mod tests {
 
         assert_eq!(result, HelperFrameReadError::HandshakeTimeout);
         assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn helper_capability_handshake_timeout_also_applies_after_hello() {
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let hello = encode_event_frame(&HelperEvent::Hello {
+            version: WIRE_VERSION,
+        })
+        .unwrap();
+        writer.write_all(&hello).await.unwrap();
+        assert!(
+            read_next_helper_frame(&mut reader, true, Duration::from_millis(10))
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let error = read_next_helper_frame(&mut reader, true, Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert_eq!(error, HelperFrameReadError::HandshakeTimeout);
     }
 
     #[test]
