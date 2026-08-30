@@ -12,7 +12,7 @@ An explicitly supplied host-key policy reads OpenSSH `known_hosts` and rejects u
 
 SFTP file movement uses `tokio::io::copy` between async readers and writers. The API never reads a complete remote file into a `Vec<u8>`. Dropping a cancelled future releases the in-flight operation; a transfer manager will add visible cancellation and bounded concurrency above this primitive.
 
-Connection setup maps common transport causes into typed, redacted errors: DNS failure, refusal, unreachable host, timeout, generic network failure, or handshake failure. Raw hostnames, socket details, and library error text are not propagated to the user-facing error by default; host-key rejection remains a separate, explicit result with only the observed fingerprint.
+Connection setup maps common transport causes into typed, redacted errors: DNS failure, refusal, unreachable host, timeout, generic network failure, or handshake failure. Raw hostnames, socket details, and library error text are not propagated to the user-facing error by default; host-key rejection remains a separate, explicit result with only the observed fingerprint. Authentication, channel, SFTP, SCP, and local I/O errors likewise use concise category messages instead of displaying library or OS detail.
 
 The opt-in X11 bridge applies the same boundary to local-display I/O. It accepts only the configured loopback TCP or absolute Unix-socket target and reports categorized display errors without returning raw socket paths or operating-system error text.
 

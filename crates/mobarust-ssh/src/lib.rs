@@ -45,7 +45,7 @@ pub enum SshError {
     HostKeyRejected { fingerprint: String },
     #[error("SSH authentication was rejected")]
     AuthenticationRejected,
-    #[error("SSH agent authentication failed: {0}")]
+    #[error("SSH agent authentication failed")]
     Agent(String),
     #[error("SSH keyboard-interactive authentication requires non-echo prompts")]
     KeyboardInteractiveEchoPrompt,
@@ -59,17 +59,17 @@ pub enum SshError {
     HostUnreachable,
     #[error("SSH network connection failed")]
     ConnectionFailed,
-    #[error("SSH private key could not be loaded: {0}")]
+    #[error("SSH private key could not be loaded")]
     PrivateKey(#[source] russh::keys::Error),
     #[error("SSH private key algorithm is unsupported: {0}")]
     UnsupportedKeyAlgorithm(String),
-    #[error("SSH known_hosts check failed: {0}")]
+    #[error("SSH known_hosts check failed")]
     KnownHosts(#[source] russh::keys::Error),
-    #[error("SSH transport failed: {0}")]
+    #[error("SSH transport failed")]
     Transport(#[source] russh::Error),
-    #[error("SSH handshake failed: {0}")]
+    #[error("SSH handshake failed")]
     Handshake(String),
-    #[error("SSH channel failed: {0}")]
+    #[error("SSH channel operation failed")]
     Channel(#[source] russh::Error),
     #[error("remote monitoring command failed with exit status {0}")]
     RemoteMonitorCommandFailed(u32),
@@ -77,7 +77,7 @@ pub enum SshError {
     RemoteMonitorOutputTooLarge,
     #[error("remote monitoring is not supported by this host")]
     RemoteMonitorUnsupported,
-    #[error("SFTP operation failed: {0}")]
+    #[error("SFTP operation failed")]
     Sftp(String),
     #[error("remote file changed since it was opened")]
     RemoteConflict,
@@ -89,9 +89,9 @@ pub enum SshError {
     RemoteFileNotUtf8,
     #[error("remote text cannot be represented in the selected encoding")]
     RemoteTextEncodingUnsupported,
-    #[error("SCP operation failed: {0}")]
+    #[error("SCP operation failed")]
     Scp(String),
-    #[error("local file operation failed: {0}")]
+    #[error("local file operation failed")]
     LocalIo(#[source] std::io::Error),
     #[error("SFTP transfer cancelled")]
     Cancelled,
@@ -2655,6 +2655,26 @@ mod tests {
         )));
         assert_eq!(error.to_string(), "SSH network connection failed");
         assert!(!error.to_string().contains("personal-host-detail"));
+    }
+
+    #[test]
+    fn operation_errors_do_not_display_library_details() {
+        let errors = [
+            SshError::Agent("agent socket path and response".into()),
+            SshError::Handshake("server response".into()),
+            SshError::Sftp("remote path and server message".into()),
+            SshError::Scp("remote stderr and path".into()),
+        ];
+        let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(messages[0], "SSH agent authentication failed");
+        assert_eq!(messages[1], "SSH handshake failed");
+        assert_eq!(messages[2], "SFTP operation failed");
+        assert_eq!(messages[3], "SCP operation failed");
+        assert!(messages.iter().all(|message| {
+            !message.contains("agent socket")
+                && !message.contains("server response")
+                && !message.contains("remote path")
+        }));
     }
 
     #[test]
