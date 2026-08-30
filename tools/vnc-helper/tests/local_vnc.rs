@@ -28,7 +28,7 @@ const FIXTURE_CHALLENGE: [u8; 16] = [
 ];
 const BALANCED_ENCODINGS: &[i32] = &[16, 1, 0, -239, -223];
 const LOW_LATENCY_ENCODINGS: &[i32] = &[0, 1, 16, -239, -223];
-const LOW_BANDWIDTH_ENCODINGS: &[i32] = &[16, 1, 0, -239, -223];
+const LOW_BANDWIDTH_ENCODINGS: &[i32] = &[7, 16, 1, 0, -239, -223];
 
 #[derive(Clone, Copy)]
 enum FixtureAuth {
@@ -58,7 +58,7 @@ async fn helper_decodes_tight_jpeg_framebuffer_fixture() {
         Ok::<(), String>(())
     });
 
-    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    let (mut child, mut stdin, mut stdout) = spawn_helper_with_quality(port, "low-bandwidth").await;
     send_command(
         &mut stdin,
         HelperCommand::Start {

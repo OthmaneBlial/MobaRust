@@ -1002,6 +1002,7 @@ const BALANCED_ENCODINGS: &[VncEncoding] = &[
 ];
 
 const LOW_BANDWIDTH_ENCODINGS: &[VncEncoding] = &[
+    VncEncoding::Tight,
     VncEncoding::Zrle,
     VncEncoding::CopyRect,
     VncEncoding::Raw,
@@ -1195,7 +1196,7 @@ mod tests {
         assert_eq!(arguments.quality, "low-bandwidth");
         assert_eq!(
             quality_encodings(&arguments.quality).unwrap()[0],
-            VncEncoding::Zrle
+            VncEncoding::Tight
         );
         assert_eq!(
             quality_refresh_interval(&arguments.quality),

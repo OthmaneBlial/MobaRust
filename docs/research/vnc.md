@@ -195,13 +195,12 @@ negotiated Latin-1 text channel; it is independent from the RDP-only native OS
 clipboard backend. The VNC profile also offers three bounded quality policies:
 `balanced`
 prefers ZRLE, `low-latency` prefers raw rectangles, and `low-bandwidth`
-also prefers ZRLE while reducing refresh frequency. Each policy selects a
-bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms respectively).
-Tight/JPEG is not currently advertised in the preference order while broader
-interoperability evidence is collected, but server-sent Tight/JPEG rectangles
-are decoded with bounds on compressed input, decoded dimensions, pixel format,
-and RGBA output size. These are client-side encoding preferences; they do not
-claim to change the VNC server resolution or invent transport encryption.
+prefers Tight/JPEG followed by ZRLE while reducing refresh frequency. Each
+policy selects a bounded framebuffer refresh cadence (100 ms, 50 ms, or 250 ms
+respectively). Tight/JPEG rectangles are decoded with bounds on compressed
+input, decoded dimensions, pixel format, and RGBA output size. These are
+client-side encoding preferences; they do not claim to change the VNC server
+resolution or invent transport encryption.
 
 The connected-session loop also puts a dedicated two-second deadline on each
 keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
