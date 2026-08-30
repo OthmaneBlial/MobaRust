@@ -20,7 +20,7 @@ What is working in the current baseline:
 - Local terminals, split panes, tunnels, snippets, diagnostics, remote monitoring, Telnet, and serial-session foundations
 - A Rust-native boundary with typed frontend IPC, redacted logs, separated session configuration and secret material, and isolated loopback test fixtures
 
-The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. That number is deliberately not a claim of complete MobaXterm parity.
+The current engineering checklist is **61/68 items evidenced — approximately 89.7%**. That number is deliberately not a claim of complete MobaXterm parity.
 
 The local implementation layer is already in place on macOS: native PTY,
 an isolated RDP candidate, a real VNC helper with loopback fixtures, and a

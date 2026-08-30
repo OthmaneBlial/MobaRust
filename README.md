@@ -114,7 +114,7 @@ Read the [threat model](docs/security/threat-model.md) and [safe testing policy]
 
 ## Honest project status
 
-The current engineering checklist is **60/67 items evidenced — approximately 89.6%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
+The current engineering checklist is **61/68 items evidenced — approximately 89.7%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
 
 The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, explicit local shell targets, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; a macOS-only TLS fixture now proves that an untrusted self-signed certificate is rejected, while real Windows/Linux shell interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
 
