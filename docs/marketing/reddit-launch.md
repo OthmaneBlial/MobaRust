@@ -20,7 +20,7 @@ What is working in the current baseline:
 - Local terminals, split panes, tunnels, snippets, diagnostics, remote monitoring, Telnet, and serial-session foundations
 - A Rust-native boundary with typed frontend IPC, redacted logs, separated session configuration and secret material, and isolated loopback test fixtures
 
-The current engineering checklist is **58/65 items evidenced — approximately 89.2%**. That number is deliberately not a claim of complete MobaXterm parity.
+The current engineering checklist is **59/66 items evidenced — approximately 89.4%**. That number is deliberately not a claim of complete MobaXterm parity.
 
 The remaining gaps are visible: production RDP through a mature engine, broader VNC interoperability, real Windows/Linux/macOS evidence, hardware testing, X11 strategy, and signed portable releases. RDP and VNC are still marked experimental until those gates are proven.
 

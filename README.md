@@ -43,7 +43,7 @@ The goal is the kind of workflow people choose instead of MobaXterm for daily ad
 
 ## The honest status
 
-The roadmap is currently **58/65 items evidenced — approximately 89.2%**. This is an engineering progress measure, not a claim of complete MobaXterm parity.
+The roadmap is currently **59/66 items evidenced — approximately 89.4%**. This is an engineering progress measure, not a claim of complete MobaXterm parity.
 
 The remaining work is visible:
 
