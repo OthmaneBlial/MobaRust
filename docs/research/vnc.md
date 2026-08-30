@@ -83,6 +83,9 @@ The parent reader also invokes bounded stop/reap cleanup after EOF or a
 malformed event before removing the session, so a VNC helper cannot outlive a
 failed native pipe. This remains local lifecycle evidence only.
 
+Reader and writer failure paths claim the stop state atomically, so a single
+pipe failure cannot produce duplicate crash events while cleanup is racing.
+
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`

@@ -378,10 +378,9 @@ async fn report_helper_input_failure(
     stop_requested: &Arc<AtomicBool>,
     error: &HelperProtocolError,
 ) {
-    if !should_report_unexpected_helper_exit(stop_requested) {
+    if !claim_unexpected_helper_exit(stop_requested) {
         return;
     }
-    stop_requested.store(true, Ordering::Release);
     emit_helper_event(
         app,
         session_id,
@@ -419,7 +418,7 @@ async fn read_helper_events(
         let frame = match read_frame(&mut stdout).await {
             Ok(Some(frame)) => frame,
             Ok(None) => {
-                if should_report_unexpected_helper_exit(&stop_requested) {
+                if claim_unexpected_helper_exit(&stop_requested) {
                     emit_helper_event(
                         &app,
                         &session_id,
@@ -431,7 +430,7 @@ async fn read_helper_events(
                 break;
             }
             Err(_) => {
-                if should_report_unexpected_helper_exit(&stop_requested) {
+                if claim_unexpected_helper_exit(&stop_requested) {
                     emit_helper_event(
                         &app,
                         &session_id,
@@ -454,7 +453,7 @@ async fn read_helper_events(
         let event = match decode_event_frame(&frame) {
             Ok(event) => event,
             Err(_) => {
-                if should_report_unexpected_helper_exit(&stop_requested) {
+                if claim_unexpected_helper_exit(&stop_requested) {
                     emit_helper_event(
                         &app,
                         &session_id,
@@ -483,9 +482,11 @@ async fn read_helper_events(
                     | mobarust_remote_desktop::HelperState::Crashed
             }
         ) {
+            stop_requested.store(true, Ordering::Release);
             break;
         }
     }
+    stop_requested.store(true, Ordering::Release);
     // EOF and protocol errors can happen while the child still owns the
     // other side of the pipe. Reuse the same bounded wait/kill/reap path as a
     // user-initiated stop before dropping the supervisor.
@@ -503,32 +504,35 @@ fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
     );
 }
 
-fn should_report_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
-    !stop_requested.load(Ordering::Acquire)
+fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
+    stop_requested
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, helper_input_failure_message,
-        should_report_unexpected_helper_exit, validate_helper_resource, validate_request,
+        RemoteDesktopConnectRequest, claim_unexpected_helper_exit, helper_input_failure_message,
+        validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{DesktopProtocol, HelperProtocolError};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
-    fn normal_helper_exit_is_reported_as_a_crash() {
+    fn normal_helper_exit_claims_the_single_failure_path() {
         let stop_requested = AtomicBool::new(false);
-        assert!(should_report_unexpected_helper_exit(&stop_requested));
+        assert!(claim_unexpected_helper_exit(&stop_requested));
+        assert!(!claim_unexpected_helper_exit(&stop_requested));
     }
 
     #[test]
     fn forced_shutdown_does_not_emit_a_false_crash() {
         let stop_requested = AtomicBool::new(true);
-        assert!(!should_report_unexpected_helper_exit(&stop_requested));
+        assert!(!claim_unexpected_helper_exit(&stop_requested));
         stop_requested.store(false, Ordering::Release);
-        assert!(should_report_unexpected_helper_exit(&stop_requested));
+        assert!(claim_unexpected_helper_exit(&stop_requested));
     }
 
     #[test]

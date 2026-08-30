@@ -180,6 +180,9 @@ malformed event, so an exited or wedged helper is not left behind when its
 session is removed. This is lifecycle hardening, not evidence of a real RDP
 server connection.
 
+Reader and writer failure paths claim the stop state atomically, so a single
+pipe failure cannot produce duplicate crash events while cleanup is racing.
+
 The desktop canvas uses a framebuffer-aware input map. When `object-fit:
 contain` adds letterbox bands, clicks and wheel events in those bands are
 discarded instead of being mapped to a misleading remote pixel. Pointer
