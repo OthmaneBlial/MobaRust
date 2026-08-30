@@ -32,12 +32,14 @@ channel receiver is shared by that session. Remote bind defaults to
 The frontend never receives an SSH channel or arbitrary socket capability. It
 gets endpoint metadata, state, connection count, byte count, and sanitized
 errors through `ssh://tunnel` events. Bind and target values are validated in
-Rust, and a local bind failure is reported before the tunnel is registered.
+Rust before a listener or channel is opened: forwarding hosts are bounded to
+255 bytes and control characters are rejected. A local bind failure is
+reported before the tunnel is registered.
 
 Dynamic forwarding performs an unauthenticated SOCKS5 CONNECT handshake on a
-bounded local listener, then opens a native `direct-tcpip` channel for the
-requested destination. The SOCKS proxy is deliberately local-only and does
-not expose a shell or arbitrary IPC operation.
+bounded local listener, rejects malformed domain names, then opens a native
+`direct-tcpip` channel for the requested destination. The SOCKS proxy is
+deliberately local-only and does not expose a shell or arbitrary IPC operation.
 
 ## Rationale
 
@@ -59,7 +61,8 @@ not expose a shell or arbitrary IPC operation.
 ## Verification
 
 The local SSH fixture opens real `direct-tcpip` and `forwarded-tcpip` channels
-to local echo servers and verifies bidirectional payload delivery. SOCKS5
+to local echo servers and verifies bidirectional payload delivery. Host-bound
+and control-character validation has deterministic unit coverage, and SOCKS5
 framing has deterministic in-memory tests. Manager-level lifecycle and
 cancellation remain native integration coverage to extend with a desktop
 fixture; manual interoperability checks are still required on Windows, Linux,

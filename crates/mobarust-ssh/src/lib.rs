@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 /// plus MFA prompt flows while failing closed on pathological fan-out.
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
 const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_FORWARD_HOST_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -124,6 +125,21 @@ pub enum SshError {
     X11Display(#[from] X11DisplayError),
     #[error("X11 display connection failed: {0}")]
     X11Transport(String),
+}
+
+/// Validate a host name or address used by an SSH forwarding channel.
+///
+/// Forwarding targets are protocol data, never shell fragments. Keep the
+/// value bounded and reject control characters before it reaches russh or a
+/// user-visible tunnel event.
+pub fn validate_forward_host(value: &str) -> Result<(), SshError> {
+    if value.trim().is_empty()
+        || value.len() > MAX_FORWARD_HOST_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(SshError::InvalidOptions);
+    }
+    Ok(())
 }
 
 /// An explicitly selected local X11 display. No environment variables or
@@ -725,6 +741,8 @@ pub enum Socks5Error {
     UnsupportedAddressType(u8),
     #[error("SOCKS5 domain name is empty")]
     EmptyDomain,
+    #[error("SOCKS5 domain name is invalid")]
+    InvalidDomain,
     #[error("SOCKS5 target port is zero")]
     InvalidPort,
 }
@@ -803,9 +821,14 @@ where
                 .read_exact(&mut bytes)
                 .await
                 .map_err(Socks5Error::Io)?;
-            let host = String::from_utf8_lossy(&bytes).trim().to_owned();
+            let host = String::from_utf8(bytes).map_err(|_| Socks5Error::InvalidDomain)?;
             if host.is_empty() {
+                let _ = send_socks5_reply(stream, Socks5ReplyCode::GeneralFailure).await;
                 return Err(Socks5Error::EmptyDomain);
+            }
+            if host != host.trim() || host.chars().any(char::is_control) {
+                let _ = send_socks5_reply(stream, Socks5ReplyCode::GeneralFailure).await;
+                return Err(Socks5Error::InvalidDomain);
             }
             host
         }
@@ -1312,9 +1335,7 @@ impl SshConnection {
             return Err(SshError::InvalidOptions);
         }
         let target_host = target_host.into();
-        if target_host.trim().is_empty() {
-            return Err(SshError::InvalidOptions);
-        }
+        validate_forward_host(&target_host)?;
         let channel = tokio::time::timeout(
             Duration::from_secs(12),
             self.handle
@@ -1334,9 +1355,7 @@ impl SshConnection {
         port: u32,
     ) -> Result<u16, SshError> {
         let address = address.into();
-        if address.trim().is_empty() || address.contains('\0') {
-            return Err(SshError::InvalidOptions);
-        }
+        validate_forward_host(&address)?;
         let port = tokio::time::timeout(
             Duration::from_secs(12),
             self.handle.tcpip_forward(address, port),
@@ -1558,8 +1577,7 @@ fn parse_scp_metadata(line: &[u8]) -> Result<u64, SshError> {
 }
 
 fn validate_options(options: &SshConnectOptions) -> Result<(), SshError> {
-    if options.host.trim().is_empty()
-        || options.host.contains('\0')
+    if validate_forward_host(&options.host).is_err()
         || options.port == 0
         || options.credentials.username().trim().is_empty()
         || options
@@ -2812,6 +2830,15 @@ mod tests {
     }
 
     #[test]
+    fn forwarding_hosts_are_bounded_and_control_free() {
+        assert!(validate_forward_host("db.internal").is_ok());
+        assert!(validate_forward_host("[::1]").is_ok());
+        assert!(validate_forward_host("").is_err());
+        assert!(validate_forward_host("db\ninternal").is_err());
+        assert!(validate_forward_host(&"h".repeat(MAX_FORWARD_HOST_BYTES + 1)).is_err());
+    }
+
+    #[test]
     fn keepalive_interval_is_applied_to_the_native_russh_config() {
         let options = SshConnectOptions {
             host: "127.0.0.1".into(),
@@ -3191,6 +3218,29 @@ mod tests {
                     target_port: 443,
                 }
             );
+        });
+    }
+
+    #[test]
+    fn socks5_rejects_control_characters_in_domain_targets() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (mut client, mut proxy) = tokio::io::duplex(128);
+            let proxy_task = tokio::spawn(async move { negotiate_socks5(&mut proxy).await });
+            client.write_all(&[5, 1, 0]).await.unwrap();
+            let mut method_reply = [0_u8; 2];
+            client.read_exact(&mut method_reply).await.unwrap();
+            assert_eq!(method_reply, [5, 0]);
+            client.write_all(&[5, 1, 0, 3, 8]).await.unwrap();
+            client.write_all(b"bad\nhost").await.unwrap();
+
+            let mut reply = [0_u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply[..2], &[5, Socks5ReplyCode::GeneralFailure as u8]);
+            assert!(matches!(
+                proxy_task.await.unwrap(),
+                Err(Socks5Error::InvalidDomain)
+            ));
         });
     }
 

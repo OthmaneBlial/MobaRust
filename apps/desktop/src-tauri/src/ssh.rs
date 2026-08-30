@@ -5,6 +5,7 @@ use mobarust_core::{
 use mobarust_ssh::{
     HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
     SshCredentials, SshError, SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
+    validate_forward_host,
 };
 use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
 use serde::{Deserialize, Serialize};
@@ -834,23 +835,20 @@ impl SshManager {
         terminal_id: String,
         request: SshLocalForwardRequest,
     ) -> Result<SshTunnelResponse, SshManagerError> {
-        let sender = self.sender(&terminal_id)?;
         let bind_host = if request.bind_host.trim().is_empty() {
             default_bind_host().to_owned()
         } else {
             request.bind_host.trim().to_owned()
         };
         let target_host = request.target_host.trim().to_owned();
-        if target_host.is_empty() || target_host.contains('\0') || request.target_port == 0 {
+        if request.target_port == 0 {
             return Err(SshManagerError::InvalidRequest(
                 "tunnel target host and port are required".into(),
             ));
         }
-        if bind_host.contains('\0') {
-            return Err(SshManagerError::InvalidRequest(
-                "tunnel bind host cannot contain NUL".into(),
-            ));
-        }
+        validate_tunnel_host(&bind_host, "tunnel bind host")?;
+        validate_tunnel_host(&target_host, "tunnel target host")?;
+        let sender = self.sender(&terminal_id)?;
         let listener = TcpListener::bind((bind_host.as_str(), request.bind_port))
             .await
             .map_err(|error| {
@@ -919,17 +917,13 @@ impl SshManager {
         terminal_id: String,
         request: SshDynamicForwardRequest,
     ) -> Result<SshTunnelResponse, SshManagerError> {
-        let sender = self.sender(&terminal_id)?;
         let bind_host = if request.bind_host.trim().is_empty() {
             default_bind_host().to_owned()
         } else {
             request.bind_host.trim().to_owned()
         };
-        if bind_host.contains('\0') {
-            return Err(SshManagerError::InvalidRequest(
-                "SOCKS bind host cannot contain NUL".into(),
-            ));
-        }
+        validate_tunnel_host(&bind_host, "SOCKS bind host")?;
+        let sender = self.sender(&terminal_id)?;
         let listener = TcpListener::bind((bind_host.as_str(), request.bind_port))
             .await
             .map_err(|error| {
@@ -980,23 +974,20 @@ impl SshManager {
         terminal_id: String,
         request: SshRemoteForwardRequest,
     ) -> Result<SshTunnelResponse, SshManagerError> {
-        let sender = self.sender(&terminal_id)?;
         let bind_host = if request.bind_host.trim().is_empty() {
             default_bind_host().to_owned()
         } else {
             request.bind_host.trim().to_owned()
         };
         let target_host = request.target_host.trim().to_owned();
-        if bind_host.contains('\0') {
-            return Err(SshManagerError::InvalidRequest(
-                "remote bind host cannot contain NUL".into(),
-            ));
-        }
-        if target_host.is_empty() || target_host.contains('\0') || request.target_port == 0 {
+        if request.target_port == 0 {
             return Err(SshManagerError::InvalidRequest(
                 "remote forward target host and port are required".into(),
             ));
         }
+        validate_tunnel_host(&bind_host, "remote bind host")?;
+        validate_tunnel_host(&target_host, "remote forward target host")?;
+        let sender = self.sender(&terminal_id)?;
         let tunnel_id = Uuid::new_v4().to_string();
         {
             let mut remote_forwards = self
@@ -3435,6 +3426,14 @@ fn default_terminal_rows() -> u32 {
     32
 }
 
+fn validate_tunnel_host(value: &str, field: &str) -> Result<(), SshManagerError> {
+    validate_forward_host(value).map_err(|_| {
+        SshManagerError::InvalidRequest(format!(
+            "{field} is empty, too long, or contains control characters"
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3442,6 +3441,7 @@ mod tests {
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
         reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
         should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
+        validate_tunnel_host,
     };
     use std::fs;
     use std::time::{Duration, Instant};
@@ -3490,6 +3490,15 @@ mod tests {
             );
         }
         assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
+
+    #[test]
+    fn tunnel_hosts_are_bounded_and_control_free_before_opening_channels() {
+        assert!(validate_tunnel_host("db.internal", "target host").is_ok());
+        assert!(validate_tunnel_host("127.0.0.1", "bind host").is_ok());
+        for invalid in ["", "   ", "db\ninternal", &"h".repeat(256)] {
+            assert!(validate_tunnel_host(invalid, "target host").is_err());
+        }
     }
 
     #[test]
