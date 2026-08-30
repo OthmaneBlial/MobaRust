@@ -154,6 +154,14 @@ impl RemoteDesktopProfile {
         }
         Ok(())
     }
+
+    pub fn validate_for_protocol(&self, protocol: Protocol) -> Result<(), SessionValidationError> {
+        self.validate()?;
+        if protocol == Protocol::Rdp && !matches!(self.color_depth, 16 | 32) {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,7 +376,7 @@ impl SessionRecord {
             (_, None) => {}
         }
         if let Some(profile) = &self.remote_desktop_profile {
-            profile.validate()?
+            profile.validate_for_protocol(self.protocol)?
         }
         if self.x11_display.as_deref().is_some_and(|display| {
             display.trim().is_empty() || display.chars().any(char::is_control)
@@ -614,6 +622,15 @@ mod tests {
             invalid.validate(),
             Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
+
+        let mut invalid_depth = profile.clone();
+        invalid_depth.color_depth = 24;
+        assert!(invalid_depth.validate().is_ok());
+        assert_eq!(
+            invalid_depth.validate_for_protocol(Protocol::Rdp),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
+        );
+        invalid_depth.validate_for_protocol(Protocol::Vnc).unwrap();
 
         let mut invalid_quality = profile;
         invalid_quality.vnc_quality = "unbounded".into();

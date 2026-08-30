@@ -5223,7 +5223,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                   </label>
                   {protocol === "rdp" ? <label>
                     Color depth
-                    <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="24">24-bit</option><option value="32">32-bit</option></select>
+                    <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}><option value="16">16-bit</option><option value="32">32-bit</option></select>
+                    <small>The current native RDP candidate supports 16-bit and 32-bit color depth.</small>
                   </label> : <label>
                     Quality
                     <select value={vncQuality} onChange={(event) => setVncQuality(event.target.value as RemoteDesktopConnectRequest["vncQuality"])}><option value="balanced">Balanced</option><option value="low-latency">Low latency</option><option value="low-bandwidth">Low bandwidth</option></select>
