@@ -397,7 +397,7 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
         {
             HelperEvent::Capabilities { capabilities }
                 if capabilities.protocol == DesktopProtocol::Vnc
-                    && capabilities.clipboard
+                    && !capabilities.clipboard
                     && !capabilities.server_resize
                     && capabilities.local_scaling
                     && !capabilities.gateway =>
@@ -479,6 +479,7 @@ async fn exercise_fixture_with_quality(
     let mut saw_framebuffer = false;
     let mut saw_remote_clipboard = false;
     let mut saw_resized_framebuffer = false;
+    let mut saw_clipboard_capability = false;
     for _ in 0..12 {
         let event = match timeout(Duration::from_secs(3), next_event(&mut stdout)).await {
             Ok(event) => event,
@@ -503,6 +504,10 @@ async fn exercise_fixture_with_quality(
         {
             saw_remote_clipboard = true;
         }
+        if matches!(event, HelperEvent::Capabilities { ref capabilities } if capabilities.clipboard)
+        {
+            saw_clipboard_capability = true;
+        }
         if matches!(
             event,
             HelperEvent::Framebuffer {
@@ -513,7 +518,12 @@ async fn exercise_fixture_with_quality(
         ) {
             saw_resized_framebuffer = true;
         }
-        if saw_active && saw_framebuffer && saw_remote_clipboard && saw_resized_framebuffer {
+        if saw_active
+            && saw_framebuffer
+            && saw_remote_clipboard
+            && saw_resized_framebuffer
+            && saw_clipboard_capability
+        {
             break;
         }
     }
@@ -524,6 +534,10 @@ async fn exercise_fixture_with_quality(
     assert!(
         saw_remote_clipboard,
         "the helper did not forward the server clipboard event"
+    );
+    assert!(
+        saw_clipboard_capability,
+        "the helper did not report opted-in clipboard capability"
     );
     assert!(
         saw_resized_framebuffer,
@@ -630,8 +644,14 @@ async fn spawn_helper_with_policy(
     tokio::process::ChildStdin,
     tokio::process::ChildStdout,
 ) {
-    spawn_helper_with_quality_and_policy(port, reconnect_enabled, reconnect_attempts, "balanced")
-        .await
+    spawn_helper_with_quality_and_policy_and_clipboard(
+        port,
+        reconnect_enabled,
+        reconnect_attempts,
+        "balanced",
+        false,
+    )
+    .await
 }
 
 async fn spawn_helper_with_quality(
@@ -642,14 +662,15 @@ async fn spawn_helper_with_quality(
     tokio::process::ChildStdin,
     tokio::process::ChildStdout,
 ) {
-    spawn_helper_with_quality_and_policy(port, true, 3, quality).await
+    spawn_helper_with_quality_and_policy_and_clipboard(port, true, 3, quality, true).await
 }
 
-async fn spawn_helper_with_quality_and_policy(
+async fn spawn_helper_with_quality_and_policy_and_clipboard(
     port: u16,
     reconnect_enabled: bool,
     reconnect_attempts: u8,
     quality: &str,
+    clipboard_enabled: bool,
 ) -> (
     tokio::process::Child,
     tokio::process::ChildStdin,
@@ -661,24 +682,31 @@ async fn spawn_helper_with_quality_and_policy(
         "--reconnect-disabled"
     };
     let reconnect_attempts = reconnect_attempts.to_string();
+    let port = port.to_string();
+    let mut helper_arguments = vec![
+        "--mobarust-protocol".to_owned(),
+        "vnc".to_owned(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "--port".to_owned(),
+        port,
+        "--width".to_owned(),
+        "320".to_owned(),
+        "--height".to_owned(),
+        "200".to_owned(),
+        "--quality".to_owned(),
+        quality.to_owned(),
+    ];
+    if clipboard_enabled {
+        helper_arguments.push("--clipboard-enabled".to_owned());
+    }
+    helper_arguments.extend([
+        reconnect_flag.to_owned(),
+        "--reconnect-attempts".to_owned(),
+        reconnect_attempts,
+    ]);
     let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-vnc-helper"))
-        .args([
-            "--mobarust-protocol",
-            "vnc",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-            "--width",
-            "320",
-            "--height",
-            "200",
-            "--quality",
-            quality,
-            reconnect_flag,
-            "--reconnect-attempts",
-            &reconnect_attempts,
-        ])
+        .args(helper_arguments)
         .env_remove("SSH_AUTH_SOCK")
         .env_remove("SSH_AGENT_PID")
         .env_remove("GIT_SSH_COMMAND")

@@ -862,6 +862,9 @@ fn validate_helper_event(
         {
             Err("remote desktop helper sent active data before entering the active state")
         }
+        HelperEvent::Clipboard { .. } if !requirements.clipboard => {
+            Err("remote desktop helper sent clipboard data without requested clipboard opt-in")
+        }
         HelperEvent::Clipboard { .. }
             if progress
                 .reported_capabilities
@@ -943,12 +946,12 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelperCapabilityRequirements, HelperDataPhase, HelperFrameReadError, HelperSessionPhase,
-        MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, SessionCommandPolicy, claim_unexpected_helper_exit,
-        helper_input_failure_message, read_next_helper_frame, validate_command_for_session,
-        validate_helper_capabilities, validate_helper_event, validate_helper_resource,
-        validate_request,
+        HelperCapabilityRequirements, HelperDataPhase, HelperEventProgress, HelperFrameReadError,
+        HelperSessionPhase, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
+        MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, SessionCommandPolicy,
+        claim_unexpected_helper_exit, helper_input_failure_message, read_next_helper_frame,
+        validate_command_for_session, validate_helper_capabilities, validate_helper_event,
+        validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
@@ -1296,14 +1299,46 @@ mod tests {
             progress,
         )
         .unwrap_err();
+        assert!(error.contains("clipboard opt-in"));
+
+        let requested_clipboard = HelperCapabilityRequirements {
+            clipboard: true,
+            ..requirements
+        };
+        let mut active_without_clipboard = HelperEventProgress {
+            hello_seen: true,
+            ready_seen: true,
+            capabilities_seen: true,
+            data_phase: HelperDataPhase::Active,
+            reported_capabilities: Some(capabilities.clone()),
+        };
+        let error = validate_helper_event(
+            &HelperEvent::Clipboard {
+                text: String::from("fixture clipboard").into(),
+            },
+            requested_clipboard,
+            active_without_clipboard.clone(),
+        )
+        .unwrap_err();
         assert!(error.contains("clipboard capability"));
+        active_without_clipboard.reported_capabilities = Some(HelperCapabilities::vnc());
+        assert!(
+            validate_helper_event(
+                &HelperEvent::Clipboard {
+                    text: String::from("fixture clipboard").into(),
+                },
+                requested_clipboard,
+                active_without_clipboard,
+            )
+            .is_ok()
+        );
 
         capabilities.clipboard = true;
         let handshake = validate_helper_event(
             &HelperEvent::Hello {
                 version: WIRE_VERSION,
             },
-            requirements,
+            requested_clipboard,
             Default::default(),
         )
         .unwrap();
@@ -1311,13 +1346,13 @@ mod tests {
             &HelperEvent::State {
                 state: HelperState::Ready,
             },
-            requirements,
+            requested_clipboard,
             handshake,
         )
         .unwrap();
         let progress = validate_helper_event(
             &HelperEvent::Capabilities { capabilities },
-            requirements,
+            requested_clipboard,
             ready,
         )
         .unwrap();
@@ -1325,7 +1360,7 @@ mod tests {
             &HelperEvent::State {
                 state: HelperState::Active,
             },
-            requirements,
+            requested_clipboard,
             progress,
         )
         .unwrap();
@@ -1333,7 +1368,7 @@ mod tests {
             &HelperEvent::Clipboard {
                 text: String::from("fixture clipboard").into(),
             },
-            requirements,
+            requested_clipboard,
             progress,
         )
         .unwrap();

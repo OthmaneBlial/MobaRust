@@ -518,6 +518,9 @@ impl HelperLaunchConfig {
                 arguments.extend(["--gateway-username".into(), username.into()]);
             }
         } else {
+            if self.clipboard_enabled {
+                arguments.push("--clipboard-enabled".into());
+            }
             arguments.extend(["--quality".into(), self.vnc_quality.clone()]);
         }
         arguments
@@ -1310,6 +1313,34 @@ mod tests {
                 .filter(|argument| argument.as_str() == "--clipboard-enabled")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn launch_arguments_forward_vnc_clipboard_opt_in_without_secret_material() {
+        let mut config = launch_config();
+        config.protocol = DesktopProtocol::Vnc;
+        config.username.clear();
+        config.credential_ref.clear();
+        config.clipboard_enabled = true;
+
+        let arguments = config.process_arguments();
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| argument.as_str() == "--clipboard-enabled")
+                .count(),
+            1
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("credential"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("password"))
         );
     }
 

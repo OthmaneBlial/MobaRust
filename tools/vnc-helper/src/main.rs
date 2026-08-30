@@ -44,6 +44,7 @@ struct Arguments {
     port: u16,
     display: DisplaySize,
     quality: String,
+    clipboard_enabled: bool,
     reconnect_enabled: bool,
     reconnect_attempts: u8,
 }
@@ -221,15 +222,11 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     let mut client = client;
 
     loop {
-        let mut canvas = Canvas::new(display)?;
+        let mut canvas = Canvas::new(display, arguments.clipboard_enabled)?;
+        let mut capabilities = HelperCapabilities::vnc();
+        capabilities.clipboard = arguments.clipboard_enabled;
         write_state(stdout, HelperState::Ready).await?;
-        write_event_frame(
-            stdout,
-            &HelperEvent::Capabilities {
-                capabilities: HelperCapabilities::vnc(),
-            },
-        )
-        .await?;
+        write_event_frame(stdout, &HelperEvent::Capabilities { capabilities }).await?;
 
         match run_connected_vnc_session(
             &client,
@@ -621,15 +618,17 @@ fn wheel_steps(delta: i16) -> u32 {
 struct Canvas {
     size: DisplaySize,
     pixels: Vec<u8>,
+    clipboard_enabled: bool,
 }
 
 impl Canvas {
-    fn new(size: DisplaySize) -> Result<Self, HelperProtocolError> {
+    fn new(size: DisplaySize, clipboard_enabled: bool) -> Result<Self, HelperProtocolError> {
         size.validate()?;
         let bytes = framebuffer_bytes(size)?;
         Ok(Self {
             size,
             pixels: vec![0; bytes],
+            clipboard_enabled,
         })
     }
 
@@ -657,6 +656,7 @@ impl Canvas {
                 "VNC JPEG rectangles are not enabled by this adapter".into(),
             )),
             VncEvent::SetPixelFormat(_) | VncEvent::SetCursor(_, _) | VncEvent::Bell => Ok(None),
+            VncEvent::Text(_) if !self.clipboard_enabled => Ok(None),
             VncEvent::Text(text) => {
                 if text.len() > MAX_CLIPBOARD_BYTES {
                     return Err(HelperProtocolError::ClipboardTooLarge { bytes: text.len() });
@@ -805,6 +805,7 @@ where
     let mut width = 1280_u16;
     let mut height = 720_u16;
     let mut quality = "balanced".to_owned();
+    let mut clipboard_enabled = false;
     let mut reconnect_enabled = DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED;
     let mut reconnect_attempts = DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS;
     let mut iterator = arguments.into_iter();
@@ -836,6 +837,7 @@ where
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
             "--height" => height = parse_u16("height", &next_argument(&mut iterator, "--height")?)?,
             "--quality" => quality = parse_quality(&next_argument(&mut iterator, "--quality")?)?,
+            "--clipboard-enabled" => clipboard_enabled = true,
             "--reconnect-enabled" => reconnect_enabled = true,
             "--reconnect-disabled" => reconnect_enabled = false,
             "--reconnect-attempts" => {
@@ -854,6 +856,7 @@ where
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         display: DisplaySize { width, height },
         quality,
+        clipboard_enabled,
         reconnect_enabled,
         reconnect_attempts,
     };
@@ -985,8 +988,28 @@ mod tests {
         assert_eq!(arguments.host, "127.0.0.1");
         assert_eq!(arguments.port, 5900);
         assert_eq!(arguments.quality, "balanced");
+        assert!(!arguments.clipboard_enabled);
         assert!(arguments.reconnect_enabled);
         assert_eq!(arguments.reconnect_attempts, 3);
+    }
+
+    #[test]
+    fn parser_accepts_explicit_clipboard_opt_in() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5900",
+                "--clipboard-enabled",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        assert!(arguments.clipboard_enabled);
     }
 
     #[test]
@@ -1159,7 +1182,7 @@ mod tests {
             width: 320,
             height: 200,
         };
-        let mut canvas = Canvas::new(size).unwrap();
+        let mut canvas = Canvas::new(size, true).unwrap();
         let error = canvas
             .apply(VncEvent::RawImage(
                 Rect {
@@ -1183,7 +1206,7 @@ mod tests {
             width: 320,
             height: 200,
         };
-        let mut canvas = Canvas::new(size).unwrap();
+        let mut canvas = Canvas::new(size, true).unwrap();
         let event = canvas
             .apply(VncEvent::RawImage(
                 Rect {
@@ -1198,6 +1221,21 @@ mod tests {
             .unwrap();
         assert!(
             matches!(event, HelperEvent::Framebuffer { width: 320, height: 200, ref pixels } if pixels[..4] == [0x11, 0x22, 0x33, 0xff])
+        );
+    }
+
+    #[test]
+    fn canvas_suppresses_server_clipboard_without_explicit_opt_in() {
+        let size = DisplaySize {
+            width: 320,
+            height: 200,
+        };
+        let mut canvas = Canvas::new(size, false).unwrap();
+        assert!(
+            canvas
+                .apply(VncEvent::Text("must stay native".into()))
+                .unwrap()
+                .is_none()
         );
     }
 
