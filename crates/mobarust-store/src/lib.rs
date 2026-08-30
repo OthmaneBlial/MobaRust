@@ -22,6 +22,7 @@ const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CURRENT_AUDIT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_AUDIT_EVENTS: usize = 1_000;
 const MAX_OPENSSH_CONFIG_BYTES: usize = 1024 * 1024;
+const MAX_LOCAL_STORE_FILE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -215,7 +216,7 @@ impl AuditStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let events = if path.exists() {
-            let bytes = fs::read(&path).map_err(|source| StoreError::AuditRead {
+            let bytes = read_local_store_file(&path).map_err(|source| StoreError::AuditRead {
                 path: path.clone(),
                 source,
             })?;
@@ -333,7 +334,7 @@ impl MacroStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let macros = if path.exists() {
-            let bytes = fs::read(&path).map_err(|source| StoreError::MacroWrite {
+            let bytes = read_local_store_file(&path).map_err(|source| StoreError::MacroWrite {
                 path: path.clone(),
                 source,
             })?;
@@ -435,10 +436,11 @@ impl SnippetStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let snippets = if path.exists() {
-            let bytes = fs::read(&path).map_err(|source| StoreError::SnippetWrite {
-                path: path.clone(),
-                source,
-            })?;
+            let bytes =
+                read_local_store_file(&path).map_err(|source| StoreError::SnippetWrite {
+                    path: path.clone(),
+                    source,
+                })?;
             let file: SnippetFile =
                 serde_json::from_slice(&bytes).map_err(|source| StoreError::SnippetDecode {
                     path: path.clone(),
@@ -537,10 +539,11 @@ impl SettingsStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let settings = if path.exists() {
-            let bytes = fs::read(&path).map_err(|source| StoreError::SettingsWrite {
-                path: path.clone(),
-                source,
-            })?;
+            let bytes =
+                read_local_store_file(&path).map_err(|source| StoreError::SettingsWrite {
+                    path: path.clone(),
+                    source,
+                })?;
             let file: SettingsFile =
                 serde_json::from_slice(&bytes).map_err(|source| StoreError::SettingsDecode {
                     path: path.clone(),
@@ -661,7 +664,7 @@ impl SessionStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
         let sessions = if path.exists() {
-            let bytes = fs::read(&path).map_err(|source| StoreError::Read {
+            let bytes = read_local_store_file(&path).map_err(|source| StoreError::Read {
                 path: path.clone(),
                 source,
             })?;
@@ -1069,6 +1072,37 @@ fn read_openssh_config(path: &Path) -> Result<String, StoreError> {
     Ok(contents)
 }
 
+/// Read a persisted application store through a bounded, regular-file handle.
+/// Store files contain no secrets, but a hostile local file must not be able to
+/// force an allocation proportional to an arbitrary reported file size.
+fn read_local_store_file(path: &Path) -> io::Result<Vec<u8>> {
+    let file = open_store_file(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "local store is not a regular file",
+        ));
+    }
+    if metadata.len() > MAX_LOCAL_STORE_FILE_BYTES as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "local store exceeds the 64 MiB safety limit",
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_LOCAL_STORE_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_LOCAL_STORE_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "local store exceeds the 64 MiB safety limit",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn is_exact_host_pattern(pattern: &str) -> bool {
     !pattern.is_empty()
         && pattern != "*"
@@ -1288,6 +1322,24 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             r#"{"schema_version":1,"sessions":[],"unknown":true}"#
+        );
+    }
+
+    #[test]
+    fn session_store_rejects_an_oversized_file_before_parsing() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(super::MAX_LOCAL_STORE_FILE_BYTES as u64 + 1)
+            .unwrap();
+
+        let error = SessionStore::open(&path).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Read { source, .. } if source.kind() == io::ErrorKind::InvalidData)
         );
     }
 

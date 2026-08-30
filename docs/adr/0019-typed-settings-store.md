@@ -26,6 +26,11 @@ The native layer remains the source of truth. Terminal font size, scrollback,
 cursor blink, and multiline-paste confirmation are applied to new terminal
 instances; invalid numeric ranges are rejected in Rust.
 
+All persisted JSON catalogs are opened through a regular-file, bounded reader
+with a 64 MiB safety limit before deserialization. The OpenSSH import path uses
+its stricter 1 MiB limit because it parses an explicitly selected external
+configuration file.
+
 ## Security boundary
 
 Settings are non-secret preferences. Passwords, private keys, passphrases,
