@@ -24,9 +24,12 @@ const PORTABLE_MAGIC: &[u8; 8] = b"MRPVLT01";
 const PORTABLE_SALT_BYTES: usize = 16;
 const PORTABLE_NONCE_BYTES: usize = 12;
 const PORTABLE_KEY_BYTES: usize = 32;
+const PORTABLE_AUTH_TAG_BYTES: usize = 16;
 const PORTABLE_HEADER_BYTES: usize =
     PORTABLE_MAGIC.len() + PORTABLE_SALT_BYTES + PORTABLE_NONCE_BYTES;
 const PORTABLE_MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
+const PORTABLE_MAX_PLAINTEXT_BYTES: usize =
+    PORTABLE_MAX_FILE_BYTES - PORTABLE_HEADER_BYTES - PORTABLE_AUTH_TAG_BYTES;
 const PORTABLE_MAX_CREDENTIALS: usize = 4096;
 pub const MAX_SECRET_BYTES: usize = 1024 * 1024;
 const PORTABLE_ARGON_MEMORY_KIB: u32 = 64 * 1024;
@@ -423,7 +426,7 @@ impl PortableVault {
             serde_json::to_vec(&payload)
                 .map_err(|error| VaultError::PortableFormat(error.to_string()))?,
         );
-        if plaintext.len() > PORTABLE_MAX_FILE_BYTES - PORTABLE_HEADER_BYTES {
+        if plaintext.len() > PORTABLE_MAX_PLAINTEXT_BYTES {
             return Err(VaultError::PortableFileTooLarge);
         }
 
@@ -707,6 +710,27 @@ mod tests {
             PortableVault::open(&path, &SecretMaterial::new("fixture-passphrase")),
             Err(VaultError::PortableFileTooLarge)
         ));
+    }
+
+    #[test]
+    fn portable_vault_reserves_authentication_tag_space_in_file_limit() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("portable-vault.bin");
+        let mut vault =
+            PortableVault::create(&path, &SecretMaterial::new("fixture-passphrase")).unwrap();
+
+        for index in 0..8 {
+            vault.entries.insert(
+                format!("fixture-{index}"),
+                SecretMaterial::new("s".repeat(MAX_SECRET_BYTES)),
+            );
+        }
+
+        assert!(matches!(
+            vault.persist(),
+            Err(VaultError::PortableFileTooLarge)
+        ));
+        assert!(fs::metadata(&path).unwrap().len() <= super::PORTABLE_MAX_FILE_BYTES as u64);
     }
 
     #[test]
