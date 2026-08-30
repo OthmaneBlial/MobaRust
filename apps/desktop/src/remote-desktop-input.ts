@@ -32,6 +32,12 @@ export type RemoteDesktopPointerQueueItem = {
 };
 
 export const MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS = 128;
+export const RDP_EXTENDED_SCANCODE_MASK = 0x100;
+
+/** Encode a set-1 RDP scan code with the protocol's extended-key marker. */
+export function rdpExtendedScancode(scancode: number): number {
+  return RDP_EXTENDED_SCANCODE_MASK | scancode;
+}
 
 function positiveFinite(value: number): boolean {
   return Number.isFinite(value) && value > 0;

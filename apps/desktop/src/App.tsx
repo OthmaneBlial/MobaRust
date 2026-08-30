@@ -14,7 +14,7 @@ import { formatSessionEnvironment, parseSessionEnvironment } from "./session-env
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
-import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
+import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, rdpExtendedScancode, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import {
   preserveRemoteDesktopError,
@@ -1256,7 +1256,7 @@ function desktopKeyCode(protocol: DesktopProtocol, event: ReactKeyboardEvent<HTM
     KeyA: 0x1e, KeyB: 0x30, KeyC: 0x2e, KeyD: 0x20, KeyE: 0x12, KeyF: 0x21, KeyG: 0x22, KeyH: 0x23, KeyI: 0x17, KeyJ: 0x24, KeyK: 0x25, KeyL: 0x26, KeyM: 0x32, KeyN: 0x31, KeyO: 0x18, KeyP: 0x19, KeyQ: 0x10, KeyR: 0x13, KeyS: 0x1f, KeyT: 0x14, KeyU: 0x16, KeyV: 0x2f, KeyW: 0x11, KeyX: 0x2d, KeyY: 0x15, KeyZ: 0x2c,
     Digit0: 0x0b, Digit1: 0x02, Digit2: 0x03, Digit3: 0x04, Digit4: 0x05, Digit5: 0x06, Digit6: 0x07, Digit7: 0x08, Digit8: 0x09, Digit9: 0x0a,
     Enter: 0x1c, Escape: 0x01, Backspace: 0x0e, Tab: 0x0f, Space: 0x39, Minus: 0x0c, Equal: 0x0d, BracketLeft: 0x1a, BracketRight: 0x1b, Backslash: 0x2b, Semicolon: 0x27, Quote: 0x28, Comma: 0x33, Period: 0x34, Slash: 0x35,
-    ShiftLeft: 0x2a, ShiftRight: 0x36, ControlLeft: 0x1d, ControlRight: 0x1d, AltLeft: 0x38, AltRight: 0x38, ArrowUp: 0xc8, ArrowDown: 0xd0, ArrowLeft: 0xcb, ArrowRight: 0xcd, Delete: 0xd3, Home: 0xc7, End: 0xcf, PageUp: 0xc9, PageDown: 0xd1,
+    ShiftLeft: 0x2a, ShiftRight: 0x36, ControlLeft: 0x1d, ControlRight: rdpExtendedScancode(0x1d), AltLeft: 0x38, AltRight: rdpExtendedScancode(0x38), ArrowUp: rdpExtendedScancode(0x48), ArrowDown: rdpExtendedScancode(0x50), ArrowLeft: rdpExtendedScancode(0x4b), ArrowRight: rdpExtendedScancode(0x4d), Delete: rdpExtendedScancode(0x53), Home: rdpExtendedScancode(0x47), End: rdpExtendedScancode(0x4f), PageUp: rdpExtendedScancode(0x49), PageDown: rdpExtendedScancode(0x51),
     F1: 0x3b, F2: 0x3c, F3: 0x3d, F4: 0x3e, F5: 0x3f, F6: 0x40, F7: 0x41, F8: 0x42, F9: 0x43, F10: 0x44, F11: 0x57, F12: 0x58,
   };
   return scanCodes[event.code] ?? null;

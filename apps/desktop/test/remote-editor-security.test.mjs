@@ -18,6 +18,7 @@ import {
   fittedRemoteViewport,
   MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS,
   mapRemoteDesktopPoint,
+  rdpExtendedScancode,
   remoteDesktopKeyState,
   remoteDesktopPointerPoint,
 } from "../src/remote-desktop-input.ts";
@@ -27,6 +28,8 @@ import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
 } from "../src/remote-desktop-errors.ts";
+
+assert.equal(rdpExtendedScancode(0x48), 0x148);
 
 const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>&lt;already-encoded&gt;';
 for (const language of ["plain", "shell", "json", "yaml", "ini"]) {

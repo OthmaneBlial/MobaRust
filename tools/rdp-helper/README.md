@@ -73,6 +73,12 @@ succeeds. If the RDP input channel closes, the helper emits a stable lifecycle
 failure and uses the bounded stop/reconnect path rather than exposing a raw
 channel error.
 
+Keyboard input uses a shared set-1 scan-code contract. Extended keys carry an
+explicit marker across the native boundary and become IronRDP's
+`KeyboardFlags::EXTENDED`; malformed or out-of-range values are rejected
+without reaching the engine. Real Windows keyboard-layout interoperability is
+still a required follow-up test.
+
 Safe local checks:
 
 ```text

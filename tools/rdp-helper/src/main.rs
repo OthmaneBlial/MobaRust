@@ -26,8 +26,8 @@ use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_DOMAIN_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, validate_rdp_color_depth,
-    write_event_frame,
+    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, rdp_scancode_parts,
+    validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -585,15 +585,18 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Key { scancode, pressed } => {
-            let Some(scancode) = u8::try_from(scancode).ok() else {
+            let Some((scancode, extended)) = rdp_keyboard_scancode(scancode) else {
                 send_error(stdout, "keyboard scancode is outside the RDP range").await?;
                 return Ok(false);
             };
-            let flags = if pressed {
+            let mut flags = if pressed {
                 KeyboardFlags::empty()
             } else {
                 KeyboardFlags::RELEASE
             };
+            if extended {
+                flags |= KeyboardFlags::EXTENDED;
+            }
             let mut events = SmallVec::<[FastPathInputEvent; 2]>::new();
             events.push(FastPathInputEvent::KeyboardEvent(flags, scancode));
             send_rdp_input(input_tx, RdpInputEvent::FastPath(events))?;
@@ -626,6 +629,10 @@ async fn handle_command<W: AsyncWrite + Unpin>(
         }
         HelperCommand::Start { .. } => Ok(false),
     }
+}
+
+fn rdp_keyboard_scancode(scancode: u32) -> Option<(u8, bool)> {
+    rdp_scancode_parts(scancode)
 }
 
 fn send_rdp_input(
@@ -1177,6 +1184,13 @@ mod tests {
         assert!(
             matches!(events[1], FastPathInputEvent::MouseEvent(MousePdu { flags, .. }) if flags.contains(PointerFlags::LEFT_BUTTON) && flags.contains(PointerFlags::DOWN))
         );
+    }
+
+    #[test]
+    fn extended_keyboard_scancodes_set_the_rdp_extended_flag() {
+        assert_eq!(rdp_keyboard_scancode(0x148), Some((0x48, true)));
+        assert_eq!(rdp_keyboard_scancode(0x4b), Some((0x4b, false)));
+        assert!(rdp_keyboard_scancode(0x1ff).is_none());
     }
 
     #[test]

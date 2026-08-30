@@ -27,6 +27,20 @@ pub const MAX_USERNAME_BYTES: usize = 256;
 pub const MAX_DOMAIN_BYTES: usize = 255;
 pub const MAX_CREDENTIAL_REFERENCE_BYTES: usize = 128;
 pub const HELPER_PIPE_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Bit used by the typed key command to mark an RDP extended scan code.
+///
+/// The low seven bits contain the set-1 scan code. Keeping this convention in
+/// the shared contract prevents the frontend from sending browser/evdev-style
+/// values that the RDP engine would interpret as a different key.
+pub const RDP_EXTENDED_SCANCODE_MASK: u32 = 0x100;
+
+pub fn rdp_scancode_parts(scancode: u32) -> Option<(u8, bool)> {
+    if scancode & !0x17f != 0 {
+        return None;
+    }
+    let code = scancode & 0x7f;
+    (code != 0).then_some((code as u8, scancode & RDP_EXTENDED_SCANCODE_MASK != 0))
+}
 
 /// Validate the color depths supported by the pinned RDP candidate.
 ///
@@ -1065,6 +1079,14 @@ mod tests {
             config.color_depth = depth;
             config.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn rdp_extended_scancode_contract_preserves_base_code_and_marker() {
+        assert_eq!(rdp_scancode_parts(0x148), Some((0x48, true)));
+        assert_eq!(rdp_scancode_parts(0x4b), Some((0x4b, false)));
+        assert_eq!(rdp_scancode_parts(0x1ff), None);
+        assert_eq!(rdp_scancode_parts(0), None);
     }
 
     #[test]

@@ -267,6 +267,14 @@ When the desktop window loses focus, the UI releases the last captured pointer
 button and all tracked remote scancodes. This is a client-side safety release;
 the native helper still owns the actual protocol input and session shutdown.
 
+The shared key contract now encodes RDP set-1 extended keys explicitly: the
+frontend marks keys such as arrows, Home/End, PageUp/PageDown, Delete, and
+right-side modifiers with a dedicated extended bit, and the helper converts
+that marker into IronRDP's `KeyboardFlags::EXTENDED`. Invalid values are
+rejected before they reach the engine. This is protocol-correct input mapping
+at the boundary; it still needs validation against real Windows keyboard
+layouts.
+
 High-frequency pointer moves are coalesced only while adjacent and pending;
 pointer-down, pointer-up, cancel, and button-state transitions retain order.
 The browser-side queue is also capped at 128 items. When saturated, stale
