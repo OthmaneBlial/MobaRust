@@ -85,7 +85,7 @@ zeroizing native credential frame. Its clipboard command is intentionally
 rejected until a user-controlled OS clipboard backend is wired. Audio requests
 are rejected at both the desktop boundary and helper boundary rather than
 silently ignored. This is still
-not a production selection: certificate trust/pinning policy, reconnect
+not a production selection: certificate fixture coverage, reconnect
 interoperability, audio, gateway behavior, packaging, and real Windows
 interoperability remain open gates. The helper now rebuilds a native RDP client
 after an active-session loss with three bounded exponential-backoff attempts;

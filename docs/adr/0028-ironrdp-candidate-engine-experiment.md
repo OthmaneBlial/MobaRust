@@ -13,7 +13,7 @@ helper contract and supervisor, so a candidate engine must first prove that it
 can provide a native event seam without leaking into React or requiring a
 global installation.
 
-The local workspace uses Rust 1.95. The candidate `ironrdp-client` release is
+The local workspace uses the repository's supported Rust stable toolchain. The candidate `ironrdp-client` release is
 MIT/Apache-2.0 and exposes a reusable client with image output and typed input
 events. This is an engineering evaluation, not a claim of interoperability.
 
@@ -45,7 +45,9 @@ environment variables, logs, or frontend state. Trust/pinning policy,
 reconnect interoperability, clipboard, audio, gateway support, packaging, and
 Windows interoperability are still release gates. The current helper
 deliberately reports clipboard input as unsupported rather than silently
-bridging the local clipboard.
+bridging the local clipboard. RDP target metadata is passed unchanged to the
+native TLS boundary; the helper does not resolve targets in React or use a
+frontend-side trust decision.
 
 The clipboard feature was checked against the pinned IronRDP source before
 making this boundary decision. `ClipboardType::Enable` selects a native
@@ -68,25 +70,26 @@ initial experiment. Its `native-tls` builder calls
 also uses a no-certificate-verification implementation. The local compatibility
 crate replaces that behavior with `rustls-platform-verifier` and SNI. This is
 a security improvement for the isolated candidate, not production evidence:
-the helper remains loopback-only and excluded from normal bundles until real
-certificate fixtures, Windows interoperability, dependency audit, and
-packaging checks pass. RD Gateway remains deferred until its separate
-transport path has the same trust policy.
+the helper accepts hostname/IP metadata only through that native verification
+path and remains excluded from normal bundles until real certificate fixtures,
+Windows interoperability, dependency audit, and packaging checks pass. RD
+Gateway remains deferred until its separate transport path has the same trust
+policy.
 
-The helper continues to enforce a fail-closed experiment boundary at runtime:
-it accepts only literal loopback IP targets (`127.0.0.1` or `::1`) and rejects
-hostnames and other addresses before opening a socket. The local TLS adapter
-now validates the presented certificate when a handshake is attempted, but
-loopback restriction remains until real interoperability evidence exists.
+The helper enforces a fail-closed trust boundary at runtime: it rejects
+inherited `SSL_CERT_FILE`, `SSL_CERT_DIR`, and `SSLKEYLOGFILE` settings, then
+passes the explicit target to the native adapter for DNS, SNI, and platform
+certificate verification. Invalid or untrusted certificates are rejected.
+Local tests still use only literal loopback listeners and never contact a real
+remote host.
 
-This is a hard security gate. Promotion requires an audited engine/backend with
-real certificate-chain and hostname validation, or an explicit reviewed
-pinning policy, plus deterministic certificate fixtures and Windows
-interoperability evidence. The eventual distribution matrix must also audit
-and package the platform TLS requirements (Windows certificate APIs, Security
-Framework on macOS, and the platform verifier's Linux trust sources). The
-candidate remains excluded from normal bundles until those requirements and
-the existing RSA advisory are resolved.
+This remains a hard security gate. Promotion requires deterministic certificate
+fixtures, an audited engine/backend with real certificate-chain and hostname
+validation, and Windows interoperability evidence. The eventual distribution
+matrix must also audit and package the platform TLS requirements (Windows
+certificate APIs, Security Framework on macOS, and the platform verifier's
+Linux trust sources). The candidate remains excluded from normal bundles until
+those requirements and the existing RSA advisory are resolved.
 
 ## Verification and next gate
 
@@ -114,7 +117,7 @@ only the helper lifecycle handshake and exits on EOF; it does not open a socket.
 The helper's real connection path is still exercised only against a dedicated
 fixture when one is available.
 
-The next gate is parent-process wiring plus a disposable local/Windows RDP
-fixture, with a real framebuffer and controlled input, including a real loss
-and recovery cycle. Until that evidence and packaging exist, the UI must not
-advertise RDP as implemented.
+The next gate is a disposable local/Windows RDP fixture, with a real
+framebuffer and controlled input, including a real loss and recovery cycle.
+Until that evidence and packaging exist, the UI must not advertise RDP as
+implemented.
