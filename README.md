@@ -1,96 +1,119 @@
 # MobaRust
 
-MobaRust is a free, open-source remote workstation for people who live in terminals, bastions, and remote filesystems. It is built Rust-first, with a Tauri desktop shell and a focused operator UI.
+## Every machine. One control room.
 
-> The free, open-source MobaXterm alternative built with Rust.
+MobaRust is a Rust-first, open-source remote workstation for people who operate systems. It brings terminals, file movement, tunnels, saved connections, diagnostics, and remote-desktop experiments into one focused desktop workspace.
 
-## Current vertical slice
+[Open the project site](https://othmaneblial.github.io/MobaRust/) · [View the roadmap](ROADMAP.md) · [Report an issue](https://github.com/OthmaneBlial/MobaRust/issues)
 
-The first working slice provides:
+![MobaRust operations workspace](apps/desktop/src-tauri/icons/icon.svg)
 
-- a real local PTY owned by Rust and rendered through xterm.js;
-- a real `russh` transport crate with restrictive host-key policy, interactive SSH PTY, and streaming SFTP primitives;
-- password, private-key, agent, and bounded keyboard-interactive SSH authentication, with credential references resolved only in Rust;
-- a native Quick Connect path for a real SSH shell with typed write, resize, and close commands;
-- a Quick Connect URI path for `ssh://`, `telnet://`, `rdp://`, and `vnc://` endpoints, with password-bearing URIs rejected and cleared;
-- an SFTP directory browser over the live SSH connection with single-file upload/download, bounded concurrency, progress events, explicit overwrite handling, cancellation, and temporary-file commits;
-- SFTP file-list controls for name/type/size/modified sorting, explicit hidden-file visibility, modification/ownership metadata, explicit remote-path copy, and confirmed POSIX permission changes;
-- a native SCP compatibility path in the bounded transfer manager for single-file upload/download, with explicit protocol selection, progress, cancellation, and atomic per-file commits; recursive jobs remain SFTP;
-- a global transfer-manager view that aggregates SFTP/SCP jobs across SSH sessions, exposes source/destination paths, throttled progress, native speed and ETA estimates, explicit retry with overwrite confirmation, and cancellation;
-- a native Telnet transport and Quick Connect path with bounded option negotiation, configurable terminal encoding, reconnect/cancel lifecycle, resize support, and a local TCP fixture; Telnet is clearly unencrypted;
-- a native serial transport primitive with explicit line parameters, bounded driver I/O, line-ending framing, and recoverable device-loss errors; hardware access is explicit and not exercised by tests;
-- an explicit serial-port refresh action and secret-free saved serial profiles that can be reopened with their line parameters;
-- a bounded native TCP diagnostic primitive with explicit targets, port ranges, concurrency, timeouts, cancellation, and loopback-only fixtures;
-- bounded platform-native ping and traceroute diagnostics with explicit targets, hop/timeout limits, process cancellation, and output truncation;
-- explicit unauthenticated SSH host-key fingerprint inspection with a bounded timeout and no credential, agent, or known_hosts access;
-- a native credential-vault boundary using platform credential stores without exposing secrets to React;
-- an opt-in portable encrypted vault using Argon2id + AES-256-GCM, atomic private-file writes, explicit unlock/lock, and native-only secret lookup;
-- a one-shot SSH remote system monitor using a fixed read-only query, bounded output, a six-second timeout, and graceful per-metric capability detection;
-- a reproducible local `sshd` integration fixture covering host-key rejection, key authentication, PTY I/O, and streaming transfer;
-- a stateful connection/session model with explicit lifecycle transitions;
-- a versioned, secret-free saved-session store with typed Tauri list/save/delete commands;
-- favorite, tag-aware, and durable recent-session organization with secret-free MobaRust catalog import/export;
-- explicit SSH session saving after Quick Connect and clickable saved-session reconnect using stored host-trust and credential references;
-- real SSH jump-host chaining through native `direct-tcpip` streams, with saved hop descriptors and imported `ProxyJump` alias resolution when matching profiles exist;
-- bounded SSH shell reconnection with explicit reconnecting/failed state events and preserved terminal identity;
-- opt-in SSH X11 forwarding through an explicitly configured local TCP/Unix display, with native-only cookie handling, bounded channels, and no DISPLAY/Xauthority discovery;
-- native SSH local port forwarding through direct-tcpip channels, with bounded client concurrency, lifecycle events, byte counts, and cooperative cancellation;
-- native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
-- bounded recursive SFTP upload/download with streaming file bodies, progress, cancellation, symlink refusal, and atomic per-file commits;
-- terminal multiline paste is intercepted and confirmed visibly before it is sent to a remote or local shell;
-- typed non-secret settings are persisted separately with validation, atomic writes, reset, safe import/export, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
-- a configurable, persisted keyboard shortcut system with platform-aware `Mod` handling, collision validation, command-palette actions, pane focus/split controls, and an unconditional Escape safety cancel; see [keyboard shortcuts](docs/keyboard-shortcuts.md);
-- a secret-free snippet library with tags, validated `${variable}` placeholders, rendered preview, and explicit manual clipboard copy (never automatic execution);
-- a bounded macro runner and explicit broadcast-input mode with typed actions, target preflight, visible progress, cooperative cancellation, and an `Esc` emergency disable;
-- deliberate terminal macro recording with bounded capture, editor review, and selectable before-run or per-action approval;
-- a transfer lifecycle model used by the native SFTP manager;
-- a high-signal workspace shell for sessions, tunnels, transfers, diagnostics, and local terminals;
-- persistent terminal tabs and two-pane splits for simultaneous local, SSH, Telnet, and serial sessions, with per-tab event routing and lifecycle cleanup;
-- a session-scoped SSH workspace that keeps the terminal and SFTP browser on the same native connection, with explicit palette, tab, and return-to-terminal navigation;
-- a bounded remote text editor with UTF-8/Windows-1252 encoding selection, local search/replace, SHA-256 conflict detection, mode preservation, and rollback-safe temporary-file promotion;
-- an explicit SSH tunnel manager for bounded local forwarding, remote `-R` forwarding, and local SOCKS5 `-D`, with direction-aware lifecycle events and stop controls;
-- a local quality command: `cargo xtask check`.
-- a documented safe-testing policy that keeps protocol fixtures on loopback
-  and temporary paths, without reading personal SSH material.
-- a bounded, local audit history for connection and transfer lifecycle facts;
-  it never records terminal commands, remote paths, hostnames, errors, or
-  credential material, and it is not included in session exports.
-- explicit-path-only OpenSSH import; MobaRust never falls back to reading
-  `~/.ssh/config` automatically.
-- a Tauri packaging hook that stages only the audited VNC helper as an ignored
-  native resource; the isolated RDP candidate remains excluded until its
-  dependency audit is clean. Signing, clean-install, and cross-platform
-  evidence remain explicit release gates.
-- a versioned, bounded RDP/VNC helper-process contract with lifecycle and
-  redaction tests, plus isolated IronRDP and `vnc-rs` adapter experiments under
-  `tools/rdp-helper` and `tools/vnc-helper`; current-platform debug packaging
-  stages only the VNC helper as an ignored resource, while the RDP candidate is
-  held back pending a clean dependency audit. Neither is a production desktop
-  client until signing, clean-install, and interoperability gates pass; VNC
-  clipboard updates require an explicit local copy action and are never copied
-  automatically; the isolated VNC helper also has bounded, cancellable
-  reconnect evidence against loopback fixtures.
+MobaRust is built around a simple promise: make the next remote operation obvious, fast, and safe to inspect before it runs.
 
-The native SSH/SFTP/SCP transport and transfer-manager paths, local/remote/dynamic forwarding paths and manager UI, bounded recursive SFTP transfers, jump-host handshake and saved-profile alias resolution, cancellation path, Quick Connect path, Telnet session path, explicit serial refresh/profile flow, secret-free snippets and macros, explicit native vault reference save/delete flow, opt-in portable encrypted vault flow, protocol fixtures, serial configuration/lifecycle tests, bounded TCP diagnostics, bounded native ping/traceroute, explicit DNS/TCP/port-scan diagnostics view, and unauthenticated SSH host-key fingerprint inspection are covered locally. The bounded reconnect policy now has deterministic failure, recovery, and in-flight cancellation tests; full platform interoperability remains a release gate. Native file/directory pickers, hardware interoperability, RDP/VNC, and the remaining protocol adapters are intentionally staged behind these primitives. See [the roadmap](ROADMAP.md) and [architecture decisions](docs/adr/0001-rust-first-tauri.md).
+## Why it exists
 
-## Development
+Modern operators rarely need one protocol. They need a terminal, an SFTP browser, a tunnel, a quick diagnostic, a serial console, a saved profile, and a reliable way to move between them without losing context.
+
+MobaRust is the attempt to make that workflow feel like one coherent control room instead of a pile of disconnected utilities.
+
+## What is real today
+
+The current engineering baseline is intentionally evidence-led:
+
+- Native SSH sessions with host-key verification, password/key authentication paths, PTY terminals, cancellation, timeouts, structured errors, and reconnect state handling.
+- Integrated SFTP and SCP primitives, recursive transfers, bounded progress, cancellation, conflict-aware remote editing, and transfer history.
+- A Rust-owned terminal boundary with typed Tauri commands, local terminal support, link safety, title/zoom behavior, and paste safeguards.
+- SSH forwarding and tunnels with explicit lifecycle management rather than opaque background processes.
+- Saved sessions, groups, tags, typed settings, migrations, import/export foundations, snippets, visible macros, and explicitly selected broadcast targets.
+- A local encrypted vault boundary, privacy-conscious logging, threat-model documentation, and isolated validation that does not require personal machine credentials.
+- Telnet and serial foundations for legacy equipment, plus focused network diagnostics and optional remote monitoring paths.
+- RDP and VNC experiments kept behind controlled helper boundaries while real interoperability and packaging evidence is still being completed.
+
+This repository favors a smaller number of honest capabilities over a longer list of screenshots or placeholders.
+
+## The honest frontier
+
+The roadmap is approximately **89% evidenced** against the current engineering checklist. That is a useful progress signal, not a claim of complete MobaXterm parity.
+
+The remaining frontier includes:
+
+- Production-grade RDP integration with a mature engine, Windows evidence, and the full clipboard/audio/gateway/resizing matrix.
+- Cross-platform VNC interoperability and manual evidence beyond the local loopback fixtures.
+- Real Windows/Linux/macOS runtime and hardware matrices, including PTYs, serial devices, WSL, clipboard, and multi-monitor behavior.
+- Integrated X-server strategy, signed portable distributions, clean-install evidence, and final packaging/release hardening.
+
+These limits are visible on purpose. Contributions and issue reports should turn them into measured evidence, not marketing claims.
+
+## Built for operators
+
+### One workspace, many operations
+
+Keep the shell, remote files, tunnel state, and session context close together. The UI is designed for dense daily use without turning every action into a modal detour.
+
+### Native where it matters
+
+Rust owns protocol boundaries, cancellation, filesystem policy, storage, and sensitive operations. The React frontend receives narrow, typed capabilities instead of an unrestricted shell or filesystem bridge.
+
+### Safe by default
+
+The local test harness isolates `HOME` and XDG directories, strips credential-related environment variables, uses loopback-only protocol fixtures, and never needs to inspect your personal `~/.ssh`, Keychain, GitHub keys, or real hosts.
+
+The application is also designed around explicit host-key and certificate decisions, redacted logs, bounded retries, operation-specific timeouts, and visible broadcast mode.
+
+## Start locally
+
+Requirements: Rust stable, Node.js, and pnpm.
 
 ```bash
+git clone https://github.com/OthmaneBlial/MobaRust.git
+cd MobaRust
 pnpm install --dir apps/desktop
 cargo xtask check
-pnpm --dir apps/desktop tauri dev
+cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-The desktop binary is named `mobarust`.
+For the isolated local validation path:
 
-Reference projects live under `base/` for local research only and are excluded from Git. See [the research log](docs/research/reference-projects.md).
+```bash
+cargo xtask check
+cargo xtask package-check
+cargo xtask pre-push-check
+```
 
-Portable mode is opt-in: a distribution must place an empty regular-file
-`portable.flag` beside the executable; symbolic-link markers are rejected.
-MobaRust then keeps non-secret application data and the
-separate encrypted `portable-data/vault.bin` beside it; it never turns normal
-installed or development runs into portable mode automatically.
+Validation uses repository-local or temporary state and loopback fixtures. It does not connect to production machines or read personal credential stores.
+
+## Architecture
+
+```text
+React / TypeScript UI
+        │ typed Tauri commands and events
+Rust desktop boundary
+        ├── session orchestration and cancellation
+        ├── SSH / SFTP / SCP / tunnels
+        ├── PTY and local terminal lifecycle
+        ├── encrypted vault and versioned store
+        ├── transfer, editor, diagnostics, and monitoring services
+        └── isolated RDP / VNC helper experiments
+```
+
+The architecture is deliberately protocol-aware. A session configuration references credential material; it does not duplicate secrets through every UI state object or log event.
+
+## Documentation
+
+- [Roadmap](ROADMAP.md)
+- [Safe testing policy](docs/security/safe-testing.md)
+- [Threat model](docs/security/threat-model.md)
+- [Architecture decisions](docs/adr/)
+- [Research notes](docs/research/)
+- [Keyboard shortcuts](docs/keyboard-shortcuts.md)
+- [Release and packaging notes](docs/release/packaging.md)
+
+## Contributing
+
+Useful contributions are small, testable, and explicit about platform evidence. Before opening a pull request, run the isolated checks above and explain which behavior is covered by unit tests, fixtures, or manual verification.
+
+Do not include private keys, passwords, host inventories, real connection logs, or personal configuration exports in issues or pull requests.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE).

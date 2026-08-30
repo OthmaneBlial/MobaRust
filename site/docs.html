@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101511" />
+    <meta name="description" content="MobaRust documentation, architecture, safety model, and honest protocol frontier." />
+    <title>MobaRust — Documentation</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .docs-hero { max-width: 1380px; margin: 0 auto; padding: 105px 5vw 85px; }
+      .docs-hero h1 { font-size: clamp(58px, 8vw, 105px); margin-bottom: 25px; }
+      .docs-hero p { color: #aab5ad; font-size: 17px; line-height: 1.6; max-width: 590px; }
+      .docs-layout { display: grid; grid-template-columns: 220px minmax(0, 790px); gap: clamp(45px, 9vw, 145px); max-width: 1120px; margin: 0 auto; padding: 30px 5vw 140px; }
+      .docs-nav { align-self: start; position: sticky; top: 25px; }
+      .docs-nav small, .docs-kicker { color: #6e7d72; display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .13em; margin-bottom: 16px; text-transform: uppercase; }
+      .docs-nav a { border-left: 1px solid var(--line); color: #86948a; display: block; font-size: 12px; padding: 9px 0 9px 14px; }
+      .docs-nav a:hover { border-left-color: var(--lime); color: var(--lime); }
+      .docs-content section { border-top: 1px solid var(--line); padding: 54px 0 60px; }
+      .docs-content section:first-child { border-top: 0; padding-top: 0; }
+      .docs-content h2 { font-size: 43px; margin-bottom: 21px; }
+      .docs-content h3 { font-family: var(--display); font-size: 25px; font-weight: 400; letter-spacing: -.04em; margin: 34px 0 12px; }
+      .docs-content p, .docs-content li { color: #93a096; font-size: 14px; line-height: 1.75; }
+      .docs-content ul { padding-left: 19px; }
+      .docs-content li::marker { color: var(--lime); }
+      .docs-note { background: rgba(214, 243, 106, .07); border-left: 2px solid var(--lime); color: #b7c3b6; font-size: 13px; line-height: 1.65; margin: 25px 0; padding: 15px 17px; }
+      .docs-table-wrap { overflow-x: auto; }
+      .docs-table { border-collapse: collapse; min-width: 620px; width: 100%; }
+      .docs-table th, .docs-table td { border-bottom: 1px solid var(--line); padding: 13px 12px 13px 0; text-align: left; vertical-align: top; }
+      .docs-table th { color: #76847a; font-family: var(--mono); font-size: 8px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; }
+      .docs-table td { color: #a4b0a5; font-size: 12px; line-height: 1.5; }
+      .docs-table td:first-child { color: var(--lime); font-family: var(--mono); font-size: 10px; }
+      .docs-link { color: var(--lime); text-decoration: underline; text-decoration-color: rgba(214, 243, 106, .35); text-underline-offset: 4px; }
+      .status-pill { border: 1px solid currentColor; display: inline-block; font-family: var(--mono); font-size: 8px; letter-spacing: .08em; padding: 5px 7px; text-transform: uppercase; }
+      .status-pill.ready { color: var(--sage); }.status-pill.frontier { color: var(--amber); }.status-pill.open { color: var(--coral); }
+      @media (max-width: 760px) { .docs-hero { padding-top: 70px; }.docs-layout { display: block; padding-top: 0; }.docs-nav { background: #1a221c; border: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 0 15px; margin-bottom: 55px; padding: 13px; position: static; }.docs-nav small { flex-basis: 100%; margin: 3px 0 6px; }.docs-nav a { border-left: 0; padding: 6px 0; }.docs-content h2 { font-size: 39px; } }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header" data-site-header><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>MobaRust</span></a><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button><nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="index.html#capabilities">Capabilities</a><a href="index.html#architecture">Trust</a><a href="docs.html">Docs</a><a href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">GitHub <span class="arrow">↗</span></a><a class="nav-cta" href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">View the source</a></nav></header>
+      <main>
+        <section class="docs-hero"><p class="eyebrow">MobaRust / field notes</p><h1>Read the<br /><em>receipts.</em></h1><p>A compact guide to what MobaRust does today, where the native boundary lives, and which capabilities still need real platform evidence.</p></section>
+        <div class="docs-layout">
+          <aside class="docs-nav"><small>On this page</small><a href="#connect">Connect</a><a href="#move">Move files</a><a href="#operate">Operate</a><a href="#safety">Safety</a><a href="#frontier">Frontier</a></aside>
+          <div class="docs-content">
+            <section id="connect"><span class="docs-kicker">01 / connect</span><h2>Make the handshake legible.</h2><p>MobaRust keeps SSH connection work inside the Rust/native boundary. The session model separates connection configuration from secret material and exposes typed state to the UI.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Surface</th><th>Current focus</th><th>Status</th></tr></thead><tbody><tr><td>SSH</td><td>Host-key verification, auth paths, PTY, cancellation, timeout, reconnect state</td><td><span class="status-pill ready">evidenced</span></td></tr><tr><td>Local shell</td><td>Native process lifecycle and terminal boundary</td><td><span class="status-pill ready">evidenced</span></td></tr><tr><td>Telnet</td><td>Legacy connectivity, explicitly identified as unencrypted</td><td><span class="status-pill ready">foundation</span></td></tr><tr><td>Serial</td><td>Device settings, disconnect handling, refresh, terminal view</td><td><span class="status-pill frontier">matrix open</span></td></tr></tbody></table></div></section>
+            <section id="move"><span class="docs-kicker">02 / move</span><h2>Files belong beside the shell.</h2><p>SFTP and SCP operations use bounded, cancellable pipelines. Remote editing is designed around a temporary local representation, conflict detection where possible, and an atomic upload path.</p><h3>The useful details</h3><ul><li>Recursive transfers report progress without spawning uncontrolled work.</li><li>Remote filenames are treated as untrusted input and normalized before local use.</li><li>Failed uploads remain visible instead of becoming silent partial writes.</li><li>Remote edits warn before overwriting a file changed since it was opened.</li></ul><p>See the source decisions for <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/tree/main/docs/adr" target="_blank" rel="noreferrer">transfers and remote editing ↗</a>.</p></section>
+            <section id="operate"><span class="docs-kicker">03 / operate</span><h2>Context is an operator feature.</h2><p>Saved sessions, groups, tags, snippets, tunnels, diagnostics, monitoring, and visible transfer state are designed as one operating surface. The goal is fewer hidden states, not more panels.</p><div class="docs-note">Broadcast input is explicit: the user selects target terminals, the UI shows a highly visible active indicator, and an emergency disable path remains available. Snippets are previewed before sending and never execute automatically.</div><h3>Built to stay responsive</h3><p>Search and storage are structured for large session collections. Every network operation has an operation-specific timeout and a cooperative cancellation path. Reconnect uses bounded retries and backoff instead of an infinite loop.</p></section>
+            <section id="safety"><span class="docs-kicker">04 / safety</span><h2>Local-first does not mean careless.</h2><p>The repository's validation path is deliberately defensive. It uses isolated `HOME` and XDG directories, strips credential-related environment variables, and runs protocol fixtures only on loopback addresses.</p><ul><li>Personal `~/.ssh`, GitHub keys, SSH agents, Keychain, and real remote hosts are out of scope for tests.</li><li>Passwords, private key material, tokens, and sensitive environment variables are redacted from logs.</li><li>Frontend IPC is typed and narrow; there is no unrestricted `execute_anything(command)` bridge.</li><li>Terminal output is untrusted content and is not promoted to arbitrary HTML.</li></ul><p>Read the full <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/safe-testing.md" target="_blank" rel="noreferrer">safe testing policy ↗</a> and <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md" target="_blank" rel="noreferrer">threat model ↗</a>.</p></section>
+            <section id="frontier"><span class="docs-kicker">05 / frontier</span><h2>What still needs proving.</h2><p>The project is approximately 89% through its current engineering checklist. The remaining work is not hidden behind a vague “coming soon” label.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Area</th><th>What remains</th><th>Status</th></tr></thead><tbody><tr><td>RDP</td><td>Mature engine integration, Windows evidence, gateway, audio, clipboard, resize</td><td><span class="status-pill frontier">experimental</span></td></tr><tr><td>VNC</td><td>Cross-platform interoperability and manual evidence beyond local fixtures</td><td><span class="status-pill frontier">experimental</span></td></tr><tr><td>Platforms</td><td>Real Windows/Linux/macOS runtime, WSL, hardware, multi-monitor matrix</td><td><span class="status-pill open">open</span></td></tr><tr><td>Release</td><td>Signed portable packages, notarization, clean-install evidence</td><td><span class="status-pill open">open</span></td></tr></tbody></table></div><p>That distinction matters. A local fixture proves lifecycle logic; it does not prove production interoperability on every desktop.</p></section>
+          </div>
+        </div>
+      </main>
+      <footer class="site-footer"><div class="footer-brand"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>MobaRust</span></a><p>A Rust-first remote workstation<br />for people who operate systems.</p></div><div class="footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span><a href="index.html">Back to home ↑</a></span></div></footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

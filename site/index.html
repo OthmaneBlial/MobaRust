@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101511" />
+    <meta name="description" content="MobaRust is a Rust-first remote workstation for SSH, SFTP, SCP, terminals, tunnels, diagnostics, and remote operations." />
+    <meta property="og:title" content="MobaRust — Every machine. One control room." />
+    <meta property="og:description" content="A focused, open-source remote workstation for people who operate systems." />
+    <meta property="og:type" content="website" />
+    <title>MobaRust — Every machine. One control room.</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header" data-site-header>
+        <a class="brand" href="index.html" aria-label="MobaRust home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>MobaRust</span>
+        </a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="site-nav" id="site-nav" aria-label="Main navigation">
+          <a href="#capabilities">Capabilities</a>
+          <a href="#architecture">Trust</a>
+          <a href="docs.html">Docs</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">GitHub <span class="arrow">↗</span></a>
+          <a class="nav-cta" href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">View the source</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero section-grid">
+          <div class="hero-copy reveal">
+            <p class="eyebrow"><span class="pulse-dot"></span> open source · rust-first · operator focused</p>
+            <h1>Every machine.<br /><em>One control room.</em></h1>
+            <p class="hero-lede">MobaRust brings the remote workday into one calm, fast desktop workspace — terminals, files, tunnels, diagnostics, and the context between them.</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">Explore on GitHub <span>↗</span></a>
+              <a class="text-link" href="#install">Run it locally <span>↓</span></a>
+            </div>
+            <div class="hero-proof">
+              <span><strong>~89%</strong> roadmap evidenced</span>
+              <span class="proof-divider"></span>
+              <span>local-first validation</span>
+            </div>
+          </div>
+
+          <div class="hero-visual reveal reveal-delay-1" aria-label="Illustration of the MobaRust operations workspace">
+            <div class="visual-glow"></div>
+            <div class="workspace-window">
+              <div class="window-bar">
+                <span class="window-dots"><b></b><b></b><b></b></span>
+                <span class="window-title">MobaRust <small>operations deck</small></span>
+                <span class="window-signal"><i></i> secure workspace</span>
+              </div>
+              <div class="workspace-body">
+                <aside class="mock-sidebar">
+                  <div class="mock-side-top"><span class="mini-mark">M</span><span>WORKSPACE</span><button aria-label="Add session">+</button></div>
+                  <div class="side-label">PINNED</div>
+                  <button class="mock-session active" type="button" data-preview-tab="terminal"><span class="session-icon amber">⌁</span><span><strong>edge-prod-01</strong><small>ssh · connected</small></span><i class="status-live"></i></button>
+                  <button class="mock-session" type="button" data-preview-tab="files"><span class="session-icon green">□</span><span><strong>staging-files</strong><small>sftp · ready</small></span></button>
+                  <button class="mock-session" type="button" data-preview-tab="local"><span class="session-icon blue">⌘</span><span><strong>local-shell</strong><small>local · ready</small></span></button>
+                  <div class="side-label side-label-lower">OPERATIONS</div>
+                  <div class="side-item"><span>◈</span> Tunnel manager <b>2</b></div>
+                  <div class="side-item"><span>↕</span> Transfers <b>1</b></div>
+                  <div class="side-item"><span>⌕</span> Diagnostics</div>
+                </aside>
+                <div class="mock-main">
+                  <div class="mock-tabs"><span class="mock-tab selected" data-preview-label="terminal">edge-prod-01 <i>×</i></span><span class="mock-tab" data-preview-label="files">staging-files <i>×</i></span><span class="mock-tab" data-preview-label="local">local-shell <i>×</i></span><span class="mock-tab-plus">+</span></div>
+                  <div class="mock-toolbar"><span class="crumb">SSH / edge-prod-01</span><span class="toolbar-actions"><b>↗</b><b>◫</b><b>⋯</b></span></div>
+                  <div class="terminal-screen" data-preview-panel="terminal">
+                    <div class="terminal-line dim">MobaRust session · host key verified</div>
+                    <div class="terminal-line"><span class="prompt">ops@edge-prod-01</span><span class="colon">:</span><span class="path">~</span><span class="dollar">$</span> <span class="command">systemctl status api</span></div>
+                    <div class="terminal-line blank"></div>
+                    <div class="terminal-line"><span class="ok">●</span> api.service — Operations API</div>
+                    <div class="terminal-line dim">&nbsp;&nbsp;&nbsp;Loaded: loaded · Active: <span class="ok-text">active (running)</span></div>
+                    <div class="terminal-line dim">&nbsp;&nbsp;&nbsp;Tasks: 42 · Memory: 284.6M · Uptime: 14d</div>
+                    <div class="terminal-line blank"></div>
+                    <div class="terminal-line"><span class="prompt">ops@edge-prod-01</span><span class="colon">:</span><span class="path">~</span><span class="dollar">$</span> <span class="cursor"></span></div>
+                    <div class="terminal-status"><span><i></i> connected</span><span>UTF-8</span><span>scrollback 2,000</span></div>
+                  </div>
+                  <div class="files-panel" data-preview-panel="files" hidden>
+                    <div class="file-head"><span>REMOTE FILES</span><span>3 items</span></div>
+                    <div class="file-row"><span class="file-icon">▤</span><strong>deploy</strong><small>directory</small><time>today</time></div>
+                    <div class="file-row"><span class="file-icon amber-text">▤</span><strong>docker-compose.yml</strong><small>4.2 KB</small><time>09:42</time></div>
+                    <div class="file-row"><span class="file-icon green-text">▤</span><strong>release-notes.md</strong><small>12.8 KB</small><time>yesterday</time></div>
+                    <div class="file-footer">SFTP ready · drag to transfer</div>
+                  </div>
+                  <div class="local-panel" data-preview-panel="local" hidden><div class="local-callout"><span class="local-icon">⌘</span><div><strong>Local terminal</strong><p>A native shell, kept close to the remote work.</p></div></div><div class="local-command"><span>➜</span> pwd <b>/Users/operator/projects</b></div><div class="local-command"><span>➜</span> cargo xtask check <b class="ok-text">passed</b></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="floating-card floating-card-top"><span class="float-icon lime">↕</span><span><small>TRANSFER</small><strong>release.tar.gz</strong></span><b>84%</b></div>
+            <div class="floating-card floating-card-bottom"><span class="float-icon coral">⌁</span><span><small>TUNNEL</small><strong>localhost:5432</strong></span><i class="status-live"></i></div>
+          </div>
+        </section>
+
+        <section class="ticker" aria-label="MobaRust capabilities">
+          <div class="ticker-track"><span>SSH</span><i>✳</i><span>SFTP</span><i>✳</i><span>SCP</span><i>✳</i><span>PTY</span><i>✳</i><span>TUNNELS</span><i>✳</i><span>DIAGNOSTICS</span><i>✳</i><span>REMOTE OPS</span><i>✳</i><span>SSH</span><i>✳</i><span>SFTP</span><i>✳</i><span>SCP</span><i>✳</i><span>PTY</span><i>✳</i><span>TUNNELS</span><i>✳</i><span>DIAGNOSTICS</span><i>✳</i></div>
+        </section>
+
+        <section class="intro section-narrow reveal" id="capabilities">
+          <p class="eyebrow">01 / the daily loop</p>
+          <h2>From first connect<br />to <em>last command.</em></h2>
+          <p class="section-lede">The hard part of remote work is rarely the protocol. It is the context switching, the hidden state, and the tiny moments where an unsafe action becomes too easy. MobaRust makes the whole loop legible.</p>
+        </section>
+
+        <section class="capability-grid section-wide">
+          <article class="capability-card card-dark reveal"><div class="card-number">01</div><div class="card-icon icon-terminal">⌁</div><h3>Connect with confidence.</h3><p>Native SSH with host-key verification, authentication paths, PTY lifecycle, timeouts, cancellation, reconnect state, and errors you can actually act on.</p><a href="docs.html#connect">Connection model <span>↗</span></a></article>
+          <article class="capability-card card-lime reveal reveal-delay-1"><div class="card-number">02</div><div class="card-icon icon-files">□</div><h3>Move work, not tabs.</h3><p>SFTP and SCP primitives, recursive transfers, bounded progress, conflict-aware remote editing, and a file surface that stays beside the shell.</p><a href="docs.html#move">File operations <span>↗</span></a></article>
+          <article class="capability-card card-amber reveal reveal-delay-2"><div class="card-number">03</div><div class="card-icon icon-tunnel">↗</div><h3>Operate with context.</h3><p>Tunnels, snippets, visible macros, selected broadcast targets, focused diagnostics, and optional remote monitoring for the moments between commands.</p><a href="docs.html#operate">Operator tools <span>↗</span></a></article>
+        </section>
+
+        <section class="architecture section-grid" id="architecture">
+          <div class="architecture-copy reveal"><p class="eyebrow">02 / the boundary</p><h2>Powerful under the hood.<br /><em>Quiet by default.</em></h2><p>Rust owns the sensitive edges: protocol state, cancellation, local storage, file policy, and credential boundaries. The React surface gets narrow, typed capabilities — never a blank cheque.</p><a class="text-link" href="https://github.com/OthmaneBlial/MobaRust/tree/main/docs/security" target="_blank" rel="noreferrer">Read the security notes <span>↗</span></a></div>
+          <div class="boundary-card reveal reveal-delay-1"><div class="boundary-header"><span class="boundary-lock">⌑</span><span>TRUST BOUNDARY</span><span class="boundary-dot"><i></i> enforced</span></div><div class="boundary-flow"><div class="flow-box frontend"><small>FRONTEND</small><strong>Typed commands</strong><span>React / TypeScript</span></div><div class="flow-line"><i></i><i></i><i></i></div><div class="flow-box native"><small>NATIVE CORE</small><strong>Protocol state</strong><span>Rust / Tauri</span></div><div class="flow-line"><i></i><i></i><i></i></div><div class="flow-box secret"><small>SECRET MATERIAL</small><strong>Referenced, not copied</strong><span>Vault boundary</span></div></div><div class="boundary-foot"><span><i></i> personal credentials never required for tests</span><span>loopback fixtures only</span></div></div>
+        </section>
+
+        <section class="frontier section-wide reveal" id="frontier">
+          <div class="frontier-heading"><p class="eyebrow">03 / the honest frontier</p><h2>Ambition with<br /><em>receipts.</em></h2><p>There is a lot here. There is also more to prove. The remaining work is visible, named, and deliberately kept separate from the strong core.</p></div>
+          <div class="frontier-list"><div class="frontier-item"><span class="frontier-status experiment">EXPERIMENT</span><div><h3>RDP / VNC</h3><p>Controlled helper experiments and loopback fixtures exist. Cross-platform interoperability, Windows evidence, audio, gateway, and production packaging remain open.</p></div><span class="frontier-arrow">↗</span></div><div class="frontier-item"><span class="frontier-status matrix">MATRIX</span><div><h3>Every desktop, every edge</h3><p>Windows, Linux, macOS, WSL, serial hardware, multi-monitor, clipboard, and clean-install evidence need real environment coverage.</p></div><span class="frontier-arrow">↗</span></div><div class="frontier-item"><span class="frontier-status release">RELEASE</span><div><h3>Signed distribution</h3><p>Portable packaging, signing, notarization, and a reproducible cross-platform release matrix are part of the final hardening pass.</p></div><span class="frontier-arrow">↗</span></div></div>
+        </section>
+
+        <section class="install section-grid" id="install">
+          <div class="install-copy reveal"><p class="eyebrow">04 / get close to the metal</p><h2>Try the<br /><em>workbench.</em></h2><p>Clone the repository, run the isolated checks, and open the desktop shell. The validation path uses local state and loopback fixtures — it does not need your personal SSH files.</p><a class="text-link" href="docs.html#safety">See the safe testing policy <span>↗</span></a></div>
+          <div class="code-card reveal reveal-delay-1"><div class="code-card-top"><span><i></i><i></i><i></i></span><small>TERMINAL</small><button class="copy-button" type="button" data-copy="git clone https://github.com/OthmaneBlial/MobaRust.git\ncd MobaRust\ncargo xtask check">Copy</button></div><pre><code><span class="code-comment"># clone the control room</span>
+<span class="code-command">git clone</span> https://github.com/OthmaneBlial/MobaRust.git
+<span class="code-command">cd</span> MobaRust
+
+<span class="code-comment"># isolated validation</span>
+<span class="code-command">cargo xtask check</span>
+
+<span class="code-comment"># launch the desktop shell</span>
+<span class="code-command">cargo tauri dev</span> <span class="code-flag">--manifest-path</span> apps/desktop/src-tauri/Cargo.toml</code></pre><div class="copy-note" data-copy-note>Copies commands only · nothing is executed</div></div>
+        </section>
+
+        <section class="closing section-narrow reveal"><div class="closing-rule"></div><p class="eyebrow">Built in the open</p><h2>The next remote operation<br /><em>should feel obvious.</em></h2><div class="hero-actions"><a class="button button-primary" href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">Star the project <span>↗</span></a><a class="text-link" href="https://github.com/OthmaneBlial/MobaRust/issues" target="_blank" rel="noreferrer">Help shape the frontier <span>↗</span></a></div></section>
+      </main>
+
+      <footer class="site-footer"><div class="footer-brand"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>MobaRust</span></a><p>A Rust-first remote workstation<br />for people who operate systems.</p></div><div class="footer-links"><div><small>EXPLORE</small><a href="docs.html">Documentation</a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md" target="_blank" rel="noreferrer">Roadmap</a><a href="https://github.com/OthmaneBlial/MobaRust/issues" target="_blank" rel="noreferrer">Issues</a></div><div><small>PROJECT</small><a href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">GitHub <span>↗</span></a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a><a href="docs.html#safety">Safety model</a></div></div><div class="footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span>made for the terminal-minded</span></div></footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
