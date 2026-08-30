@@ -829,6 +829,8 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const sessionIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: request.width, height: request.height });
+  const [remoteClipboard, setRemoteClipboard] = useState<string | null>(null);
+  const [clipboardCopied, setClipboardCopied] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -886,6 +888,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
             if (helperEvent.payload.state === "stopped") onStatusChange(workspaceId, "closed");
           }
           if (helperEvent.event === "framebuffer") renderFramebuffer(helperEvent.payload.width, helperEvent.payload.height, helperEvent.payload.pixels);
+          if (helperEvent.event === "clipboard") {
+            setRemoteClipboard(helperEvent.payload.text);
+            setClipboardCopied(false);
+          }
           if (helperEvent.event === "diagnostic") setError(helperEvent.payload.message);
         });
         const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request });
@@ -916,6 +922,20 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     };
   }, [instanceKey, onNativeTerminalId, onStatusChange, request, workspaceId]);
 
+  const copyRemoteClipboard = async () => {
+    if (remoteClipboard === null) return;
+    if (!navigator.clipboard?.writeText) {
+      setError("The desktop runtime does not expose a safe clipboard writer.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(remoteClipboard);
+      setClipboardCopied(true);
+    } catch {
+      setError("Copying remote clipboard text was blocked by the desktop runtime.");
+    }
+  };
+
   const sendKey = (event: ReactKeyboardEvent<HTMLCanvasElement>, pressed: boolean) => {
     const sessionId = sessionIdRef.current;
     const code = desktopKeyCode(request.protocol, event);
@@ -944,6 +964,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
     <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
+    {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button></div>}
     <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{error && <span className="remote-desktop-error">{error}</span>}</div>
   </div>;
 }

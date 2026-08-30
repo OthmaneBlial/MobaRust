@@ -858,6 +858,23 @@ mod tests {
     }
 
     #[test]
+    fn launch_arguments_include_each_optional_domain_value_once() {
+        let arguments = launch_config().process_arguments();
+        let domain_count = arguments
+            .iter()
+            .filter(|argument| *argument == "--domain")
+            .count();
+        assert_eq!(domain_count, 1);
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| *argument == "LAB")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn vnc_no_auth_can_omit_username_and_credential_reference() {
         let mut config = launch_config();
         config.protocol = DesktopProtocol::Vnc;

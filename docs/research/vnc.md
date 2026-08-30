@@ -55,7 +55,10 @@ mock event stream, or screenshot does not count.
 
 VNC profiles must visibly distinguish legacy VNC authentication from transport
 encryption. Resize and clipboard are capability-dependent; unsupported
-operations must be reported rather than simulated.
+operations must be reported rather than simulated. Remote clipboard events are
+treated as untrusted input: the desktop UI holds them transiently and requires
+an explicit user click before writing to the local clipboard. It never copies
+remote text automatically.
 
 ## Tests before release
 
@@ -82,4 +85,6 @@ pointer, and clean stop. This is meaningful protocol evidence, but it is not
 yet cross-platform interoperability or a production UI integration. The
 research working notes remain in `research_vnc_integration/`, and VNC must not
 be advertised as shipped until the parent supervisor/renderer, reconnect,
-packaging, and Windows/Linux/macOS checks are complete.
+packaging, and Windows/Linux/macOS checks are complete. The parent UI now
+surfaces remote clipboard events as an explicit “Copy text” action without
+automatically touching the local clipboard.
