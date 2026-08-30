@@ -1,4 +1,4 @@
-use mobarust_core::{ConnectionState, OutputBatcher};
+use mobarust_core::{ConnectionState, OutputBatcher, TerminalInputError, validate_terminal_input};
 use mobarust_telnet::{TelnetConnection, TelnetEncoding, TelnetError, TelnetOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -90,6 +90,8 @@ pub enum TelnetManagerError {
     InvalidRequest(String),
     #[error(transparent)]
     Transport(#[from] TelnetError),
+    #[error(transparent)]
+    Input(#[from] TerminalInputError),
 }
 
 #[derive(Clone, Default)]
@@ -141,6 +143,7 @@ impl TelnetManager {
     }
 
     pub async fn write(&self, terminal_id: &str, data: String) -> Result<(), TelnetManagerError> {
+        validate_terminal_input(data.as_bytes())?;
         self.sender(terminal_id)?
             .send(TelnetCommand::Write(data.into_bytes()))
             .await
@@ -368,4 +371,22 @@ fn default_columns() -> u16 {
 
 fn default_rows() -> u16 {
     32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TelnetManager, TelnetManagerError};
+
+    #[tokio::test]
+    async fn oversized_telnet_write_is_rejected_before_session_lookup() {
+        let data = "x".repeat(mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1);
+        let error = TelnetManager::default()
+            .write("missing", data)
+            .await
+            .expect_err("oversized Telnet input must be rejected");
+        assert!(matches!(
+            error,
+            TelnetManagerError::Input(mobarust_core::TerminalInputError::TooLarge)
+        ));
+    }
 }

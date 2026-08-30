@@ -1,4 +1,7 @@
-use mobarust_core::{OutputBatcher, validate_session_environment, validate_session_startup};
+use mobarust_core::{
+    OutputBatcher, TerminalInputError, validate_session_environment, validate_session_startup,
+    validate_terminal_input,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -32,6 +35,8 @@ pub enum TerminalError {
     InvalidEnvironment,
     #[error("local terminal startup command is invalid")]
     InvalidStartupCommand,
+    #[error(transparent)]
+    Input(#[from] TerminalInputError),
     #[cfg(target_os = "windows")]
     #[error("WSL distribution discovery timed out")]
     WslDiscoveryTimeout,
@@ -225,6 +230,7 @@ impl TerminalManager {
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), TerminalError> {
+        validate_terminal_input(data)?;
         let session = self.session(id)?;
         let mut writer = session.writer.lock().expect("terminal writer poisoned");
         writer.write_all(data).map_err(TerminalError::Io)?;
@@ -498,6 +504,18 @@ mod tests {
 
         assert!(output.contains("MOBARUST_PTY_OK"));
         assert!(output.contains("INPUT:hello"));
+    }
+
+    #[test]
+    fn oversized_terminal_write_is_rejected_before_session_lookup() {
+        let data = vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1];
+        let error = TerminalManager::default()
+            .write("missing", &data)
+            .expect_err("oversized terminal input must be rejected");
+        assert!(matches!(
+            error,
+            TerminalError::Input(TerminalInputError::TooLarge)
+        ));
     }
 
     fn fixture_command() -> CommandBuilder {

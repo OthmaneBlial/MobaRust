@@ -20,9 +20,13 @@ React xterm <- ssh://output / ssh://closed <- native task
 ```
 
 Remote output is emitted as text events only; xterm treats the data as
-terminal bytes rather than HTML. The output chunks are capped at 32 KiB and
-the command queue at 64 messages. Connection setup uses a 12-second
-operation-specific timeout. Unknown host keys remain rejected by default.
+terminal bytes rather than HTML. The output chunks are capped at 32 KiB, the
+command queue at 64 messages, and each native terminal-write request is capped
+at 1 MiB by the shared core validation policy. A larger paste is rejected
+before it enters the queue so a renderer cannot create an unbounded command
+item; the UI may split an explicitly approved paste into bounded requests.
+Connection setup uses a 12-second operation-specific timeout. Unknown host
+keys remain rejected by default.
 
 ## Consequences
 

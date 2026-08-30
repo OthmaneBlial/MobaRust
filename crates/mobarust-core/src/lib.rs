@@ -29,5 +29,8 @@ pub use settings::{
     SettingsValidationError, SshSettings, TerminalSettings, ThemePreference,
 };
 pub use snippet::{SnippetRecord, SnippetValidationError};
-pub use terminal::{OutputBatcher, OutputChunk};
+pub use terminal::{
+    MAX_TERMINAL_INPUT_BYTES, OutputBatcher, OutputChunk, TerminalInputError,
+    validate_terminal_input,
+};
 pub use transfer::{TransferEvent, TransferLifecycle, TransferState};

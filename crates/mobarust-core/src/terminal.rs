@@ -1,3 +1,23 @@
+use thiserror::Error;
+
+/// Maximum bytes accepted by one native terminal-write request. Larger
+/// pastes must be split by the caller instead of occupying an unbounded
+/// command-queue item.
+pub const MAX_TERMINAL_INPUT_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum TerminalInputError {
+    #[error("terminal input exceeds the 1 MiB safety limit")]
+    TooLarge,
+}
+
+pub fn validate_terminal_input(data: &[u8]) -> Result<(), TerminalInputError> {
+    if data.len() > MAX_TERMINAL_INPUT_BYTES {
+        return Err(TerminalInputError::TooLarge);
+    }
+    Ok(())
+}
+
 /// A UI-sized output chunk. Keeping this type separate makes IPC backpressure
 /// policy explicit instead of coupling it to a renderer implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,5 +91,14 @@ mod tests {
         assert_eq!(chunks[0].bytes, b"1234");
         assert_eq!(chunks[1].bytes, b"5678");
         assert_eq!(batcher.flush().unwrap().bytes, b"9");
+    }
+
+    #[test]
+    fn terminal_input_is_bounded_before_queueing() {
+        assert!(validate_terminal_input(&vec![b'x'; MAX_TERMINAL_INPUT_BYTES]).is_ok());
+        assert_eq!(
+            validate_terminal_input(&vec![b'x'; MAX_TERMINAL_INPUT_BYTES + 1]),
+            Err(TerminalInputError::TooLarge)
+        );
     }
 }

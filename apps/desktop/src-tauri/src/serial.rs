@@ -1,4 +1,4 @@
-use mobarust_core::{ConnectionState, OutputBatcher};
+use mobarust_core::{ConnectionState, OutputBatcher, TerminalInputError, validate_terminal_input};
 use mobarust_serial::{
     SerialConnection, SerialDataBits, SerialFlowControl, SerialOptions, SerialParity,
     SerialStopBits,
@@ -88,6 +88,8 @@ pub enum SerialManagerError {
     InvalidRequest(String),
     #[error(transparent)]
     Transport(#[from] mobarust_serial::SerialError),
+    #[error(transparent)]
+    Input(#[from] TerminalInputError),
 }
 
 #[derive(Clone, Default)]
@@ -151,6 +153,7 @@ impl SerialManager {
     }
 
     pub async fn write(&self, terminal_id: &str, data: String) -> Result<(), SerialManagerError> {
+        validate_terminal_input(data.as_bytes())?;
         self.sender(terminal_id)?
             .send(SerialCommand::Write(data.into_bytes()))
             .await
@@ -326,4 +329,22 @@ async fn run_serial_session(
         },
     );
     manager.remove(&terminal_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SerialManager, SerialManagerError};
+
+    #[tokio::test]
+    async fn oversized_serial_write_is_rejected_before_session_lookup() {
+        let data = "x".repeat(mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1);
+        let error = SerialManager::default()
+            .write("missing", data)
+            .await
+            .expect_err("oversized serial input must be rejected");
+        assert!(matches!(
+            error,
+            SerialManagerError::Input(mobarust_core::TerminalInputError::TooLarge)
+        ));
+    }
 }

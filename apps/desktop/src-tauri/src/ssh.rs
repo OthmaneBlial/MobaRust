@@ -1,5 +1,6 @@
 use mobarust_core::{
-    MAX_SERVER_ALIVE_INTERVAL_SECONDS, TransferEvent, TransferLifecycle, TransferState,
+    MAX_SERVER_ALIVE_INTERVAL_SECONDS, TerminalInputError, TransferEvent, TransferLifecycle,
+    TransferState, validate_terminal_input,
 };
 use mobarust_ssh::{
     HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
@@ -355,6 +356,8 @@ pub enum SshManagerError {
     Transport(#[from] SshError),
     #[error(transparent)]
     Vault(#[from] VaultError),
+    #[error(transparent)]
+    Input(#[from] TerminalInputError),
 }
 
 #[derive(Clone)]
@@ -603,6 +606,7 @@ impl SshManager {
     }
 
     pub async fn write(&self, terminal_id: &str, data: String) -> Result<(), SshManagerError> {
+        validate_terminal_input(data.as_bytes())?;
         self.sender(terminal_id)?
             .send(SshCommand::Write(data.into_bytes()))
             .await
@@ -3434,8 +3438,8 @@ fn default_terminal_rows() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshTransferRequest,
-        TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
+        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
+        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
         reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
         should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
     };
@@ -3455,6 +3459,19 @@ mod tests {
         assert!(
             server_alive_interval_duration(Some(MAX_SERVER_ALIVE_INTERVAL_SECONDS + 1)).is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_ssh_write_is_rejected_before_session_lookup() {
+        let data = "x".repeat(mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1);
+        let error = SshManager::default()
+            .write("missing", data)
+            .await
+            .expect_err("oversized SSH input must be rejected");
+        assert!(matches!(
+            error,
+            SshManagerError::Input(mobarust_core::TerminalInputError::TooLarge)
+        ));
     }
 
     #[test]
