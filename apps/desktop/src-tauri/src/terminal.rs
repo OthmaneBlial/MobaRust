@@ -379,7 +379,6 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
 }
 
-#[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,11 +405,7 @@ mod tests {
             })
             .expect("resize test pty");
 
-        let mut command = CommandBuilder::new("/bin/sh");
-        command.args([
-            "-c",
-            "printf 'MOBARUST_PTY_OK\\n'; read line; printf 'INPUT:%s\\n' \"$line\"",
-        ]);
+        let command = fixture_command();
         let mut child = pair.slave.spawn_command(command).expect("spawn test shell");
         let mut reader = pair.master.try_clone_reader().expect("clone test reader");
         let mut writer = pair.master.take_writer().expect("take test writer");
@@ -425,6 +420,28 @@ mod tests {
 
         assert!(output.contains("MOBARUST_PTY_OK"));
         assert!(output.contains("INPUT:hello"));
+    }
+
+    fn fixture_command() -> CommandBuilder {
+        #[cfg(target_os = "windows")]
+        {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args([
+                "/C",
+                "echo MOBARUST_PTY_OK && set /p line= && echo. && echo INPUT:%line%",
+            ]);
+            command
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut command = CommandBuilder::new("/bin/sh");
+            command.args([
+                "-c",
+                "printf 'MOBARUST_PTY_OK\\n'; read line; printf 'INPUT:%s\\n' \"$line\"",
+            ]);
+            command
+        }
     }
 
     #[test]
