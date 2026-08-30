@@ -145,9 +145,11 @@ backoff, honors `Stop` during both the delay and handshake, and emits `Failed`
 after the final refused/failed attempt. The default remains three enabled
 attempts, and users can disable reconnect or set zero attempts. The loopback
 fixture verifies recovery to a second real framebuffer and bounded failure
-when the fixture disappears. This is helper-level evidence only; the Tauri
-parent still requires the full cross-platform and manual interoperability
-gate. `vnc-rs 0.5.3` still
+when the fixture disappears. A separate loopback fixture verifies that an
+explicitly disabled policy transitions straight from an active loss to
+`Failed` without emitting `Reconnecting`. This is helper-level evidence only;
+the Tauri parent still requires the full cross-platform and manual
+interoperability gate. `vnc-rs 0.5.3` still
 requires the authentication callback to return an owned `String`, so that
 upstream API limitation remains a credential-lifetime promotion gate and is
 not hidden by the local wrapper. The helper moves its zeroizing source buffer

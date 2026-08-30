@@ -224,6 +224,73 @@ async fn helper_bounds_reconnect_attempts_after_the_fixture_goes_away() {
 }
 
 #[tokio::test]
+async fn helper_fails_without_reconnect_when_the_policy_is_disabled() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        serve_framebuffer_connection(&mut stream, [0x11, 0x22, 0x33, 0xff])
+            .await
+            .unwrap();
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper_with_policy(port, false, 0).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+        .await
+        .unwrap();
+
+    let mut saw_active = false;
+    let mut saw_reconnecting = false;
+    let mut saw_failed = false;
+    for _ in 0..8 {
+        let event = timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap();
+        match event {
+            HelperEvent::State {
+                state: HelperState::Active,
+            } => saw_active = true,
+            HelperEvent::State {
+                state: HelperState::Reconnecting,
+            } => saw_reconnecting = true,
+            HelperEvent::State {
+                state: HelperState::Failed,
+            } => {
+                saw_failed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_active,
+        "the helper did not establish the fixture session"
+    );
+    assert!(
+        saw_failed,
+        "the helper did not fail after the disabled policy"
+    );
+    assert!(
+        !saw_reconnecting,
+        "disabled reconnect emitted a retry state"
+    );
+    server_task.await.unwrap();
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -519,6 +586,24 @@ async fn spawn_helper(
     tokio::process::ChildStdin,
     tokio::process::ChildStdout,
 ) {
+    spawn_helper_with_policy(port, true, 3).await
+}
+
+async fn spawn_helper_with_policy(
+    port: u16,
+    reconnect_enabled: bool,
+    reconnect_attempts: u8,
+) -> (
+    tokio::process::Child,
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+) {
+    let reconnect_flag = if reconnect_enabled {
+        "--reconnect-enabled"
+    } else {
+        "--reconnect-disabled"
+    };
+    let reconnect_attempts = reconnect_attempts.to_string();
     let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-vnc-helper"))
         .args([
             "--mobarust-protocol",
@@ -531,6 +616,9 @@ async fn spawn_helper(
             "320",
             "--height",
             "200",
+            reconnect_flag,
+            "--reconnect-attempts",
+            &reconnect_attempts,
         ])
         .env_remove("SSH_AUTH_SOCK")
         .env_remove("SSH_AGENT_PID")
