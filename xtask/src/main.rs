@@ -176,9 +176,14 @@ fn portable_check() -> Result<(), String> {
 
     copy_regular_tree(&bundle, &package_directory.join("MobaRust.app"))?;
     fs::write(
+        package_directory.join("MobaRust.app/Contents/MacOS/portable.flag"),
+        b"",
+    )
+    .map_err(|error| format!("could not write portable mode marker: {error}"))?;
+    fs::write(
         package_directory.join("PORTABLE-UNSIGNED.txt"),
         format!(
-            "MobaRust {version} portable package\n\nThis local package is unsigned and intended for repository-scoped smoke testing only.\nIt is not notarized and does not establish cross-platform or interoperability evidence.\nPortable credentials remain in the separate encrypted vault and require an explicit unlock.\n",
+            "MobaRust {version} portable package\n\nThis local package is unsigned and intended for repository-scoped smoke testing only.\nIt is not notarized and does not establish cross-platform or interoperability evidence.\nThe package includes a portable.flag marker beside the macOS executable.\nPortable credentials remain in the separate encrypted vault and require an explicit unlock.\n",
             version = env!("CARGO_PKG_VERSION")
         ),
     )
@@ -418,6 +423,7 @@ fn validate_portable_archive_listing(listing: &str, package_name: &str) -> Resul
         format!("{package_name}/PORTABLE-UNSIGNED.txt"),
         format!("{package_name}/MobaRust.sha256"),
         format!("{package_name}/MobaRust.app/Contents/MacOS/mobarust"),
+        format!("{package_name}/MobaRust.app/Contents/MacOS/portable.flag"),
         format!("{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper"),
     ] {
         if !entries.iter().any(|entry| *entry == required) {
@@ -1421,7 +1427,7 @@ mod tests {
     fn portable_archive_listing_rejects_escape_and_requires_runtime_entries() {
         let package_name = "MobaRust-macos-arm64";
         let valid = format!(
-            "{package_name}/\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
+            "{package_name}/\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/MacOS/portable.flag\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
         );
         validate_portable_archive_listing(&valid, package_name)
             .expect("complete portable listing should pass");
