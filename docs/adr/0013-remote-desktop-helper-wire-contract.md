@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted. The Rust-side contract and an isolated IronRDP candidate helper are
-implemented; production RDP/VNC engine integration remains pending.
+Accepted. The Rust-side contract, isolated IronRDP/vnc-rs helpers, and the
+current Tauri framebuffer/input bridge are implemented; production RDP/VNC
+promotion remains pending.
 
 ## Context
 
@@ -35,18 +36,21 @@ messages before a process is started:
 - debug formatting redacts opaque credential references and clipboard text.
 
 The crate is a contract, test seam, and native-parent API. The isolated
-`tools/rdp-helper` implements a real IronRDP client path behind that boundary,
-but it is not yet packaged or wired into the desktop UI. The UI will not
-advertise RDP or VNC as available until a helper is packaged and exercised
-against a real server.
+`tools/rdp-helper` and `tools/vnc-helper` implement real protocol-client paths
+behind that boundary, and the current debug Tauri package wires their typed
+framebuffer/input events into the desktop canvas. This is still a controlled
+integration experiment: production promotion requires the interoperability,
+certificate, reconnect, packaging, and platform evidence listed below.
 
 ## Consequences
 
 The process boundary can contain native crashes and allows bounded graceful
 shutdown followed by forced termination. It also adds packaging, IPC, and
-framebuffer-copy work. A real engine experiment must measure input latency,
-resize behavior, clipboard, reconnect, audio, certificate handling, and
-Windows interoperability before the adapter is promoted.
+framebuffer-copy work. The UI offers explicit user-triggered reconnect after a
+helper failure; it does not run an unbounded background reconnect loop. A real
+engine experiment must measure input latency, resize behavior, clipboard,
+reconnect, audio, certificate handling, and Windows interoperability before
+the adapter is promoted.
 
 The protocol-independent contract tests run without spawning a process or
 reading host configuration. The helper's EOF smoke test also avoids sockets.

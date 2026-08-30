@@ -831,6 +831,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const [dimensions, setDimensions] = useState({ width: request.width, height: request.height });
   const [remoteClipboard, setRemoteClipboard] = useState<string | null>(null);
   const [clipboardCopied, setClipboardCopied] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -846,6 +847,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     };
 
     const sendResize = () => {
+      if (request.protocol === "vnc") return;
       const width = Math.max(320, Math.min(4096, Math.round(host.clientWidth)));
       const height = Math.max(200, Math.min(4096, Math.round(host.clientHeight)));
       setDimensions({ width, height });
@@ -871,6 +873,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     };
 
     const boot = async () => {
+      setError(null);
+      setRemoteClipboard(null);
+      setClipboardCopied(false);
       onStatusChange(workspaceId, "starting");
       if (!IS_TAURI) {
         setError(`${request.protocol.toUpperCase()} requires the desktop runtime; browser preview does not open remote hosts.`);
@@ -920,7 +925,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       onNativeTerminalId(workspaceId, null);
       if (IS_TAURI && sessionId) void invoke("remote_desktop_stop", { sessionId });
     };
-  }, [instanceKey, onNativeTerminalId, onStatusChange, request, workspaceId]);
+  }, [connectAttempt, instanceKey, onNativeTerminalId, onStatusChange, request, workspaceId]);
 
   const copyRemoteClipboard = async () => {
     if (remoteClipboard === null) return;
@@ -965,7 +970,8 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
     <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
     {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button></div>}
-    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small>{error && <span className="remote-desktop-error">{error}</span>}</div>
+    {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
+    <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small></div>
   </div>;
 }
 

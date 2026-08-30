@@ -81,10 +81,12 @@ server-side resize are reported rather than simulated.
 
 `tools/vnc-helper/tests/local_vnc.rs` runs a deterministic no-auth RFB fixture
 on an OS-assigned `127.0.0.1` port and verifies handshake, framebuffer, key,
-pointer, and clean stop. This is meaningful protocol evidence, but it is not
-yet cross-platform interoperability or a production UI integration. The
-research working notes remain in `research_vnc_integration/`, and VNC must not
-be advertised as shipped until the parent supervisor/renderer, reconnect,
-packaging, and Windows/Linux/macOS checks are complete. The parent UI now
-surfaces remote clipboard events as an explicit “Copy text” action without
-automatically touching the local clipboard.
+pointer, and clean stop. The current Tauri UI is wired to the parent
+supervisor/renderer and offers explicit user-triggered reconnect after helper
+failure, but this is not yet cross-platform interoperability or production
+evidence. The research working notes remain in
+`research_vnc_integration/`, and VNC must not be advertised as shipped until
+packaging and Windows/Linux/macOS checks are complete. The parent UI surfaces
+remote clipboard events as an explicit “Copy text” action without
+automatically touching the local clipboard; server-side resize remains
+capability-dependent and is reported rather than simulated.
