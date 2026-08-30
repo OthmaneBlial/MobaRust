@@ -187,6 +187,13 @@ repository-local checks but is not staged into normal application bundles.
 Reconsider packaging only after selecting a maintained, audited engine or
 dependency path.
 
+For development-only parent-process experiments, `cargo xtask stage-rdp-helper`
+explicitly builds and stages the candidate under the repository's ignored
+helper directory. The normal `stage-helpers`, `package-check`, and release
+paths continue to remove or exclude it. This makes the existing Tauri/helper
+wire path runnable when a disposable RDP fixture is later available without
+silently turning the audited candidate into a shipped dependency.
+
 ```text
 MobaRust Rust core
   -> start / configure / resize / key / pointer / clipboard / stop

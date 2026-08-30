@@ -151,6 +151,8 @@ The validation path uses isolated home/XDG directories, repository-owned or disp
 
 `package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. They do not claim notarization, cross-platform release support, or RDP/VNC interoperability.
 
+The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first; this does not make RDP production-ready, bypass its separate dependency audit, or provide Windows/Linux interoperability evidence.
+
 ## Architecture at a glance
 
 ```text

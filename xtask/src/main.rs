@@ -20,6 +20,7 @@ fn main() {
         "verify-platform-layout" => verify_platform_layout_command(arguments.collect()),
         "portable-check" => portable_check(),
         "stage-helpers" => stage_helpers(),
+        "stage-rdp-helper" => stage_experimental_rdp_helper(),
         "pre-push-check" => pre_push_check(),
         "verify-checksum" => verify_checksum_command(arguments.collect()),
         "help" | "--help" | "-h" => {
@@ -42,6 +43,9 @@ fn main() {
             );
             println!(
                 "cargo xtask stage-helpers    Build and stage ignored desktop helper resources"
+            );
+            println!(
+                "cargo xtask stage-rdp-helper    Explicitly stage the isolated RDP candidate for local development"
             );
             println!(
                 "cargo xtask pre-push-check    Audit the local Git payload without network access"
@@ -77,53 +81,94 @@ fn stage_helpers() -> Result<(), String> {
     remove_unshippable_rdp_helper(&staging_directory, executable_suffix)?;
 
     for (manifest, binary) in helpers {
-        let manifest_path = repository_root.join(manifest);
-        let mut command = Command::new("cargo");
-        sanitize_process_environment(&mut command);
-        let isolated_home = create_sanitized_test_home()?;
-        apply_isolated_home(&mut command, &isolated_home);
-        let status = command
-            .args(["build", "--locked", "--release", "--manifest-path"])
-            .arg(&manifest_path)
-            .current_dir(&repository_root)
-            .status()
-            .map_err(|error| format!("could not build {binary}: {error}"));
-        let cleanup = fs::remove_dir_all(&isolated_home)
-            .map_err(|error| format!("could not remove temporary helper home: {error}"));
-        cleanup?;
-        let status = status?;
-        if !status.success() {
-            return Err(format!(
-                "cargo failed while building {binary} with {status}"
-            ));
-        }
-        let source = manifest_path
-            .parent()
-            .ok_or_else(|| format!("helper manifest has no parent: {}", manifest_path.display()))?
-            .join("target/release")
-            .join(format!("{binary}{executable_suffix}"));
-        let source_metadata = fs::symlink_metadata(&source).map_err(|error| {
-            format!(
-                "could not inspect built {binary} at {}: {error}",
-                source.display()
-            )
-        })?;
-        if !source_metadata.file_type().is_file() {
-            return Err(format!(
-                "built {binary} is not a regular file: {}",
-                source.display()
-            ));
-        }
-        let destination = staging_directory.join(format!("{binary}{executable_suffix}"));
-        fs::copy(&source, &destination).map_err(|error| {
-            format!(
-                "could not stage {binary} from {} to {}: {error}",
-                source.display(),
-                destination.display()
-            )
-        })?;
-        println!("staged {}", destination.display());
+        build_and_stage_helper(
+            &repository_root,
+            &staging_directory,
+            manifest,
+            binary,
+            executable_suffix,
+        )?;
     }
+    Ok(())
+}
+
+/// Explicitly stage the isolated RDP candidate for a local development run.
+///
+/// Normal application preparation never calls this path: the candidate has a
+/// separate dependency audit and is intentionally excluded from distributable
+/// bundles until that gate and real interoperability evidence are complete.
+fn stage_experimental_rdp_helper() -> Result<(), String> {
+    let repository_root = repository_root()?;
+    let staging_directory = repository_root.join("apps/desktop/src-tauri/helpers");
+    fs::create_dir_all(&staging_directory)
+        .map_err(|error| format!("could not create helper staging directory: {error}"))?;
+    let executable_suffix = if cfg!(windows) { ".exe" } else { "" };
+    build_and_stage_helper(
+        &repository_root,
+        &staging_directory,
+        "tools/rdp-helper/Cargo.toml",
+        "mobarust-rdp-helper",
+        executable_suffix,
+    )?;
+    println!(
+        "staged experimental RDP helper for local development only; normal bundles still exclude it"
+    );
+    Ok(())
+}
+
+fn build_and_stage_helper(
+    repository_root: &Path,
+    staging_directory: &Path,
+    manifest: &str,
+    binary: &str,
+    executable_suffix: &str,
+) -> Result<(), String> {
+    let manifest_path = repository_root.join(manifest);
+    let mut command = Command::new("cargo");
+    sanitize_process_environment(&mut command);
+    let isolated_home = create_sanitized_test_home()?;
+    apply_isolated_home(&mut command, &isolated_home);
+    let status = command
+        .args(["build", "--locked", "--release", "--manifest-path"])
+        .arg(&manifest_path)
+        .current_dir(repository_root)
+        .status()
+        .map_err(|error| format!("could not build {binary}: {error}"));
+    let cleanup = fs::remove_dir_all(&isolated_home)
+        .map_err(|error| format!("could not remove temporary helper home: {error}"));
+    cleanup?;
+    let status = status?;
+    if !status.success() {
+        return Err(format!(
+            "cargo failed while building {binary} with {status}"
+        ));
+    }
+    let source = manifest_path
+        .parent()
+        .ok_or_else(|| format!("helper manifest has no parent: {}", manifest_path.display()))?
+        .join("target/release")
+        .join(format!("{binary}{executable_suffix}"));
+    let source_metadata = fs::symlink_metadata(&source).map_err(|error| {
+        format!(
+            "could not inspect built {binary} at {}: {error}",
+            source.display()
+        )
+    })?;
+    if !source_metadata.file_type().is_file() {
+        return Err(format!(
+            "built {binary} is not a regular file: {}",
+            source.display()
+        ));
+    }
+    let destination = staging_directory.join(format!("{binary}{executable_suffix}"));
+    fs::copy(&source, &destination).map_err(|error| {
+        format!(
+            "could not stage {binary} from {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    println!("staged {}", destination.display());
     Ok(())
 }
 
