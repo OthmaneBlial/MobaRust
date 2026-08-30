@@ -28,6 +28,6 @@
   "bundle": {
     "active": true,
     "resources": ["helpers/*"],
-    "icon": []
+    "icon": ["icons/icon.png"]
   }
 }
