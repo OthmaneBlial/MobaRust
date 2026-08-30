@@ -544,6 +544,7 @@ async fn read_helper_events(
     supervisor: Arc<Mutex<HelperSupervisor>>,
     capability_requirements: HelperCapabilityRequirements,
 ) {
+    let mut capabilities_seen = false;
     loop {
         let frame = match read_frame(&mut stdout).await {
             Ok(Some(frame)) => frame,
@@ -603,25 +604,28 @@ async fn read_helper_events(
                 break;
             }
         };
-        if let Err(message) = validate_helper_event(&event, capability_requirements) {
-            if claim_unexpected_helper_exit(&stop_requested) {
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::Diagnostic {
-                        level: mobarust_remote_desktop::DiagnosticLevel::Error,
-                        message: message.into(),
-                    },
-                );
-                emit_helper_event(
-                    &app,
-                    &session_id,
-                    HelperEvent::State {
-                        state: mobarust_remote_desktop::HelperState::Failed,
-                    },
-                );
+        match validate_helper_event(&event, capability_requirements, capabilities_seen) {
+            Ok(seen) => capabilities_seen = seen,
+            Err(message) => {
+                if claim_unexpected_helper_exit(&stop_requested) {
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::Diagnostic {
+                            level: mobarust_remote_desktop::DiagnosticLevel::Error,
+                            message: message.into(),
+                        },
+                    );
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::State {
+                            state: mobarust_remote_desktop::HelperState::Failed,
+                        },
+                    );
+                }
+                break;
             }
-            break;
         }
         emit_helper_event(&app, &session_id, event.clone());
         if matches!(
@@ -647,12 +651,21 @@ async fn read_helper_events(
 fn validate_helper_event(
     event: &HelperEvent,
     requirements: HelperCapabilityRequirements,
-) -> Result<(), &'static str> {
+    capabilities_seen: bool,
+) -> Result<bool, &'static str> {
     match event {
         HelperEvent::Capabilities { capabilities } => {
-            validate_helper_capabilities(capabilities, requirements)
+            validate_helper_capabilities(capabilities, requirements)?;
+            Ok(true)
         }
-        _ => Ok(()),
+        HelperEvent::Framebuffer { .. }
+        | HelperEvent::Clipboard { .. }
+        | HelperEvent::State {
+            state: mobarust_remote_desktop::HelperState::Active,
+        } if !capabilities_seen => {
+            Err("remote desktop helper sent active data before reporting capabilities")
+        }
+        _ => Ok(capabilities_seen),
     }
 }
 
@@ -749,14 +762,18 @@ mod tests {
             gateway: false,
             color_depth: Some(32),
         };
-        assert!(validate_helper_event(&rdp_capabilities, rdp_requirements).is_ok());
+        assert_eq!(
+            validate_helper_event(&rdp_capabilities, rdp_requirements, false),
+            Ok(true)
+        );
         assert!(
             validate_helper_event(
                 &rdp_capabilities,
                 HelperCapabilityRequirements {
                     protocol: DesktopProtocol::Vnc,
                     ..rdp_requirements
-                }
+                },
+                false,
             )
             .is_err()
         );
@@ -776,6 +793,7 @@ mod tests {
                     gateway: false,
                     color_depth: None,
                 },
+                false,
             )
             .is_ok()
         );
@@ -798,8 +816,29 @@ mod tests {
                     state: HelperState::Ready,
                 },
                 rdp_requirements,
+                false,
             )
             .is_ok()
+        );
+        assert!(
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Active,
+                },
+                rdp_requirements,
+                false,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Active,
+                },
+                rdp_requirements,
+                true,
+            ),
+            Ok(true)
         );
     }
 

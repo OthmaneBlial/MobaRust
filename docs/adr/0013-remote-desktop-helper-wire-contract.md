@@ -33,7 +33,9 @@ messages before a process is started:
   from a protocol feature flag, while the native parent rejects a report for
   a protocol or requested feature other than the one requested at session
   start; RDP capability depth entries are validated against the shared `16` or
-  `32`-bit contract before they can cross the boundary;
+  `32`-bit contract before they can cross the boundary, and active framebuffer,
+  clipboard, or `Active` state events are rejected until one validated report
+  has been received;
 - envelopes and every deserialized payload reject unknown fields, so a
   malformed or newer-incompatible helper message fails closed instead of
   silently discarding data;

@@ -116,7 +116,9 @@ The parent also verifies requested clipboard, audio, Gateway, and RDP color
 depth capabilities before forwarding the report. The UI can show the actual
 platform backend and disable unsupported clipboard actions before a user
 attempts them. A mismatched report fails the session locally and is never
-treated as proof of a different protocol or feature.
+treated as proof of a different protocol or feature. The parent also refuses
+active framebuffer, clipboard, or `Active` state events until a valid report
+has arrived.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
