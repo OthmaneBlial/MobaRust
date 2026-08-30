@@ -1,7 +1,7 @@
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperLaunchConfig,
-    HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
+    HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
+    MAX_HOST_BYTES, MAX_USERNAME_BYTES, decode_event_frame, encode_command_frame, read_frame,
     write_frame_with_timeout,
 };
 use mobarust_vault::{CredentialId, CredentialLookup};
@@ -154,6 +154,10 @@ impl RemoteDesktopManager {
         );
         let sessions = Arc::clone(&self.sessions);
         let reader_session_id = session_id.clone();
+        let writer_app = app.clone();
+        let writer_session_id = session_id.clone();
+        let writer_supervisor = Arc::clone(&supervisor);
+        let writer_stop_requested = Arc::clone(&stop_requested);
         tokio::spawn(read_helper_events(
             app,
             reader_session_id,
@@ -161,7 +165,14 @@ impl RemoteDesktopManager {
             sessions,
             stop_requested,
         ));
-        tokio::spawn(write_helper_commands(stdin, command_rx));
+        tokio::spawn(write_helper_commands(
+            writer_app,
+            writer_session_id,
+            stdin,
+            command_rx,
+            writer_supervisor,
+            writer_stop_requested,
+        ));
 
         Ok(RemoteDesktopConnectResponse {
             session_id,
@@ -328,16 +339,69 @@ fn protocol_name(protocol: DesktopProtocol) -> &'static str {
 }
 
 async fn write_helper_commands<W: AsyncWrite + Unpin>(
+    app: AppHandle,
+    session_id: String,
     mut stdin: W,
     mut commands: mpsc::Receiver<HelperCommand>,
+    supervisor: Arc<Mutex<HelperSupervisor>>,
+    stop_requested: Arc<AtomicBool>,
 ) {
     while let Some(command) = commands.recv().await {
-        let Ok(frame) = encode_command_frame(&command) else {
-            break;
+        let frame = match encode_command_frame(&command) {
+            Ok(frame) => frame,
+            Err(error) => {
+                report_helper_input_failure(
+                    &app,
+                    &session_id,
+                    &supervisor,
+                    &stop_requested,
+                    &error,
+                )
+                .await;
+                break;
+            }
         };
-        if write_frame_with_timeout(&mut stdin, &frame).await.is_err() {
+        if let Err(error) = write_frame_with_timeout(&mut stdin, &frame).await {
+            report_helper_input_failure(&app, &session_id, &supervisor, &stop_requested, &error)
+                .await;
             break;
         }
+    }
+}
+
+async fn report_helper_input_failure(
+    app: &AppHandle,
+    session_id: &str,
+    supervisor: &Arc<Mutex<HelperSupervisor>>,
+    stop_requested: &Arc<AtomicBool>,
+    error: &HelperProtocolError,
+) {
+    if !should_report_unexpected_helper_exit(stop_requested) {
+        return;
+    }
+    stop_requested.store(true, Ordering::Release);
+    emit_helper_event(
+        app,
+        session_id,
+        HelperEvent::Diagnostic {
+            level: mobarust_remote_desktop::DiagnosticLevel::Error,
+            message: helper_input_failure_message(error).into(),
+        },
+    );
+    emit_helper_event(
+        app,
+        session_id,
+        HelperEvent::State {
+            state: mobarust_remote_desktop::HelperState::Crashed,
+        },
+    );
+    let _ = supervisor.lock().await.stop(HELPER_GRACE_PERIOD).await;
+}
+
+fn helper_input_failure_message(error: &HelperProtocolError) -> &'static str {
+    match error {
+        HelperProtocolError::PipeWriteTimeout => "remote desktop helper input pipe timed out",
+        _ => "remote desktop helper input pipe failed",
     }
 }
 
@@ -440,10 +504,10 @@ fn should_report_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 mod tests {
     use super::{
         MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-        RemoteDesktopConnectRequest, should_report_unexpected_helper_exit,
-        validate_helper_resource, validate_request,
+        RemoteDesktopConnectRequest, helper_input_failure_message,
+        should_report_unexpected_helper_exit, validate_helper_resource, validate_request,
     };
-    use mobarust_remote_desktop::DesktopProtocol;
+    use mobarust_remote_desktop::{DesktopProtocol, HelperProtocolError};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
@@ -458,6 +522,18 @@ mod tests {
         assert!(!should_report_unexpected_helper_exit(&stop_requested));
         stop_requested.store(false, Ordering::Release);
         assert!(should_report_unexpected_helper_exit(&stop_requested));
+    }
+
+    #[test]
+    fn helper_pipe_failure_messages_are_stable_and_do_not_echo_details() {
+        assert_eq!(
+            helper_input_failure_message(&HelperProtocolError::PipeWriteTimeout),
+            "remote desktop helper input pipe timed out"
+        );
+        let message =
+            helper_input_failure_message(&HelperProtocolError::Io("private helper detail".into()));
+        assert_eq!(message, "remote desktop helper input pipe failed");
+        assert!(!message.contains("private helper detail"));
     }
 
     fn request(protocol: DesktopProtocol, username: &str) -> RemoteDesktopConnectRequest {

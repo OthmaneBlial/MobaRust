@@ -74,7 +74,10 @@ The shared native helper contract also puts a two-second deadline on control,
 credential, and event pipe writes. The deadline is tested with a deliberately
 backpressured in-memory pipe so cancellation cannot depend on a responsive
 peer. It protects helper lifecycle only; it does not prove VNC network
-throughput or cross-platform interoperability.
+throughput or cross-platform interoperability. If the parent-side input writer
+fails, the desktop boundary emits a stable redacted diagnostic, transitions
+the session to `Crashed`, and invokes bounded helper stop/reap cleanup without
+echoing technical error details or secrets into the UI.
 
 ## Isolated implementation experiment
 

@@ -170,6 +170,11 @@ task blocked forever; the process supervisor remains responsible for the
 bounded stop and forced-reap fallback. This is local IPC evidence, not RDP
 interoperability evidence.
 
+If the parent-side input writer fails, the desktop boundary emits a stable
+redacted diagnostic, transitions the session to `Crashed`, and invokes the same
+bounded helper stop/reap path. This keeps local IPC failure visible without
+echoing technical error details or secrets into the UI.
+
 The desktop canvas uses a framebuffer-aware input map. When `object-fit:
 contain` adds letterbox bands, clicks and wheel events in those bands are
 discarded instead of being mapped to a misleading remote pixel. Pointer
