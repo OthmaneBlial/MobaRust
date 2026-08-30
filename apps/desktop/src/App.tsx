@@ -234,6 +234,13 @@ type SavedSession = {
     line_ending: "none" | "cr-lf" | "cr" | "lf";
   } | null;
   jump_host_profiles?: SavedJumpHost[];
+  remote_desktop_profile?: {
+    domain?: string | null;
+    width: number;
+    height: number;
+    color_depth: number;
+    audio_enabled: boolean;
+  } | null;
   auth: SavedAuth;
 };
 
@@ -1338,7 +1345,7 @@ function App() {
     }
   }, [refreshSavedSessions]);
 
-  const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest) => {
+  const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest, offerSave = true) => {
     setConnectionError(null);
     setSessionNotice(null);
     const terminal = createWorkspaceTerminal({
@@ -1354,7 +1361,19 @@ function App() {
     setActiveView("terminal");
     setQuickConnectOpen(false);
     setSessionNotice(`${request.protocol.toUpperCase()} session queued. The native helper will report its actual connection state.`);
-  }, []);
+    if (offerSave && IS_TAURI) {
+      const suggestedName = `${request.username ? `${request.username}@` : ""}${request.host}`;
+      const name = window.prompt(`Save this ${request.protocol.toUpperCase()} session as`, suggestedName);
+      if (name?.trim()) {
+        void invoke("session_save_remote_desktop", { payload: { name: name.trim(), request } })
+          .then(() => {
+            refreshSavedSessions();
+            setSessionNotice(`Queued ${request.protocol.toUpperCase()} session and saved ${name.trim()}.`);
+          })
+          .catch((error) => setConnectionError(`Queued, but the session could not be saved: ${String(error)}`));
+      }
+    }
+  }, [refreshSavedSessions]);
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
@@ -1456,13 +1475,39 @@ function App() {
       }, false);
       return;
     }
+    if (session.protocol === "RDP" || session.protocol === "VNC") {
+      const profile = session.remote_desktop_profile;
+      if (!profile || session.port === 0) {
+        setConnectionError("This remote desktop profile has no saved display parameters.");
+        return;
+      }
+      const protocol = session.protocol.toLowerCase() as DesktopProtocol;
+      const credentialId = session.auth.kind === "password" ? session.auth.credentialRef : undefined;
+      if (protocol === "rdp" && (!session.username?.trim() || !credentialId?.trim())) {
+        setConnectionError("This RDP profile has no complete username or credential reference.");
+        return;
+      }
+      connectRemoteDesktop({
+        protocol,
+        host: session.hostname,
+        port: session.port,
+        username: session.username ?? "",
+        domain: profile.domain ?? undefined,
+        credentialId,
+        width: profile.width,
+        height: profile.height,
+        colorDepth: profile.color_depth,
+        audioEnabled: profile.audio_enabled,
+      }, false);
+      return;
+    }
     const request = requestFromSavedSession(session, savedSessions);
     if (!request) {
       setConnectionError("This saved session uses an authentication method that is not available yet.");
       return;
     }
     void connectSsh(request, false);
-  }, [connectSerial, connectSsh, savedSessions]);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, savedSessions]);
 
   const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
     const targets = [...new Set(targetIds)].map((workspaceId) => ({

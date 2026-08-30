@@ -670,6 +670,7 @@ impl SessionStore {
                 jump_host_profiles: Vec::new(),
                 notes,
                 serial_profile: None,
+                remote_desktop_profile: None,
             });
         }
 
@@ -842,8 +843,8 @@ impl SessionStore {
 mod tests {
     use super::*;
     use mobarust_core::{
-        AuthMethod, JumpHostRecord, MacroAction, MacroKey, MacroRecord, Protocol, SessionRecord,
-        SnippetRecord,
+        AuthMethod, JumpHostRecord, MacroAction, MacroKey, MacroRecord, Protocol,
+        RemoteDesktopProfile, SessionRecord, SnippetRecord,
     };
     use tempfile::tempdir;
 
@@ -870,6 +871,7 @@ mod tests {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            remote_desktop_profile: None,
         }
     }
 
@@ -887,6 +889,32 @@ mod tests {
 
         let reopened = SessionStore::open(&path).unwrap();
         assert_eq!(reopened.list(), &[session]);
+    }
+
+    #[test]
+    fn remote_desktop_profiles_persist_metadata_and_opaque_credentials_only() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let mut store = SessionStore::open(&path).unwrap();
+        let mut session = remote_session();
+        session.protocol = Protocol::Vnc;
+        session.auth = AuthMethod::Password {
+            credential_ref: "vnc-password-ref".into(),
+        };
+        session.remote_desktop_profile = Some(RemoteDesktopProfile {
+            domain: None,
+            width: 1280,
+            height: 800,
+            color_depth: 32,
+            audio_enabled: false,
+        });
+        store.save(session.clone()).unwrap();
+
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("remote_desktop_profile"));
+        assert!(json.contains("vnc-password-ref"));
+        assert!(!json.contains("super-secret"));
+        assert_eq!(SessionStore::open(&path).unwrap().list(), &[session]);
     }
 
     #[test]

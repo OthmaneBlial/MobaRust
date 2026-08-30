@@ -8,7 +8,8 @@ mod telnet;
 mod terminal;
 
 use mobarust_core::{
-    AppSettings, AuthMethod, JumpHostRecord, Protocol, SerialProfile, SessionId, SessionRecord,
+    AppSettings, AuthMethod, JumpHostRecord, Protocol, RemoteDesktopProfile, SerialProfile,
+    SessionId, SessionRecord,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_remote_desktop::HelperCommand;
@@ -58,6 +59,13 @@ struct SaveSshSessionRequest {
 struct SaveSerialSessionRequest {
     name: String,
     request: SerialConnectRequest,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveRemoteDesktopSessionRequest {
+    name: String,
+    request: RemoteDesktopConnectRequest,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -695,6 +703,7 @@ fn session_save_ssh(
             .collect::<Result<Vec<_>, String>>()?,
         notes: None,
         serial_profile: None,
+        remote_desktop_profile: None,
     };
     store
         .lock()
@@ -742,6 +751,67 @@ fn session_save_serial(
                 mobarust_serial::LineEnding::Lf => "lf",
             }
             .into(),
+        }),
+        remote_desktop_profile: None,
+    };
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .save(session)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_save_remote_desktop(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: SaveRemoteDesktopSessionRequest,
+) -> Result<SessionRecord, String> {
+    remote_desktop::validate_request(&payload.request)?;
+    let SaveRemoteDesktopSessionRequest { name, request } = payload;
+    let protocol = match request.protocol {
+        mobarust_remote_desktop::DesktopProtocol::Rdp => Protocol::Rdp,
+        mobarust_remote_desktop::DesktopProtocol::Vnc => Protocol::Vnc,
+    };
+    let protocol_tag = match request.protocol {
+        mobarust_remote_desktop::DesktopProtocol::Rdp => "rdp",
+        mobarust_remote_desktop::DesktopProtocol::Vnc => "vnc",
+    };
+    let credential_ref = request.credential_id.unwrap_or_default().trim().to_owned();
+    let auth = if credential_ref.is_empty() {
+        if protocol == Protocol::Rdp {
+            return Err("RDP requires a saved credential reference".into());
+        }
+        AuthMethod::None
+    } else {
+        CredentialId::new(&credential_ref).map_err(|error| error.to_string())?;
+        AuthMethod::Password { credential_ref }
+    };
+    let session = SessionRecord {
+        id: SessionId::new(),
+        name,
+        protocol,
+        hostname: request.host,
+        port: request.port,
+        username: (!request.username.trim().is_empty()).then_some(request.username),
+        auth,
+        known_hosts_path: None,
+        pinned_fingerprint: None,
+        folder: Some("Remote desktops".into()),
+        tags: vec![protocol_tag.into()],
+        favorite: false,
+        startup_directory: None,
+        startup_command: None,
+        environment: Vec::new(),
+        jump_hosts: Vec::new(),
+        jump_host_profiles: Vec::new(),
+        notes: None,
+        serial_profile: None,
+        remote_desktop_profile: Some(RemoteDesktopProfile {
+            domain: request.domain,
+            width: request.width,
+            height: request.height,
+            color_depth: request.color_depth,
+            audio_enabled: request.audio_enabled,
         }),
     };
     store
@@ -1328,6 +1398,7 @@ fn main() {
             macro_delete,
             session_save_ssh,
             session_save_serial,
+            session_save_remote_desktop,
             session_delete,
             network_resolve_host,
             network_check_tcp,

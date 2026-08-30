@@ -87,6 +87,31 @@ impl SerialProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteDesktopProfile {
+    pub domain: Option<String>,
+    pub width: u16,
+    pub height: u16,
+    pub color_depth: u16,
+    pub audio_enabled: bool,
+}
+
+impl RemoteDesktopProfile {
+    pub fn validate(&self) -> Result<(), SessionValidationError> {
+        if !(320..=16_384).contains(&self.width)
+            || !(200..=16_384).contains(&self.height)
+            || self.color_depth == 0
+            || self
+                .domain
+                .as_deref()
+                .is_some_and(|domain| domain.chars().any(char::is_control))
+        {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JumpHostRecord {
     pub host: String,
     pub port: u16,
@@ -123,6 +148,8 @@ pub struct SessionRecord {
     pub notes: Option<String>,
     #[serde(default)]
     pub serial_profile: Option<SerialProfile>,
+    #[serde(default)]
+    pub remote_desktop_profile: Option<RemoteDesktopProfile>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -137,6 +164,8 @@ pub enum SessionValidationError {
     EmptyTag,
     #[error("serial profile is invalid")]
     InvalidSerialProfile,
+    #[error("remote desktop profile is invalid")]
+    InvalidRemoteDesktopProfile,
 }
 
 impl SessionRecord {
@@ -161,6 +190,7 @@ impl SessionRecord {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            remote_desktop_profile: None,
         }
     }
 
@@ -182,6 +212,9 @@ impl SessionRecord {
             (Protocol::Serial, None) => return Err(SessionValidationError::InvalidSerialProfile),
             (_, Some(profile)) => profile.validate()?,
             (_, None) => {}
+        }
+        if let Some(profile) = &self.remote_desktop_profile {
+            profile.validate()?
         }
         Ok(())
     }
@@ -221,6 +254,7 @@ mod tests {
             jump_host_profiles: Vec::new(),
             notes: None,
             serial_profile: None,
+            remote_desktop_profile: None,
         };
 
         assert_eq!(session.validate(), Err(SessionValidationError::MissingPort));
@@ -243,6 +277,27 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(SessionValidationError::InvalidSerialProfile)
+        );
+    }
+
+    #[test]
+    fn remote_desktop_profile_rejects_unsafe_dimensions() {
+        let profile = RemoteDesktopProfile {
+            domain: Some("LAB".into()),
+            width: 1280,
+            height: 800,
+            color_depth: 32,
+            audio_enabled: false,
+        };
+        profile.validate().unwrap();
+
+        let invalid = RemoteDesktopProfile {
+            width: 319,
+            ..profile
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(SessionValidationError::InvalidRemoteDesktopProfile)
         );
     }
 }

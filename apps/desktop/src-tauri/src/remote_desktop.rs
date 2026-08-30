@@ -224,7 +224,7 @@ pub fn helper_program(app: &AppHandle, protocol: DesktopProtocol) -> Result<Path
     Ok(program)
 }
 
-fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<(), String> {
+pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<(), String> {
     if request.host.trim().is_empty()
         || request.host.chars().any(char::is_control)
         || request.port == 0
