@@ -39,8 +39,9 @@ messages before a process is started:
 - envelopes and every deserialized payload reject unknown fields, so a
   malformed or newer-incompatible helper message fails closed instead of
   silently discarding data;
-- the parent requires `Hello` as the first event and rejects duplicate
-  handshakes or active data that arrives before a validated capability report;
+- the parent requires `Hello` as the first event, `Ready` before each
+  capability report, and rejects duplicate handshakes or active data that
+  arrives before a validated capability report;
 - framebuffer and clipboard data are accepted only after the corresponding
   attempt has entered `Active`; a `Reconnecting` event starts a fresh
   capability-to-active sequence, so stale data cannot cross the boundary while

@@ -114,6 +114,7 @@ enum HelperDataPhase {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct HelperEventProgress {
     hello_seen: bool,
+    ready_seen: bool,
     capabilities_seen: bool,
     data_phase: HelperDataPhase,
     reported_capabilities: Option<HelperCapabilities>,
@@ -779,7 +780,13 @@ fn validate_helper_event(
             Ok(progress)
         }
         HelperEvent::Capabilities { capabilities } => {
+            if !progress.ready_seen {
+                return Err("remote desktop helper reported capabilities before ready state");
+            }
             if progress.data_phase == HelperDataPhase::Active {
+                return Err("remote desktop helper sent a duplicate capability report");
+            }
+            if progress.data_phase == HelperDataPhase::AwaitingActive {
                 return Err("remote desktop helper sent a duplicate capability report");
             }
             validate_helper_capabilities(capabilities, requirements)?;
@@ -789,8 +796,15 @@ fn validate_helper_event(
             Ok(progress)
         }
         HelperEvent::State {
+            state: mobarust_remote_desktop::HelperState::Ready,
+        } => {
+            progress.ready_seen = true;
+            Ok(progress)
+        }
+        HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Reconnecting,
         } => {
+            progress.ready_seen = false;
             progress.data_phase = HelperDataPhase::AwaitingCapabilities;
             progress.reported_capabilities = None;
             Ok(progress)
@@ -1000,8 +1014,17 @@ mod tests {
         )
         .unwrap();
         assert!(handshake.hello_seen);
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            rdp_requirements,
+            handshake.clone(),
+        )
+        .unwrap();
+        assert!(ready.ready_seen);
         let rdp_progress =
-            validate_helper_event(&rdp_capabilities, rdp_requirements, handshake.clone()).unwrap();
+            validate_helper_event(&rdp_capabilities, rdp_requirements, ready.clone()).unwrap();
         assert!(rdp_progress.capabilities_seen);
         assert_eq!(rdp_progress.data_phase, HelperDataPhase::AwaitingActive);
         assert!(
@@ -1011,7 +1034,7 @@ mod tests {
                     protocol: DesktopProtocol::Vnc,
                     ..rdp_requirements
                 },
-                handshake.clone(),
+                ready.clone(),
             )
             .is_err()
         );
@@ -1031,7 +1054,7 @@ mod tests {
                     gateway: false,
                     color_depth: None,
                 },
-                handshake.clone(),
+                ready.clone(),
             )
             .is_ok()
         );
@@ -1114,7 +1137,15 @@ mod tests {
         let capabilities = HelperEvent::Capabilities {
             capabilities: HelperCapabilities::rdp(),
         };
-        let awaiting_active = validate_helper_event(&capabilities, requirements, hello).unwrap();
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            hello,
+        )
+        .unwrap();
+        let awaiting_active = validate_helper_event(&capabilities, requirements, ready).unwrap();
         let framebuffer = HelperEvent::Framebuffer {
             width: 1,
             height: 1,
@@ -1158,8 +1189,15 @@ mod tests {
             .is_err()
         );
 
-        let awaiting_active =
-            validate_helper_event(&capabilities, requirements, reconnecting).unwrap();
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            reconnecting,
+        )
+        .unwrap();
+        let awaiting_active = validate_helper_event(&capabilities, requirements, ready).unwrap();
         let active = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Active,
@@ -1193,7 +1231,15 @@ mod tests {
             Default::default(),
         )
         .unwrap();
-        let progress = validate_helper_event(&capability_event, requirements, handshake).unwrap();
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            handshake,
+        )
+        .unwrap();
+        let progress = validate_helper_event(&capability_event, requirements, ready).unwrap();
         let progress = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Active,
@@ -1213,17 +1259,26 @@ mod tests {
         assert!(error.contains("clipboard capability"));
 
         capabilities.clipboard = true;
+        let handshake = validate_helper_event(
+            &HelperEvent::Hello {
+                version: WIRE_VERSION,
+            },
+            requirements,
+            Default::default(),
+        )
+        .unwrap();
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            handshake,
+        )
+        .unwrap();
         let progress = validate_helper_event(
             &HelperEvent::Capabilities { capabilities },
             requirements,
-            validate_helper_event(
-                &HelperEvent::Hello {
-                    version: WIRE_VERSION,
-                },
-                requirements,
-                Default::default(),
-            )
-            .unwrap(),
+            ready,
         )
         .unwrap();
         let progress = validate_helper_event(
