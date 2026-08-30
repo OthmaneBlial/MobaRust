@@ -21,6 +21,9 @@ diagnostics. Credentials are sent through a protected native channel and never
 appear in process arguments, environment variables, or logs. Credential frames
 are encoded by reference and the credential/clipboard command types are
 deliberately not cloneable, which reduces accidental plaintext duplication.
+Pointer and wheel coordinates are clamped to the current negotiated display
+inside the helper, so an IPC resize race cannot forward an out-of-surface
+coordinate and a release event is not discarded.
 
 ## Rationale
 

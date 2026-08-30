@@ -666,12 +666,14 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(false)
         }
         HelperCommand::Pointer { x, y, buttons } => {
+            let (x, y) = bounded_rdp_point(x, y, *current_display);
             let events = pointer_events(x, y, buttons, *last_buttons);
             send_rdp_input(input_tx, RdpInputEvent::FastPath(events))?;
             *last_buttons = buttons;
             Ok(false)
         }
         HelperCommand::Wheel { x, y, delta } => {
+            let (x, y) = bounded_rdp_point(x, y, *current_display);
             send_rdp_input(
                 input_tx,
                 RdpInputEvent::FastPath(smallvec::smallvec![wheel_event(x, y, delta),]),
@@ -703,6 +705,18 @@ async fn handle_command<W: AsyncWrite + Unpin>(
 
 fn rdp_keyboard_scancode(scancode: u32) -> Option<(u8, bool)> {
     rdp_scancode_parts(scancode)
+}
+
+/// Keep pointer coordinates inside the currently negotiated desktop surface.
+///
+/// The Tauri boundary uses u16 values, but that type alone still permits a
+/// coordinate beyond a smaller remote framebuffer after a resize race. Clamp
+/// rather than drop the event so a release can always reach the last pixel.
+fn bounded_rdp_point(x: u16, y: u16, display: DisplaySize) -> (u16, u16) {
+    (
+        x.min(display.width.saturating_sub(1)),
+        y.min(display.height.saturating_sub(1)),
+    )
 }
 
 fn send_rdp_input(
@@ -1527,6 +1541,26 @@ mod tests {
         assert!(
             matches!(events[1], FastPathInputEvent::MouseEvent(MousePdu { flags, .. }) if flags.contains(PointerFlags::LEFT_BUTTON) && flags.contains(PointerFlags::DOWN))
         );
+    }
+
+    #[test]
+    fn pointer_coordinates_are_clamped_to_the_current_display() {
+        let display = DisplaySize {
+            width: 1280,
+            height: 720,
+        };
+        assert_eq!(bounded_rdp_point(0, 0, display), (0, 0));
+        assert_eq!(bounded_rdp_point(65_535, 65_535, display), (1279, 719));
+
+        let events = pointer_events(1279, 719, 0, 0);
+        assert!(matches!(
+            events[0],
+            FastPathInputEvent::MouseEvent(MousePdu {
+                x_position: 1279,
+                y_position: 719,
+                ..
+            })
+        ));
     }
 
     #[test]
