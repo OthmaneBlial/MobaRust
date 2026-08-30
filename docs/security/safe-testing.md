@@ -139,6 +139,13 @@ downloads through the renderer only after the user clicks the action. It does
 not read or include sessions, connection targets, commands, paths, environment
 values, terminal output, logs, or credential material.
 
+The SSH monitor is similarly quiet by default: opening it requests one bounded
+snapshot, while live refresh requires an explicit operator toggle. The only
+allowed refresh periods are 15, 30, and 60 seconds; each request finishes
+before the next timer is scheduled, and leaving the view or changing sessions
+stops future refreshes. The native six-second operation timeout remains the
+backstop for a host that stops responding.
+
 The dependency audit is also local and read-only when run with the cached
 advisory database:
 

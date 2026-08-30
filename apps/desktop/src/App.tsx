@@ -23,6 +23,7 @@ import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
+import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import {
   preserveRemoteDesktopError,
@@ -1450,6 +1451,10 @@ function App() {
   const [remoteMonitor, setRemoteMonitor] = useState<RemoteMonitorSnapshot | null>(null);
   const [remoteMonitorStatus, setRemoteMonitorStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [remoteMonitorError, setRemoteMonitorError] = useState<string | null>(null);
+  const [remoteMonitorLive, setRemoteMonitorLive] = useState(false);
+  const [remoteMonitorIntervalSeconds, setRemoteMonitorIntervalSeconds] = useState<number>(30);
+  const remoteMonitorRequestRef = useRef(false);
+  const remoteMonitorGenerationRef = useRef(0);
   const [networkHost, setNetworkHost] = useState("");
   const [networkPort, setNetworkPort] = useState("22");
   const [networkTimeout, setNetworkTimeout] = useState("1500");
@@ -2709,6 +2714,8 @@ function App() {
       setRemoteMonitorError("Remote monitoring requires the desktop runtime.");
       return;
     }
+    if (remoteMonitorRequestRef.current) return;
+    remoteMonitorRequestRef.current = true;
     setRemoteMonitorStatus("loading");
     setRemoteMonitorError(null);
     try {
@@ -2718,6 +2725,8 @@ function App() {
     } catch (error) {
       setRemoteMonitorStatus("error");
       setRemoteMonitorError(String(error));
+    } finally {
+      remoteMonitorRequestRef.current = false;
     }
   }, [remoteProtocol, remoteSessionId]);
 
@@ -3431,6 +3440,7 @@ function App() {
     setRemoteMonitor(null);
     setRemoteMonitorStatus("idle");
     setRemoteMonitorError(null);
+    setRemoteMonitorLive(false);
   }, [remoteSessionId]);
 
   useEffect(() => {
@@ -3438,6 +3448,28 @@ function App() {
       void collectRemoteMonitor();
     }
   }, [activeView, collectRemoteMonitor, remoteMonitorStatus, remoteProtocol, remoteSessionId]);
+
+  useEffect(() => {
+    if (!remoteMonitorLive || activeView !== "monitor" || !remoteSessionId || remoteProtocol !== "ssh") return;
+    let disposed = false;
+    let timer: number | undefined;
+    const generation = ++remoteMonitorGenerationRef.current;
+
+    const refresh = async () => {
+      if (disposed) return;
+      await collectRemoteMonitor();
+      if (!disposed && generation === remoteMonitorGenerationRef.current) {
+        timer = window.setTimeout(refresh, remoteMonitorIntervalSeconds * 1000);
+      }
+    };
+
+    void refresh();
+    return () => {
+      disposed = true;
+      remoteMonitorGenerationRef.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [activeView, collectRemoteMonitor, remoteMonitorIntervalSeconds, remoteMonitorLive, remoteProtocol, remoteSessionId]);
 
   useEffect(() => {
     if (!IS_TAURI) return;
@@ -3733,7 +3765,7 @@ function App() {
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
+                <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} live={remoteMonitorLive} intervalSeconds={remoteMonitorIntervalSeconds} onLiveChange={setRemoteMonitorLive} onIntervalChange={setRemoteMonitorIntervalSeconds} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "transfers" ? (
                 <TransferManagerView transfers={transfers} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "audit" ? (
@@ -4128,15 +4160,15 @@ function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onNewRemoteForw
   </section>;
 }
 
-function RemoteMonitorView({ snapshot, status, error, onRefresh }: { snapshot: RemoteMonitorSnapshot | null; status: "idle" | "loading" | "ready" | "error"; error: string | null; onRefresh: () => void }) {
+function RemoteMonitorView({ snapshot, status, error, live, intervalSeconds, onLiveChange, onIntervalChange, onRefresh }: { snapshot: RemoteMonitorSnapshot | null; status: "idle" | "loading" | "ready" | "error"; error: string | null; live: boolean; intervalSeconds: number; onLiveChange: (enabled: boolean) => void; onIntervalChange: (seconds: number) => void; onRefresh: () => void }) {
   const memoryUsed = snapshot?.memoryTotalBytes != null && snapshot.memoryAvailableBytes != null
     ? Math.max(0, snapshot.memoryTotalBytes - snapshot.memoryAvailableBytes)
     : null;
   const statusLabel = status === "loading" ? "Collecting" : status === "ready" ? "Snapshot ready" : status === "error" ? "Unavailable" : "Ready";
   return <section className="remote-monitor" aria-label="Remote system monitor">
     <div className="remote-monitor-toolbar">
-      <div><span className="eyebrow">SSH / SYSTEM SNAPSHOT</span><strong>Remote system monitor</strong><p>Collect one bounded snapshot through the active SSH connection. No agent is installed and no polling starts automatically.</p></div>
-      <div className="remote-monitor-actions"><span className={`remote-monitor-status monitor-${status}`}><span /> {statusLabel}</span><button className="primary-button" onClick={onRefresh} disabled={status === "loading"}><RefreshCw className={status === "loading" ? "spin" : ""} size={14} /> {status === "loading" ? "Collecting…" : "Refresh snapshot"}</button></div>
+      <div><span className="eyebrow">SSH / SYSTEM SNAPSHOT</span><strong>Remote system monitor</strong><p>Collect a bounded read-only snapshot through the active SSH connection. Live refresh is opt-in and stops when this view closes.</p></div>
+      <div className="remote-monitor-actions"><span className={`remote-monitor-status monitor-${status}`}><span /> {statusLabel}</span><label className="remote-monitor-live"><input type="checkbox" checked={live} onChange={(event) => onLiveChange(event.target.checked)} /> Live <select value={intervalSeconds} onChange={(event) => { const next = Number(event.target.value); if (isRemoteMonitorRefreshInterval(next)) onIntervalChange(next); }} disabled={!live} aria-label="Live monitor interval">{REMOTE_MONITOR_REFRESH_INTERVALS.map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}</select></label><button className="primary-button" onClick={onRefresh} disabled={status === "loading"}><RefreshCw className={status === "loading" ? "spin" : ""} size={14} /> {status === "loading" ? "Collecting…" : "Refresh snapshot"}</button></div>
     </div>
     {error && <div className="connect-error remote-monitor-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
     {snapshot ? <>

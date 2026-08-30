@@ -17,7 +17,11 @@ whole operation to six seconds. A non-zero command status is reported as a
 typed monitor error without forwarding arbitrary stderr to the renderer.
 Missing `/proc`, `sysctl`, `df`, or `ps` data becomes an unavailable metric.
 The UI requests one snapshot when opened and refreshes only on an explicit
-button press; it does not poll continuously.
+button press by default. An operator may explicitly enable live refresh at a
+bounded 15-, 30-, or 60-second interval. The scheduler waits for each native
+request to finish before scheduling the next one, so requests cannot overlap;
+leaving the monitor view or changing sessions cancels the next scheduled
+refresh.
 
 ## Why
 
@@ -32,8 +36,9 @@ model.
 Linux hosts expose the most complete set of fields. BSD, macOS, appliances, and
 minimal shells may expose only identity or a subset of metrics. This is an
 intentional graceful-degradation behavior, not a claim of universal GNU/Linux
-compatibility. Continuous dashboards and process-detail views remain future
-work and must preserve the same bounded/cancellable boundary.
+compatibility. Process-detail views remain future work and must preserve the
+same bounded/cancellable boundary. Live refresh is intentionally a
+low-frequency dashboard, not a high-rate process monitor.
 
 ## Verification
 

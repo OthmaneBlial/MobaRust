@@ -103,6 +103,10 @@ button:not(:disabled) { cursor: pointer; }
 .remote-monitor-toolbar strong { color: var(--text); font-size: 17px; letter-spacing: -.03em; }
 .remote-monitor-toolbar p { max-width: 520px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .remote-monitor-actions { display: flex; align-items: center; gap: 10px; }
+.remote-monitor-live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-family: var(--mono); font-size: 8px; white-space: nowrap; }
+.remote-monitor-live input { width: 13px; height: 13px; margin: 0; accent-color: var(--amber); }
+.remote-monitor-live select { height: 27px; padding: 0 5px; border: 1px solid var(--line); background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 9px; }
+.remote-monitor-live select:disabled { cursor: not-allowed; opacity: .45; }
 .remote-monitor-status { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-family: var(--mono); font-size: 8px; white-space: nowrap; }
 .remote-monitor-status > span { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 .monitor-loading > span { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }

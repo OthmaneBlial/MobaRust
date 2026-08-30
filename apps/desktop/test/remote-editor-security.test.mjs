@@ -34,6 +34,7 @@ import {
   vncKeysymForText,
 } from "../src/remote-desktop-input.ts";
 import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
+import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
 import {
   preserveRemoteDesktopError,
@@ -76,6 +77,11 @@ assert.equal(highlighted.includes("<script"), false);
 
 assert.equal(remoteEditorLanguage("/tmp/settings.json"), "json");
 assert.equal(remoteEditorLanguage("/tmp/profile"), "shell");
+assert.deepEqual(REMOTE_MONITOR_REFRESH_INTERVALS, [15, 30, 60]);
+assert.equal(isRemoteMonitorRefreshInterval(15), true);
+assert.equal(isRemoteMonitorRefreshInterval(60), true);
+assert.equal(isRemoteMonitorRefreshInterval(5), false);
+assert.equal(isRemoteMonitorRefreshInterval(61), false);
 
 assert.equal(isLoopbackIpLiteral("127.0.0.1"), true);
 assert.equal(isLoopbackIpLiteral("127.0.0.42"), true);
