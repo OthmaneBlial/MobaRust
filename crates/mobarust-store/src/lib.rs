@@ -11,13 +11,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mobarust_core::{
-    AppSettings, AuthMethod, MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
+    AppSettings, AuditEvent, AuditEventKind, AuthMethod, MacroRecord, Protocol, SessionId,
+    SessionRecord, SnippetRecord,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_AUDIT_SCHEMA_VERSION: u32 = 1;
+pub const MAX_AUDIT_EVENTS: usize = 1_000;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -77,6 +80,21 @@ pub enum StoreError {
     MacroEncode(serde_json::Error),
     #[error("could not write macro file {path}: {source}")]
     MacroWrite { path: PathBuf, source: io::Error },
+    #[error("could not read audit file {path}: {source}")]
+    AuditRead { path: PathBuf, source: io::Error },
+    #[error("audit file {path} contains invalid data: {source}")]
+    AuditDecode {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("audit file {path} uses unsupported schema version {version}")]
+    AuditUnsupportedSchema { path: PathBuf, version: u32 },
+    #[error("audit history cannot contain more than {MAX_AUDIT_EVENTS} events")]
+    AuditTooLarge,
+    #[error("could not serialize audit file: {0}")]
+    AuditEncode(serde_json::Error),
+    #[error("could not write audit file {path}: {source}")]
+    AuditWrite { path: PathBuf, source: io::Error },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,6 +130,13 @@ const CURRENT_MACRO_SCHEMA_VERSION: u32 = 1;
 struct MacroFile {
     schema_version: u32,
     macros: Vec<MacroRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditFile {
+    schema_version: u32,
+    events: Vec<AuditEvent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,6 +195,135 @@ pub struct SnippetStore {
 pub struct MacroStore {
     path: PathBuf,
     macros: Vec<MacroRecord>,
+}
+
+/// A bounded, secret-free local audit history. This store is intentionally
+/// separate from saved sessions and credential storage. It is not exported
+/// with session definitions and never stores terminal input or file paths.
+#[derive(Debug)]
+pub struct AuditStore {
+    path: PathBuf,
+    events: Vec<AuditEvent>,
+}
+
+impl AuditStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let path = path.into();
+        let events = if path.exists() {
+            let bytes = fs::read(&path).map_err(|source| StoreError::AuditRead {
+                path: path.clone(),
+                source,
+            })?;
+            let file: AuditFile =
+                serde_json::from_slice(&bytes).map_err(|source| StoreError::AuditDecode {
+                    path: path.clone(),
+                    source,
+                })?;
+            if file.schema_version != CURRENT_AUDIT_SCHEMA_VERSION {
+                return Err(StoreError::AuditUnsupportedSchema {
+                    path,
+                    version: file.schema_version,
+                });
+            }
+            if file.events.len() > MAX_AUDIT_EVENTS {
+                return Err(StoreError::AuditTooLarge);
+            }
+            file.events
+        } else {
+            Vec::new()
+        };
+
+        Ok(Self { path, events })
+    }
+
+    pub fn list(&self) -> &[AuditEvent] {
+        &self.events
+    }
+
+    pub fn append(
+        &mut self,
+        kind: AuditEventKind,
+        session_id: Option<SessionId>,
+        protocol: Option<Protocol>,
+    ) -> Result<AuditEvent, StoreError> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.append_at(kind, session_id, protocol, timestamp)
+    }
+
+    pub fn append_at(
+        &mut self,
+        kind: AuditEventKind,
+        session_id: Option<SessionId>,
+        protocol: Option<Protocol>,
+        timestamp: u64,
+    ) -> Result<AuditEvent, StoreError> {
+        let event = AuditEvent::new(kind, session_id, protocol, timestamp);
+        let previous = self.events.clone();
+        self.events.push(event.clone());
+        if self.events.len() > MAX_AUDIT_EVENTS {
+            let overflow = self.events.len() - MAX_AUDIT_EVENTS;
+            self.events.drain(..overflow);
+        }
+        if let Err(error) = self.persist() {
+            self.events = previous;
+            return Err(error);
+        }
+        Ok(event)
+    }
+
+    pub fn clear(&mut self) -> Result<(), StoreError> {
+        let previous = self.events.clone();
+        self.events.clear();
+        if let Err(error) = self.persist() {
+            self.events = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn persist(&self) -> Result<(), StoreError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|source| StoreError::AuditWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let bytes = serde_json::to_vec_pretty(&AuditFile {
+            schema_version: CURRENT_AUDIT_SCHEMA_VERSION,
+            events: self.events.clone(),
+        })
+        .map_err(StoreError::AuditEncode)?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("audit.json");
+        let temporary_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+        let mut temporary = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|source| StoreError::AuditWrite {
+                path: temporary_path.clone(),
+                source,
+            })?;
+        let write_result = (|| -> io::Result<()> {
+            temporary.write_all(&bytes)?;
+            temporary.sync_all()?;
+            drop(temporary);
+            replace_file(&temporary_path, &self.path)
+        })();
+        if let Err(source) = write_result {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(StoreError::AuditWrite {
+                path: self.path.clone(),
+                source,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl MacroStore {
@@ -1268,6 +1422,65 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             r#"{"schema_version":1,"macros":[],"unknown":true}"#
+        );
+    }
+
+    #[test]
+    fn audit_history_is_bounded_secret_free_and_durable() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("audit.json");
+        let session_id = SessionId::new();
+        let mut store = AuditStore::open(&path).unwrap();
+
+        for timestamp in 0..=MAX_AUDIT_EVENTS as u64 {
+            store
+                .append_at(
+                    AuditEventKind::ConnectionSucceeded,
+                    Some(session_id),
+                    Some(Protocol::Ssh),
+                    timestamp,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(store.list().len(), MAX_AUDIT_EVENTS);
+        assert_eq!(store.list().first().unwrap().timestamp, 1);
+        assert_eq!(
+            store.list().last().unwrap().timestamp,
+            MAX_AUDIT_EVENTS as u64
+        );
+
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("password"));
+        assert!(!json.contains("private_key"));
+        assert_eq!(
+            AuditStore::open(&path).unwrap().list().len(),
+            MAX_AUDIT_EVENTS
+        );
+    }
+
+    #[test]
+    fn audit_clear_is_durable_and_corrupt_data_is_not_replaced() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("audit.json");
+        let mut store = AuditStore::open(&path).unwrap();
+        store
+            .append_at(
+                AuditEventKind::SessionOpened,
+                None,
+                Some(Protocol::Local),
+                42,
+            )
+            .unwrap();
+        store.clear().unwrap();
+        assert!(AuditStore::open(&path).unwrap().list().is_empty());
+
+        fs::write(&path, br#"{"schema_version":1,"events":[],"unknown":true}"#).unwrap();
+        let error = AuditStore::open(&path).unwrap_err();
+        assert!(matches!(error, StoreError::AuditDecode { .. }));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"schema_version":1,"events":[],"unknown":true}"#
         );
     }
 }

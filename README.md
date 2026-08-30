@@ -50,6 +50,11 @@ The first working slice provides:
 - a local quality command: `cargo xtask check`.
 - a documented safe-testing policy that keeps protocol fixtures on loopback
   and temporary paths, without reading personal SSH material.
+- a bounded, local audit history for connection and transfer lifecycle facts;
+  it never records terminal commands, remote paths, hostnames, errors, or
+  credential material, and it is not included in session exports.
+- explicit-path-only OpenSSH import; MobaRust never falls back to reading
+  `~/.ssh/config` automatically.
 - a Tauri packaging hook that stages the isolated RDP/VNC helpers as ignored
   native resources; signing, clean-install, and cross-platform evidence remain
   explicit release gates.

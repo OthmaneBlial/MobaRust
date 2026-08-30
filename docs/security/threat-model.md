@@ -24,7 +24,7 @@ This document describes the security boundary for the first vertical slice and t
 | Private-key exposure | Keys are referenced by path and never copied into session metadata. Passphrases use the native vault; loaded key-memory hygiene remains a release-review gate. |
 | Malicious local process | Documented as an OS limitation; minimize plaintext lifetime and never claim protection from a process with equivalent user privileges. |
 | Compromised application database | The current session store contains metadata and opaque references only. Platform vault entries are separate; portable credentials use a separate encrypted vault file and remain unavailable while locked. |
-| Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. |
+| Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. The optional audit file is a separate bounded lifecycle journal, not a terminal transcript. |
 | Clipboard exposure | Paste is explicit; MobaRust intercepts multiline terminal paste and asks for confirmation before sending it. Remote clipboard support will be opt-in per protocol. |
 | Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. |
 | Portable mode | Portable mode is marker-gated by `portable.flag`; credentials use a separate Argon2id + AES-256-GCM vault file, atomic private writes, and explicit native unlock/lock. It is not a plaintext JSON exception. |
@@ -33,6 +33,16 @@ This document describes the security boundary for the first vertical slice and t
 | Remote content execution | Terminal output is rendered as terminal text only; URLs need explicit user action and are not automatic HTML. |
 | Webview script injection | The Tauri CSP disallows `unsafe-eval`, objects, and framing; remote output is escaped before any non-terminal rendering. |
 | IPC abuse | Use typed, narrow commands with validation. Do not expose `execute_anything(command: String)`. |
+
+## Audit history boundary
+
+The optional local audit history is capped at 1,000 events and stored separately
+from sessions, settings, and the vault. Its schema permits only a timestamp,
+event kind, opaque session ID, and protocol. It intentionally has no fields for
+terminal input, remote paths, hostnames, usernames, error text, or credentials.
+The UI provides an explicit clear action. Audit history is not part of session
+import/export, and a corrupt or unknown-schema audit file is rejected rather
+than silently replaced.
 
 ## Non-goals
 

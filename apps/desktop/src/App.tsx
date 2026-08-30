@@ -20,6 +20,7 @@ import {
   Folder,
   FolderPlus,
   Gauge,
+  History,
   KeyRound,
   LoaderCircle,
   LayoutDashboard,
@@ -49,7 +50,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-type View = "terminal" | "files" | "tunnels" | "monitor" | "diagnostics" | "transfers";
+type View = "terminal" | "files" | "tunnels" | "monitor" | "diagnostics" | "transfers" | "audit";
 
 type AppSettings = {
   general: {
@@ -531,6 +532,16 @@ type SshTransferEvent = {
   error?: string | null;
 };
 
+type AuditEventKind = "sessionOpened" | "connectionSucceeded" | "connectionFailed" | "disconnected" | "transferCompleted" | "transferFailed";
+type AuditProtocol = "SSH" | "SFTP" | "SCP" | "RDP" | "VNC" | "TELNET" | "SERIAL" | "LOCAL";
+type AuditEvent = {
+  id: string;
+  timestamp: number;
+  kind: AuditEventKind;
+  sessionId?: string | null;
+  protocol?: AuditProtocol | null;
+};
+
 type TunnelState = "listening" | "running" | "stopping" | "stopped" | "failed";
 
 type SshTunnelEvent = {
@@ -605,8 +616,16 @@ const quickActions: Array<{ label: string; hint: string; icon: LucideIcon }> = [
   { label: "Credential vault", hint: "", icon: KeyRound },
   { label: "Snippets", hint: "", icon: BookOpen },
   { label: "Macros", hint: "", icon: Play },
+  { label: "Audit history", hint: "", icon: History },
   { label: "Command palette", hint: "⌘ ⇧ P", icon: Command },
 ];
+
+function auditProtocol(protocol: string | null | undefined): AuditProtocol | null {
+  const normalized = protocol?.toUpperCase();
+  return normalized === "SSH" || normalized === "SFTP" || normalized === "SCP" || normalized === "RDP" || normalized === "VNC" || normalized === "TELNET" || normalized === "SERIAL" || normalized === "LOCAL"
+    ? normalized
+    : null;
+}
 
 function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -1104,6 +1123,7 @@ function App() {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
   const [macros, setMacros] = useState<MacroRecord[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
@@ -1147,6 +1167,8 @@ function App() {
   const macroRecordingRef = useRef<MacroRecordingState | null>(macroRecording);
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
+  const terminalAuditStateRef = useRef(new Map<string, TerminalStatus>());
+  const transferAuditStateRef = useRef(new Map<string, TransferState>());
   const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement; path: SplitPath } | null>(null);
   terminalTabsRef.current = terminalTabs;
   broadcastEnabledRef.current = broadcastEnabled;
@@ -1255,9 +1277,27 @@ function App() {
     setSessionNotice(`Captured ${recording.actions.length} bounded macro action${recording.actions.length === 1 ? "" : "s"}. Review before saving.`);
   }, []);
 
+  const recordAudit = useCallback((kind: AuditEventKind, protocol: string | null | undefined, sessionId?: string | null) => {
+    const normalizedProtocol = auditProtocol(protocol);
+    if (!IS_TAURI || !normalizedProtocol) return;
+    void invoke<AuditEvent>("audit_record", {
+      payload: { kind, protocol: normalizedProtocol, sessionId: sessionId ?? null },
+    })
+      .then((event) => setAuditEvents((current) => [...current, event].slice(-1000)))
+      .catch(() => undefined);
+  }, []);
+
   const handleTerminalStatus = useCallback((workspaceId: string, status: TerminalStatus) => {
     setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, status } : terminal));
-  }, []);
+    const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
+    const protocol = auditProtocol(terminal?.remoteProtocol);
+    const previous = terminalAuditStateRef.current.get(workspaceId);
+    terminalAuditStateRef.current.set(workspaceId, status);
+    if (!protocol || previous === status) return;
+    if (status === "connected") recordAudit("connectionSucceeded", protocol);
+    if (status === "error") recordAudit("connectionFailed", protocol);
+    if (status === "closed") recordAudit("disconnected", protocol);
+  }, [recordAudit]);
 
   const handleNativeTerminalId = useCallback((workspaceId: string, terminalId: string | null) => {
     if (terminalId) nativeTerminalIdsRef.current.set(workspaceId, terminalId);
@@ -1398,6 +1438,7 @@ function App() {
 
   const closeTerminal = useCallback((workspaceId: string) => {
     nativeTerminalIdsRef.current.delete(workspaceId);
+    terminalAuditStateRef.current.delete(workspaceId);
     setBroadcastTargetIds((current) => current.filter((id) => id !== workspaceId));
     if (terminalTabs.length === 1) {
       const replacement = createWorkspaceTerminal();
@@ -1507,6 +1548,25 @@ function App() {
     void invoke<MacroRecord[]>("macro_list")
       .then((records) => setMacros(records.map(normalizeMacroRecord)))
       .catch((error) => setConnectionError(`Macros could not be loaded: ${String(error)}`));
+  }, []);
+
+  const refreshAudit = useCallback(() => {
+    if (!IS_TAURI) return;
+    void invoke<AuditEvent[]>("audit_list")
+      .then(setAuditEvents)
+      .catch((error) => setConnectionError(`Audit history could not be loaded: ${String(error)}`));
+  }, []);
+
+  const clearAudit = useCallback(async () => {
+    if (!IS_TAURI || !window.confirm("Clear the local audit history? Terminal commands and secrets are not stored there.")) return;
+    try {
+      await invoke("audit_clear");
+      setAuditEvents([]);
+      setSessionNotice("Local audit history cleared.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Audit history could not be cleared: ${String(error)}`);
+    }
   }, []);
 
   const saveSnippet = useCallback(async (snippet: SnippetRecord) => {
@@ -1704,6 +1764,7 @@ function App() {
     }
     try {
       const response = await invoke<SshConnectResponse>("ssh_connect", { request });
+      recordAudit("sessionOpened", "SSH");
       const terminal = createWorkspaceTerminal({
         label: `${request.username}@${response.host}`,
         remoteSessionId: response.terminalId,
@@ -1728,9 +1789,10 @@ function App() {
         }
       }
     } catch (error) {
+      recordAudit("connectionFailed", "SSH");
       setConnectionError(String(error));
     }
-  }, [refreshSavedSessions]);
+  }, [recordAudit, refreshSavedSessions]);
 
   const connectTelnet = useCallback(async (request: TelnetConnectRequest) => {
     setConnectionError(null);
@@ -1741,6 +1803,7 @@ function App() {
     }
     try {
       const response = await invoke<TelnetConnectResponse>("telnet_connect", { request });
+      recordAudit("sessionOpened", "TELNET");
       const terminal = createWorkspaceTerminal({
         label: `Telnet · ${response.host}`,
         remoteSessionId: response.terminalId,
@@ -1754,9 +1817,10 @@ function App() {
       setQuickConnectOpen(false);
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
     } catch (error) {
+      recordAudit("connectionFailed", "TELNET");
       setConnectionError(String(error));
     }
-  }, []);
+  }, [recordAudit]);
 
   const connectSerial = useCallback(async (request: SerialConnectRequest, offerSave = true) => {
     setConnectionError(null);
@@ -1767,6 +1831,7 @@ function App() {
     }
     try {
       const response = await invoke<SerialConnectResponse>("serial_connect", { request });
+      recordAudit("sessionOpened", "SERIAL");
       const terminal = createWorkspaceTerminal({
         label: `Serial · ${response.device}`,
         remoteSessionId: response.terminalId,
@@ -1792,13 +1857,15 @@ function App() {
         }
       }
     } catch (error) {
+      recordAudit("connectionFailed", "SERIAL");
       setConnectionError(String(error));
     }
-  }, [refreshSavedSessions]);
+  }, [recordAudit, refreshSavedSessions]);
 
   const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest, offerSave = true) => {
     setConnectionError(null);
     setSessionNotice(null);
+    recordAudit("sessionOpened", request.protocol.toUpperCase());
     const terminal = createWorkspaceTerminal({
       label: `${request.protocol.toUpperCase()} · ${request.host}`,
       remoteProtocol: request.protocol,
@@ -1823,15 +1890,15 @@ function App() {
           .catch((error) => setConnectionError(`Queued, but the session could not be saved: ${String(error)}`));
       }
     }
-  }, [refreshSavedSessions]);
+  }, [recordAudit, refreshSavedSessions]);
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
-    const requestedPath = window.prompt("OpenSSH config path", "~/.ssh/config");
-    if (requestedPath === null) return;
+    const requestedPath = window.prompt("OpenSSH config path (explicit path only; never read automatically)", "");
+    if (requestedPath === null || !requestedPath.trim()) return;
     try {
       const report = await invoke<OpenSshImportReport>("session_import_openssh", {
-        payload: { path: requestedPath.trim() || "~/.ssh/config" },
+        payload: { path: requestedPath.trim() },
       });
       refreshSavedSessions();
       const warnings = [
@@ -1917,6 +1984,7 @@ function App() {
   }, [editingSession?.id, refreshSavedSessions]);
 
   const connectSavedSession = useCallback((session: SavedSession) => {
+    recordAudit("sessionOpened", session.protocol, session.id);
     touchSavedSession(session.id);
     if (session.protocol === "SERIAL") {
       const profile = session.serial_profile;
@@ -1967,7 +2035,7 @@ function App() {
       return;
     }
     void connectSsh(request, false);
-  }, [connectRemoteDesktop, connectSerial, connectSsh, savedSessions, touchSavedSession]);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, recordAudit, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
     const targets = [...new Set(targetIds)].map((workspaceId) => ({
@@ -2773,6 +2841,10 @@ function App() {
   }, [refreshMacros]);
 
   useEffect(() => {
+    refreshAudit();
+  }, [refreshAudit]);
+
+  useEffect(() => {
     if (activeView === "files" && remoteSessionId && remoteProtocol === "ssh") void loadRemoteDirectory(".");
   }, [activeView, loadRemoteDirectory, remoteProtocol, remoteSessionId]);
 
@@ -2793,9 +2865,18 @@ function App() {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     void listen<SshTransferEvent>("sftp://transfer", (event) => {
+      const payload = event.payload;
+      const previousState = transferAuditStateRef.current.get(payload.transferId);
+      transferAuditStateRef.current.set(payload.transferId, payload.state);
+      if (transferAuditStateRef.current.size > 256) {
+        const oldest = transferAuditStateRef.current.keys().next().value;
+        if (oldest) transferAuditStateRef.current.delete(oldest);
+      }
+      if (previousState !== payload.state && payload.state === "completed") recordAudit("transferCompleted", payload.protocol.toUpperCase());
+      if (previousState !== payload.state && payload.state === "failed") recordAudit("transferFailed", payload.protocol.toUpperCase());
       setTransfers((current) => {
-        const next = current.filter((transfer) => transfer.transferId !== event.payload.transferId);
-        return [...next, event.payload].slice(-40);
+        const next = current.filter((transfer) => transfer.transferId !== payload.transferId);
+        return [...next, payload].slice(-40);
       });
     }).then((stop) => {
       if (disposed) stop();
@@ -2805,7 +2886,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [recordAudit]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2960,6 +3041,7 @@ function App() {
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className={`nav-item ${activeView === "monitor" ? "active" : ""}`} onClick={() => setActiveView("monitor")} disabled={!remoteSessionId || remoteProtocol !== "ssh"} title={remoteSessionId && remoteProtocol === "ssh" ? "Collect a one-shot SSH system snapshot" : "Open an SSH session first"}><Gauge size={15} /> Remote monitor</button>
             <button className={`nav-item ${activeView === "transfers" ? "active" : ""}`} onClick={() => setActiveView("transfers")}><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
+            <button className={`nav-item ${activeView === "audit" ? "active" : ""}`} onClick={() => setActiveView("audit")}><History size={15} /> Audit history <span className="nav-count">{auditEvents.length}</span></button>
           </div>
         </aside>
 
@@ -2994,6 +3076,7 @@ function App() {
                 {remoteSessionId && remoteProtocol === "ssh" && <button className={activeView === "monitor" ? "selected" : ""} onClick={() => setActiveView("monitor")} role="tab" aria-selected={activeView === "monitor"}><Gauge size={15} /> Monitor</button>}
                 <button className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
                 <button className={activeView === "transfers" ? "selected" : ""} onClick={() => setActiveView("transfers")} role="tab" aria-selected={activeView === "transfers"}><ArrowDownToLine size={15} /> Transfers <span className="tab-badge">{activeTransferCount}</span></button>
+                <button className={activeView === "audit" ? "selected" : ""} onClick={() => setActiveView("audit")} role="tab" aria-selected={activeView === "audit"}><History size={15} /> Audit</button>
               </div>
 
               {activeView === "terminal" ? (
@@ -3017,6 +3100,8 @@ function App() {
                 <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "transfers" ? (
                 <TransferManagerView transfers={transfers} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
+              ) : activeView === "audit" ? (
+                <AuditHistoryView events={auditEvents} onClear={() => void clearAudit()} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} fingerprint={networkFingerprint} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onInspectFingerprint={inspectNetworkHostKey} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
               ) : (
@@ -3046,7 +3131,7 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
@@ -3387,6 +3472,24 @@ function TransferManagerView({ transfers, onCancelTransfer, onRetryTransfer }: {
   </section>;
 }
 
+function AuditHistoryView({ events, onClear }: { events: AuditEvent[]; onClear: () => void }) {
+  return <section className="audit-manager" aria-label="Local audit history">
+    <div className="audit-manager-heading"><div><span className="eyebrow">LOCAL / AUDIT</span><strong>Audit history</strong><p>Bounded lifecycle facts only. Terminal commands, remote paths, hostnames, errors, and credential material are never recorded.</p></div><button type="button" className="outline-button danger-button" onClick={onClear} disabled={events.length === 0}><Trash2 size={14} /> Clear history</button></div>
+    <div className="audit-manager-meta"><span>{events.length} of 1,000 events retained</span><span className="remote-files-safe"><ShieldCheck size={13} /> Separate from sessions and vault</span></div>
+    {events.length === 0 ? <div className="audit-empty"><History size={22} /><strong>No audit events yet</strong><span>Connection and transfer lifecycle events will appear here without recording terminal input.</span></div> : <div className="audit-list">{events.slice().reverse().map((event) => <div className="audit-row" key={event.id}><div className="audit-row-icon"><History size={15} /></div><div className="audit-row-copy"><strong>{auditEventLabel(event.kind)}</strong><small>{event.protocol ?? "LOCAL"} · {new Date(event.timestamp * 1000).toLocaleString()}</small></div></div>)}</div>}
+    <div className="audit-manager-note">Audit history is local and bounded. It is not included in secret-free session exports and never becomes a terminal transcript.</div>
+  </section>;
+}
+
+function auditEventLabel(kind: AuditEventKind): string {
+  if (kind === "sessionOpened") return "Session opened";
+  if (kind === "connectionSucceeded") return "Connection succeeded";
+  if (kind === "connectionFailed") return "Connection failed";
+  if (kind === "disconnected") return "Disconnected";
+  if (kind === "transferCompleted") return "Transfer completed";
+  return "Transfer failed";
+}
+
 function TransferPanel({ transfers, onCancelTransfer, onRetryTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void; onRetryTransfer: (transfer: SshTransferEvent) => void }) {
   return <section className="transfer-panel" aria-label="Transfers"><div className="transfer-panel-heading"><span className="eyebrow">TRANSFER QUEUE</span><span>{transfers.length} retained</span></div>{transfers.length === 0 && <div className="transfer-empty"><ArrowDownToLine size={20} /><strong>No transfers yet</strong><span>Start an upload or download from a connected SSH session. Jobs will appear here across all sessions.</span></div>}{transfers.slice().reverse().map((transfer) => {
     const percent = transfer.totalBytes && transfer.totalBytes > 0 ? Math.min(100, Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)) : null;
@@ -3606,7 +3709,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   </div>;
 }
 
-function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onToggleSidebar: () => void }) {
+function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onOpenAudit, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onOpenAudit: () => void; onToggleSidebar: () => void }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const commands = [
@@ -3621,6 +3724,7 @@ function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, o
                 : action.label === "Credential vault" ? onOpenCredentials
                   : action.label === "Snippets" ? onOpenSnippets
                     : action.label === "Macros" ? onOpenMacros
+                      : action.label === "Audit history" ? onOpenAudit
                       : onClose,
       })),
     { label: "Toggle sidebar", hint: "⌘ B", icon: PanelLeftClose, run: onToggleSidebar },

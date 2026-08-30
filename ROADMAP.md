@@ -49,6 +49,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] Typed non-secret settings with validation, atomic persistence, reset, and terminal application
 - [x] Secret-free snippets with tags, validated variables, rendered preview, and explicit manual copy
 - [x] Portable encrypted vault backend with marker-gated data directory, explicit unlock/lock, and native-only lookup
+- [x] Optional bounded local audit history with explicit clear, lifecycle-only fields, and no terminal transcript
 - [ ] Signed portable distribution/package matrix
 
 ## Later protocol adapters

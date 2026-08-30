@@ -13,6 +13,9 @@ configuration.
 - SSH tests generate fixture host/client keys in the temporary test directory.
   They pass an explicit fixture `known_hosts` path and never read `~/.ssh`,
   `SSH_AUTH_SOCK`, GitHub keys, or a user's private key.
+- OpenSSH import requires an explicit path and never falls back to
+  `~/.ssh/config`; tests and development runs must use a repository fixture or
+  an isolated temporary file.
 - RDP/VNC tests use protocol-independent fixtures or an explicitly approved
   disposable server. The isolated RDP helper can be compiled and exercised on
   EOF without opening a socket; the VNC integration fixture binds only to

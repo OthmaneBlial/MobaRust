@@ -1,6 +1,7 @@
 //! Protocol-neutral primitives shared by the MobaRust desktop shell and future
 //! SSH/SFTP adapters. Secrets intentionally never appear in these types.
 
+pub mod audit;
 pub mod lifecycle;
 pub mod r#macro;
 pub mod session;
@@ -9,6 +10,7 @@ pub mod snippet;
 pub mod terminal;
 pub mod transfer;
 
+pub use audit::{AuditEvent, AuditEventKind};
 pub use lifecycle::{ConnectionEvent, ConnectionLifecycle, ConnectionState, TransitionError};
 pub use r#macro::{
     MAX_MACRO_ACTIONS, MAX_MACRO_TEXT_BYTES, MAX_MACRO_WAIT_MILLISECONDS, MacroAction,

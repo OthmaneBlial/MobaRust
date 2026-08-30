@@ -8,14 +8,15 @@ mod telnet;
 mod terminal;
 
 use mobarust_core::{
-    AppSettings, AuthMethod, JumpHostRecord, Protocol, RemoteDesktopProfile, SerialProfile,
-    SessionId, SessionRecord,
+    AppSettings, AuditEvent, AuditEventKind, AuthMethod, JumpHostRecord, Protocol,
+    RemoteDesktopProfile, SerialProfile, SessionId, SessionRecord,
 };
 use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_remote_desktop::HelperCommand;
 use mobarust_ssh::{SshFingerprintOptions, inspect_host_key};
 use mobarust_store::{
-    MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore, SnippetStore,
+    AuditStore, MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore,
+    SnippetStore,
 };
 use mobarust_vault::{
     CredentialId, CredentialLookup, PlatformVault, PortableVault, SecretMaterial, VaultError,
@@ -78,6 +79,14 @@ struct ImportOpenSshRequest {
 #[serde(rename_all = "camelCase")]
 struct ImportSessionRequest {
     json: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditRecordRequest {
+    kind: AuditEventKind,
+    session_id: Option<SessionId>,
+    protocol: Option<Protocol>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -341,7 +350,9 @@ fn session_import_openssh(
         .path
         .filter(|path| !path.trim().is_empty())
         .map(|path| expand_user_path(path.trim()))
-        .unwrap_or_else(default_openssh_config_path);
+        .ok_or_else(|| {
+            "an explicit OpenSSH config path is required; MobaRust never reads ~/.ssh/config automatically".to_owned()
+        })?;
     store
         .lock()
         .map_err(|_| "session store lock poisoned".to_owned())?
@@ -421,6 +432,37 @@ fn settings_reset(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings,
         .lock()
         .map_err(|_| "settings store lock poisoned".to_owned())?
         .reset()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn audit_list(store: State<'_, Mutex<AuditStore>>) -> Result<Vec<AuditEvent>, String> {
+    store
+        .lock()
+        .map_err(|_| "audit store lock poisoned".to_owned())
+        .map(|store| store.list().to_vec())
+}
+
+/// Append only a typed, secret-free lifecycle fact. The request intentionally
+/// has no hostname, path, command, credential, or error-detail field.
+#[tauri::command]
+fn audit_record(
+    store: State<'_, Mutex<AuditStore>>,
+    payload: AuditRecordRequest,
+) -> Result<AuditEvent, String> {
+    store
+        .lock()
+        .map_err(|_| "audit store lock poisoned".to_owned())?
+        .append(payload.kind, payload.session_id, payload.protocol)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn audit_clear(store: State<'_, Mutex<AuditStore>>) -> Result<(), String> {
+    store
+        .lock()
+        .map_err(|_| "audit store lock poisoned".to_owned())?
+        .clear()
         .map_err(|error| error.to_string())
 }
 
@@ -961,12 +1003,6 @@ fn network_scan_cancel(
         .map_err(|error| error.to_string())
 }
 
-fn default_openssh_config_path() -> PathBuf {
-    std::env::home_dir()
-        .map(|home| home.join(".ssh").join("config"))
-        .unwrap_or_else(|| PathBuf::from(".ssh/config"))
-}
-
 fn expand_user_path(path: &str) -> PathBuf {
     if path == "~" {
         return std::env::home_dir().unwrap_or_else(|| PathBuf::from(path));
@@ -1428,6 +1464,8 @@ fn main() {
                 .map_err(|error| error.to_string())?;
             let macros = MacroStore::open(data_dir.join("macros.json"))
                 .map_err(|error| error.to_string())?;
+            let audit =
+                AuditStore::open(data_dir.join("audit.json")).map_err(|error| error.to_string())?;
             if store.list().is_empty() {
                 store
                     .save(SessionRecord::local_terminal("Local workstation"))
@@ -1437,6 +1475,7 @@ fn main() {
             app.manage(Mutex::new(settings));
             app.manage(Mutex::new(snippets));
             app.manage(Mutex::new(macros));
+            app.manage(Mutex::new(audit));
             app.manage(RemoteDesktopManager::default());
             Ok(())
         })
@@ -1452,6 +1491,9 @@ fn main() {
             settings_get,
             settings_save,
             settings_reset,
+            audit_list,
+            audit_record,
+            audit_clear,
             vault_put,
             vault_delete,
             portable_vault_status,
