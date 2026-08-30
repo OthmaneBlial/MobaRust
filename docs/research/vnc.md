@@ -102,7 +102,9 @@ password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
 fixture verifies security-type selection and the DES challenge response before
 checking framebuffer, explicit server-side resize rejection, key, pointer,
 server-announced resize, clipboard input, server-to-helper clipboard events,
-and clean stop. The current
+and clean stop. A separate malformed fixture sends a rectangle beyond the
+negotiated framebuffer and verifies that the helper emits a stable diagnostic,
+fails closed, and exits without forwarding invalid pixels. The current
 Tauri UI is
 wired to the parent
 supervisor/renderer and offers explicit user-triggered reconnect after helper

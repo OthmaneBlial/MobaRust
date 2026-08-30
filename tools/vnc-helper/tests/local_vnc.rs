@@ -119,6 +119,72 @@ async fn helper_decodes_tight_jpeg_framebuffer_fixture() {
 }
 
 #[tokio::test]
+async fn helper_rejects_out_of_bounds_framebuffer_fixture() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        prepare_vnc_connection(&mut stream).await?;
+        let mut update = vec![0_u8, 0, 0, 1];
+        update.extend_from_slice(&[0x01, 0x3f, 0, 0, 0, 2, 0, 1]);
+        update.extend_from_slice(&0_i32.to_be_bytes());
+        update.extend_from_slice(&[0x11, 0x22, 0x33, 0xff, 0x44, 0x55, 0x66, 0xff]);
+        stream
+            .write_all(&update)
+            .await
+            .map_err(|error| error.to_string())
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+        .await
+        .unwrap();
+
+    let mut saw_diagnostic = false;
+    let mut saw_failed = false;
+    for _ in 0..8 {
+        match timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap()
+        {
+            HelperEvent::Diagnostic { ref message, .. }
+                if message == "VNC framebuffer update was invalid" =>
+            {
+                saw_diagnostic = true
+            }
+            HelperEvent::State {
+                state: HelperState::Failed,
+            } => {
+                saw_failed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_diagnostic,
+        "the helper did not report the invalid framebuffer"
+    );
+    assert!(
+        saw_failed,
+        "the helper did not fail closed on the invalid framebuffer"
+    );
+    server_task.await.unwrap().unwrap();
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn helper_sends_the_selected_quality_encodings_to_the_server() {
     for (quality, expected_encodings) in [
         ("balanced", BALANCED_ENCODINGS),
