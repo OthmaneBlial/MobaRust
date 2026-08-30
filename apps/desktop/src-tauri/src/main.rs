@@ -863,9 +863,10 @@ async fn ssh_save_remote_text_file(
     path: String,
     expected_revision: String,
     content: String,
+    encoding: mobarust_ssh::RemoteTextEncoding,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
     manager
-        .save_remote_text_file(&terminal_id, path, expected_revision, content)
+        .save_remote_text_file(&terminal_id, path, expected_revision, content, encoding)
         .await
         .map_err(|error| error.to_string())
 }

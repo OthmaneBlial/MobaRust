@@ -2915,6 +2915,7 @@ name = "mobarust-ssh"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "encoding_rs",
  "mobarust-core",
  "russh",
  "russh-sftp",

@@ -338,6 +338,7 @@ type RemoteTextDocument = {
   size: number;
   modifiedUnixSeconds?: number | null;
   permissions?: number | null;
+  encoding: "utf-8" | "windows-1252";
 };
 
 type RemoteMonitorSnapshot = {
@@ -1420,13 +1421,14 @@ function App() {
     }
   }, [remoteSessionId]);
 
-  const saveRemoteTextFile = useCallback(async (content: string) => {
+  const saveRemoteTextFile = useCallback(async (content: string, encoding: RemoteTextDocument["encoding"]) => {
     if (!remoteSessionId || !editingRemoteFile) return;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file", {
       terminalId: remoteSessionId,
       path: editingRemoteFile.path,
       expectedRevision: editingRemoteFile.revision,
       content,
+      encoding,
     });
     setEditingRemoteFile(saved);
     setConnectionError(null);
@@ -2390,12 +2392,17 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
   </section>;
 }
 
-function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string) => Promise<void> }) {
+function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string, encoding: RemoteTextDocument["encoding"]) => Promise<void> }) {
   const [content, setContent] = useState(document.content);
+  const [encoding, setEncoding] = useState<RemoteTextDocument["encoding"]>(document.encoding);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dirty = content !== document.content;
+  const dirty = content !== document.content || encoding !== document.encoding;
   const lineCount = content.split(/\r?\n/).length;
+  const matchCount = countTextMatches(content, searchQuery, matchCase);
 
   const close = () => {
     if (dirty && !window.confirm("Discard unsaved remote changes?")) return;
@@ -2407,7 +2414,7 @@ function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteText
     setBusy(true);
     setError(null);
     try {
-      await onSave(content);
+      await onSave(content, encoding);
     } catch (saveError) {
       setError(String(saveError));
     } finally {
@@ -2415,13 +2422,46 @@ function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteText
     }
   };
 
+  const replaceAll = () => {
+    if (!searchQuery) return;
+    setContent((current) => replaceTextMatches(current, searchQuery, replacement, matchCase));
+  };
+
   return <div className="palette-backdrop" role="presentation" onMouseDown={close}><section className="remote-editor-modal" role="dialog" aria-modal="true" aria-label={`Edit ${document.path}`} onMouseDown={(event) => event.stopPropagation()}>
-    <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / UTF-8</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close}><X size={17} /></button></div>
-    <div className="remote-editor-toolbar"><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div>
+    <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close}><X size={17} /></button></div>
+    <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding"><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
     {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error}</span></div>}
     <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" />
     <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
+}
+
+function countTextMatches(value: string, query: string, matchCase: boolean): number {
+  if (!query) return 0;
+  const source = matchCase ? value : value.toLocaleLowerCase();
+  const needle = matchCase ? query : query.toLocaleLowerCase();
+  let count = 0;
+  let offset = 0;
+  while ((offset = source.indexOf(needle, offset)) !== -1) {
+    count += 1;
+    offset += Math.max(needle.length, 1);
+  }
+  return count;
+}
+
+function replaceTextMatches(value: string, query: string, replacement: string, matchCase: boolean): string {
+  if (!query) return value;
+  if (matchCase) return value.split(query).join(replacement);
+  const lowerValue = value.toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  let result = "";
+  let offset = 0;
+  let match;
+  while ((match = lowerValue.indexOf(lowerQuery, offset)) !== -1) {
+    result += value.slice(offset, match) + replacement;
+    offset = match + query.length;
+  }
+  return offset === 0 ? value : result + value.slice(offset);
 }
 
 function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {

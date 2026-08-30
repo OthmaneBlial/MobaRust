@@ -252,6 +252,7 @@ enum SshCommand {
         path: String,
         expected_revision: String,
         content: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
         reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
     },
     FileOperation {
@@ -611,6 +612,7 @@ impl SshManager {
         path: String,
         expected_revision: String,
         content: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
     ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
         let path = validate_remote_file_path(&path)?;
         if content.len() > mobarust_ssh::MAX_REMOTE_EDITOR_BYTES {
@@ -629,6 +631,7 @@ impl SshManager {
                 path,
                 expected_revision,
                 content,
+                encoding,
                 reply,
             })
             .await
@@ -1426,7 +1429,7 @@ async fn run_shell_once(
                             let _ = reply.send(result);
                         });
                     }
-                    Some(SshCommand::SaveTextFile { path, expected_revision, content, reply }) => {
+                    Some(SshCommand::SaveTextFile { path, expected_revision, content, encoding, reply }) => {
                         let operation_connection = Arc::clone(connection);
                         tauri::async_runtime::spawn(async move {
                             let result = save_remote_text_file(
@@ -1434,6 +1437,7 @@ async fn run_shell_once(
                                 path,
                                 expected_revision,
                                 content,
+                                encoding,
                             )
                             .await;
                             let _ = reply.send(result);
@@ -1527,12 +1531,13 @@ async fn save_remote_text_file(
     path: String,
     expected_revision: String,
     content: String,
+    encoding: mobarust_ssh::RemoteTextEncoding,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
     let sftp = open_sftp_with_timeout(connection)
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp
-        .save_text_document(path, &expected_revision, &content)
+        .save_text_document_with_encoding(path, &expected_revision, &content, encoding)
         .await
         .map_err(|error| error.to_string());
     let _ = sftp.close().await;

@@ -2,14 +2,17 @@
 
 ## Status
 
-Accepted and implemented for the first UTF-8 remote editor slice.
+Accepted and implemented for the bounded UTF-8/Windows-1252 remote editor
+slice.
 
 ## Decision
 
 The SFTP browser offers an edit action for regular files. Rust reads a bounded
-UTF-8 document (maximum 4 MiB) and returns its content plus a SHA-256 revision
-token and mode metadata. The lightweight renderer editor keeps the content in
-an explicit editable buffer and requires a deliberate Save action.
+document (maximum 4 MiB) as either UTF-8 or Windows-1252 and returns its
+content, selected encoding, SHA-256 revision of the original bytes, and mode
+metadata. The lightweight renderer editor keeps the content in an explicit
+editable buffer and provides local search/replace plus a deliberate Save
+action.
 
 On save, Rust rereads the remote file and rejects the operation when its
 revision differs from the token captured at open time. It writes the new
@@ -21,8 +24,9 @@ cleaned on all handled failure paths.
 
 ## Security and reliability boundary
 
-The editor refuses directories, non-UTF-8 data, and files above the 4 MiB
-limit. Remote content is untrusted text and is rendered only in a textarea;
+The editor refuses directories, invalid UTF-8 data, lossy Windows-1252 writes,
+and files above the 4 MiB limit. Remote content is untrusted text and is
+rendered only in a textarea;
 it is never interpreted as HTML or a command. The renderer receives file
 content because editing requires it, but no credential or shell state is
 included.

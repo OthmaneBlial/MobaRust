@@ -100,6 +100,15 @@ button:not(:disabled) { cursor: pointer; }
 .remote-file-action:hover, .transfer-cancel:hover { background: rgba(232, 180, 92, .1); color: var(--amber); }
 .remote-editor-modal { display: flex; flex-direction: column; width: min(1000px, calc(100vw - 40px)); height: min(760px, calc(100vh - 48px)); padding: 22px; border: 1px solid var(--line-strong); background: #121a18; box-shadow: 0 25px 80px rgba(0, 0, 0, .45); }
 .remote-editor-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; color: var(--faint); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+.remote-editor-search, .remote-editor-meta { display: flex; align-items: center; gap: 8px; }
+.remote-editor-search { min-width: 0; flex: 1; }
+.remote-editor-search input { width: 130px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); background: #0b100f; color: var(--text); font-family: var(--mono); font-size: 9px; }
+.remote-editor-search input:focus, .remote-editor-meta select:focus { border-color: rgba(232, 180, 92, .6); outline: 0; }
+.remote-editor-case { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.remote-editor-case input { accent-color: var(--amber); }
+.remote-editor-meta { justify-content: flex-end; white-space: nowrap; }
+.remote-editor-meta label { display: inline-flex; align-items: center; gap: 5px; }
+.remote-editor-meta select { padding: 6px 7px; border: 1px solid var(--line); background: #0b100f; color: var(--text); font-family: var(--mono); font-size: 9px; }
 .remote-editor-dirty { color: var(--amber); }
 .remote-editor-error { flex-direction: row; align-items: flex-start; margin-bottom: 10px; }
 .remote-editor-error span { color: var(--muted); }
@@ -107,6 +116,7 @@ button:not(:disabled) { cursor: pointer; }
 .remote-editor-textarea:focus { border-color: rgba(232, 180, 92, .6); }
 .remote-editor-safety { display: inline-flex; align-items: center; gap: 6px; color: var(--mint); font-family: var(--mono); font-size: 8px; }
 .app-shell.theme-light .remote-editor-modal { background: #ffffff; }.app-shell.theme-light .remote-editor-textarea { background: #f8faf6; }
+.app-shell.theme-light .remote-editor-search input, .app-shell.theme-light .remote-editor-meta select { background: #f8faf6; }
 .transfer-panel { border-top: 1px solid var(--line); background: rgba(7, 11, 10, .2); }
 .transfer-panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px 8px; color: var(--faint); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
 .transfer-panel-heading .eyebrow { font-size: 8px; }
@@ -259,3 +269,4 @@ button:not(:disabled) { cursor: pointer; }
 @media (max-width: 1200px) { .workspace { padding-left: 25px; padding-right: 25px; }.workspace-grid { grid-template-columns: minmax(0, 1fr) 215px; gap: 16px; }.context-metrics { gap: 8px; }.terminal-chip { display: none; } }
 @media (max-width: 720px) { .snippet-layout, .macro-layout { grid-template-columns: 1fr; }.snippet-list, .macro-list { padding-right: 0; padding-bottom: 12px; border-right: 0; border-bottom: 1px solid var(--line); max-height: 170px; overflow: auto; }.snippet-form-row, .snippet-variable-grid { grid-template-columns: 1fr; }.snippet-form-footer { align-items: flex-start; flex-direction: column; }.snippet-form-footer > div { width: 100%; justify-content: flex-end; }.broadcast-banner, .macro-run-banner { align-items: flex-start; flex-wrap: wrap; }.broadcast-banner button, .macro-run-banner button { margin-left: 25px; }.diagnostics-target { grid-template-columns: 1fr 1fr; }.diagnostics-target .diagnostics-host { grid-column: 1 / -1; }.diagnostics-actions { flex-wrap: wrap; justify-content: flex-start; }.diagnostics-trace-options { justify-content: flex-start; }.diagnostics-results { grid-template-columns: 1fr; }.settings-grid, .settings-vault-grid { grid-template-columns: 1fr; }.settings-vault-actions { grid-column: auto; justify-content: flex-start; } }
 @media (max-width: 720px) { .remote-monitor-toolbar, .remote-monitor-actions { align-items: flex-start; flex-direction: column; }.remote-monitor-actions { width: 100%; }.remote-monitor-actions .primary-button { width: 100%; justify-content: center; }.remote-monitor-identity, .remote-monitor-grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .remote-editor-toolbar, .remote-editor-search, .remote-editor-meta { align-items: stretch; flex-direction: column; }.remote-editor-search input, .remote-editor-meta select { width: 100%; }.remote-editor-search .outline-button { justify-content: center; }.remote-editor-meta { align-items: flex-start; } }

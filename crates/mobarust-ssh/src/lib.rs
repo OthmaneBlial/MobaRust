@@ -7,11 +7,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use encoding_rs::WINDOWS_1252;
 use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Disconnect};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -71,6 +72,8 @@ pub enum SshError {
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
     RemoteFileNotUtf8,
+    #[error("remote text cannot be represented in the selected encoding")]
+    RemoteTextEncodingUnsupported,
     #[error("SCP operation failed: {0}")]
     Scp(String),
     #[error("local file operation failed: {0}")]
@@ -1385,6 +1388,14 @@ pub struct SftpConnection {
 
 pub const MAX_REMOTE_EDITOR_BYTES: usize = 4 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteTextEncoding {
+    #[default]
+    Utf8,
+    Windows1252,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteTextDocument {
@@ -1394,6 +1405,7 @@ pub struct RemoteTextDocument {
     pub size: u64,
     pub modified_unix_seconds: Option<u64>,
     pub permissions: Option<u32>,
+    pub encoding: RemoteTextEncoding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1448,12 +1460,21 @@ impl SftpConnection {
         Ok((metadata.len(), metadata.is_dir()))
     }
 
-    /// Read a bounded UTF-8 document together with a content revision. The
-    /// bound keeps the editor path from becoming an accidental large-file
-    /// transfer mechanism.
+    /// Read a bounded UTF-8 document together with a byte revision. The bound
+    /// keeps the editor path from becoming an accidental large-file transfer
+    /// mechanism.
     pub async fn read_text_document(
         &self,
         path: impl Into<String>,
+    ) -> Result<RemoteTextDocument, SshError> {
+        self.read_text_document_with_encoding(path, RemoteTextEncoding::Utf8)
+            .await
+    }
+
+    pub async fn read_text_document_with_encoding(
+        &self,
+        path: impl Into<String>,
+        encoding: RemoteTextEncoding,
     ) -> Result<RemoteTextDocument, SshError> {
         let path = path.into();
         let metadata = self
@@ -1487,14 +1508,16 @@ impl SftpConnection {
         if bytes.len() > MAX_REMOTE_EDITOR_BYTES {
             return Err(SshError::RemoteFileTooLarge);
         }
-        let content = String::from_utf8(bytes).map_err(|_| SshError::RemoteFileNotUtf8)?;
+        let revision = text_revision(&bytes);
+        let content = decode_remote_text(&bytes, encoding)?;
         Ok(RemoteTextDocument {
             path,
-            revision: text_revision(content.as_bytes()),
-            size: content.len() as u64,
+            revision,
+            size: metadata.len(),
             modified_unix_seconds: metadata.mtime.map(u64::from),
             permissions: metadata.permissions,
             content,
+            encoding,
         })
     }
 
@@ -1509,11 +1532,30 @@ impl SftpConnection {
         expected_revision: &str,
         content: &str,
     ) -> Result<RemoteTextDocument, SshError> {
-        if content.len() > MAX_REMOTE_EDITOR_BYTES {
+        self.save_text_document_with_encoding(
+            path,
+            expected_revision,
+            content,
+            RemoteTextEncoding::Utf8,
+        )
+        .await
+    }
+
+    pub async fn save_text_document_with_encoding(
+        &self,
+        path: impl Into<String>,
+        expected_revision: &str,
+        content: &str,
+        encoding: RemoteTextEncoding,
+    ) -> Result<RemoteTextDocument, SshError> {
+        let encoded = encode_remote_text(content, encoding)?;
+        if encoded.len() > MAX_REMOTE_EDITOR_BYTES {
             return Err(SshError::RemoteFileTooLarge);
         }
         let path = path.into();
-        let current = self.read_text_document(path.clone()).await?;
+        let current = self
+            .read_text_document_with_encoding(path.clone(), encoding)
+            .await?;
         if current.revision != expected_revision {
             return Err(SshError::RemoteConflict);
         }
@@ -1528,7 +1570,7 @@ impl SftpConnection {
             .await
             .map_err(|error| SshError::Sftp(error.to_string()))?;
         let write_result = file
-            .write_all(content.as_bytes())
+            .write_all(&encoded)
             .await
             .map_err(|error| SshError::Sftp(error.to_string()));
         let close_result = file
@@ -1593,7 +1635,7 @@ impl SftpConnection {
                 "remote file saved but backup cleanup failed: {error}"
             )));
         }
-        self.read_text_document(path).await
+        self.read_text_document_with_encoding(path, encoding).await
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
@@ -1742,6 +1784,36 @@ fn text_revision(content: &[u8]) -> String {
         let _ = write!(revision, "{byte:02x}");
     }
     revision
+}
+
+fn decode_remote_text(bytes: &[u8], encoding: RemoteTextEncoding) -> Result<String, SshError> {
+    match encoding {
+        RemoteTextEncoding::Utf8 => {
+            String::from_utf8(bytes.to_vec()).map_err(|_| SshError::RemoteFileNotUtf8)
+        }
+        RemoteTextEncoding::Windows1252 => {
+            let (content, _, had_errors) = WINDOWS_1252.decode(bytes);
+            if had_errors {
+                Err(SshError::RemoteTextEncodingUnsupported)
+            } else {
+                Ok(content.into_owned())
+            }
+        }
+    }
+}
+
+fn encode_remote_text(content: &str, encoding: RemoteTextEncoding) -> Result<Vec<u8>, SshError> {
+    match encoding {
+        RemoteTextEncoding::Utf8 => Ok(content.as_bytes().to_vec()),
+        RemoteTextEncoding::Windows1252 => {
+            let (bytes, _, had_errors) = WINDOWS_1252.encode(content);
+            if had_errors {
+                Err(SshError::RemoteTextEncodingUnsupported)
+            } else {
+                Ok(bytes.into_owned())
+            }
+        }
+    }
 }
 
 fn next_editor_temp_id() -> u64 {
@@ -2070,6 +2142,30 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, changed);
         assert!(first.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn remote_text_encoding_round_trips_utf8_and_windows_1252() {
+        let utf8 = encode_remote_text("café", RemoteTextEncoding::Utf8).unwrap();
+        assert_eq!(
+            decode_remote_text(&utf8, RemoteTextEncoding::Utf8).unwrap(),
+            "café"
+        );
+
+        let windows = encode_remote_text("price €", RemoteTextEncoding::Windows1252).unwrap();
+        assert!(windows.contains(&0x80));
+        assert_eq!(
+            decode_remote_text(&windows, RemoteTextEncoding::Windows1252).unwrap(),
+            "price €"
+        );
+    }
+
+    #[test]
+    fn remote_text_encoding_rejects_lossy_windows_1252_conversion() {
+        assert!(matches!(
+            encode_remote_text("emoji 😀", RemoteTextEncoding::Windows1252),
+            Err(SshError::RemoteTextEncodingUnsupported)
+        ));
     }
 
     #[test]

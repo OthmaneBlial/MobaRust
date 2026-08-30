@@ -9,6 +9,7 @@ description = "Native SSH transport and interactive PTY primitives for MobaRust"
 
 [dependencies]
 anyhow.workspace = true
+encoding_rs.workspace = true
 mobarust-core = { path = "../mobarust-core" }
 russh.workspace = true
 russh-sftp.workspace = true
