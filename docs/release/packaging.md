@@ -50,6 +50,25 @@ the complete deterministic manifest before reporting success. It proves local
 artifact integrity only; it is not a signature verifier and does not establish
 publisher authenticity.
 
+## Portable local smoke package
+
+cargo xtask portable-check first runs the bundle smoke check, then copies the
+verified macOS .app into an explicit generated package directory and creates
+an unsigned .tar.gz archive. The copy routine refuses symlinks and
+non-regular files, so a bundle entry cannot redirect packaging outside the
+repository-owned artifact tree. The package contains:
+
+* MobaRust.app
+* PORTABLE-UNSIGNED.txt
+* MobaRust.sha256, covering the extracted package contents
+
+The archive is inspected with tar for required entries and path traversal,
+then receives a separate archive SHA-256 manifest. All generated output stays
+under ignored target/debug/portable/; no package is committed or uploaded.
+This proves a local macOS packaging path only. It does not prove signing,
+notarization, clean installation, Windows/Linux support, or protocol
+interoperability.
+
 On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
 was created at `target/debug/bundle/macos/MobaRust.app`; its main executable
 and the staged VNC helper resource (`mobarust-vnc-helper`) were verified as

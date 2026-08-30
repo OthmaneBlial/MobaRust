@@ -83,10 +83,16 @@ Run the repository-scoped safety and packaging checks before contributing:
 ```bash
 cargo xtask check
 cargo xtask package-check
+cargo xtask portable-check
 cargo xtask pre-push-check
 ```
 
 The validation pipeline uses isolated home/XDG directories, repository or temporary fixture paths, and loopback-only protocol servers. It does not need your personal `~/.ssh`, GitHub keys, Keychain, SSH agent, real hosts, or attached hardware.
+
+cargo xtask portable-check is currently a macOS-only local smoke check. It
+assembles an unsigned .tar.gz beside the generated bundle, verifies its
+contents and SHA-256 manifests, and leaves the artifact under ignored
+target/. It is not a signed, notarized, or cross-platform release.
 
 ## Architecture
 

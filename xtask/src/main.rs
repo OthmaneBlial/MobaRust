@@ -16,6 +16,7 @@ fn main() {
         "check-vnc-helper" => check_vnc_helper(),
         "benchmark" => benchmark(),
         "package-check" => package_check(),
+        "portable-check" => portable_check(),
         "stage-helpers" => stage_helpers(),
         "pre-push-check" => pre_push_check(),
         "verify-checksum" => verify_checksum_command(arguments.collect()),
@@ -27,6 +28,9 @@ fn main() {
             println!("cargo xtask benchmark    Run synthetic local performance probes");
             println!(
                 "cargo xtask package-check    Build and inspect an unsigned current-platform Tauri app bundle"
+            );
+            println!(
+                "cargo xtask portable-check    Assemble and inspect an unsigned current-platform portable archive"
             );
             println!(
                 "cargo xtask stage-helpers    Build and stage ignored desktop helper resources"
@@ -143,6 +147,314 @@ fn package_check() -> Result<(), String> {
         Some("apps/desktop"),
     )?;
     verify_current_platform_bundle()
+}
+
+fn portable_check() -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err(
+            "portable-check currently requires a macOS host; cross-platform packaging evidence is pending"
+                .to_owned(),
+        );
+    }
+
+    package_check()?;
+
+    let repository_root = repository_root()?;
+    let bundle = repository_root.join("target/debug/bundle/macos/MobaRust.app");
+    let portable_root = repository_root.join("target/debug/portable");
+    let package_name = current_platform_package_name();
+    let package_directory = portable_root.join(&package_name);
+    let archive_name = format!("{package_name}.tar.gz");
+    let archive = portable_root.join(&archive_name);
+    let archive_manifest = portable_root.join(format!("{archive_name}.sha256"));
+
+    remove_generated_path(&package_directory)?;
+    remove_generated_path(&archive)?;
+    remove_generated_path(&archive_manifest)?;
+    fs::create_dir_all(&package_directory)
+        .map_err(|error| format!("could not create portable package directory: {error}"))?;
+
+    copy_regular_tree(&bundle, &package_directory.join("MobaRust.app"))?;
+    fs::write(
+        package_directory.join("PORTABLE-UNSIGNED.txt"),
+        format!(
+            "MobaRust {version} portable package\n\nThis local package is unsigned and intended for repository-scoped smoke testing only.\nIt is not notarized and does not establish cross-platform or interoperability evidence.\nPortable credentials remain in the separate encrypted vault and require an explicit unlock.\n",
+            version = env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .map_err(|error| format!("could not write portable package notice: {error}"))?;
+
+    let package_manifest = package_directory.join("MobaRust.sha256");
+    write_checksum_manifest(&portable_root, &package_directory, &package_manifest)?;
+    verify_checksum_manifest(&portable_root, &package_directory, &package_manifest)?;
+    create_portable_archive(&portable_root, &package_name, &archive)?;
+    verify_portable_archive(&portable_root, &package_name, &archive)?;
+    write_archive_checksum_manifest(&portable_root, &archive, &archive_manifest)?;
+    verify_archive_checksum_manifest(&portable_root, &archive, &archive_manifest)?;
+
+    println!(
+        "assembled and verified unsigned portable archive: {}",
+        archive.display()
+    );
+    println!(
+        "wrote and verified archive checksum manifest: {}",
+        archive_manifest.display()
+    );
+    Ok(())
+}
+
+fn repository_root() -> Result<PathBuf, String> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "xtask manifest has no repository parent".to_owned())
+        .map(Path::to_path_buf)
+}
+
+fn current_platform_package_name() -> String {
+    let architecture = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
+    format!("MobaRust-{}-{architecture}", std::env::consts::OS)
+}
+
+fn remove_generated_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
+            fs::remove_file(path).map_err(|error| {
+                format!(
+                    "could not remove generated file {}: {error}",
+                    path.display()
+                )
+            })
+        }
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).map_err(|error| {
+            format!(
+                "could not remove generated directory {}: {error}",
+                path.display()
+            )
+        }),
+        Ok(_) => Err(format!(
+            "generated path has unsupported type: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "could not inspect generated path {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// Copy only regular files and directories into the generated package. A
+/// bundle symlink is rejected so packaging cannot accidentally follow a path
+/// outside the repository-owned artifact tree.
+fn copy_regular_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source).map_err(|error| {
+        format!(
+            "could not inspect portable source {}: {error}",
+            source.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "portable source contains unsupported symlink: {}",
+            source.display()
+        ));
+    }
+    if metadata.is_file() {
+        fs::copy(source, destination).map_err(|error| {
+            format!(
+                "could not copy portable file {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        fs::set_permissions(destination, metadata.permissions()).map_err(|error| {
+            format!(
+                "could not preserve portable file permissions for {}: {error}",
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "portable source has unsupported file type: {}",
+            source.display()
+        ));
+    }
+
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "could not create portable destination {}: {error}",
+            destination.display()
+        )
+    })?;
+    let mut children = fs::read_dir(source)
+        .map_err(|error| format!("could not enumerate portable source: {error}"))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("could not read portable source entry: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    children.sort();
+    for child in children {
+        let name = child
+            .file_name()
+            .ok_or_else(|| format!("portable source entry has no name: {}", child.display()))?;
+        copy_regular_tree(&child, &destination.join(name))?;
+    }
+    Ok(())
+}
+
+fn create_portable_archive(
+    portable_root: &Path,
+    package_name: &str,
+    archive: &Path,
+) -> Result<(), String> {
+    let archive_name = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "portable archive path is not valid UTF-8: {}",
+                archive.display()
+            )
+        })?;
+    let output = run_sanitized_output("tar", &["-czf", archive_name, package_name], portable_root)?;
+    if !output.status.success() {
+        return Err(format!(
+            "tar could not create portable archive {} with {}",
+            archive.display(),
+            output.status
+        ));
+    }
+    Ok(())
+}
+
+fn verify_portable_archive(
+    portable_root: &Path,
+    package_name: &str,
+    archive: &Path,
+) -> Result<(), String> {
+    let archive_name = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "portable archive path is not valid UTF-8: {}",
+                archive.display()
+            )
+        })?;
+    let output = run_sanitized_output("tar", &["-tzf", archive_name], portable_root)?;
+    if !output.status.success() {
+        return Err(format!(
+            "tar could not inspect portable archive {} with {}",
+            archive.display(),
+            output.status
+        ));
+    }
+    let listing = String::from_utf8_lossy(&output.stdout);
+    validate_portable_archive_listing(&listing, package_name)
+}
+
+fn validate_portable_archive_listing(listing: &str, package_name: &str) -> Result<(), String> {
+    let entries = listing
+        .lines()
+        .map(|line| line.trim_end_matches('/'))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let package_prefix = format!("{package_name}/");
+    for entry in &entries {
+        if entry.starts_with('/')
+            || entry.split('/').any(|component| component == "..")
+            || (*entry != package_name && !entry.starts_with(&package_prefix))
+        {
+            return Err(format!("portable archive contains an unsafe path: {entry}"));
+        }
+    }
+
+    for required in [
+        package_name.to_owned(),
+        format!("{package_name}/PORTABLE-UNSIGNED.txt"),
+        format!("{package_name}/MobaRust.sha256"),
+        format!("{package_name}/MobaRust.app/Contents/MacOS/mobarust"),
+        format!("{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper"),
+    ] {
+        if !entries.iter().any(|entry| *entry == required) {
+            return Err(format!(
+                "portable archive is missing required entry: {required}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn write_archive_checksum_manifest(
+    portable_root: &Path,
+    archive: &Path,
+    manifest: &Path,
+) -> Result<(), String> {
+    let contents = archive_checksum_manifest_contents(portable_root, archive)?;
+    fs::write(manifest, contents)
+        .map_err(|error| format!("could not write archive checksum manifest: {error}"))
+}
+
+fn verify_archive_checksum_manifest(
+    portable_root: &Path,
+    archive: &Path,
+    manifest: &Path,
+) -> Result<(), String> {
+    let expected = archive_checksum_manifest_contents(portable_root, archive)?;
+    let actual = fs::read_to_string(manifest)
+        .map_err(|error| format!("could not read archive checksum manifest: {error}"))?;
+    if actual != expected {
+        return Err(format!(
+            "archive checksum manifest changed during verification: {}",
+            manifest.display()
+        ));
+    }
+    Ok(())
+}
+
+fn archive_checksum_manifest_contents(
+    portable_root: &Path,
+    archive: &Path,
+) -> Result<String, String> {
+    let relative = archive
+        .strip_prefix(portable_root)
+        .map_err(|error| format!("portable archive is outside its output directory: {error}"))?
+        .to_str()
+        .ok_or_else(|| {
+            format!(
+                "portable archive path is not valid UTF-8: {}",
+                archive.display()
+            )
+        })?
+        .replace('\\', "/");
+    Ok(format!("{}  {relative}\n", sha256_file(archive)?))
+}
+
+fn run_sanitized_output(
+    program: &str,
+    args: &[&str],
+    directory: &Path,
+) -> Result<std::process::Output, String> {
+    let isolated_home = create_sanitized_test_home()?;
+    let mut command = Command::new(program);
+    sanitize_process_environment(&mut command);
+    apply_isolated_home(&mut command, &isolated_home);
+    command.args(args).current_dir(directory);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not start {program}: {error}"));
+    let cleanup = fs::remove_dir_all(&isolated_home)
+        .map_err(|error| format!("could not remove temporary command home: {error}"));
+    cleanup?;
+    output
 }
 
 fn pre_push_check() -> Result<(), String> {
@@ -1013,5 +1325,73 @@ mod tests {
         let error = verify_unbundled_helper(&root, "mobarust-rdp-helper").unwrap_err();
         assert!(error.contains("unshippable helper"));
         fs::remove_dir_all(root).expect("remove test bundle");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn portable_copy_rejects_symlinked_bundle_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-portable-copy-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).expect("create portable source");
+        fs::write(source.join("safe.bin"), b"safe").expect("write safe source");
+        std::os::unix::fs::symlink(root.join("outside"), source.join("escape"))
+            .expect("create source symlink");
+
+        let error = copy_regular_tree(&source, &destination)
+            .expect_err("portable copy must reject symlinked entries");
+        assert!(error.contains("unsupported symlink"));
+        assert!(!destination.join("escape").exists());
+        fs::remove_dir_all(root).expect("remove portable copy fixture");
+    }
+
+    #[test]
+    fn portable_archive_listing_rejects_escape_and_requires_runtime_entries() {
+        let package_name = "MobaRust-macos-arm64";
+        let valid = format!(
+            "{package_name}/\n{package_name}/PORTABLE-UNSIGNED.txt\n{package_name}/MobaRust.sha256\n{package_name}/MobaRust.app/Contents/MacOS/mobarust\n{package_name}/MobaRust.app/Contents/Resources/helpers/mobarust-vnc-helper\n"
+        );
+        validate_portable_archive_listing(&valid, package_name)
+            .expect("complete portable listing should pass");
+
+        let error = validate_portable_archive_listing(
+            &format!("{package_name}/\n{package_name}/../escape"),
+            package_name,
+        )
+        .expect_err("archive traversal must be rejected");
+        assert!(error.contains("unsafe path"));
+    }
+
+    #[test]
+    fn archive_checksum_manifest_detects_tampering() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-archive-checksum-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create archive checksum fixture");
+        let archive = root.join("MobaRust-macos-arm64.tar.gz");
+        let manifest = root.join("MobaRust-macos-arm64.tar.gz.sha256");
+        fs::write(&archive, b"fixture archive").expect("write archive fixture");
+        write_archive_checksum_manifest(&root, &archive, &manifest)
+            .expect("write archive manifest");
+        verify_archive_checksum_manifest(&root, &archive, &manifest)
+            .expect("verify archive manifest");
+
+        fs::write(&archive, b"tampered archive").expect("tamper archive fixture");
+        let error = verify_archive_checksum_manifest(&root, &archive, &manifest)
+            .expect_err("archive tampering must be rejected");
+        assert!(error.contains("changed during verification"));
+        fs::remove_dir_all(root).expect("remove archive checksum fixture");
     }
 }
