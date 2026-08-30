@@ -44,6 +44,14 @@ pub enum TelnetError {
     InvalidOptions,
     #[error("Telnet operation timed out")]
     Timeout,
+    #[error("Telnet host could not be resolved")]
+    DnsFailure,
+    #[error("Telnet connection was refused")]
+    ConnectionRefused,
+    #[error("Telnet host is unreachable")]
+    HostUnreachable,
+    #[error("Telnet network connection failed")]
+    ConnectionFailed,
     #[error("Telnet I/O failed: {0}")]
     Io(#[source] io::Error),
     #[error("Telnet protocol frame is invalid: {0}")]
@@ -152,6 +160,18 @@ fn default_connect_timeout() -> Duration {
 
 fn default_operation_timeout() -> Duration {
     Duration::from_secs(5)
+}
+
+fn map_connect_error(error: io::Error) -> TelnetError {
+    match error.kind() {
+        io::ErrorKind::NotFound => TelnetError::DnsFailure,
+        io::ErrorKind::ConnectionRefused => TelnetError::ConnectionRefused,
+        io::ErrorKind::NetworkUnreachable | io::ErrorKind::HostUnreachable => {
+            TelnetError::HostUnreachable
+        }
+        io::ErrorKind::TimedOut => TelnetError::Timeout,
+        _ => TelnetError::ConnectionFailed,
+    }
 }
 
 /// A bounded retry policy for explicitly requested reconnect attempts.
@@ -379,7 +399,7 @@ impl TelnetConnection {
         )
         .await
         .map_err(|_| TelnetError::Timeout)?
-        .map_err(TelnetError::Io)?;
+        .map_err(map_connect_error)?;
         stream.set_nodelay(true).map_err(TelnetError::Io)?;
 
         let (reader, writer) = stream.into_split();
@@ -534,7 +554,7 @@ impl TelnetConnection {
         )
         .await
         .map_err(|_| TelnetError::Timeout)
-        .and_then(|result| result.map_err(TelnetError::Io));
+        .and_then(|result| result.map_err(map_connect_error));
         let stream = match result {
             Ok(stream) => stream,
             Err(error) => {
@@ -709,6 +729,23 @@ mod tests {
             options.validate(),
             Err(TelnetError::InvalidOptions)
         ));
+    }
+
+    #[test]
+    fn connect_errors_are_typed_without_raw_host_details() {
+        assert!(matches!(
+            map_connect_error(io::Error::from(io::ErrorKind::ConnectionRefused)),
+            TelnetError::ConnectionRefused
+        ));
+        assert_eq!(
+            map_connect_error(io::Error::other("private-host-detail")).to_string(),
+            "Telnet network connection failed"
+        );
+        assert!(
+            !map_connect_error(io::Error::other("private-host-detail"))
+                .to_string()
+                .contains("private-host-detail")
+        );
     }
 
     #[test]

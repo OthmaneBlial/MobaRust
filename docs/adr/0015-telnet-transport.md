@@ -34,6 +34,10 @@ shuts down the writer and enters the shared cancelled lifecycle state. An
 explicit reconnect uses a bounded retry policy and exponential backoff; there
 is no infinite background loop.
 
+Connection setup maps DNS failure, refusal, unreachable host, timeout, and
+generic network failure to typed redacted errors. Raw socket and operating
+system error text is not propagated through the user-facing Telnet boundary.
+
 ## Verification
 
 Unit tests cover incremental framing, literal IAC bytes, supported-option
