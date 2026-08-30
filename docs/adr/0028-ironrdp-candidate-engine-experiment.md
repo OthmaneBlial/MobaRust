@@ -28,6 +28,8 @@ the `rustls`/`clipboard` features. The helper:
 - constructs an IronRDP `ConfigBuilder` with TLS and CredSSP enabled;
 - maps real IronRDP image, keyboard, mouse, resize, lifecycle, and clean-stop
   events to the helper contract;
+- maps connector failures to redacted authentication/access, protocol,
+  malformed-data, and TLS/certificate-or-transport categories;
 - never reads the local vault, accesses the SSH agent, or touches personal
   files;
 - remains separate from the main workspace because IronRDP's `picky`
@@ -40,6 +42,13 @@ environment variables, logs, or frontend state. Certificate policy, reconnect,
 clipboard, audio, gateway support, packaging, and Windows interoperability are
 still release gates. The current helper deliberately reports clipboard input as
 unsupported rather than silently bridging the local clipboard.
+
+The pinned `ironrdp-tls 0.2.2` rustls backend currently installs an explicit
+no-op certificate verifier. The helper therefore does not claim certificate
+validation and cannot be promoted or packaged until the engine exposes a
+maintained verification policy (or the architecture moves to a vetted
+FreeRDP/native path). Categorizing this failure surface improves diagnostics;
+it does not remove that security gate.
 
 ## Verification and next gate
 

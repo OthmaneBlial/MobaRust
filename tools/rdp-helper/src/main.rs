@@ -228,8 +228,8 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
                             }
                         }
                     }
-                    Some(RdpOutputEvent::ConnectionFailure(_)) => {
-                        send_error(stdout, "RDP connection or authentication failed").await?;
+                    Some(RdpOutputEvent::ConnectionFailure(error)) => {
+                        send_error(stdout, rdp_failure_message(&error)).await?;
                         write_state(stdout, HelperState::Failed).await?;
                         return Ok(());
                     }
@@ -370,6 +370,23 @@ fn build_config(
     // policy exists. Keeping the flag parsed prevents accidental argv drift.
     let _ = arguments.audio_requested;
     Ok(builder.build()?)
+}
+
+fn rdp_failure_message(error: &ironrdp_connector::ConnectorError) -> &'static str {
+    use ironrdp_connector::ConnectorErrorKind;
+
+    match error.kind() {
+        ConnectorErrorKind::AccessDenied | ConnectorErrorKind::Credssp(_) => {
+            "RDP authentication or access was rejected"
+        }
+        ConnectorErrorKind::Negotiation(_) => "RDP protocol negotiation failed",
+        ConnectorErrorKind::Decode(_) | ConnectorErrorKind::Encode(_) => {
+            "RDP protocol data was invalid"
+        }
+        ConnectorErrorKind::Custom => "RDP TLS/certificate or transport validation failed",
+        ConnectorErrorKind::Reason(_) | ConnectorErrorKind::General => "RDP connection failed",
+        _ => "RDP connection failed",
+    }
 }
 
 fn framebuffer_event(
@@ -637,5 +654,35 @@ mod tests {
         assert!(
             matches!(events[1], FastPathInputEvent::MouseEvent(MousePdu { flags, .. }) if flags.contains(PointerFlags::LEFT_BUTTON) && flags.contains(PointerFlags::DOWN))
         );
+    }
+
+    #[test]
+    fn connector_failures_are_categorized_without_internal_details() {
+        let denied = ironrdp_connector::ConnectorError::new(
+            "fixture authentication",
+            ironrdp_connector::ConnectorErrorKind::AccessDenied,
+        );
+        assert_eq!(
+            rdp_failure_message(&denied),
+            "RDP authentication or access was rejected"
+        );
+
+        let custom = ironrdp_connector::ConnectorError::new(
+            "fixture TLS",
+            ironrdp_connector::ConnectorErrorKind::Custom,
+        );
+        assert_eq!(
+            rdp_failure_message(&custom),
+            "RDP TLS/certificate or transport validation failed"
+        );
+
+        let reason = ironrdp_connector::ConnectorError::new(
+            "fixture internal detail",
+            ironrdp_connector::ConnectorErrorKind::Reason(
+                "secret server name and certificate detail".into(),
+            ),
+        );
+        assert_eq!(rdp_failure_message(&reason), "RDP connection failed");
+        assert!(!rdp_failure_message(&reason).contains("secret server name"));
     }
 }

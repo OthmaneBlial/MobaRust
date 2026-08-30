@@ -53,6 +53,12 @@ behavior, packaging, and real Windows interoperability remain open gates. No
 global package, personal credential, or remote server was used during the
 local validation.
 
+Connector failures are reduced to stable categories at the helper boundary,
+including authentication/access rejection, protocol negotiation, malformed
+data, and TLS/certificate-or-transport validation. This is diagnostic
+hardening only: the pinned IronRDP rustls backend still uses a no-op
+certificate verifier, so certificate validation remains a promotion blocker.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

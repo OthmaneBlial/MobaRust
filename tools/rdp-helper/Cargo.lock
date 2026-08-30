@@ -1720,6 +1720,7 @@ name = "mobarust-rdp-helper"
 version = "0.1.0"
 dependencies = [
  "ironrdp-client",
+ "ironrdp-connector",
  "ironrdp-pdu",
  "mobarust-remote-desktop",
  "smallvec",
