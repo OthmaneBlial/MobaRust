@@ -1042,6 +1042,21 @@ async fn ssh_save_remote_text_file(
 }
 
 #[tauri::command]
+async fn ssh_save_remote_text_file_as(
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+    path: String,
+    content: String,
+    encoding: mobarust_ssh::RemoteTextEncoding,
+    overwrite: bool,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    manager
+        .save_remote_text_file_as(&terminal_id, path, content, encoding, overwrite)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn ssh_rename_remote(
     manager: State<'_, SshManager>,
     terminal_id: String,
@@ -1423,6 +1438,7 @@ fn main() {
             ssh_open_remote_text_file,
             ssh_collect_remote_monitor,
             ssh_save_remote_text_file,
+            ssh_save_remote_text_file_as,
             ssh_rename_remote,
             ssh_delete_remote,
             ssh_create_remote_directory,

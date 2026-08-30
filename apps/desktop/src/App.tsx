@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type UIEvent as ReactUIEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -1683,6 +1683,21 @@ function App() {
     void loadRemoteDirectory(remotePath);
   }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
 
+  const saveRemoteTextFileAs = useCallback(async (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => {
+    if (!remoteSessionId || !editingRemoteFile) return;
+    const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file_as", {
+      terminalId: remoteSessionId,
+      path,
+      content,
+      encoding,
+      overwrite,
+    });
+    setEditingRemoteFile(saved);
+    setConnectionError(null);
+    setSessionNotice(`Saved a new remote file at ${saved.path}.`);
+    void loadRemoteDirectory(remotePath);
+  }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
+
   const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
     const localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
@@ -2480,7 +2495,7 @@ function App() {
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
-      {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} />}
+      {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => setMacrosOpen(false)} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
@@ -2642,7 +2657,8 @@ function RemoteFilesView({ entries, path, status, error, transfers, onNavigate, 
   </section>;
 }
 
-function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string, encoding: RemoteTextDocument["encoding"]) => Promise<void> }) {
+function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string, encoding: RemoteTextDocument["encoding"]) => Promise<void>; onSaveAs: (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => Promise<void> }) {
+  const highlightRef = useRef<HTMLPreElement>(null);
   const [content, setContent] = useState(document.content);
   const [encoding, setEncoding] = useState<RemoteTextDocument["encoding"]>(document.encoding);
   const [searchQuery, setSearchQuery] = useState("");
@@ -2653,6 +2669,7 @@ function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteText
   const dirty = content !== document.content || encoding !== document.encoding;
   const lineCount = content.split(/\r?\n/).length;
   const matchCount = countTextMatches(content, searchQuery, matchCase);
+  const language = remoteEditorLanguage(document.path);
 
   const close = () => {
     if (dirty && !window.confirm("Discard unsaved remote changes?")) return;
@@ -2677,12 +2694,36 @@ function RemoteEditorModal({ document, onClose, onSave }: { document: RemoteText
     setContent((current) => replaceTextMatches(current, searchQuery, replacement, matchCase));
   };
 
+  const saveAs = async () => {
+    const target = window.prompt("Remote target path", document.path);
+    if (!target?.trim() || target.trim() === document.path) return;
+    const overwrite = window.confirm("If the remote target already exists, allow replacing it atomically? Cancel to create only.");
+    setBusy(true);
+    setError(null);
+    try {
+      await onSaveAs(target.trim(), content, encoding, overwrite);
+    } catch (saveError) {
+      setError(String(saveError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncHighlightScroll = (event: ReactUIEvent<HTMLTextAreaElement>) => {
+    if (!highlightRef.current) return;
+    highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+    highlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
+  };
+
   return <div className="palette-backdrop" role="presentation" onMouseDown={close}><section className="remote-editor-modal" role="dialog" aria-modal="true" aria-label={`Edit ${document.path}`} onMouseDown={(event) => event.stopPropagation()}>
     <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close}><X size={17} /></button></div>
     <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding"><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
-    {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error}</span></div>}
-    <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" />
-    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
+    {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error.includes("target already exists") ? "That remote target already exists. Choose Replace when using Save as if overwriting is intentional." : error}</span></div>}
+    <div className="remote-editor-code-shell">
+      <pre ref={highlightRef} className="remote-editor-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightRemoteCode(content, language) }} />
+      <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" />
+    </div>
+    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
 }
 
@@ -2712,6 +2753,50 @@ function replaceTextMatches(value: string, query: string, replacement: string, m
     offset = match + query.length;
   }
   return offset === 0 ? value : result + value.slice(offset);
+}
+
+type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
+
+function remoteEditorLanguage(path: string): RemoteEditorLanguage {
+  const lower = path.toLocaleLowerCase();
+  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
+  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
+  if (lower.endsWith(".ini") || lower.endsWith(".conf") || lower.endsWith(".cfg")) return "ini";
+  if (lower.endsWith(".sh") || lower.endsWith(".bash") || lower.endsWith(".zsh") || lower.endsWith(".fish") || lower.endsWith("/profile") || lower.endsWith("/rc")) return "shell";
+  return "plain";
+}
+
+function escapeRemoteEditorHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * Remote content is escaped before the fixed, local token spans are added.
+ * This function never treats bytes received from a host as HTML.
+ */
+function highlightRemoteCode(value: string, language: RemoteEditorLanguage): string {
+  const escaped = escapeRemoteEditorHtml(value);
+  if (language === "plain") return escaped;
+  if (language === "shell") {
+    return escaped.replace(
+      /\b(?:sudo|docker|kubectl|git|ssh|scp|sftp|cd|ls|cat|grep|systemctl|cargo|npm|pnpm)\b|--[A-Za-z0-9-]+|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/g,
+      (token) => `<span class="remote-editor-token-command">${token}</span>`,
+    );
+  }
+  if (language === "json") {
+    return escaped
+      .replace(/(&quot;[^\n]*?&quot;)(?=\s*:)/g, '<span class="remote-editor-token-key">$1</span>')
+      .replace(/\b(true|false|null)\b/g, '<span class="remote-editor-token-literal">$1</span>')
+      .replace(/\b-?\d+(?:\.\d+)?\b/g, '<span class="remote-editor-token-number">$&</span>');
+  }
+  const separator = language === "yaml" ? ":" : "=";
+  const keyPattern = new RegExp(`(^|\\n)([A-Za-z][A-Za-z0-9_.-]*)(?=\\s*\\${separator})`, "gm");
+  return escaped.replace(keyPattern, '$1<span class="remote-editor-token-key">$2</span>');
 }
 
 function TransferPanel({ transfers, onCancelTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void }) {

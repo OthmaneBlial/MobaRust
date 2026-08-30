@@ -70,6 +70,8 @@ pub enum SshError {
     Sftp(String),
     #[error("remote file changed since it was opened")]
     RemoteConflict,
+    #[error("remote save target already exists")]
+    RemoteTargetExists,
     #[error("remote text file exceeds the 4 MiB editor limit")]
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
@@ -1691,6 +1693,117 @@ impl SftpConnection {
                 "remote file saved but backup cleanup failed: {error}"
             )));
         }
+        self.read_text_document_with_encoding(path, encoding).await
+    }
+
+    /// Create a second remote document through a temporary file. Existing
+    /// targets are refused unless the caller explicitly opts into replacing
+    /// them; replacement uses the same rollback-safe promotion as normal
+    /// editing and never exposes a partially written target.
+    pub async fn save_text_document_as(
+        &self,
+        path: impl Into<String>,
+        content: &str,
+        encoding: RemoteTextEncoding,
+        overwrite: bool,
+    ) -> Result<RemoteTextDocument, SshError> {
+        let encoded = encode_remote_text(content, encoding)?;
+        if encoded.len() > MAX_REMOTE_EDITOR_BYTES {
+            return Err(SshError::RemoteFileTooLarge);
+        }
+        let path = path.into();
+        let existing = if self.try_exists(path.clone()).await? {
+            Some(
+                self.read_text_document_with_encoding(path.clone(), encoding)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        if existing.is_some() && !overwrite {
+            return Err(SshError::RemoteTargetExists);
+        }
+
+        let temporary = format!(
+            "{path}.mobarust-edit-{}-{}",
+            std::process::id(),
+            next_editor_temp_id()
+        );
+        let mut file = self
+            .session
+            .create(&temporary)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()))?;
+        let write_result = file
+            .write_all(&encoded)
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        let close_result = file
+            .shutdown()
+            .await
+            .map_err(|error| SshError::Sftp(error.to_string()));
+        if let Err(error) = write_result {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(error);
+        }
+        if let Err(error) = close_result {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(error);
+        }
+
+        if let Some(document) = &existing {
+            if let Some(permissions) = document.permissions {
+                let mut metadata = russh_sftp::client::fs::Metadata::empty();
+                metadata.permissions = Some(permissions);
+                let file = match self.session.open(&temporary).await {
+                    Ok(file) => file,
+                    Err(error) => {
+                        let _ = self.session.remove_file(&temporary).await;
+                        return Err(SshError::Sftp(error.to_string()));
+                    }
+                };
+                let set_result = file
+                    .set_metadata(metadata)
+                    .await
+                    .map_err(|error| SshError::Sftp(error.to_string()));
+                let close_result = file
+                    .close()
+                    .await
+                    .map_err(|error| SshError::Sftp(error.to_string()));
+                if let Err(error) = set_result {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(error);
+                }
+                if let Err(error) = close_result {
+                    let _ = self.session.remove_file(&temporary).await;
+                    return Err(error);
+                }
+            }
+
+            let backup = format!(
+                "{path}.mobarust-edit-backup-{}-{}",
+                std::process::id(),
+                next_editor_temp_id()
+            );
+            if let Err(error) = self.session.rename(&path, &backup).await {
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(SshError::Sftp(error.to_string()));
+            }
+            if let Err(error) = self.session.rename(&temporary, &path).await {
+                let _ = self.session.rename(&backup, &path).await;
+                let _ = self.session.remove_file(&temporary).await;
+                return Err(SshError::Sftp(error.to_string()));
+            }
+            if let Err(error) = self.session.remove_file(&backup).await {
+                return Err(SshError::Sftp(format!(
+                    "remote file saved but backup cleanup failed: {error}"
+                )));
+            }
+        } else if let Err(error) = self.session.rename(&temporary, &path).await {
+            let _ = self.session.remove_file(&temporary).await;
+            return Err(SshError::Sftp(error.to_string()));
+        }
+
         self.read_text_document_with_encoding(path, encoding).await
     }
 

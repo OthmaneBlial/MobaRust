@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use mobarust_ssh::{
-    HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials, SshError,
+    HostKeyPolicy, RemoteTextEncoding, SshConnectOptions, SshConnection, SshCredentials, SshError,
     SshFingerprintOptions, SshOutput, inspect_host_key,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
@@ -227,6 +227,30 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 .await,
             Err(SshError::RemoteConflict)
         ));
+        let save_as_path = format!("/tmp/mobarust-editor-copy-{}.txt", std::process::id());
+        let copied = sftp
+            .save_text_document_as(&save_as_path, "copy\n", RemoteTextEncoding::Utf8, false)
+            .await
+            .expect("create remote text document through save-as");
+        assert_eq!(copied.content, "copy\n");
+        assert!(matches!(
+            sftp.save_text_document_as(
+                &save_as_path,
+                "blocked\n",
+                RemoteTextEncoding::Utf8,
+                false,
+            )
+            .await,
+            Err(SshError::RemoteTargetExists)
+        ));
+        let replaced = sftp
+            .save_text_document_as(&save_as_path, "replaced\n", RemoteTextEncoding::Utf8, true)
+            .await
+            .expect("replace remote save-as target explicitly");
+        assert_eq!(replaced.content, "replaced\n");
+        sftp.remove_file(&save_as_path)
+            .await
+            .expect("remove save-as fixture");
         sftp.remove_file(&editor_path)
             .await
             .expect("remove editor fixture");

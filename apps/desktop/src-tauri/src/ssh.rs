@@ -259,6 +259,13 @@ enum SshCommand {
         encoding: mobarust_ssh::RemoteTextEncoding,
         reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
     },
+    SaveTextFileAs {
+        path: String,
+        content: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
+        overwrite: bool,
+        reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
+    },
     FileOperation {
         operation: SshFileOperation,
         reply: oneshot::Sender<Result<(), String>>,
@@ -636,6 +643,37 @@ impl SshManager {
                 expected_revision,
                 content,
                 encoding,
+                reply,
+            })
+            .await
+            .map_err(|_| SshManagerError::Closed)?;
+        response
+            .await
+            .map_err(|_| SshManagerError::Closed)?
+            .map_err(SshManagerError::InvalidRequest)
+    }
+
+    pub async fn save_remote_text_file_as(
+        &self,
+        terminal_id: &str,
+        path: String,
+        content: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
+        overwrite: bool,
+    ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
+        let path = validate_remote_file_path(&path)?;
+        if content.len() > mobarust_ssh::MAX_REMOTE_EDITOR_BYTES {
+            return Err(SshManagerError::InvalidRequest(
+                "remote editor content exceeds the 4 MiB limit".into(),
+            ));
+        }
+        let (reply, response) = oneshot::channel();
+        self.sender(terminal_id)?
+            .send(SshCommand::SaveTextFileAs {
+                path,
+                content,
+                encoding,
+                overwrite,
                 reply,
             })
             .await
@@ -1455,6 +1493,20 @@ async fn run_shell_once(
                             let _ = reply.send(result);
                         });
                     }
+                    Some(SshCommand::SaveTextFileAs { path, content, encoding, overwrite, reply }) => {
+                        let operation_connection = Arc::clone(connection);
+                        tauri::async_runtime::spawn(async move {
+                            let result = save_remote_text_file_as(
+                                &operation_connection,
+                                path,
+                                content,
+                                encoding,
+                                overwrite,
+                            )
+                            .await;
+                            let _ = reply.send(result);
+                        });
+                    }
                     Some(SshCommand::FileOperation { operation, reply }) => {
                         let operation_connection = Arc::clone(connection);
                         tauri::async_runtime::spawn(async move {
@@ -1550,6 +1602,24 @@ async fn save_remote_text_file(
         .map_err(|error| error.to_string())?;
     let result = sftp
         .save_text_document_with_encoding(path, &expected_revision, &content, encoding)
+        .await
+        .map_err(|error| error.to_string());
+    let _ = sftp.close().await;
+    result
+}
+
+async fn save_remote_text_file_as(
+    connection: &SshConnection,
+    path: String,
+    content: String,
+    encoding: mobarust_ssh::RemoteTextEncoding,
+    overwrite: bool,
+) -> Result<mobarust_ssh::RemoteTextDocument, String> {
+    let sftp = open_sftp_with_timeout(connection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = sftp
+        .save_text_document_as(path, &content, encoding, overwrite)
         .await
         .map_err(|error| error.to_string());
     let _ = sftp.close().await;
