@@ -98,11 +98,7 @@ impl SerialManager {
     {
         tokio::task::spawn_blocking(mobarust_serial::enumerate_devices)
             .await
-            .map_err(|error| {
-                SerialManagerError::Transport(mobarust_serial::SerialError::Worker(
-                    error.to_string(),
-                ))
-            })?
+            .map_err(|_| SerialManagerError::Transport(mobarust_serial::SerialError::Worker))?
             .map_err(SerialManagerError::Transport)
     }
 

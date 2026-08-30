@@ -19,30 +19,28 @@ const MAX_READ_BYTES: usize = 64 * 1024;
 pub enum SerialError {
     #[error("serial device and baud rate are required")]
     InvalidOptions,
-    #[error("serial device could not be opened: {0}")]
-    Open(String),
-    #[error("serial device disconnected during {operation}: {detail}")]
-    DeviceDisconnected {
-        operation: &'static str,
-        detail: String,
-    },
-    #[error("serial I/O failed during {operation}: {detail}")]
-    Io {
-        operation: &'static str,
-        detail: String,
-    },
+    #[error("serial device could not be found")]
+    DeviceNotFound,
+    #[error("serial device permission was denied")]
+    PermissionDenied,
+    #[error("serial device could not be opened")]
+    OpenFailed,
+    #[error("serial device disconnected during {operation}")]
+    DeviceDisconnected { operation: &'static str },
+    #[error("serial I/O failed during {operation}")]
+    Io { operation: &'static str },
     #[error("serial operation timed out")]
     Timeout,
     #[error("serial connection is closed")]
     Closed,
     #[error("serial connection was cancelled")]
     Cancelled,
-    #[error("serial devices could not be enumerated: {0}")]
-    Enumeration(String),
-    #[error("serial lifecycle error: {0}")]
-    Lifecycle(String),
-    #[error("serial worker failed: {0}")]
-    Worker(String),
+    #[error("serial devices could not be enumerated")]
+    Enumeration,
+    #[error("serial lifecycle error")]
+    Lifecycle,
+    #[error("serial worker failed")]
+    Worker,
 }
 
 impl SerialError {
@@ -124,7 +122,7 @@ pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, SerialError> {
                 })
                 .collect()
         })
-        .map_err(|error| SerialError::Enumeration(error.to_string()))
+        .map_err(|_| SerialError::Enumeration)
 }
 
 impl LineEnding {
@@ -251,18 +249,18 @@ impl SerialConnection {
         let port = tokio::time::timeout(options.open_timeout, worker)
             .await
             .map_err(|_| SerialError::Timeout)?
-            .map_err(|error| SerialError::Worker(error.to_string()))??;
+            .map_err(|_| SerialError::Worker)??;
 
         let mut lifecycle = ConnectionLifecycle::new();
         lifecycle
             .apply(ConnectionEvent::BeginConnect)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
         lifecycle
             .apply(ConnectionEvent::BeginAuthentication)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
         lifecycle
             .apply(ConnectionEvent::AuthenticationSucceeded)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
 
         Ok(Self {
             options,
@@ -289,9 +287,7 @@ impl SerialConnection {
         let maximum = maximum.clamp(1, MAX_READ_BYTES);
         let port = Arc::clone(&self.port);
         let operation = tokio::task::spawn_blocking(move || {
-            let mut guard = port
-                .lock()
-                .map_err(|_| SerialError::Worker("serial port lock poisoned".into()))?;
+            let mut guard = port.lock().map_err(|_| SerialError::Worker)?;
             let Some(port) = guard.as_mut() else {
                 return Err(SerialError::Closed);
             };
@@ -307,7 +303,7 @@ impl SerialConnection {
         let result = tokio::time::timeout(self.options.io_timeout.saturating_mul(2), operation)
             .await
             .map_err(|_| SerialError::Timeout)?
-            .map_err(|error| SerialError::Worker(error.to_string()))?;
+            .map_err(|_| SerialError::Worker)?;
         if let Err(error) = &result
             && error.is_device_loss()
         {
@@ -324,9 +320,7 @@ impl SerialConnection {
         let length = bytes.len();
         let port = Arc::clone(&self.port);
         let operation = tokio::task::spawn_blocking(move || {
-            let mut guard = port
-                .lock()
-                .map_err(|_| SerialError::Worker("serial port lock poisoned".into()))?;
+            let mut guard = port.lock().map_err(|_| SerialError::Worker)?;
             let Some(port) = guard.as_mut() else {
                 return Err(SerialError::Closed);
             };
@@ -337,7 +331,7 @@ impl SerialConnection {
         let result = tokio::time::timeout(self.options.io_timeout.saturating_mul(2), operation)
             .await
             .map_err(|_| SerialError::Timeout)?
-            .map_err(|error| SerialError::Worker(error.to_string()))?;
+            .map_err(|_| SerialError::Worker)?;
         if let Err(error) = &result
             && error.is_device_loss()
         {
@@ -355,7 +349,7 @@ impl SerialConnection {
             .lock()
             .expect("serial lifecycle lock poisoned")
             .apply(ConnectionEvent::BeginReconnect)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
         let options = self.options.clone();
         let open_options = options.clone();
         let worker = tokio::task::spawn_blocking(move || open_port(&open_options));
@@ -364,9 +358,9 @@ impl SerialConnection {
                 self.mark_failed();
                 return Err(SerialError::Timeout);
             }
-            Ok(Err(error)) => {
+            Ok(Err(_error)) => {
                 self.mark_failed();
-                return Err(SerialError::Worker(error.to_string()));
+                return Err(SerialError::Worker);
             }
             Ok(Ok(Err(error))) => {
                 self.mark_failed();
@@ -374,20 +368,14 @@ impl SerialConnection {
             }
             Ok(Ok(Ok(port))) => port,
         };
-        *self
-            .port
-            .lock()
-            .map_err(|_| SerialError::Worker("serial port lock poisoned".into()))? = Some(new_port);
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| SerialError::Worker("serial lifecycle lock poisoned".into()))?;
+        *self.port.lock().map_err(|_| SerialError::Worker)? = Some(new_port);
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
         lifecycle
             .apply(ConnectionEvent::BeginAuthentication)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
         lifecycle
             .apply(ConnectionEvent::AuthenticationSucceeded)
-            .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+            .map_err(|_| SerialError::Lifecycle)?;
         Ok(())
     }
 
@@ -404,10 +392,7 @@ impl SerialConnection {
     }
 
     pub async fn cancel(&self) -> Result<(), SerialError> {
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| SerialError::Worker("serial lifecycle lock poisoned".into()))?;
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
         if matches!(
             lifecycle.state(),
             ConnectionState::Connected
@@ -417,7 +402,7 @@ impl SerialConnection {
         ) {
             lifecycle
                 .apply(ConnectionEvent::Cancel)
-                .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+                .map_err(|_| SerialError::Lifecycle)?;
         }
         drop(lifecycle);
         self.take_port()?;
@@ -425,10 +410,7 @@ impl SerialConnection {
     }
 
     pub async fn close(&self) -> Result<(), SerialError> {
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| SerialError::Worker("serial lifecycle lock poisoned".into()))?;
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
         if matches!(
             lifecycle.state(),
             ConnectionState::Connected
@@ -438,27 +420,21 @@ impl SerialConnection {
         ) {
             lifecycle
                 .apply(ConnectionEvent::DisconnectRequested)
-                .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+                .map_err(|_| SerialError::Lifecycle)?;
         }
         drop(lifecycle);
         self.take_port()?;
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| SerialError::Worker("serial lifecycle lock poisoned".into()))?;
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
         if lifecycle.state() == ConnectionState::Disconnecting {
             lifecycle
                 .apply(ConnectionEvent::Disconnected)
-                .map_err(|error| SerialError::Lifecycle(error.to_string()))?;
+                .map_err(|_| SerialError::Lifecycle)?;
         }
         Ok(())
     }
 
     fn take_port(&self) -> Result<(), SerialError> {
-        self.port
-            .lock()
-            .map_err(|_| SerialError::Worker("serial port lock poisoned".into()))?
-            .take();
+        self.port.lock().map_err(|_| SerialError::Worker)?.take();
         Ok(())
     }
 }
@@ -470,13 +446,21 @@ fn open_port(options: &SerialOptions) -> Result<Box<dyn serialport::SerialPort>,
         .parity(options.parity.into())
         .flow_control(options.flow_control.into())
         .timeout(options.io_timeout);
-    builder
-        .open()
-        .map_err(|error| SerialError::Open(error.to_string()))
+    builder.open().map_err(map_open_error)
+}
+
+fn map_open_error(error: serialport::Error) -> SerialError {
+    match error.kind() {
+        serialport::ErrorKind::NoDevice | serialport::ErrorKind::Io(io::ErrorKind::NotFound) => {
+            SerialError::DeviceNotFound
+        }
+        serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => SerialError::PermissionDenied,
+        serialport::ErrorKind::InvalidInput => SerialError::InvalidOptions,
+        serialport::ErrorKind::Unknown | serialport::ErrorKind::Io(_) => SerialError::OpenFailed,
+    }
 }
 
 fn classify_io_error(operation: &'static str, error: io::Error) -> SerialError {
-    let detail = error.to_string();
     if matches!(
         error.kind(),
         io::ErrorKind::NotConnected
@@ -484,9 +468,9 @@ fn classify_io_error(operation: &'static str, error: io::Error) -> SerialError {
             | io::ErrorKind::BrokenPipe
             | io::ErrorKind::NotFound
     ) {
-        SerialError::DeviceDisconnected { operation, detail }
+        SerialError::DeviceDisconnected { operation }
     } else {
-        SerialError::Io { operation, detail }
+        SerialError::Io { operation }
     }
 }
 
@@ -574,6 +558,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn open_errors_are_typed_without_device_path_or_driver_text() {
+        let missing = map_open_error(serialport::Error::new(
+            serialport::ErrorKind::NoDevice,
+            "/private/device/path disappeared",
+        ));
+        assert_eq!(missing.to_string(), "serial device could not be found");
+        assert!(!missing.to_string().contains("/private/device/path"));
+
+        let denied = map_open_error(serialport::Error::new(
+            serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied),
+            "permission details",
+        ));
+        assert_eq!(denied.to_string(), "serial device permission was denied");
     }
 
     #[test]

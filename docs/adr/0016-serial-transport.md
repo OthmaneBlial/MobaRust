@@ -55,6 +55,11 @@ and configuration values are validated before any open attempt; control
 characters and zero timeouts are rejected. Logs must contain metadata only,
 never terminal payloads by default.
 
+Open and I/O failures are categorized before they cross the native boundary:
+missing device, permission denied, device loss, timeout, or generic driver
+failure. Raw device paths and driver descriptions are not included in the
+user-facing error text.
+
 ## Verification
 
 Unit tests cover all serial parameters, line-ending framing, invalid paths and
