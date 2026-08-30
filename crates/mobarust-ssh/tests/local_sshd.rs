@@ -673,7 +673,9 @@ impl LocalSshd {
         } else {
             "/usr/local/sbin/sshd"
         };
-        let child = Command::new(sshd)
+        let mut command = Command::new(sshd);
+        clear_credential_environment(&mut command);
+        let child = command
             .args(["-D", "-e", "-f"])
             .arg(&config)
             .stdout(Stdio::null())
@@ -707,13 +709,27 @@ impl Drop for LocalSshd {
 }
 
 fn run_keygen(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let status = Command::new("ssh-keygen")
+    let mut command = Command::new("ssh-keygen");
+    clear_credential_environment(&mut command);
+    let status = command
         .args(["-q", "-t", "ed25519", "-N", ""])
         .arg("-f")
         .arg(path)
         .status()?;
     assert!(status.success(), "ssh-keygen failed for {}", path.display());
     Ok(())
+}
+
+fn clear_credential_environment(command: &mut Command) {
+    for variable in [
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GIT_SSH_COMMAND",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+    ] {
+        command.env_remove(variable);
+    }
 }
 
 fn reserve_port() -> Result<u16, Box<dyn std::error::Error>> {

@@ -55,6 +55,11 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
             "--height",
             "200",
         ])
+        .env_remove("SSH_AUTH_SOCK")
+        .env_remove("SSH_AGENT_PID")
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_CONFIG_GLOBAL")
+        .env_remove("GIT_CONFIG_SYSTEM")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

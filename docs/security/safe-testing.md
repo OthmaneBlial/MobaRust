@@ -37,7 +37,8 @@ Before merging a new integration test, verify that it:
 2. uses a temporary fixture path for keys, known-hosts, databases, and files;
 3. uses synthetic credentials held only for the test lifetime;
 4. does not inherit or query the SSH agent when agent behavior is not the
-   subject of the test;
+   subject of the test; fixture child processes remove agent and Git SSH
+   environment variables explicitly;
 5. cleans up child processes and listening sockets on success, failure, and
    cancellation;
 6. does not print passwords, private keys, tokens, or full environment values.
