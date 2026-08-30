@@ -10,6 +10,7 @@ import {
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
 import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
+import { parseRemoteDesktopProfile } from "./remote-desktop-profile";
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
@@ -4549,7 +4550,13 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [favorite, setFavorite] = useState(session.favorite);
   const isSsh = session.protocol === "SSH";
   const isLocal = session.protocol === "LOCAL";
+  const isRemoteDesktop = session.protocol === "RDP" || session.protocol === "VNC";
   const supportsStartup = isSsh || isLocal;
+  const [desktopDomain, setDesktopDomain] = useState(session.remote_desktop_profile?.domain ?? "");
+  const [desktopWidth, setDesktopWidth] = useState(String(session.remote_desktop_profile?.width ?? 1280));
+  const [desktopHeight, setDesktopHeight] = useState(String(session.remote_desktop_profile?.height ?? 720));
+  const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
+  const [vncQuality, setVncQuality] = useState<NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"]>(session.remote_desktop_profile?.vnc_quality ?? "balanced");
   const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
     session.auth.kind === "none" ? "agent" : session.auth.kind,
   );
@@ -4567,8 +4574,8 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
     const normalizedTags = [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))];
     let auth = session.auth;
     let environment = session.environment ?? [];
+    if (supportsStartup || isRemoteDesktop) setAuthError(null);
     if (supportsStartup) {
-      setAuthError(null);
       try {
         environment = parseSessionEnvironment(environmentText);
       } catch (error) {
@@ -4598,6 +4605,21 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         auth = { kind: "agent" };
       }
     }
+    let remoteDesktopProfile = session.remote_desktop_profile;
+    if (isRemoteDesktop) {
+      const parsedProfile = parseRemoteDesktopProfile(session.protocol === "RDP" ? "RDP" : "VNC", {
+        domain: desktopDomain,
+        width: desktopWidth,
+        height: desktopHeight,
+        colorDepth: desktopColorDepth,
+        vncQuality,
+      });
+      if (!parsedProfile.ok) {
+        setAuthError(parsedProfile.error);
+        return;
+      }
+      remoteDesktopProfile = parsedProfile.profile;
+    }
     onSave({
       ...session,
       name: name.trim(),
@@ -4609,6 +4631,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       notes: notes.trim() || null,
       environment,
       auth,
+      remote_desktop_profile: remoteDesktopProfile,
       server_alive_interval: isSsh && Number(serverAliveInterval) === 0 ? null : isSsh ? Number(serverAliveInterval) : session.server_alive_interval ?? null,
     });
   };
@@ -4664,6 +4687,44 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
             <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Operational notes" rows={3} />
           </label>
         </div>
+
+        {isRemoteDesktop && <div className="session-editor-auth">
+          <span className="settings-section-label">Remote desktop parameters</span>
+          <div className="session-editor-grid">
+            {session.protocol === "RDP" && <label>
+              Domain <span className="optional">optional</span>
+              <input value={desktopDomain} onChange={(event) => setDesktopDomain(event.target.value)} placeholder="WORKGROUP" />
+              <small>Passed as RDP session metadata; credentials remain opaque references.</small>
+            </label>}
+            <label>
+              Width
+              <input type="number" min="320" max="16384" value={desktopWidth} onChange={(event) => setDesktopWidth(event.target.value)} />
+            </label>
+            <label>
+              Height
+              <input type="number" min="200" max="16384" value={desktopHeight} onChange={(event) => setDesktopHeight(event.target.value)} />
+            </label>
+            {session.protocol === "RDP" && <label>
+              Color depth
+              <select value={desktopColorDepth} onChange={(event) => setDesktopColorDepth(event.target.value)}>
+                <option value="16">16-bit</option>
+                <option value="32">32-bit</option>
+              </select>
+              <small>Only the candidate’s validated 16/32-bit modes are accepted.</small>
+            </label>}
+            {session.protocol === "VNC" && <label>
+              Quality profile
+              <select value={vncQuality ?? "balanced"} onChange={(event) => setVncQuality(event.target.value as NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"])}>
+                <option value="balanced">Balanced</option>
+                <option value="low-latency">Low latency</option>
+                <option value="low-bandwidth">Low bandwidth</option>
+              </select>
+              <small>Controls client-side encoding preference and refresh cadence.</small>
+            </label>}
+          </div>
+          <div className="credential-modal-note"><ShieldCheck size={14} /><span>{session.protocol === "RDP" ? "RDP audio redirection remains disabled until a reviewed native backend exists." : "VNC keeps server-side resize and transport security capability-dependent; unsupported behavior is reported."}</span></div>
+          {authError && <div className="connect-error-inline" role="alert">{authError}</div>}
+        </div>}
 
         {isSsh && <div className="session-editor-auth">
           <span className="settings-section-label">SSH authentication</span>

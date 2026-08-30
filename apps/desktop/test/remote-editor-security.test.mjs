@@ -5,6 +5,7 @@ import {
   isLoopbackIpLiteral,
 } from "../src/connection-safety.ts";
 import { parseQuickConnectUri } from "../src/connection-uri.ts";
+import { parseRemoteDesktopProfile } from "../src/remote-desktop-profile.ts";
 import {
   formatSessionEnvironment,
   parseSessionEnvironment,
@@ -69,6 +70,63 @@ assert.equal(
 );
 assert.equal(experimentalDesktopTargetError("vnc", "::1"), null);
 assert.equal(experimentalDesktopTargetError("ssh", "example.invalid"), null);
+
+assert.deepEqual(
+  parseRemoteDesktopProfile("RDP", {
+    domain: "WORKGROUP",
+    width: "1920",
+    height: "1080",
+    colorDepth: "32",
+    vncQuality: undefined,
+  }),
+  {
+    ok: true,
+    profile: {
+      domain: "WORKGROUP",
+      width: 1920,
+      height: 1080,
+      color_depth: 32,
+      audio_enabled: false,
+      vnc_quality: "balanced",
+    },
+  },
+);
+assert.deepEqual(
+  parseRemoteDesktopProfile("VNC", {
+    domain: "ignored",
+    width: "1280",
+    height: "720",
+    colorDepth: "24",
+    vncQuality: "low-latency",
+  }),
+  {
+    ok: true,
+    profile: {
+      domain: null,
+      width: 1280,
+      height: 720,
+      color_depth: 24,
+      audio_enabled: false,
+      vnc_quality: "low-latency",
+    },
+  },
+);
+assert.match(
+  parseRemoteDesktopProfile("RDP", { domain: "", width: "319", height: "720", colorDepth: "32", vncQuality: "balanced" }).error,
+  /resolution/,
+);
+assert.match(
+  parseRemoteDesktopProfile("RDP", { domain: "", width: "1280", height: "720", colorDepth: "24", vncQuality: "balanced" }).error,
+  /color depth/,
+);
+assert.match(
+  parseRemoteDesktopProfile("RDP", { domain: "WORK\u0000GROUP", width: "1280", height: "720", colorDepth: "32", vncQuality: "balanced" }).error,
+  /domain/,
+);
+assert.match(
+  parseRemoteDesktopProfile("VNC", { domain: "", width: "1280", height: "720", colorDepth: "24", vncQuality: "unsupported" }).error,
+  /quality/,
+);
 
 assert.deepEqual(parseQuickConnectUri("rdp://fixture@[::1]:3389"), {
   protocol: "rdp",
