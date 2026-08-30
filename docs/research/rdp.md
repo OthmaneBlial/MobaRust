@@ -139,6 +139,13 @@ separate bounded grace period before forcing task termination. A stalled
 loopback handshake test verifies that this path returns promptly; it does not
 prove remote-server interoperability.
 
+The candidate also normalizes a closed IronRDP input channel into a stable
+helper-level failure. It stops the client before returning and routes an active
+or reconnecting attempt through the existing bounded reconnect budget; an
+initial-attempt failure emits `Failed` instead of returning an unhandled raw
+channel error. This protects the lifecycle boundary only and does not change
+the still-open dependency, certificate, or Windows interoperability gates.
+
 ## Prototype boundary
 
 The first experiment should package a pinned FreeRDP client helper and expose a

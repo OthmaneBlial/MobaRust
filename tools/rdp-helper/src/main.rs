@@ -79,6 +79,17 @@ impl fmt::Display for ArgumentError {
 
 impl Error for ArgumentError {}
 
+#[derive(Debug)]
+struct RdpInputError(&'static str);
+
+impl fmt::Display for RdpInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl Error for RdpInputError {}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     LocalSet::new().run_until(run_main()).await
@@ -319,15 +330,31 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        if handle_command(
+                        let command_result = handle_command(
                             command,
                             &input_tx,
                             current_display,
                             &mut last_buttons,
                             stdout,
                             &mut client_task,
-                        ).await? {
-                            return Ok(RdpAttemptOutcome::Stopped);
+                        )
+                        .await;
+                        match command_result {
+                            Ok(true) => return Ok(RdpAttemptOutcome::Stopped),
+                            Ok(false) => {}
+                            Err(_) => {
+                                stop_client(&input_tx, &mut client_task).await;
+                                if active_sent || policy.reconnecting {
+                                    return Ok(lost_outcome(
+                                        "RDP input handling failed",
+                                        active_sent,
+                                        policy.reconnecting,
+                                    ));
+                                }
+                                send_error(stdout, "RDP input handling failed").await?;
+                                write_state(stdout, HelperState::Failed).await?;
+                                return Ok(RdpAttemptOutcome::Fatal);
+                            }
                         }
                     }
                     Some(Incoming::End) | None => {
@@ -520,13 +547,16 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             Ok(true)
         }
         HelperCommand::Resize { display } => {
+            send_rdp_input(
+                input_tx,
+                RdpInputEvent::Resize {
+                    width: display.width,
+                    height: display.height,
+                    scale_factor: 100,
+                    physical_size: None,
+                },
+            )?;
             *current_display = display;
-            input_tx.send(RdpInputEvent::Resize {
-                width: display.width,
-                height: display.height,
-                scale_factor: 100,
-                physical_size: None,
-            })?;
             Ok(false)
         }
         HelperCommand::Key { scancode, pressed } => {
@@ -541,19 +571,20 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             };
             let mut events = SmallVec::<[FastPathInputEvent; 2]>::new();
             events.push(FastPathInputEvent::KeyboardEvent(flags, scancode));
-            input_tx.send(RdpInputEvent::FastPath(events))?;
+            send_rdp_input(input_tx, RdpInputEvent::FastPath(events))?;
             Ok(false)
         }
         HelperCommand::Pointer { x, y, buttons } => {
             let events = pointer_events(x, y, buttons, *last_buttons);
+            send_rdp_input(input_tx, RdpInputEvent::FastPath(events))?;
             *last_buttons = buttons;
-            input_tx.send(RdpInputEvent::FastPath(events))?;
             Ok(false)
         }
         HelperCommand::Wheel { x, y, delta } => {
-            input_tx.send(RdpInputEvent::FastPath(smallvec::smallvec![wheel_event(
-                x, y, delta
-            ),]))?;
+            send_rdp_input(
+                input_tx,
+                RdpInputEvent::FastPath(smallvec::smallvec![wheel_event(x, y, delta),]),
+            )?;
             Ok(false)
         }
         HelperCommand::Clipboard { .. } => {
@@ -570,6 +601,15 @@ async fn handle_command<W: AsyncWrite + Unpin>(
         }
         HelperCommand::Start { .. } => Ok(false),
     }
+}
+
+fn send_rdp_input(
+    input_tx: &mpsc::UnboundedSender<RdpInputEvent>,
+    event: RdpInputEvent,
+) -> Result<(), RdpInputError> {
+    input_tx
+        .send(event)
+        .map_err(|_| RdpInputError("RDP input channel is unavailable"))
 }
 
 async fn stop_client(
@@ -1136,6 +1176,36 @@ mod tests {
                 if message == "RDP clipboard redirection is not enabled in this helper build"
         ));
         assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn closed_rdp_input_channel_is_categorized_without_event_details() {
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        drop(input_rx);
+        let mut current_display = DisplaySize {
+            width: 640,
+            height: 480,
+        };
+        let mut last_buttons = 0;
+        let mut client_task = tokio::spawn(async {});
+        let mut stdout = tokio::io::sink();
+
+        let error = handle_command(
+            HelperCommand::Key {
+                scancode: 30,
+                pressed: true,
+            },
+            &input_tx,
+            &mut current_display,
+            &mut last_buttons,
+            &mut stdout,
+            &mut client_task,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "RDP input channel is unavailable");
+        assert!(!error.to_string().contains("FastPath"));
     }
 
     #[tokio::test]
