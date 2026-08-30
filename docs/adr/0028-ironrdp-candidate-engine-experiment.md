@@ -83,6 +83,14 @@ certificate verification. Invalid or untrusted certificates are rejected.
 Local tests still use only literal loopback listeners and never contact a real
 remote host.
 
+On macOS, `platform_tls_rejects_a_self_signed_loopback_certificate` creates a
+short-lived synthetic self-signed certificate, serves it through a disposable
+OpenSSL process on `127.0.0.1`, and verifies that the platform trust verifier
+rejects it for the matching server name. It does not read personal
+certificates or contact a remote host. This proves the candidate's TLS trust
+decision only; Windows/Linux certificate-store fixtures and real RDP-server
+interoperability remain open gates.
+
 This remains a hard security gate. Promotion requires deterministic certificate
 fixtures, an audited engine/backend with real certificate-chain and hostname
 validation, and Windows interoperability evidence. The eventual distribution
