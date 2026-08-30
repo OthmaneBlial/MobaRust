@@ -98,7 +98,7 @@ fn package_check() -> Result<(), String> {
 
 fn check() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
-    run("cargo", ["test", "--workspace"], None)?;
+    run_sanitized_test("cargo", ["test", "--workspace"], None)?;
     run(
         "cargo",
         [
@@ -137,7 +137,7 @@ fn check_rdp_helper() -> Result<(), String> {
         ],
         None,
     )?;
-    run(
+    run_sanitized_test(
         "cargo",
         ["test", "--manifest-path", "tools/rdp-helper/Cargo.toml"],
         None,
@@ -169,7 +169,7 @@ fn check_vnc_helper() -> Result<(), String> {
         ],
         None,
     )?;
-    run(
+    run_sanitized_test(
         "cargo",
         ["test", "--manifest-path", "tools/vnc-helper/Cargo.toml"],
         None,
@@ -199,6 +199,50 @@ fn run<const N: usize>(
     if let Some(directory) = directory {
         command.current_dir(directory);
     }
+    let status: ExitStatus = command
+        .status()
+        .map_err(|error| format!("could not start {program}: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}"))
+    }
+}
+
+/// Run tests without inheriting ambient SSH agents or Git SSH configuration.
+///
+/// This is intentionally narrower than changing HOME: Cargo and rustup still
+/// need their normal toolchain/cache locations, while protocol fixtures must
+/// never accidentally discover a user's agent or personal Git configuration.
+fn run_sanitized_test<const N: usize>(
+    program: &str,
+    args: [&str; N],
+    directory: Option<&str>,
+) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+
+    for variable in [
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GIT_SSH_COMMAND",
+        "GIT_SSH",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    ] {
+        command.env_remove(variable);
+    }
+    command.env_remove("GIT_CONFIG_GLOBAL");
+    command.env_remove("GIT_CONFIG_SYSTEM");
+    command.env("GIT_CONFIG_NOSYSTEM", "1");
+    command.env(
+        "GIT_CONFIG_GLOBAL",
+        if cfg!(windows) { "NUL" } else { "/dev/null" },
+    );
+
     let status: ExitStatus = command
         .status()
         .map_err(|error| format!("could not start {program}: {error}"))?;

@@ -51,6 +51,11 @@ The default local quality command is repository-scoped:
 cargo xtask check
 ```
 
+Its test subprocesses also remove ambient SSH-agent, askpass, and Git SSH
+configuration variables. The check deliberately keeps the normal Cargo/rustup
+cache environment, so this is an application-level safety boundary rather than
+an operating-system sandbox.
+
 The isolated RDP helper check is also repository-scoped:
 
 ```text
