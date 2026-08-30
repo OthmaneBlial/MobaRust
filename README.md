@@ -6,7 +6,7 @@ MobaRust is a serious remote workstation for developers, DevOps engineers, syste
 
 It brings the daily MobaXterm workflow into an independent, Rust-first desktop app: SSH terminals, SFTP/SCP file operations, tunnels, saved sessions, local shells, diagnostics, serial consoles, Telnet, and remote-operations tooling.
 
-[Open the project website](https://othmaneblial.github.io/MobaRust/) · [View the roadmap](ROADMAP.md) · [Try the source](https://github.com/OthmaneBlial/MobaRust/issues)
+[Open the project website](https://othmaneblial.github.io/MobaRust/) · [View the roadmap](ROADMAP.md) · [Try the source](https://github.com/OthmaneBlial/MobaRust)
 
 ![MobaRust logo](apps/desktop/src-tauri/icons/icon.svg)
 
