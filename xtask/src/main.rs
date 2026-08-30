@@ -63,6 +63,18 @@ fn stage_helpers() -> Result<(), String> {
             .ok_or_else(|| format!("helper manifest has no parent: {}", manifest_path.display()))?
             .join("target/release")
             .join(format!("{binary}{executable_suffix}"));
+        let source_metadata = fs::symlink_metadata(&source).map_err(|error| {
+            format!(
+                "could not inspect built {binary} at {}: {error}",
+                source.display()
+            )
+        })?;
+        if !source_metadata.file_type().is_file() {
+            return Err(format!(
+                "built {binary} is not a regular file: {}",
+                source.display()
+            ));
+        }
         let destination = staging_directory.join(format!("{binary}{executable_suffix}"));
         fs::copy(&source, &destination).map_err(|error| {
             format!(
