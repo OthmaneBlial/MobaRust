@@ -23,7 +23,9 @@ import {
   KeyRound,
   LoaderCircle,
   LayoutDashboard,
+  Maximize2,
   MoreHorizontal,
+  Minimize2,
   Network,
   PanelBottom,
   PanelLeftClose,
@@ -832,6 +834,8 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const [remoteClipboard, setRemoteClipboard] = useState<string | null>(null);
   const [clipboardCopied, setClipboardCopied] = useState(false);
   const [connectAttempt, setConnectAttempt] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -876,6 +880,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       setError(null);
       setRemoteClipboard(null);
       setClipboardCopied(false);
+      setFullscreenError(null);
       onStatusChange(workspaceId, "starting");
       if (!IS_TAURI) {
         setError(`${request.protocol.toUpperCase()} requires the desktop runtime; browser preview does not open remote hosts.`);
@@ -912,6 +917,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       }
     };
 
+    const syncFullscreen = () => setIsFullscreen(document.fullscreenElement === host);
+    document.addEventListener("fullscreenchange", syncFullscreen);
+
     const observer = new ResizeObserver(sendResize);
     observer.observe(host);
     void boot();
@@ -919,6 +927,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     return () => {
       disposed = true;
       observer.disconnect();
+      document.removeEventListener("fullscreenchange", syncFullscreen);
       unlisten?.();
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = null;
@@ -938,6 +947,18 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       setClipboardCopied(true);
     } catch {
       setError("Copying remote clipboard text was blocked by the desktop runtime.");
+    }
+  };
+
+  const toggleFullscreen = async () => {
+    const host = hostRef.current;
+    if (!host) return;
+    setFullscreenError(null);
+    try {
+      if (document.fullscreenElement === host) await document.exitFullscreen();
+      else await host.requestFullscreen();
+    } catch {
+      setFullscreenError("Fullscreen mode was blocked by the desktop runtime.");
     }
   };
 
@@ -971,6 +992,8 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
     {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button></div>}
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
+    {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
+    <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
     <div className="remote-desktop-overlay"><span className="eyebrow">{request.protocol.toUpperCase()} / NATIVE HELPER</span><strong>{dimensions.width} × {dimensions.height}</strong><small>Click the canvas to focus · input stays inside the native protocol boundary</small></div>
   </div>;
 }

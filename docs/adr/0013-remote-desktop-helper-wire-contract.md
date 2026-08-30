@@ -52,6 +52,11 @@ engine experiment must measure input latency, resize behavior, clipboard,
 reconnect, audio, certificate handling, and Windows interoperability before
 the adapter is promoted.
 
+Fullscreen and visual scaling remain renderer-owned controls: the UI can place
+the canvas in fullscreen and preserve its aspect ratio without asking the
+remote protocol to resize. VNC server-side resize remains capability-dependent
+and is not simulated.
+
 The protocol-independent contract tests run without spawning a process or
 reading host configuration. The helper's EOF smoke test also avoids sockets.
 A future interoperability fixture must use a dedicated temporary directory and
