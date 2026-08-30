@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Versioned local session persistence for MobaRust"
 
 [dependencies]
+libc.workspace = true
 mobarust-core = { path = "../mobarust-core" }
 serde.workspace = true
 serde_json.workspace = true

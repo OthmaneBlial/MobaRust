@@ -3000,6 +3000,7 @@ dependencies = [
 name = "mobarust-store"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mobarust-core",
  "serde",
  "serde_json",

@@ -7,7 +7,8 @@ Accepted and implemented for the common OpenSSH fields.
 ## Decision
 
 MobaRust imports a user-selected OpenSSH config through a dedicated native
-command. The importer recognizes:
+command. The importer opens only a regular file, bounds the input to 1 MiB,
+and parses it natively. It recognizes:
 
 - `Host` exact aliases;
 - `HostName`, `User`, and `Port`;

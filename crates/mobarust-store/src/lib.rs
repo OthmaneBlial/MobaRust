@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,6 +21,7 @@ use uuid::Uuid;
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CURRENT_AUDIT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_AUDIT_EVENTS: usize = 1_000;
+const MAX_OPENSSH_CONFIG_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -41,6 +42,10 @@ pub enum StoreError {
     Write { path: PathBuf, source: io::Error },
     #[error("could not read OpenSSH config {path}: {source}")]
     ImportRead { path: PathBuf, source: io::Error },
+    #[error("OpenSSH config is too large (maximum 1 MiB): {0}")]
+    ImportTooLarge(PathBuf),
+    #[error("OpenSSH config path is not a regular file: {0}")]
+    ImportPathUnsafe(PathBuf),
     #[error("settings file {path} contains invalid data: {source}")]
     SettingsDecode {
         path: PathBuf,
@@ -813,10 +818,7 @@ impl SessionStore {
         path: impl Into<PathBuf>,
     ) -> Result<OpenSshImportReport, StoreError> {
         let path = path.into();
-        let contents = fs::read_to_string(&path).map_err(|source| StoreError::ImportRead {
-            path: path.clone(),
-            source,
-        })?;
+        let contents = read_openssh_config(&path)?;
         let (blocks, unsupported_directives) = parse_openssh_config(&contents);
         let mut imported = Vec::new();
         let mut skipped_hosts = Vec::new();
@@ -1038,6 +1040,35 @@ fn effective_options(blocks: &[OpenSshHostBlock], alias: &str) -> BTreeMap<Strin
     options
 }
 
+fn read_openssh_config(path: &Path) -> Result<String, StoreError> {
+    let file = open_store_file(path).map_err(|source| StoreError::ImportRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| StoreError::ImportRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(StoreError::ImportPathUnsafe(path.to_path_buf()));
+    }
+    if metadata.len() > MAX_OPENSSH_CONFIG_BYTES as u64 {
+        return Err(StoreError::ImportTooLarge(path.to_path_buf()));
+    }
+
+    let mut contents = String::with_capacity(metadata.len() as usize);
+    file.take(MAX_OPENSSH_CONFIG_BYTES as u64 + 1)
+        .read_to_string(&mut contents)
+        .map_err(|source| StoreError::ImportRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if contents.len() > MAX_OPENSSH_CONFIG_BYTES {
+        return Err(StoreError::ImportTooLarge(path.to_path_buf()));
+    }
+    Ok(contents)
+}
+
 fn is_exact_host_pattern(pattern: &str) -> bool {
     !pattern.is_empty()
         && pattern != "*"
@@ -1083,6 +1114,22 @@ fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
     }
 
     fs::rename(temporary, destination)
+}
+
+#[cfg(unix)]
+fn open_store_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path)
+}
+
+#[cfg(not(unix))]
+fn open_store_file(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 fn private_temp_options() -> OpenOptions {
@@ -1621,6 +1668,26 @@ mod tests {
         let second_report = store.import_openssh_config(&path).unwrap();
         assert_eq!(second_report.imported.len(), 3);
         assert_eq!(store.list().len(), 3);
+    }
+
+    #[test]
+    fn openssh_import_rejects_an_oversized_config_before_parsing() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(super::MAX_OPENSSH_CONFIG_BYTES as u64 + 1)
+            .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        assert!(matches!(
+            store.import_openssh_config(&path),
+            Err(StoreError::ImportTooLarge(rejected)) if rejected == path
+        ));
+        assert!(store.list().is_empty());
     }
 
     #[test]
