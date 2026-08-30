@@ -132,6 +132,11 @@ impl HelperCapabilities {
         if let Some(&depth) = self.color_depths.iter().find(|depth| **depth == 0) {
             return Err(HelperProtocolError::InvalidCapabilityColorDepth { depth });
         }
+        if self.protocol == DesktopProtocol::Rdp {
+            for &depth in &self.color_depths {
+                validate_rdp_color_depth(depth)?;
+            }
+        }
         Ok(())
     }
 }
@@ -1615,6 +1620,13 @@ mod tests {
         assert!(matches!(
             too_many.validate(),
             Err(HelperProtocolError::CapabilitiesTooLarge { count: 9 })
+        ));
+
+        let mut unsupported_rdp_depth = HelperCapabilities::rdp();
+        unsupported_rdp_depth.color_depths = vec![16, 24, 32];
+        assert!(matches!(
+            unsupported_rdp_depth.validate(),
+            Err(HelperProtocolError::UnsupportedRdpColorDepth { depth: 24 })
         ));
     }
 
