@@ -316,6 +316,12 @@ async fn handle_command<W: AsyncWrite + Unpin>(
             input_tx.send(RdpInputEvent::FastPath(events))?;
             Ok(false)
         }
+        HelperCommand::Wheel { x, y, delta } => {
+            input_tx.send(RdpInputEvent::FastPath(smallvec::smallvec![wheel_event(
+                x, y, delta
+            ),]))?;
+            Ok(false)
+        }
         HelperCommand::Clipboard { .. } => {
             // Clipboard needs a native OS backend and a user-controlled
             // trust policy. This helper build keeps the RDP channel enabled
@@ -460,6 +466,15 @@ fn pointer_events(
         }
     }
     events
+}
+
+fn wheel_event(x: u16, y: u16, delta: i16) -> FastPathInputEvent {
+    FastPathInputEvent::MouseEvent(MousePdu {
+        flags: PointerFlags::VERTICAL_WHEEL,
+        number_of_wheel_rotation_units: delta,
+        x_position: x,
+        y_position: y,
+    })
 }
 
 async fn write_state<W: AsyncWrite + Unpin>(
@@ -659,6 +674,27 @@ mod tests {
         assert!(
             matches!(events[1], FastPathInputEvent::MouseEvent(MousePdu { flags, .. }) if flags.contains(PointerFlags::LEFT_BUTTON) && flags.contains(PointerFlags::DOWN))
         );
+    }
+
+    #[test]
+    fn wheel_events_use_bounded_vertical_rotation_units() {
+        assert!(matches!(
+            wheel_event(10, 20, 120),
+            FastPathInputEvent::MouseEvent(MousePdu {
+                flags,
+                number_of_wheel_rotation_units: 120,
+                x_position: 10,
+                y_position: 20,
+            }) if flags == PointerFlags::VERTICAL_WHEEL
+        ));
+        assert!(matches!(
+            wheel_event(10, 20, -120),
+            FastPathInputEvent::MouseEvent(MousePdu {
+                flags,
+                number_of_wheel_rotation_units: -120,
+                ..
+            }) if flags == PointerFlags::VERTICAL_WHEEL
+        ));
     }
 
     #[test]

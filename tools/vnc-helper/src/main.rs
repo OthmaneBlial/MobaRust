@@ -312,6 +312,26 @@ async fn handle_command<W: AsyncWrite + Unpin>(
                 .map_err(|_| "VNC pointer input failed")?;
             Ok(false)
         }
+        HelperCommand::Wheel { x, y, delta } => {
+            let button = if delta.is_negative() {
+                0b0000_1000
+            } else {
+                0b0001_0000
+            };
+            for _ in 0..wheel_steps(delta) {
+                client
+                    .input(X11Event::PointerEvent(ClientMouseEvent::from((
+                        x, y, button,
+                    ))))
+                    .await
+                    .map_err(|_| "VNC wheel input failed")?;
+                client
+                    .input(X11Event::PointerEvent(ClientMouseEvent::from((x, y, 0))))
+                    .await
+                    .map_err(|_| "VNC wheel input failed")?;
+            }
+            Ok(false)
+        }
         HelperCommand::Clipboard { text } => {
             if text.len() > MAX_CLIPBOARD_BYTES || !text.chars().all(|value| value as u32 <= 0xff) {
                 send_error(
@@ -329,6 +349,12 @@ async fn handle_command<W: AsyncWrite + Unpin>(
         }
         HelperCommand::Start { .. } => Ok(false),
     }
+}
+
+fn wheel_steps(delta: i16) -> u32 {
+    (i32::from(delta).unsigned_abs() + 59)
+        .div_euclid(120)
+        .clamp(1, 8)
 }
 
 struct Canvas {
@@ -691,5 +717,13 @@ mod tests {
         assert!(
             matches!(event, HelperEvent::Framebuffer { width: 320, height: 200, ref pixels } if pixels[..4] == [0x11, 0x22, 0x33, 0xff])
         );
+    }
+
+    #[test]
+    fn wheel_delta_is_quantized_to_bounded_vnc_button_pulses() {
+        assert_eq!(wheel_steps(120), 1);
+        assert_eq!(wheel_steps(-240), 2);
+        assert_eq!(wheel_steps(16), 1);
+        assert_eq!(wheel_steps(16 * 120), 8);
     }
 }

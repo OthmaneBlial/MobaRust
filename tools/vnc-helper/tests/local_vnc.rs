@@ -257,6 +257,15 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
         },
     )
     .await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Wheel {
+            x: 12,
+            y: 18,
+            delta: 120,
+        },
+    )
+    .await;
 
     timeout(Duration::from_secs(3), server_task)
         .await
@@ -440,7 +449,8 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
 
     let mut saw_key = false;
     let mut saw_pointer = false;
-    while !(saw_key && saw_pointer) {
+    let mut saw_wheel = false;
+    while !(saw_key && saw_pointer && saw_wheel) {
         let mut kind = [0_u8; 1];
         timeout(Duration::from_secs(3), stream.read_exact(&mut kind))
             .await
@@ -468,7 +478,12 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
                     .read_exact(&mut payload)
                     .await
                     .map_err(|error| error.to_string())?;
-                saw_pointer = true;
+                if payload[0] == 0b0000_0001 {
+                    saw_pointer = true;
+                }
+                if payload[0] == 0b0000_1000 || payload[0] == 0b0001_0000 {
+                    saw_wheel = true;
+                }
             }
             6 => {
                 let mut header = [0_u8; 7];

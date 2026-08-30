@@ -254,6 +254,19 @@ async fn remote_desktop_pointer(
 }
 
 #[tauri::command]
+async fn remote_desktop_wheel(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+    x: u16,
+    y: u16,
+    delta: i16,
+) -> Result<(), String> {
+    manager
+        .send(&session_id, HelperCommand::Wheel { x, y, delta })
+        .await
+}
+
+#[tauri::command]
 async fn remote_desktop_resize(
     manager: State<'_, RemoteDesktopManager>,
     session_id: String,
@@ -1667,6 +1680,7 @@ fn main() {
             remote_desktop_start,
             remote_desktop_key,
             remote_desktop_pointer,
+            remote_desktop_wheel,
             remote_desktop_resize,
             remote_desktop_clipboard,
             remote_desktop_stop,

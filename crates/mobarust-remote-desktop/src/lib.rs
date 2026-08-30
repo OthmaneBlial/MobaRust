@@ -206,6 +206,11 @@ pub enum HelperCommand {
         y: u16,
         buttons: u8,
     },
+    Wheel {
+        x: u16,
+        y: u16,
+        delta: i16,
+    },
     Clipboard {
         text: Zeroizing<String>,
     },
@@ -235,6 +240,12 @@ impl fmt::Debug for HelperCommand {
                 .field("y", y)
                 .field("buttons", buttons)
                 .finish(),
+            Self::Wheel { x, y, delta } => formatter
+                .debug_struct("Wheel")
+                .field("x", x)
+                .field("y", y)
+                .field("delta", delta)
+                .finish(),
             Self::Clipboard { text } => formatter
                 .debug_struct("Clipboard")
                 .field("bytes", &text.len())
@@ -249,6 +260,9 @@ impl HelperCommand {
             Self::Start { display, .. } | Self::Resize { display } => display.validate(),
             Self::Clipboard { text } if text.len() > MAX_CLIPBOARD_BYTES => {
                 Err(HelperProtocolError::ClipboardTooLarge { bytes: text.len() })
+            }
+            Self::Wheel { delta, .. } if !(-256..=255).contains(delta) || *delta == 0 => {
+                Err(HelperProtocolError::InvalidWheelDelta { delta: *delta })
             }
             _ => Ok(()),
         }
@@ -487,6 +501,8 @@ pub enum HelperProtocolError {
     InvalidDisplaySize { width: u16, height: u16 },
     #[error("clipboard payload is too large: {bytes} bytes")]
     ClipboardTooLarge { bytes: usize },
+    #[error("wheel delta is outside the supported range: {delta}")]
+    InvalidWheelDelta { delta: i16 },
     #[error("diagnostic payload is too large: {bytes} bytes")]
     DiagnosticTooLarge { bytes: usize },
     #[error("credential payload is too large: {bytes} bytes")]
@@ -939,6 +955,13 @@ mod tests {
         let frame = encode_command_frame(&command).unwrap();
         let decoded = decode_command_frame(&frame).unwrap();
         assert_eq!(decoded, command);
+        let wheel = HelperCommand::Wheel {
+            x: 12,
+            y: 18,
+            delta: 120,
+        };
+        let wheel_frame = encode_command_frame(&wheel).unwrap();
+        assert_eq!(decode_command_frame(&wheel_frame).unwrap(), wheel);
         assert!(matches!(
             decode_command_frame(&frame[..frame.len() - 1]),
             Err(HelperProtocolError::TruncatedFrame { .. })
@@ -974,6 +997,15 @@ mod tests {
         assert!(matches!(
             invalid.validate(),
             Err(HelperProtocolError::InvalidDisplaySize { .. })
+        ));
+        assert!(matches!(
+            HelperCommand::Wheel {
+                x: 0,
+                y: 0,
+                delta: 0,
+            }
+            .validate(),
+            Err(HelperProtocolError::InvalidWheelDelta { delta: 0 })
         ));
         let invalid_frame = HelperEvent::Framebuffer {
             width: 320,

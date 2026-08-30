@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -1034,6 +1034,17 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     void invoke("remote_desktop_pointer", { sessionId, x, y, buttons: event.buttons }).catch((sendError) => setError(String(sendError)));
   };
 
+  const sendWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+    const sessionId = sessionIdRef.current;
+    const canvas = canvasRef.current;
+    if (!IS_TAURI || !sessionId || !canvas || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+    const bounds = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - bounds.left) * canvas.width / Math.max(bounds.width, 1))));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - bounds.top) * canvas.height / Math.max(bounds.height, 1))));
+    event.preventDefault();
+    void invoke("remote_desktop_wheel", { sessionId, x, y, delta: event.deltaY > 0 ? 120 : -120 }).catch((sendError) => setError(String(sendError)));
+  };
+
   const paste = (event: ReactClipboardEvent<HTMLCanvasElement>) => {
     const sessionId = sessionIdRef.current;
     const text = event.clipboardData.getData("text/plain");
@@ -1043,7 +1054,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   };
 
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
-    <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
+    <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onMouseDown={sendPointer} onMouseUp={sendPointer} onMouseMove={(event) => event.buttons > 0 && sendPointer(event)} onWheel={sendWheel} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
     {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button></div>}
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}

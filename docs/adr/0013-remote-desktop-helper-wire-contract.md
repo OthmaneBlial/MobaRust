@@ -26,7 +26,7 @@ messages before a process is started:
 - credentials are handed over through a separate native channel after helper
   startup;
 - control messages are typed (`start`, `stop`, `resize`, keyboard, pointer,
-  and clipboard);
+  wheel, and clipboard); wheel deltas are bounded before reaching a helper;
 - events are typed (hello, lifecycle state, framebuffer, clipboard, and
   bounded diagnostics);
 - JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
