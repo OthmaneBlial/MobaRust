@@ -44,6 +44,15 @@ Windows interoperability are still release gates. The current helper
 deliberately reports clipboard input as unsupported rather than silently
 bridging the local clipboard.
 
+The clipboard feature was checked against the pinned IronRDP source before
+making this boundary decision. `ClipboardType::Enable` selects a native
+`WinClipboard` backend on Windows, while the non-Windows implementation is a
+stub. The feature flag alone is therefore insufficient for the macOS and Linux
+targets. Keeping `ClipboardType::Stub` makes the limitation explicit and
+prevents a false cross-platform capability claim. Any future clipboard adapter
+must be platform-specific, user-controlled, bounded to safe text operations,
+and isolated from automatic local clipboard writes.
+
 The helper now owns a bounded reconnect policy after an active-session loss:
 three attempts with exponential backoff, native credential reuse, and
 cooperative cancellation during the delay. This is lifecycle hardening only;

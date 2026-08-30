@@ -58,6 +58,17 @@ it keeps the credential inside the helper and honors Stop during the delay.
 No global package, personal credential, or remote server was used during the
 local validation.
 
+The candidate's `clipboard` feature was inspected locally at the pinned
+`ironrdp-client 0.1.0` source. `ClipboardType::Enable` uses IronRDP's native
+Windows clipboard implementation on Windows, but falls back to a stub backend
+on non-Windows platforms. Enabling the feature therefore would not provide a
+macOS/Linux clipboard bridge and would make the cross-platform contract
+misleading. MobaRust keeps `ClipboardType::Stub` for this helper and returns an
+explicit diagnostic for clipboard commands. A future implementation needs a
+reviewed per-platform OS clipboard adapter, bounded text handling, explicit
+user action for remote-to-local copies, and deterministic cleanup; it must not
+silently write remote content into the Mac clipboard.
+
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
 data, and TLS/certificate-or-transport validation. The candidate now selects
