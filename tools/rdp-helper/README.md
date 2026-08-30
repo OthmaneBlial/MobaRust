@@ -11,6 +11,10 @@ is accepted only as a zeroizing framed native-pipe payload. It does not read
 or contact a host until a caller sends both an explicit `Start` command and a
 credential frame.
 
+TLS key logging is refused even for direct helper launches. The helper rejects
+an inherited `SSLKEYLOGFILE` variable because TLS key material must never be
+written to an external log file.
+
 This candidate is not staged into normal application bundles. Its separate
 lockfile currently fails the local audit because IronRDP's pinned `picky`
 dependency chain includes `rsa 0.10.0-rc.18` (`RUSTSEC-2023-0071`). It must

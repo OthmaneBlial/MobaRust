@@ -72,6 +72,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_main() -> Result<(), Box<dyn Error>> {
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        return Err(Box::new(ArgumentError(
+            "TLS key logging is disabled for the RDP helper".into(),
+        )));
+    }
     let arguments = parse_arguments(env::args().skip(1))?;
     let mut stdout = tokio::io::stdout();
     write_event_frame(&mut stdout, &HelperEvent::Hello { version: 1 }).await?;

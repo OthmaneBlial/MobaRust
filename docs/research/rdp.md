@@ -58,6 +58,8 @@ including authentication/access rejection, protocol negotiation, malformed
 data, and TLS/certificate-or-transport validation. This is diagnostic
 hardening only: the pinned IronRDP rustls backend still uses a no-op
 certificate verifier, so certificate validation remains a promotion blocker.
+The helper also refuses an inherited `SSLKEYLOGFILE` variable; the TLS backend's
+key-log facility must not write session key material during local experiments.
 
 ## Prototype boundary
 
