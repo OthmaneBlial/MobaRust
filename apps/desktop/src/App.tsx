@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type UIEvent as ReactUIEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type UIEvent as ReactUIEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
@@ -844,6 +844,7 @@ function App() {
   const [activeTerminalId, setActiveTerminalId] = useState("");
   const [splitDirection, setSplitDirection] = useState<SplitDirection>("none");
   const [splitTerminalIds, setSplitTerminalIds] = useState<string[]>([]);
+  const [splitRatio, setSplitRatio] = useState(50);
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
@@ -906,10 +907,37 @@ function App() {
   const broadcastTargetIdsRef = useRef(broadcastTargetIds);
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
+  const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement } | null>(null);
   terminalTabsRef.current = terminalTabs;
   broadcastEnabledRef.current = broadcastEnabled;
   broadcastTargetIdsRef.current = broadcastTargetIds;
   macroRunRef.current = macroRun;
+
+  useEffect(() => {
+    const onPointerMove = (event: MouseEvent) => {
+      const resize = splitResizeRef.current;
+      if (!resize) return;
+      const bounds = resize.frame.getBoundingClientRect();
+      const position = resize.direction === "right"
+        ? event.clientX - bounds.left
+        : event.clientY - bounds.top;
+      const length = resize.direction === "right" ? bounds.width : bounds.height;
+      if (length <= 0) return;
+      setSplitRatio(Math.max(20, Math.min(80, (position / length) * 100)));
+    };
+    const onPointerUp = () => {
+      splitResizeRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onPointerMove);
+    window.addEventListener("mouseup", onPointerUp);
+    return () => {
+      window.removeEventListener("mousemove", onPointerMove);
+      window.removeEventListener("mouseup", onPointerUp);
+      onPointerUp();
+    };
+  }, []);
 
   const activeTerminal = terminalTabs.find((terminal) => terminal.id === activeTerminalId) ?? terminalTabs[0];
   const selectedTerminalId = activeTerminal?.id ?? "";
@@ -928,6 +956,7 @@ function App() {
     setActiveTerminalId(terminal.id);
     setSplitDirection("none");
     setSplitTerminalIds([]);
+    setSplitRatio(50);
     setConnectionError(null);
     setSessionNotice(null);
     setActiveView("terminal");
@@ -982,6 +1011,7 @@ function App() {
       setActiveTerminalId(replacement.id);
       setSplitDirection("none");
       setSplitTerminalIds([]);
+      setSplitRatio(50);
       setActiveView("terminal");
       return;
     }
@@ -990,7 +1020,10 @@ function App() {
     setTerminalTabs(remaining);
     const remainingSplitIds = splitTerminalIds.filter((id) => id !== workspaceId);
     setSplitTerminalIds(remainingSplitIds);
-    if (remainingSplitIds.length < 2) setSplitDirection("none");
+    if (remainingSplitIds.length < 2) {
+      setSplitDirection("none");
+      setSplitRatio(50);
+    }
     if (activeTerminalId === workspaceId) {
       setActiveTerminalId(remaining[Math.min(closingIndex, remaining.length - 1)].id);
     }
@@ -1014,8 +1047,31 @@ function App() {
     }
     setSplitTerminalIds([firstId, second.id]);
     setSplitDirection(direction);
+    setSplitRatio(50);
     setActiveView("terminal");
   }, [selectedTerminalId, terminalTabs]);
+
+  const beginSplitResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (splitDirection === "none") return;
+    const frame = event.currentTarget.parentElement;
+    if (!frame) return;
+    event.preventDefault();
+    splitResizeRef.current = { direction: splitDirection, frame };
+    document.body.style.cursor = splitDirection === "right" ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+  }, [splitDirection]);
+
+  const adjustSplitRatio = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const increase = splitDirection === "right"
+      ? event.key === "ArrowRight"
+      : event.key === "ArrowDown";
+    const decrease = splitDirection === "right"
+      ? event.key === "ArrowLeft"
+      : event.key === "ArrowUp";
+    if (!increase && !decrease) return;
+    event.preventDefault();
+    setSplitRatio((current) => Math.max(20, Math.min(80, current + (increase ? 5 : -5))));
+  }, [splitDirection]);
 
   const refreshSavedSessions = useCallback(() => {
     if (!IS_TAURI) return;
@@ -2312,6 +2368,14 @@ function App() {
   const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
+  const splitFirstRenderedId = splitDirection === "none"
+    ? null
+    : terminalTabs.find((terminal) => splitTerminalIds.includes(terminal.id))?.id ?? null;
+  const splitFrameStyle = splitDirection === "right"
+    ? { gridTemplateColumns: `minmax(0, ${splitRatio}%) 1px minmax(0, ${100 - splitRatio}%)` }
+    : splitDirection === "down"
+      ? { gridTemplateRows: `minmax(0, ${splitRatio}%) 1px minmax(0, ${100 - splitRatio}%)` }
+      : undefined;
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
@@ -2383,7 +2447,7 @@ function App() {
               <SessionRow key={session.id ?? session.name} {...session} onSelect={startNewTerminal} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
-            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL")).map(([folder, sessions]) => (
+            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC")).map(([folder, sessions]) => (
               <div key={folder} className="session-folder-group">
                 <div className="folder-heading nested-folder"><Folder size={12} /> {folder} <span>{sessions.length}</span></div>
                 {sessions.map((session) => (
@@ -2452,7 +2516,7 @@ function App() {
                   </div>
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
-                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest; return <div key={terminal.id} className={`terminal-pane ${visible ? "active" : ""}`} aria-hidden={visible ? undefined : true}>{isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />}</div>; })}</div>
+                  <div className={`terminal-frame terminal-tabs-frame ${splitDirection === "right" ? "terminal-frame-split-right" : splitDirection === "down" ? "terminal-frame-split-down" : ""}`} style={splitFrameStyle}>{terminalTabs.map((terminal) => { const visible = splitDirection === "none" ? terminal.id === selectedTerminalId : splitTerminalIds.includes(terminal.id); const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest; return <Fragment key={terminal.id}><div className={`terminal-pane ${visible ? "active" : ""}`} onMouseDown={() => setActiveTerminalId(terminal.id)} onFocusCapture={() => setActiveTerminalId(terminal.id)}>{isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} />}</div>{splitDirection !== "none" && terminal.id === splitFirstRenderedId && <div className={`terminal-split-divider terminal-split-divider-${splitDirection}`} role="separator" tabIndex={0} aria-label="Resize split panes" aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(splitRatio)} onMouseDown={beginSplitResize} onDoubleClick={() => setSplitRatio(50)} onKeyDown={adjustSplitRatio} />}</Fragment>; })}</div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback 5,000</span><span className="terminal-status-spacer" /><span>⌘K for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
