@@ -26,13 +26,15 @@ cargo xtask check-fuzz
 
 ## Fuzz targets
 
-Install `cargo-fuzz` separately if it is not already available, then run from
-the `fuzz/` directory:
+Install `cargo-fuzz` separately if it is not already available. The sanitizer
+flags used by `cargo-fuzz` require a Nightly toolchain on the current Rust
+setup, while the application itself remains pinned to Stable. Run the fuzzers
+with an explicit `+nightly` override from the `fuzz/` directory:
 
 ```text
 cd fuzz
-cargo fuzz run session-json -- -runs=1000
-cargo fuzz run helper-frame -- -runs=1000
+cargo +nightly fuzz run session-json -- -runs=1000
+cargo +nightly fuzz run helper-frame -- -runs=1000
 ```
 
 The default corpus and artifacts are disposable and must not contain exported
