@@ -452,18 +452,31 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                 }
             }
             _ = sleep(Duration::from_millis(16)) => {
+                let mut framebuffer_dirty = false;
                 let connection_loss = loop {
                     match timeout(VNC_EVENT_POLL_TIMEOUT, client.poll_event()).await {
                         Ok(Ok(Some(event))) => {
+                            if framebuffer_dirty && Canvas::is_resolution_boundary(&event) {
+                                write_event_frame(stdout, &canvas.framebuffer_event()).await?;
+                                framebuffer_dirty = false;
+                            }
                             match canvas.apply(event) {
-                                Ok(Some(event)) => {
+                                Ok(CanvasUpdate::FramebufferDirty) => {
                                     if !active_sent {
                                         active_sent = true;
                                         write_state(stdout, HelperState::Active).await?;
                                     }
-                                    write_event_frame(stdout, &event).await?;
+                                    framebuffer_dirty = true;
                                 }
-                                Ok(None) => {}
+                                Ok(CanvasUpdate::Clipboard(text)) => {
+                                    if !active_sent {
+                                        active_sent = true;
+                                        write_state(stdout, HelperState::Active).await?;
+                                    }
+                                    write_event_frame(stdout, &HelperEvent::Clipboard { text })
+                                        .await?;
+                                }
+                                Ok(CanvasUpdate::None) => {}
                                 Err(_) => {
                                     send_error(stdout, "VNC framebuffer update was invalid").await?;
                                     close_vnc_client(client).await;
@@ -479,6 +492,9 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                 };
                 if let Some(reason) = connection_loss {
                     return Ok(ConnectedOutcome::Lost(reason));
+                }
+                if framebuffer_dirty {
+                    write_event_frame(stdout, &canvas.framebuffer_event()).await?;
                 }
                 if last_refresh.elapsed() >= refresh_interval {
                     if send_vnc_input(
@@ -626,6 +642,12 @@ fn wheel_steps(delta: i16) -> u32 {
         .clamp(1, 8)
 }
 
+enum CanvasUpdate {
+    None,
+    FramebufferDirty,
+    Clipboard(Zeroizing<String>),
+}
+
 struct Canvas {
     size: DisplaySize,
     pixels: Vec<u8>,
@@ -643,7 +665,7 @@ impl Canvas {
         })
     }
 
-    fn apply(&mut self, event: VncEvent) -> Result<Option<HelperEvent>, HelperProtocolError> {
+    fn apply(&mut self, event: VncEvent) -> Result<CanvasUpdate, HelperProtocolError> {
         match event {
             VncEvent::SetResolution(screen) => {
                 let size = DisplaySize {
@@ -653,30 +675,36 @@ impl Canvas {
                 size.validate()?;
                 self.size = size;
                 self.pixels = vec![0; framebuffer_bytes(size)?];
-                Ok(None)
+                Ok(CanvasUpdate::None)
             }
             VncEvent::RawImage(rect, data) => {
                 self.copy_rect(rect, &data)?;
-                Ok(Some(self.framebuffer_event()))
+                Ok(CanvasUpdate::FramebufferDirty)
             }
             VncEvent::Copy(destination, source) => {
                 self.copy_pixels(destination, source)?;
-                Ok(Some(self.framebuffer_event()))
+                Ok(CanvasUpdate::FramebufferDirty)
             }
             VncEvent::JpegImage(_, _) => Err(HelperProtocolError::Io(
                 "VNC JPEG rectangles are not enabled by this adapter".into(),
             )),
-            VncEvent::SetPixelFormat(_) | VncEvent::SetCursor(_, _) | VncEvent::Bell => Ok(None),
-            VncEvent::Text(_) if !self.clipboard_enabled => Ok(None),
+            VncEvent::SetPixelFormat(_) | VncEvent::SetCursor(_, _) | VncEvent::Bell => {
+                Ok(CanvasUpdate::None)
+            }
+            VncEvent::Text(_) if !self.clipboard_enabled => Ok(CanvasUpdate::None),
             VncEvent::Text(text) => {
                 if text.len() > MAX_CLIPBOARD_BYTES {
                     return Err(HelperProtocolError::ClipboardTooLarge { bytes: text.len() });
                 }
-                Ok(Some(HelperEvent::Clipboard { text: text.into() }))
+                Ok(CanvasUpdate::Clipboard(text.into()))
             }
             VncEvent::Error(_) => Err(HelperProtocolError::Io("VNC decoder error".into())),
             _ => Err(HelperProtocolError::Io("unsupported VNC event".into())),
         }
+    }
+
+    fn is_resolution_boundary(event: &VncEvent) -> bool {
+        matches!(event, VncEvent::SetResolution(_))
     }
 
     fn copy_rect(&mut self, rect: Rect, data: &[u8]) -> Result<(), HelperProtocolError> {
@@ -1207,17 +1235,18 @@ mod tests {
             height: 200,
         };
         let mut canvas = Canvas::new(size, true).unwrap();
-        let error = canvas
-            .apply(VncEvent::RawImage(
-                Rect {
-                    x: 319,
-                    y: 0,
-                    width: 2,
-                    height: 1,
-                },
-                vec![0; 8],
-            ))
-            .unwrap_err();
+        let error = match canvas.apply(VncEvent::RawImage(
+            Rect {
+                x: 319,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+            vec![0; 8],
+        )) {
+            Ok(_) => panic!("out-of-bounds framebuffer was accepted"),
+            Err(error) => error,
+        };
         assert!(matches!(
             error,
             HelperProtocolError::InvalidFramebuffer { .. }
@@ -1231,7 +1260,7 @@ mod tests {
             height: 200,
         };
         let mut canvas = Canvas::new(size, true).unwrap();
-        let event = canvas
+        let update = canvas
             .apply(VncEvent::RawImage(
                 Rect {
                     x: 0,
@@ -1241,8 +1270,9 @@ mod tests {
                 },
                 vec![0x11, 0x22, 0x33, 0xff],
             ))
-            .unwrap()
             .unwrap();
+        assert!(matches!(update, CanvasUpdate::FramebufferDirty));
+        let event = canvas.framebuffer_event();
         assert!(
             matches!(event, HelperEvent::Framebuffer { width: 320, height: 200, ref pixels } if pixels[..4] == [0x11, 0x22, 0x33, 0xff])
         );
@@ -1255,12 +1285,25 @@ mod tests {
             height: 200,
         };
         let mut canvas = Canvas::new(size, false).unwrap();
-        assert!(
+        assert!(matches!(
             canvas
                 .apply(VncEvent::Text("must stay native".into()))
-                .unwrap()
-                .is_none()
-        );
+                .unwrap(),
+            CanvasUpdate::None
+        ));
+    }
+
+    #[test]
+    fn canvas_keeps_clipboard_updates_separate_from_framebuffer_flushes() {
+        let size = DisplaySize {
+            width: 320,
+            height: 200,
+        };
+        let mut canvas = Canvas::new(size, true).unwrap();
+        assert!(matches!(
+            canvas.apply(VncEvent::Text("approved".into())).unwrap(),
+            CanvasUpdate::Clipboard(text) if text.as_str() == "approved"
+        ));
     }
 
     #[test]
