@@ -60,6 +60,11 @@ hardening only: the pinned IronRDP rustls backend still uses a no-op
 certificate verifier, so certificate validation remains a promotion blocker.
 The helper also refuses an inherited `SSLKEYLOGFILE` variable; the TLS backend's
 key-log facility must not write session key material during local experiments.
+The helper owns a 15-second startup deadline around the candidate's network
+handshake. When it expires, it requests a cooperative close and waits only a
+separate bounded grace period before forcing task termination. A stalled
+loopback handshake test verifies that this path returns promptly; it does not
+prove remote-server interoperability.
 
 ## Prototype boundary
 

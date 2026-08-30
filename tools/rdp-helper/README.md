@@ -25,6 +25,11 @@ IronRDP's internal context or server text. The current rustls backend still
 does not validate the server certificate, so this helper remains an isolated
 candidate and must not be treated as a production RDP client.
 
+The helper applies a 15-second startup timeout to a stalled RDP handshake and
+then uses a separate bounded graceful-stop window before forcing termination.
+This prevents an unresponsive endpoint from leaving the helper permanently
+stuck. The behavior is covered by a loopback-only stalled-handshake unit test.
+
 Safe local checks:
 
 ```text

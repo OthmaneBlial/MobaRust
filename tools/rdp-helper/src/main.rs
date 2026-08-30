@@ -35,6 +35,10 @@ use tokio::task::LocalSet;
 use tokio::time::timeout;
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
+// IronRDP's connector does not expose an operation-specific startup deadline
+// at this boundary, so the helper owns one and aborts the task if graceful
+// shutdown cannot complete within the separate grace period.
+const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 struct Arguments {
@@ -161,6 +165,27 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
 ) -> Result<(), Box<dyn Error>> {
+    run_rdp_session_with_policy(
+        arguments,
+        display,
+        credential,
+        stdout,
+        incoming_rx,
+        RDP_STARTUP_TIMEOUT,
+        STOP_GRACE_PERIOD,
+    )
+    .await
+}
+
+async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
+    arguments: &Arguments,
+    display: DisplaySize,
+    credential: HelperCredential,
+    stdout: &mut W,
+    incoming_rx: &mut mpsc::Receiver<Incoming>,
+    startup_timeout: Duration,
+    startup_stop_grace: Duration,
+) -> Result<(), Box<dyn Error>> {
     let config = match build_config(arguments, display, &credential) {
         Ok(config) => config,
         Err(_) => {
@@ -182,11 +207,21 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
     let mut last_buttons = 0u8;
     let mut current_display = display;
     let mut active_sent = false;
+    let startup_deadline = tokio::time::sleep(startup_timeout);
+    tokio::pin!(startup_deadline);
+    let mut startup_pending = true;
 
     write_state(stdout, HelperState::Ready).await?;
 
     loop {
         tokio::select! {
+            _ = &mut startup_deadline, if startup_pending => {
+                send_error(stdout, "RDP connection timed out").await?;
+                let _ = input_tx.send(RdpInputEvent::Close);
+                stop_client_with_grace(&input_tx, &mut client_task, startup_stop_grace).await;
+                write_state(stdout, HelperState::Failed).await?;
+                return Ok(());
+            }
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
@@ -218,6 +253,7 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
             output = output_rx.recv() => {
                 match output {
                     Some(RdpOutputEvent::Image { buffer, width, height }) => {
+                        startup_pending = false;
                         if !active_sent {
                             active_sent = true;
                             write_state(stdout, HelperState::Active).await?;
@@ -250,7 +286,9 @@ async fn run_rdp_session<W: AsyncWrite + Unpin>(
                     Some(RdpOutputEvent::PointerDefault)
                     | Some(RdpOutputEvent::PointerHidden)
                     | Some(RdpOutputEvent::PointerPosition { .. })
-                    | Some(RdpOutputEvent::PointerBitmap(_)) => {}
+                    | Some(RdpOutputEvent::PointerBitmap(_)) => {
+                        startup_pending = false;
+                    }
                     None => {
                         write_state(stdout, HelperState::Crashed).await?;
                         return Ok(());
@@ -342,8 +380,16 @@ async fn stop_client(
     input_tx: &mpsc::UnboundedSender<RdpInputEvent>,
     client_task: &mut tokio::task::JoinHandle<()>,
 ) {
+    stop_client_with_grace(input_tx, client_task, STOP_GRACE_PERIOD).await;
+}
+
+async fn stop_client_with_grace(
+    input_tx: &mpsc::UnboundedSender<RdpInputEvent>,
+    client_task: &mut tokio::task::JoinHandle<()>,
+    grace_period: Duration,
+) {
     let _ = input_tx.send(RdpInputEvent::Close);
-    if timeout(STOP_GRACE_PERIOD, &mut *client_task).await.is_err() {
+    if timeout(grace_period, &mut *client_task).await.is_err() {
         client_task.abort();
         let _ = client_task.await;
     }
@@ -725,5 +771,44 @@ mod tests {
         );
         assert_eq!(rdp_failure_message(&reason), "RDP connection failed");
         assert!(!rdp_failure_message(&reason).contains("secret server name"));
+    }
+
+    #[tokio::test]
+    async fn stalled_loopback_handshake_is_aborted_by_the_startup_timeout() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let arguments = Arguments {
+            host: "127.0.0.1".into(),
+            port,
+            username: "fixture-user".into(),
+            domain: None,
+            display: DisplaySize {
+                width: 320,
+                height: 200,
+            },
+            color_depth: 32,
+            audio_requested: false,
+        };
+        let (_incoming_tx, mut incoming_rx) = mpsc::channel(1);
+        let mut stdout = tokio::io::sink();
+        let started = std::time::Instant::now();
+
+        LocalSet::new()
+            .run_until(run_rdp_session_with_policy(
+                &arguments,
+                arguments.display,
+                HelperCredential::new("fixture-secret"),
+                &mut stdout,
+                &mut incoming_rx,
+                Duration::from_millis(40),
+                Duration::from_millis(40),
+            ))
+            .await
+            .unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(listener);
     }
 }
