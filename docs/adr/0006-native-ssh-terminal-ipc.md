@@ -32,8 +32,10 @@ event. A future reconnect layer must preserve the session identity while
 making shell-state loss visible.
 
 The first adapter supports password credentials referenced from the native
-vault, private-key files with optional vault-backed passphrases, and the local
-SSH agent. It does not yet expose keyboard-interactive authentication, file
+vault, private-key files with optional vault-backed passphrases, the local SSH
+agent, and a bounded keyboard-interactive mode backed by one vault response.
+The keyboard-interactive mode refuses echo-enabled prompts and does not expose
+server prompt text to the renderer. It does not yet expose file
 transfers, or unlimited scrollback replay across reconnects. A bounded attach
 buffer protects the prompt and first output while xterm subscribes; the
 remaining transfer and reconnect concerns are release gates before claiming

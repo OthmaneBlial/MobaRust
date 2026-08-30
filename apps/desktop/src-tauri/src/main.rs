@@ -543,6 +543,13 @@ fn session_save_ssh(
             key_ref: path,
             credential_ref: passphrase_credential_id,
         },
+        SshAuthRequest::KeyboardInteractive { credential_id }
+            if !credential_id.trim().is_empty() =>
+        {
+            AuthMethod::KeyboardInteractive {
+                credential_ref: credential_id,
+            }
+        }
         _ => return Err("cannot save an SSH session with incomplete authentication".into()),
     };
     let session = SessionRecord {
@@ -581,6 +588,13 @@ fn session_save_ssh(
                         key_ref: path,
                         credential_ref: passphrase_credential_id,
                     }),
+                    SshAuthRequest::KeyboardInteractive { credential_id }
+                        if !credential_id.trim().is_empty() =>
+                    {
+                        Ok(AuthMethod::KeyboardInteractive {
+                            credential_ref: credential_id,
+                        })
+                    }
                     _ => Err("cannot save a jump host with incomplete authentication".to_owned()),
                 }?;
                 Ok(JumpHostRecord {

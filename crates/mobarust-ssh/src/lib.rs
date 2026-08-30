@@ -46,6 +46,8 @@ pub enum SshError {
     AuthenticationRejected,
     #[error("SSH agent authentication failed: {0}")]
     Agent(String),
+    #[error("SSH keyboard-interactive authentication requires non-echo prompts")]
+    KeyboardInteractiveEchoPrompt,
     #[error("SSH connection timed out")]
     Timeout,
     #[error("SSH private key could not be loaded: {0}")]
@@ -123,6 +125,10 @@ pub enum SshCredentials {
     Agent {
         username: String,
     },
+    KeyboardInteractive {
+        username: String,
+        response: Secret,
+    },
 }
 
 impl fmt::Debug for SshCredentials {
@@ -161,11 +167,19 @@ impl SshCredentials {
         }
     }
 
+    pub fn keyboard_interactive(username: impl Into<String>, response: impl Into<String>) -> Self {
+        Self::KeyboardInteractive {
+            username: username.into(),
+            response: Secret::new(response),
+        }
+    }
+
     fn username(&self) -> &str {
         match self {
             Self::Password { username, .. }
             | Self::PrivateKey { username, .. }
-            | Self::Agent { username } => username,
+            | Self::Agent { username }
+            | Self::KeyboardInteractive { username, .. } => username,
         }
     }
 
@@ -174,6 +188,7 @@ impl SshCredentials {
             Self::Password { .. } => "password",
             Self::PrivateKey { .. } => "private-key",
             Self::Agent { .. } => "agent",
+            Self::KeyboardInteractive { .. } => "keyboard-interactive",
         }
     }
 }
@@ -1294,6 +1309,47 @@ async fn authenticate(
                 .map_err(SshError::Transport)
         }
         SshCredentials::Agent { username } => authenticate_with_agent(handle, username).await,
+        SshCredentials::KeyboardInteractive { username, response } => {
+            authenticate_keyboard_interactive(handle, username, response).await
+        }
+    }
+}
+
+async fn authenticate_keyboard_interactive(
+    handle: &mut client::Handle<ClientHandler>,
+    username: String,
+    response: Secret,
+) -> Result<client::AuthResult, SshError> {
+    let mut next = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(SshError::Transport)?;
+
+    loop {
+        next = match next {
+            client::KeyboardInteractiveAuthResponse::Success => {
+                return Ok(client::AuthResult::Success);
+            }
+            client::KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                return Ok(client::AuthResult::Failure {
+                    remaining_methods,
+                    partial_success,
+                });
+            }
+            client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                if prompts.iter().any(|prompt| prompt.echo) {
+                    return Err(SshError::KeyboardInteractiveEchoPrompt);
+                }
+                let responses = vec![response.as_str().to_owned(); prompts.len()];
+                handle
+                    .authenticate_keyboard_interactive_respond(responses)
+                    .await
+                    .map_err(SshError::Transport)?
+            }
+        };
     }
 }
 
@@ -2091,6 +2147,17 @@ mod tests {
         let debug = format!("{:?}", SshCredentials::agent("ops"));
         assert!(debug.contains("agent"));
         assert!(debug.contains("ops"));
+    }
+
+    #[test]
+    fn keyboard_interactive_credentials_have_no_secret_bearing_debug_fields() {
+        let debug = format!(
+            "{:?}",
+            SshCredentials::keyboard_interactive("ops", "one-time-secret")
+        );
+        assert!(debug.contains("keyboard-interactive"));
+        assert!(debug.contains("ops"));
+        assert!(!debug.contains("one-time-secret"));
     }
 
     #[test]

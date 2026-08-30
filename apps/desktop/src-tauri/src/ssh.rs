@@ -89,6 +89,10 @@ pub enum SshAuthRequest {
         #[serde(rename = "passphraseCredentialId", alias = "passphrase_credential_id")]
         passphrase_credential_id: Option<String>,
     },
+    KeyboardInteractive {
+        #[serde(rename = "credentialId", alias = "credential_id")]
+        credential_id: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -1218,6 +1222,14 @@ fn credentials_from_auth(
                 username,
                 expand_user_path(path),
                 passphrase,
+            ))
+        }
+        SshAuthRequest::KeyboardInteractive { credential_id } => {
+            let id = CredentialId::new(credential_id.clone())?;
+            let secret = vault.get(&id)?;
+            Ok(SshCredentials::keyboard_interactive(
+                username,
+                secret.as_str(),
             ))
         }
     }

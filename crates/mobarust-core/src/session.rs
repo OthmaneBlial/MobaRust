@@ -30,7 +30,10 @@ pub enum AuthMethod {
         credential_ref: Option<String>,
     },
     Agent,
-    KeyboardInteractive,
+    KeyboardInteractive {
+        #[serde(rename = "credentialRef", alias = "credential_ref")]
+        credential_ref: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

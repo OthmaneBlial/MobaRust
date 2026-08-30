@@ -208,7 +208,8 @@ type SavedAuth =
   | { kind: "none" }
   | { kind: "agent" }
   | { kind: "password"; credentialRef: string }
-  | { kind: "privateKey"; keyRef: string; credentialRef?: string | null };
+  | { kind: "privateKey"; keyRef: string; credentialRef?: string | null }
+  | { kind: "keyboardInteractive"; credentialRef: string };
 
 type SavedJumpHost = {
   host: string;
@@ -261,7 +262,8 @@ type MacroRecord = {
 type SshAuthRequest =
   | { method: "agent" }
   | { method: "privateKey"; path: string; passphraseCredentialId?: string }
-  | { method: "password"; credentialId: string };
+  | { method: "password"; credentialId: string }
+  | { method: "keyboardInteractive"; credentialId: string };
 
 type SshConnectRequest = {
   host: string;
@@ -2246,6 +2248,9 @@ function requestFromSavedAuth(auth: SavedAuth): SshConnectRequest["auth"] | null
   if (auth.kind === "password" && auth.credentialRef.trim()) {
     return { method: "password", credentialId: auth.credentialRef };
   }
+  if (auth.kind === "keyboardInteractive" && auth.credentialRef.trim()) {
+    return { method: "keyboardInteractive", credentialId: auth.credentialRef };
+  }
   if (auth.kind === "privateKey" && auth.keyRef.trim()) {
     return { method: "privateKey", path: auth.keyRef, passphraseCredentialId: auth.credentialRef ?? undefined };
   }
@@ -2866,7 +2871,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   };
 
   const endpoint = session.username ? `${session.username}@${session.hostname}:${session.port}` : `${session.hostname}:${session.port}`;
-  const authLabel = session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "privateKey" ? "Private key reference" : "No authentication";
+  const authLabel = session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "keyboardInteractive" ? "Keyboard-interactive vault response" : session.auth.kind === "privateKey" ? "Private key reference" : "No authentication";
 
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
@@ -3022,7 +3027,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
   const [protocol, setProtocol] = useState<"ssh" | "telnet" | "serial">("ssh");
-  const [method, setMethod] = useState<"agent" | "privateKey" | "password">("agent");
+  const [method, setMethod] = useState<"agent" | "privateKey" | "password" | "keyboardInteractive">("agent");
   const [keyPath, setKeyPath] = useState("");
   const [passphraseCredentialId, setPassphraseCredentialId] = useState("");
   const [credentialId, setCredentialId] = useState("");
@@ -3089,6 +3094,8 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       ? { method: "agent" as const }
       : method === "privateKey"
         ? { method: "privateKey" as const, path: keyPath, passphraseCredentialId: passphraseCredentialId.trim() || undefined }
+        : method === "keyboardInteractive"
+          ? { method: "keyboardInteractive" as const, credentialId }
         : { method: "password" as const, credentialId };
     const parsedJumpPort = Number(jumpPort);
     const jumpHosts = jumpHost.trim() && Number.isInteger(parsedJumpPort) && parsedJumpPort > 0 && parsedJumpPort <= 65535
@@ -3225,10 +3232,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                   </label>
                   <label className="quick-connect-wide">
                     Authentication
-                    <select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password")}>
+                    <select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password" | "keyboardInteractive")}>
                       <option value="agent">Local SSH agent</option>
                       <option value="privateKey">Private key path</option>
                       <option value="password">Existing vault credential reference</option>
+                      <option value="keyboardInteractive">Keyboard-interactive · vault response</option>
                     </select>
                   </label>
                   {method === "privateKey" ? (
@@ -3244,11 +3252,11 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                         <small>Encrypted-key passphrases are retrieved natively from the vault.</small>
                       </label>
                     </>
-                  ) : method === "password" ? (
+                  ) : method === "password" || method === "keyboardInteractive" ? (
                     <label className="quick-connect-wide">
-                      Credential reference
+                      {method === "keyboardInteractive" ? "Keyboard-interactive response reference" : "Credential reference"}
                       <input required value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" />
-                      <small>Only an opaque vault reference crosses IPC, never the password.</small>
+                      <small>{method === "keyboardInteractive" ? "The native layer answers non-echo prompts with this vault secret; echo prompts are refused." : "Only an opaque vault reference crosses IPC, never the password."}</small>
                     </label>
                   ) : (
                     <div className="quick-connect-wide quick-connect-hint">
