@@ -10,7 +10,12 @@ import {
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
 import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
-import { parseRemoteDesktopProfile, supportsNativeRdpClipboard } from "./remote-desktop-profile";
+import {
+  parseRemoteDesktopProfile,
+  remoteDesktopCanResize,
+  remoteDesktopCanSendClipboard,
+  supportsNativeRdpClipboard,
+} from "./remote-desktop-profile";
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
@@ -1027,6 +1032,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const capabilitiesRef = useRef<RemoteDesktopCapabilities | null>(null);
   const [capabilities, setCapabilities] = useState<RemoteDesktopCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: request.width, height: request.height });
@@ -1054,7 +1060,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     };
 
     const sendResize = () => {
-      if (request.protocol === "vnc") return;
+      if (!remoteDesktopCanResize(request.protocol, capabilitiesRef.current)) return;
       const size = boundedRemoteDesktopSize(host.clientWidth, host.clientHeight);
       if (!size) return;
       setDimensions(size);
@@ -1082,6 +1088,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     const boot = async () => {
       setError(null);
       setCapabilities(null);
+      capabilitiesRef.current = null;
       setRemoteClipboard(null);
       setClipboardCopied(false);
       setFullscreenError(null);
@@ -1103,7 +1110,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               setErrorAndFail("The remote desktop helper reported the wrong protocol.");
               return;
             }
+            capabilitiesRef.current = helperEvent.payload.capabilities;
             setCapabilities(helperEvent.payload.capabilities);
+            if (helperEvent.payload.capabilities.serverResize) sendResize();
           }
           if (helperEvent.event === "state") {
             if (helperEvent.payload.state === "ready" || helperEvent.payload.state === "active") {
@@ -1283,9 +1292,11 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     const sessionId = sessionIdRef.current;
     const text = event.clipboardData.getData("text/plain");
     if (!IS_TAURI || !sessionId || !text) return;
-    if (request.protocol === "rdp" && !request.clipboardEnabled) {
+    if (!remoteDesktopCanSendClipboard(request.protocol, request.clipboardEnabled, capabilitiesRef.current)) {
       event.preventDefault();
-      setError("RDP clipboard redirection is disabled for this session.");
+      setError(request.protocol === "rdp" && !request.clipboardEnabled
+        ? "RDP clipboard redirection is disabled for this session."
+        : "The native helper does not advertise clipboard input for this session.");
       return;
     }
     event.preventDefault();

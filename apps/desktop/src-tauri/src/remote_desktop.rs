@@ -102,10 +102,11 @@ impl From<HelperCapabilityRequirements> for SessionCommandPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct HelperEventProgress {
     hello_seen: bool,
     capabilities_seen: bool,
+    reported_capabilities: Option<HelperCapabilities>,
 }
 
 fn required_helper_capabilities(
@@ -718,6 +719,7 @@ fn validate_helper_event(
         HelperEvent::Capabilities { capabilities } => {
             validate_helper_capabilities(capabilities, requirements)?;
             progress.capabilities_seen = true;
+            progress.reported_capabilities = Some(capabilities.clone());
             Ok(progress)
         }
         HelperEvent::Framebuffer { .. }
@@ -726,6 +728,14 @@ fn validate_helper_event(
             state: mobarust_remote_desktop::HelperState::Active,
         } if !progress.capabilities_seen => {
             Err("remote desktop helper sent active data before reporting capabilities")
+        }
+        HelperEvent::Clipboard { .. }
+            if progress
+                .reported_capabilities
+                .as_ref()
+                .is_some_and(|capabilities| !capabilities.clipboard) =>
+        {
+            Err("remote desktop helper sent clipboard data without clipboard capability")
         }
         _ => Ok(progress),
     }
@@ -861,7 +871,7 @@ mod tests {
         .unwrap();
         assert!(handshake.hello_seen);
         let rdp_progress =
-            validate_helper_event(&rdp_capabilities, rdp_requirements, handshake).unwrap();
+            validate_helper_event(&rdp_capabilities, rdp_requirements, handshake.clone()).unwrap();
         assert!(rdp_progress.capabilities_seen);
         assert!(
             validate_helper_event(
@@ -870,7 +880,7 @@ mod tests {
                     protocol: DesktopProtocol::Vnc,
                     ..rdp_requirements
                 },
-                handshake,
+                handshake.clone(),
             )
             .is_err()
         );
@@ -890,7 +900,7 @@ mod tests {
                     gateway: false,
                     color_depth: None,
                 },
-                handshake,
+                handshake.clone(),
             )
             .is_ok()
         );
@@ -913,7 +923,7 @@ mod tests {
                     state: HelperState::Ready,
                 },
                 rdp_requirements,
-                handshake,
+                handshake.clone(),
             )
             .is_ok()
         );
@@ -923,7 +933,7 @@ mod tests {
                     state: HelperState::Active,
                 },
                 rdp_requirements,
-                handshake,
+                handshake.clone(),
             )
             .is_err()
         );
@@ -933,7 +943,7 @@ mod tests {
                     state: HelperState::Active,
                 },
                 rdp_requirements,
-                rdp_progress,
+                rdp_progress.clone(),
             ),
             Ok(rdp_progress)
         );
@@ -947,6 +957,63 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn helper_event_rejects_clipboard_without_runtime_capability() {
+        let requirements = HelperCapabilityRequirements {
+            protocol: DesktopProtocol::Rdp,
+            clipboard: false,
+            audio: false,
+            gateway: false,
+            color_depth: Some(32),
+        };
+        let mut capabilities = HelperCapabilities::rdp();
+        capabilities.clipboard = false;
+        let capability_event = HelperEvent::Capabilities {
+            capabilities: capabilities.clone(),
+        };
+        let handshake = validate_helper_event(
+            &HelperEvent::Hello {
+                version: WIRE_VERSION,
+            },
+            requirements,
+            Default::default(),
+        )
+        .unwrap();
+        let progress = validate_helper_event(&capability_event, requirements, handshake).unwrap();
+        let error = validate_helper_event(
+            &HelperEvent::Clipboard {
+                text: String::from("fixture clipboard").into(),
+            },
+            requirements,
+            progress,
+        )
+        .unwrap_err();
+        assert!(error.contains("clipboard capability"));
+
+        capabilities.clipboard = true;
+        let progress = validate_helper_event(
+            &HelperEvent::Capabilities { capabilities },
+            requirements,
+            validate_helper_event(
+                &HelperEvent::Hello {
+                    version: WIRE_VERSION,
+                },
+                requirements,
+                Default::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        validate_helper_event(
+            &HelperEvent::Clipboard {
+                text: String::from("fixture clipboard").into(),
+            },
+            requirements,
+            progress,
+        )
+        .unwrap();
     }
 
     fn request(protocol: DesktopProtocol, username: &str) -> RemoteDesktopConnectRequest {

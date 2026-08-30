@@ -1,5 +1,10 @@
 export type RemoteDesktopProtocol = "RDP" | "VNC";
 
+export type RemoteDesktopRuntimeCapabilities = {
+  clipboard: boolean;
+  serverResize: boolean;
+};
+
 export type VncQuality = "balanced" | "low-latency" | "low-bandwidth";
 
 export type RemoteDesktopProfileValue = {
@@ -44,6 +49,23 @@ export type RemoteDesktopProfileParseResult =
  */
 export function supportsNativeRdpClipboard(platform: string | undefined = typeof navigator === "undefined" ? undefined : navigator.platform): boolean {
   return typeof platform === "string" && /^win/i.test(platform);
+}
+
+/** Allow resize only after the native helper explicitly advertises it. */
+export function remoteDesktopCanResize(
+  protocol: "rdp" | "vnc",
+  capabilities: RemoteDesktopRuntimeCapabilities | null,
+): boolean {
+  return protocol === "rdp" && capabilities?.serverResize === true;
+}
+
+/** Clipboard input is an explicit RDP opt-in and requires helper support. */
+export function remoteDesktopCanSendClipboard(
+  protocol: "rdp" | "vnc",
+  requested: boolean,
+  capabilities: RemoteDesktopRuntimeCapabilities | null,
+): boolean {
+  return protocol === "rdp" && requested && capabilities?.clipboard === true;
 }
 
 const MIN_WIDTH = 320;

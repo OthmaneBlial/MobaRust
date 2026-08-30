@@ -7,6 +7,8 @@ import {
 import { parseQuickConnectUri } from "../src/connection-uri.ts";
 import {
   parseRemoteDesktopProfile,
+  remoteDesktopCanResize,
+  remoteDesktopCanSendClipboard,
   supportsNativeRdpClipboard,
 } from "../src/remote-desktop-profile.ts";
 import {
@@ -77,6 +79,14 @@ assert.equal(supportsNativeRdpClipboard("Win32"), true);
 assert.equal(supportsNativeRdpClipboard("MacIntel"), false);
 assert.equal(supportsNativeRdpClipboard("Linux x86_64"), false);
 assert.equal(supportsNativeRdpClipboard(undefined), false);
+assert.equal(remoteDesktopCanResize("rdp", { serverResize: true, clipboard: false }), true);
+assert.equal(remoteDesktopCanResize("rdp", null), false);
+assert.equal(remoteDesktopCanResize("vnc", { serverResize: true, clipboard: true }), false);
+assert.equal(remoteDesktopCanResize("rdp", { serverResize: false, clipboard: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: true }), true);
+assert.equal(remoteDesktopCanSendClipboard("rdp", false, { serverResize: true, clipboard: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: false }), false);
+assert.equal(remoteDesktopCanSendClipboard("vnc", true, { serverResize: false, clipboard: true }), false);
 
 assert.deepEqual(
   parseRemoteDesktopProfile("RDP", {
