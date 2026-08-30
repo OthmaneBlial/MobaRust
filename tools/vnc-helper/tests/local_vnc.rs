@@ -448,6 +448,124 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
         .unwrap();
 }
 
+#[tokio::test]
+async fn helper_rejects_clipboard_input_without_opt_in_at_the_socket_boundary() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (probe_tx, probe_rx) = oneshot::channel();
+    let (checked_tx, checked_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        serve_framebuffer_connection(&mut stream, [0x11, 0x22, 0x33, 0xff])
+            .await
+            .unwrap();
+        probe_rx.await.map_err(|error| error.to_string())?;
+
+        let mut saw_clipboard = false;
+        let mut read_error = None;
+        for _ in 0..8 {
+            match timeout(
+                Duration::from_millis(150),
+                read_client_message_kind(&mut stream),
+            )
+            .await
+            {
+                Ok(Ok(6)) => {
+                    saw_clipboard = true;
+                    break;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    read_error = Some(error);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = checked_tx.send(saw_clipboard);
+        let _ = release_rx.await;
+        if saw_clipboard {
+            Err("the helper forwarded clipboard input without opt-in".into())
+        } else if let Some(error) = read_error {
+            Err(error)
+        } else {
+            Ok(())
+        }
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+        .await
+        .unwrap();
+
+    let mut saw_framebuffer = false;
+    for _ in 0..8 {
+        match timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap()
+        {
+            HelperEvent::Framebuffer { .. } => {
+                saw_framebuffer = true;
+                break;
+            }
+            HelperEvent::Capabilities { capabilities } => {
+                assert!(!capabilities.clipboard);
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_framebuffer, "the helper did not become active");
+
+    send_command(
+        &mut stdin,
+        HelperCommand::Clipboard {
+            text: "must stay native".to_owned().into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        timeout(Duration::from_secs(2), next_event(&mut stdout))
+            .await
+            .unwrap(),
+        HelperEvent::Diagnostic { message, .. }
+            if message == "VNC clipboard input is disabled without explicit opt-in"
+    ));
+    probe_tx.send(()).unwrap();
+    assert!(!checked_rx.await.unwrap());
+
+    send_command(&mut stdin, HelperCommand::Stop).await;
+    let mut saw_stopped = false;
+    for _ in 0..5 {
+        if matches!(
+            timeout(Duration::from_secs(2), next_event(&mut stdout))
+                .await
+                .unwrap(),
+            HelperEvent::State {
+                state: HelperState::Stopped
+            }
+        ) {
+            saw_stopped = true;
+            break;
+        }
+    }
+    assert!(saw_stopped, "the helper did not stop cleanly");
+    let _ = release_tx.send(());
+    server_task.await.unwrap().unwrap();
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 async fn exercise_fixture(auth: FixtureAuth, password: &str) {
     exercise_fixture_with_quality(auth, password, "balanced", BALANCED_ENCODINGS).await;
 }
@@ -1064,4 +1182,38 @@ async fn read_update_request(stream: &mut TcpStream) -> Result<(), String> {
         return Err("expected FramebufferUpdateRequest".into());
     }
     Ok(())
+}
+
+async fn read_client_message_kind(stream: &mut TcpStream) -> Result<u8, String> {
+    let mut kind = [0_u8; 1];
+    stream
+        .read_exact(&mut kind)
+        .await
+        .map_err(|error| error.to_string())?;
+    match kind[0] {
+        3 => {
+            let mut payload = [0_u8; 9];
+            stream
+                .read_exact(&mut payload)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        4 => {
+            let mut payload = [0_u8; 7];
+            stream
+                .read_exact(&mut payload)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        5 => {
+            let mut payload = [0_u8; 5];
+            stream
+                .read_exact(&mut payload)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        6 => {}
+        value => return Err(format!("fixture saw an unexpected client message: {value}")),
+    }
+    Ok(kind[0])
 }
