@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
 const HELPER_GRACE_PERIOD: Duration = Duration::from_secs(2);
+const HELPER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const COMMAND_CAPACITY: usize = 32;
 
 #[derive(Debug, Deserialize)]
@@ -577,6 +578,29 @@ struct HelperReaderContext {
     capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HelperFrameReadError {
+    Protocol,
+    HandshakeTimeout,
+}
+
+async fn read_next_helper_frame<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    handshake_pending: bool,
+    handshake_timeout: Duration,
+) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, HelperFrameReadError> {
+    if handshake_pending {
+        tokio::time::timeout(handshake_timeout, read_frame(reader))
+            .await
+            .map_err(|_| HelperFrameReadError::HandshakeTimeout)?
+            .map_err(|_| HelperFrameReadError::Protocol)
+    } else {
+        read_frame(reader)
+            .await
+            .map_err(|_| HelperFrameReadError::Protocol)
+    }
+}
+
 async fn read_helper_events(
     app: AppHandle,
     session_id: String,
@@ -592,7 +616,13 @@ async fn read_helper_events(
     } = context;
     let mut progress = HelperEventProgress::default();
     loop {
-        let frame = match read_frame(&mut stdout).await {
+        let frame = match read_next_helper_frame(
+            &mut stdout,
+            !progress.hello_seen,
+            HELPER_HANDSHAKE_TIMEOUT,
+        )
+        .await
+        {
             Ok(Some(frame)) => frame,
             Ok(None) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
@@ -606,7 +636,27 @@ async fn read_helper_events(
                 }
                 break;
             }
-            Err(_) => {
+            Err(HelperFrameReadError::HandshakeTimeout) => {
+                if claim_unexpected_helper_exit(&stop_requested) {
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::Diagnostic {
+                            level: mobarust_remote_desktop::DiagnosticLevel::Error,
+                            message: "remote desktop helper handshake timed out".into(),
+                        },
+                    );
+                    emit_helper_event(
+                        &app,
+                        &session_id,
+                        HelperEvent::State {
+                            state: mobarust_remote_desktop::HelperState::Failed,
+                        },
+                    );
+                }
+                break;
+            }
+            Err(HelperFrameReadError::Protocol) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
                     emit_helper_event(
                         &app,
@@ -806,11 +856,11 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelperCapabilityRequirements, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES,
-        MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, SessionCommandPolicy,
-        claim_unexpected_helper_exit, helper_input_failure_message, validate_command_for_session,
-        validate_helper_capabilities, validate_helper_event, validate_helper_resource,
-        validate_request,
+        HelperCapabilityRequirements, HelperFrameReadError, MAX_CREDENTIAL_REFERENCE_BYTES,
+        MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest,
+        SessionCommandPolicy, claim_unexpected_helper_exit, helper_input_failure_message,
+        read_next_helper_frame, validate_command_for_session, validate_helper_capabilities,
+        validate_helper_event, validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
@@ -818,12 +868,29 @@ mod tests {
         MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, WIRE_VERSION,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn normal_helper_exit_claims_the_single_failure_path() {
         let stop_requested = AtomicBool::new(false);
         assert!(claim_unexpected_helper_exit(&stop_requested));
         assert!(!claim_unexpected_helper_exit(&stop_requested));
+    }
+
+    #[tokio::test]
+    async fn helper_handshake_timeout_is_bounded() {
+        let (_writer, mut reader) = tokio::io::duplex(1);
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            read_next_helper_frame(&mut reader, true, Duration::from_millis(10)),
+        )
+        .await
+        .expect("handshake read must return within the test deadline")
+        .unwrap_err();
+
+        assert_eq!(result, HelperFrameReadError::HandshakeTimeout);
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
