@@ -1019,6 +1019,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickConnectOpen, setQuickConnectOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -2748,7 +2749,7 @@ function App() {
           <span className="muted">{IS_TAURI ? "desktop runtime" : "browser preview"}</span>
         </div>
         <div className="topbar-actions">
-          <button className="icon-button" aria-label="Help" title="Help">
+          <button className="icon-button" aria-label="Help" title="Help" onClick={() => setHelpOpen(true)}>
             <CircleHelp size={17} strokeWidth={1.7} />
           </button>
           <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
@@ -2787,7 +2788,6 @@ function App() {
             <div className="nav-section-label">Workspace</div>
             <button className={`nav-item ${!favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(false)}><LayoutDashboard size={15} /> Overview <span className="nav-count">{sessionRows.length}</span></button>
             <button className={`nav-item ${favoritesOnly ? "active" : ""}`} onClick={() => setFavoritesOnly(true)}><Star size={15} /> Favorites <span className="nav-count">{sessionRows.filter((session) => session.favorite).length}</span></button>
-            <button className="nav-item"><Activity size={15} /> Recent</button>
           </nav>
 
           <div className="session-list">
@@ -2822,7 +2822,7 @@ function App() {
             <button className={`nav-item ${activeView === "diagnostics" ? "active" : ""}`} onClick={() => setActiveView("diagnostics")}><Activity size={15} /> Network diagnostics</button>
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className={`nav-item ${activeView === "monitor" ? "active" : ""}`} onClick={() => setActiveView("monitor")} disabled={!remoteSessionId || remoteProtocol !== "ssh"} title={remoteSessionId && remoteProtocol === "ssh" ? "Collect a one-shot SSH system snapshot" : "Open an SSH session first"}><Gauge size={15} /> Remote monitor</button>
-            <button className="nav-item"><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
+            <button className="nav-item" onClick={() => { setActiveView("files"); if (!remoteSessionId || remoteProtocol !== "ssh") setQuickConnectOpen(true); }}><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
           </div>
         </aside>
 
@@ -2862,7 +2862,7 @@ function App() {
                 <section className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="tablist" aria-label="Terminal sessions">{terminalTabs.map((terminal) => <button type="button" key={terminal.id} className={`terminal-tab ${terminal.id === selectedTerminalId ? "selected" : ""}`} role="tab" aria-selected={terminal.id === selectedTerminalId} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}><span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} /><span>{terminal.label}</span><span className="terminal-tab-meta">{terminal.status === "connected" ? (terminal.remoteHost ? terminal.remoteProtocol : "zsh") : terminal.status}</span><span className="terminal-tab-close" role="button" aria-label={`Close ${terminal.label}`} onClick={(event) => { event.stopPropagation(); closeTerminal(terminal.id); }}><X size={13} /></span></button>)}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options"><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={startNewTerminal}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={() => setSettingsOpen(true)}><MoreHorizontal size={16} /></button></div>
                   </div>
                   {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
                   {macroRecording && <div className="macro-recording-banner" role="alert"><Radio size={15} /><div><strong>RECORDING INPUT · {macroRecording.terminalLabel}</strong><span>Only terminal input is captured locally. Do not type passwords, tokens, or private keys.</span></div><button type="button" className="danger-button" onClick={stopMacroRecording}><Square size={13} /> Stop recording</button></div>}
@@ -2884,13 +2884,13 @@ function App() {
               )}
 
               <div className="lower-grid">
-                <InfoCard icon={ShieldCheck} label="Security boundary" title="Credentials never cross into React" detail="Session records carry references. Secret material stays in the native layer." action="Read threat model" />
-                <InfoCard icon={ArrowUpFromLine} label="Transport" title="Backpressure is explicit" detail="PTY output is bounded before it reaches the renderer, keeping noisy jobs responsive." action="View architecture" />
+                <InfoCard icon={ShieldCheck} label="Security boundary" title="Credentials never cross into React" detail="Session records carry references. Secret material stays in the native layer." action="Read threat model" onAction={() => setHelpOpen(true)} />
+                <InfoCard icon={ArrowUpFromLine} label="Transport" title="Backpressure is explicit" detail="PTY output is bounded before it reaches the renderer, keeping noisy jobs responsive." action="View architecture" onAction={() => setHelpOpen(true)} />
               </div>
             </div>
 
             <aside className="right-rail">
-              <div className="rail-heading"><span>Session brief</span><button aria-label="Session options"><MoreHorizontal size={15} /></button></div>
+              <div className="rail-heading"><span>Session brief</span><button aria-label="Session options" title="Open connection options" onClick={() => setQuickConnectOpen(true)}><MoreHorizontal size={15} /></button></div>
                 <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
                 <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? (remoteProtocol === "telnet" ? "Telnet · unencrypted" : remoteProtocol === "serial" ? "Serial · device" : remoteProtocol === "rdp" ? "RDP · isolated helper" : remoteProtocol === "vnc" ? "VNC · isolated helper" : "SSH · verified transport") : "Apple Silicon · local"}</div></div>
@@ -2907,6 +2907,7 @@ function App() {
       </div>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNewTerminal={startNewTerminal} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} />}
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
@@ -3370,12 +3371,30 @@ function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels" | "mo
   return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : isMonitor ? <Gauge size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : isMonitor ? "REMOTE MONITOR" : "NETWORK FABRIC"}</span><h2>{isFiles ? "Open an SSH session to browse files" : isMonitor ? "Connect an SSH session to inspect it" : "No tunnels are active"}</h2><p>{isFiles ? "SFTP listing, streaming transfers, cancellation, and path safety are ready for a connected SSH session." : isMonitor ? "The monitor sends a single bounded read-only query and leaves unsupported platform metrics blank." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
 }
 
-function InfoCard({ icon: Icon, label, title, detail, action }: { icon: LucideIcon; label: string; title: string; detail: string; action: string }) {
-  return <article className="info-card"><div className="info-card-top"><span className="info-icon"><Icon size={15} /></span><span>{label}</span><button aria-label="More information"><MoreHorizontal size={15} /></button></div><h3>{title}</h3><p>{detail}</p><button className="text-button">{action} <ExternalLink size={12} /></button></article>;
+function InfoCard({ icon: Icon, label, title, detail, action, onAction }: { icon: LucideIcon; label: string; title: string; detail: string; action: string; onAction: () => void }) {
+  return <article className="info-card"><div className="info-card-top"><span className="info-icon"><Icon size={15} /></span><span>{label}</span><button aria-label={`More information about ${label}`} title={`More information about ${label}`} onClick={onAction}><MoreHorizontal size={15} /></button></div><h3>{title}</h3><p>{detail}</p><button className="text-button" onClick={onAction}>{action} <ExternalLink size={12} /></button></article>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="help-modal" role="dialog" aria-modal="true" aria-label="MobaRust help" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="session-editor-heading">
+        <div><span className="eyebrow">MOBA / HELP</span><h2>Operate safely</h2><p>Shortcuts, protocol boundaries, and the local-only testing posture.</p></div>
+        <button type="button" className="icon-button" aria-label="Close help" onClick={onClose}><X size={17} /></button>
+      </div>
+      <div className="help-grid">
+        <section className="help-section"><span className="settings-section-label">Shortcuts</span><div className="help-shortcut"><span>Quick connect</span><kbd>⌘ K</kbd></div><div className="help-shortcut"><span>Command palette</span><kbd>⌘ ⇧ P</kbd></div><div className="help-shortcut"><span>New local terminal</span><kbd>⌘ N</kbd></div><div className="help-shortcut"><span>Emergency broadcast disable</span><kbd>Esc</kbd></div></section>
+        <section className="help-section"><span className="settings-section-label">Security boundary</span><p>Credential references may appear in session configuration, but passwords, passphrases, private-key bytes, and agent material stay in the Rust/native layer.</p><p>Remote terminal output is treated as untrusted text. Pasted multiline commands require confirmation by default.</p></section>
+        <section className="help-section"><span className="settings-section-label">Protocol posture</span><p>SSH provides host-key verification, native PTY, SFTP, forwarding, bounded reconnect, and cancellation. Telnet and serial are clearly marked as unencrypted transports.</p><p>RDP and VNC run behind controlled native helper boundaries; packaging and cross-platform interoperability remain explicit release gates.</p></section>
+        <section className="help-section"><span className="settings-section-label">Safe testing</span><p>Local validation uses temporary fixtures, synthetic credentials, and loopback services only. It does not inspect personal SSH directories, GitHub keys, your SSH agent, keychains, real hosts, or attached serial devices.</p></section>
+      </div>
+      <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> No credentials are read by this help screen</span><div><button type="button" className="primary-button" onClick={onClose}>Done</button></div></div>
+    </section>
+  </div>;
 }
 
 function CommandPalette({ onClose, onNewTerminal, onQuickConnect, onOpenFiles, onOpenSettings, onOpenCredentials, onOpenSnippets, onOpenMacros, onToggleSidebar }: { onClose: () => void; onNewTerminal: () => void; onQuickConnect: () => void; onOpenFiles: () => void; onOpenSettings: () => void; onOpenCredentials: () => void; onOpenSnippets: () => void; onOpenMacros: () => void; onToggleSidebar: () => void }) {
