@@ -87,8 +87,10 @@ the adapter is promoted.
 
 Fullscreen and visual scaling remain renderer-owned controls: the UI can place
 the canvas in fullscreen and preserve its aspect ratio without asking the
-remote protocol to resize. VNC server-side resize remains capability-dependent
-and is not simulated.
+remote protocol to resize. RDP dynamic resize is coalesced to the latest
+bounded viewport size before it crosses the Tauri command queue, and pending
+resize timers are cancelled when a view closes. VNC server-side resize remains
+capability-dependent and is not simulated.
 
 The protocol-independent contract tests run without spawning a process or
 reading host configuration. The helper's EOF smoke test also avoids sockets.

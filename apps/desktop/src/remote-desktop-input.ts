@@ -95,6 +95,14 @@ export function boundedRemoteDesktopSize(width: number, height: number): RemoteD
   };
 }
 
+/** Avoid forwarding the same negotiated size repeatedly for one helper session. */
+export function remoteDesktopSizeChanged(
+  previous: RemoteDesktopSize | null,
+  next: RemoteDesktopSize,
+): boolean {
+  return previous === null || previous.width !== next.width || previous.height !== next.height;
+}
+
 /**
  * Return the actual painted image rectangle for a canvas using object-fit:
  * contain. The DOM rectangle is the full viewport, which may include black

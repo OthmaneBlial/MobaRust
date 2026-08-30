@@ -21,7 +21,7 @@ import { formatSessionEnvironment, parseSessionEnvironment } from "./session-env
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
-import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint } from "./remote-desktop-input";
+import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import {
   preserveRemoteDesktopError,
@@ -1053,6 +1053,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     if (!host || !canvas) return;
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
+    let resizeTimer: number | null = null;
+    let pendingResize: RemoteDesktopSize | null = null;
+    let lastSentResize: RemoteDesktopSize | null = null;
 
     const setErrorAndFail = (message: string) => {
       if (disposed) return;
@@ -1065,9 +1068,17 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       const size = boundedRemoteDesktopSize(host.clientWidth, host.clientHeight);
       if (!size) return;
       setDimensions(size);
-      const sessionId = sessionIdRef.current;
-      if (!IS_TAURI || !sessionId) return;
-      void invoke("remote_desktop_resize", { sessionId, ...size }).catch(() => undefined);
+      pendingResize = size;
+      if (resizeTimer !== null) return;
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        const next = pendingResize;
+        pendingResize = null;
+        const sessionId = sessionIdRef.current;
+        if (disposed || !next || !IS_TAURI || !sessionId || !remoteDesktopSizeChanged(lastSentResize, next)) return;
+        lastSentResize = next;
+        void invoke("remote_desktop_resize", { sessionId, ...next }).catch(() => undefined);
+      }, 75);
     };
 
     const renderFramebuffer = (width: number, height: number, pixels: number[]) => {
@@ -1164,6 +1175,9 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       pressedRemoteKeysRef.current.clear();
       pointerQueueRef.current = [];
       observer.disconnect();
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = null;
+      pendingResize = null;
       document.removeEventListener("fullscreenchange", syncFullscreen);
       unlisten?.();
       const sessionId = sessionIdRef.current;

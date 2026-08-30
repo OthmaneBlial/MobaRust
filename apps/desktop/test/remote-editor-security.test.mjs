@@ -29,6 +29,7 @@ import {
   rdpExtendedScancode,
   remoteDesktopKeyState,
   remoteDesktopPointerPoint,
+  remoteDesktopSizeChanged,
 } from "../src/remote-desktop-input.ts";
 import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
@@ -339,6 +340,9 @@ assert.equal(
 assert.equal(boundedRemoteDesktopSize(0, 0), null, "hidden panes must not trigger a resize");
 assert.deepEqual(boundedRemoteDesktopSize(1200.4, 799.6), { width: 1200, height: 800 });
 assert.deepEqual(boundedRemoteDesktopSize(80, 9000), { width: 320, height: 4096 });
+assert.equal(remoteDesktopSizeChanged(null, { width: 1280, height: 720 }), true);
+assert.equal(remoteDesktopSizeChanged({ width: 1280, height: 720 }, { width: 1280, height: 720 }), false);
+assert.equal(remoteDesktopSizeChanged({ width: 1280, height: 720 }, { width: 1281, height: 720 }), true);
 assert.deepEqual(remoteDesktopKeyState([], 30, true), [30]);
 assert.deepEqual(remoteDesktopKeyState([42, 30, 30], 30, true), [30, 42]);
 assert.deepEqual(remoteDesktopKeyState([30, 42], 30, false), [42]);
