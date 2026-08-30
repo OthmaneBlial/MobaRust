@@ -1651,6 +1651,34 @@ function App() {
     }
   }, []);
 
+  const exportSettings = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const json = await invoke<string>("settings_export");
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(json);
+      else window.prompt("Copy this secret-free MobaRust settings export", json);
+      setSessionNotice("Secret-free settings copied. Credentials and session definitions are not included.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Settings export failed: ${String(error)}`);
+    }
+  }, []);
+
+  const importSettings = useCallback(async () => {
+    if (!IS_TAURI) return;
+    const json = window.prompt("Paste a secret-free MobaRust settings export JSON");
+    if (!json?.trim()) return;
+    try {
+      const imported = await invoke<AppSettings>("settings_import", { payload: { json } });
+      setSettings(imported);
+      setSettingsOpen(false);
+      setSessionNotice("Settings imported after validation. Credentials and session definitions were untouched.");
+      setConnectionError(null);
+    } catch (error) {
+      setConnectionError(`Settings import failed: ${String(error)}`);
+    }
+  }, []);
+
   const createPortableVault = useCallback(async (passphrase: string) => {
     if (!IS_TAURI) return;
     try {
@@ -3135,7 +3163,7 @@ function App() {
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
-      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
+      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
@@ -4112,7 +4140,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   );
 }
 
-function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
+function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onExport, onImport, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onExport: () => Promise<void>; onImport: () => Promise<void>; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
   const [theme, setTheme] = useState(settings.general.theme);
   const [confirmMultilinePaste, setConfirmMultilinePaste] = useState(settings.general.confirmMultilinePaste);
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
@@ -4198,7 +4226,7 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
         </div>
 
         <div className="session-editor-footer">
-          <button type="button" className="outline-button" onClick={onReset}>Reset defaults</button>
+          <div className="settings-footer-left"><button type="button" className="outline-button" onClick={onReset}>Reset defaults</button><button type="button" className="outline-button" onClick={() => void onImport()}>Import settings</button><button type="button" className="outline-button" onClick={() => void onExport()}>Export settings</button></div>
           <div><button type="button" className="outline-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><CheckCircle2 size={14} /> Save settings</button></div>
         </div>
       </form>

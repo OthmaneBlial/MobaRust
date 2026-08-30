@@ -26,7 +26,7 @@ This document describes the security boundary for the first vertical slice and t
 | Compromised application database | The current session store contains metadata and opaque references only. Platform vault entries are separate; portable credentials use a separate encrypted vault file and remain unavailable while locked. |
 | Logs and crash dumps | Structured redaction is required. Passwords, key material, tokens, and sensitive environment values are forbidden in logs. The optional audit file is a separate bounded lifecycle journal, not a terminal transcript. |
 | Clipboard exposure | Paste is explicit; MobaRust intercepts multiline terminal paste and asks for confirmation before sending it. Remote clipboard support will be opt-in per protocol. |
-| Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. |
+| Exported profiles | Export configuration and secret references separately. Never include secret values by default; warn before exporting sensitive references. Settings export is a separate non-secret schema and cannot include sessions or vault material. |
 | Portable mode | Portable mode is marker-gated by `portable.flag`; credentials use a separate Argon2id + AES-256-GCM vault file, atomic private writes, and explicit native unlock/lock. It is not a plaintext JSON exception. |
 | Application backups | Document that backups can contain session metadata; provide a safe export format and migration versioning. |
 | Host impersonation | SSH adapters must verify known_hosts/fingerprints and must never silently accept unknown keys. |

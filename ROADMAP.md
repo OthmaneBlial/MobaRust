@@ -46,7 +46,7 @@ The roadmap is ordered by operator value and evidence, not by protocol count.
 - [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
 - [x] OS credential vault abstraction
 - [x] Explicit native vault reference save/delete commands with transient secret entry
-- [x] Typed non-secret settings with validation, atomic persistence, reset, and terminal application
+- [x] Typed non-secret settings with validation, atomic persistence, reset, safe import/export, and terminal application
 - [x] Secret-free snippets with tags, validated variables, rendered preview, and explicit manual copy
 - [x] Portable encrypted vault backend with marker-gated data directory, explicit unlock/lock, and native-only lookup
 - [x] Optional bounded local audit history with explicit clear, lifecycle-only fields, and no terminal transcript

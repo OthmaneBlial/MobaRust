@@ -83,6 +83,12 @@ struct ImportSessionRequest {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ImportSettingsRequest {
+    json: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AuditRecordRequest {
     kind: AuditEventKind,
     session_id: Option<SessionId>,
@@ -432,6 +438,27 @@ fn settings_reset(store: State<'_, Mutex<SettingsStore>>) -> Result<AppSettings,
         .lock()
         .map_err(|_| "settings store lock poisoned".to_owned())?
         .reset()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_export(store: State<'_, Mutex<SettingsStore>>) -> Result<String, String> {
+    store
+        .lock()
+        .map_err(|_| "settings store lock poisoned".to_owned())?
+        .export_json()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_import(
+    store: State<'_, Mutex<SettingsStore>>,
+    payload: ImportSettingsRequest,
+) -> Result<AppSettings, String> {
+    store
+        .lock()
+        .map_err(|_| "settings store lock poisoned".to_owned())?
+        .import_json(&payload.json)
         .map_err(|error| error.to_string())
 }
 
@@ -1491,6 +1518,8 @@ fn main() {
             settings_get,
             settings_save,
             settings_reset,
+            settings_export,
+            settings_import,
             audit_list,
             audit_record,
             audit_clear,

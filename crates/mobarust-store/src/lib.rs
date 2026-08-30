@@ -577,6 +577,43 @@ impl SettingsStore {
         self.save(AppSettings::default())
     }
 
+    /// Serializes only validated, non-secret preferences. Credentials and
+    /// session definitions live in separate stores and cannot enter this
+    /// export by construction.
+    pub fn export_json(&self) -> Result<String, StoreError> {
+        serde_json::to_string_pretty(&SettingsFile {
+            schema_version: CURRENT_SETTINGS_SCHEMA_VERSION,
+            settings: self.settings.clone(),
+        })
+        .map_err(StoreError::SettingsEncode)
+    }
+
+    /// Replaces preferences only after the complete payload has decoded,
+    /// passed schema validation, and been durably persisted. A failed write
+    /// restores the in-memory settings so callers never observe a half-import.
+    pub fn import_json(&mut self, json: &str) -> Result<AppSettings, StoreError> {
+        let path = PathBuf::from("<settings-import>");
+        let file: SettingsFile =
+            serde_json::from_str(json).map_err(|error| StoreError::SettingsDecode {
+                path: path.clone(),
+                source: error,
+            })?;
+        if file.schema_version != CURRENT_SETTINGS_SCHEMA_VERSION {
+            return Err(StoreError::SettingsUnsupportedSchema {
+                path,
+                version: file.schema_version,
+            });
+        }
+        file.settings.validate()?;
+        let previous = self.settings.clone();
+        self.settings = file.settings.clone();
+        if let Err(error) = self.persist() {
+            self.settings = previous;
+            return Err(error);
+        }
+        Ok(file.settings)
+    }
+
     fn persist(&self) -> Result<(), StoreError> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|source| StoreError::SettingsWrite {
@@ -1266,6 +1303,31 @@ mod tests {
             SettingsStore::open(&path).unwrap().get(),
             &AppSettings::default()
         );
+    }
+
+    #[test]
+    fn settings_export_import_is_secret_free_and_rejects_invalid_payloads() {
+        let directory = tempdir().unwrap();
+        let source_path = directory.path().join("source-settings.json");
+        let target_path = directory.path().join("target-settings.json");
+        let mut source = SettingsStore::open(&source_path).unwrap();
+        let mut settings = AppSettings::default();
+        settings.appearance.font_size = 19;
+        settings.network.scan_concurrency = 8;
+        source.save(settings.clone()).unwrap();
+
+        let json = source.export_json().unwrap();
+        assert!(json.contains("scanConcurrency"));
+        assert!(!json.contains("password"));
+        assert!(!json.contains("credential"));
+
+        let mut target = SettingsStore::open(&target_path).unwrap();
+        assert_eq!(target.import_json(&json).unwrap(), settings);
+        assert_eq!(SettingsStore::open(&target_path).unwrap().get(), &settings);
+
+        let error = target.import_json(r#"{"schema_version":1,"settings":{},"secret":"nope"}"#);
+        assert!(matches!(error, Err(StoreError::SettingsDecode { .. })));
+        assert_eq!(target.get(), &settings);
     }
 
     #[test]

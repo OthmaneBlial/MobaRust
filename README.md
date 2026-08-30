@@ -37,7 +37,7 @@ The first working slice provides:
 - native SSH remote forwarding and a bounded local SOCKS5 `-D` proxy path with typed tunnel-manager commands;
 - bounded recursive SFTP upload/download with streaming file bodies, progress, cancellation, symlink refusal, and atomic per-file commits;
 - terminal multiline paste is intercepted and confirmed visibly before it is sent to a remote or local shell;
-- typed non-secret settings are persisted separately with validation, atomic writes, reset, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
+- typed non-secret settings are persisted separately with validation, atomic writes, reset, safe import/export, theme selection, terminal profile controls, reconnect policy, and bounded diagnostic defaults;
 - a secret-free snippet library with tags, validated `${variable}` placeholders, rendered preview, and explicit manual clipboard copy (never automatic execution);
 - a bounded macro runner and explicit broadcast-input mode with typed actions, target preflight, visible progress, cooperative cancellation, and an `Esc` emergency disable;
 - deliberate terminal macro recording with bounded capture, editor review, and selectable before-run or per-action approval;
