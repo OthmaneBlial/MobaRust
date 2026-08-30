@@ -103,10 +103,19 @@ impl From<HelperCapabilityRequirements> for SessionCommandPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum HelperDataPhase {
+    #[default]
+    AwaitingCapabilities,
+    AwaitingActive,
+    Active,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct HelperEventProgress {
     hello_seen: bool,
     capabilities_seen: bool,
+    data_phase: HelperDataPhase,
     reported_capabilities: Option<HelperCapabilities>,
 }
 
@@ -770,17 +779,38 @@ fn validate_helper_event(
             Ok(progress)
         }
         HelperEvent::Capabilities { capabilities } => {
+            if progress.data_phase == HelperDataPhase::Active {
+                return Err("remote desktop helper sent a duplicate capability report");
+            }
             validate_helper_capabilities(capabilities, requirements)?;
             progress.capabilities_seen = true;
+            progress.data_phase = HelperDataPhase::AwaitingActive;
             progress.reported_capabilities = Some(capabilities.clone());
             Ok(progress)
         }
-        HelperEvent::Framebuffer { .. }
-        | HelperEvent::Clipboard { .. }
-        | HelperEvent::State {
+        HelperEvent::State {
+            state: mobarust_remote_desktop::HelperState::Reconnecting,
+        } => {
+            progress.data_phase = HelperDataPhase::AwaitingCapabilities;
+            progress.reported_capabilities = None;
+            Ok(progress)
+        }
+        HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Active,
-        } if !progress.capabilities_seen => {
-            Err("remote desktop helper sent active data before reporting capabilities")
+        } => match progress.data_phase {
+            HelperDataPhase::AwaitingCapabilities => {
+                Err("remote desktop helper sent active state before reporting capabilities")
+            }
+            HelperDataPhase::AwaitingActive => {
+                progress.data_phase = HelperDataPhase::Active;
+                Ok(progress)
+            }
+            HelperDataPhase::Active => Err("remote desktop helper sent a duplicate active state"),
+        },
+        HelperEvent::Framebuffer { .. } | HelperEvent::Clipboard { .. }
+            if progress.data_phase != HelperDataPhase::Active =>
+        {
+            Err("remote desktop helper sent active data before entering the active state")
         }
         HelperEvent::Clipboard { .. }
             if progress
@@ -859,11 +889,12 @@ fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        HelperCapabilityRequirements, HelperFrameReadError, MAX_CREDENTIAL_REFERENCE_BYTES,
-        MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES, RemoteDesktopConnectRequest,
-        SessionCommandPolicy, claim_unexpected_helper_exit, helper_input_failure_message,
-        read_next_helper_frame, validate_command_for_session, validate_helper_capabilities,
-        validate_helper_event, validate_helper_resource, validate_request,
+        HelperCapabilityRequirements, HelperDataPhase, HelperFrameReadError,
+        MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
+        RemoteDesktopConnectRequest, SessionCommandPolicy, claim_unexpected_helper_exit,
+        helper_input_failure_message, read_next_helper_frame, validate_command_for_session,
+        validate_helper_capabilities, validate_helper_event, validate_helper_resource,
+        validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
@@ -972,6 +1003,7 @@ mod tests {
         let rdp_progress =
             validate_helper_event(&rdp_capabilities, rdp_requirements, handshake.clone()).unwrap();
         assert!(rdp_progress.capabilities_seen);
+        assert_eq!(rdp_progress.data_phase, HelperDataPhase::AwaitingActive);
         assert!(
             validate_helper_event(
                 &rdp_capabilities,
@@ -1036,15 +1068,19 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(
-            validate_helper_event(
-                &HelperEvent::State {
-                    state: HelperState::Active,
-                },
-                rdp_requirements,
-                rdp_progress.clone(),
-            ),
-            Ok(rdp_progress)
+        let active_progress = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Active,
+            },
+            rdp_requirements,
+            rdp_progress.clone(),
+        )
+        .unwrap();
+        assert_eq!(active_progress.data_phase, HelperDataPhase::Active);
+        assert_ne!(active_progress, rdp_progress);
+        assert!(
+            validate_helper_event(&rdp_capabilities, rdp_requirements, active_progress.clone(),)
+                .is_err()
         );
         assert!(
             validate_helper_event(
@@ -1056,6 +1092,83 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn helper_framebuffer_requires_active_state_after_each_reconnect() {
+        let requirements = HelperCapabilityRequirements {
+            protocol: DesktopProtocol::Rdp,
+            clipboard: false,
+            audio: false,
+            gateway: false,
+            color_depth: Some(32),
+        };
+        let hello = validate_helper_event(
+            &HelperEvent::Hello {
+                version: WIRE_VERSION,
+            },
+            requirements,
+            Default::default(),
+        )
+        .unwrap();
+        let capabilities = HelperEvent::Capabilities {
+            capabilities: HelperCapabilities::rdp(),
+        };
+        let awaiting_active = validate_helper_event(&capabilities, requirements, hello).unwrap();
+        let framebuffer = HelperEvent::Framebuffer {
+            width: 1,
+            height: 1,
+            pixels: vec![0; 4],
+        };
+        let error =
+            validate_helper_event(&framebuffer, requirements, awaiting_active.clone()).unwrap_err();
+        assert!(error.contains("active state"));
+
+        let active = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Active,
+            },
+            requirements,
+            awaiting_active,
+        )
+        .unwrap();
+        assert!(validate_helper_event(&framebuffer, requirements, active.clone()).is_ok());
+
+        let reconnecting = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Reconnecting,
+            },
+            requirements,
+            active,
+        )
+        .unwrap();
+        assert_eq!(
+            reconnecting.data_phase,
+            HelperDataPhase::AwaitingCapabilities
+        );
+        assert!(reconnecting.reported_capabilities.is_none());
+        assert!(
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Active,
+                },
+                requirements,
+                reconnecting.clone(),
+            )
+            .is_err()
+        );
+
+        let awaiting_active =
+            validate_helper_event(&capabilities, requirements, reconnecting).unwrap();
+        let active = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Active,
+            },
+            requirements,
+            awaiting_active,
+        )
+        .unwrap();
+        assert!(validate_helper_event(&framebuffer, requirements, active).is_ok());
     }
 
     #[test]
@@ -1081,6 +1194,14 @@ mod tests {
         )
         .unwrap();
         let progress = validate_helper_event(&capability_event, requirements, handshake).unwrap();
+        let progress = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Active,
+            },
+            requirements,
+            progress,
+        )
+        .unwrap();
         let error = validate_helper_event(
             &HelperEvent::Clipboard {
                 text: String::from("fixture clipboard").into(),
@@ -1103,6 +1224,14 @@ mod tests {
                 Default::default(),
             )
             .unwrap(),
+        )
+        .unwrap();
+        let progress = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Active,
+            },
+            requirements,
+            progress,
         )
         .unwrap();
         validate_helper_event(

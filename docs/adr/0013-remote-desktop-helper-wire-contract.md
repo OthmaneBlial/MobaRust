@@ -41,6 +41,10 @@ messages before a process is started:
   silently discarding data;
 - the parent requires `Hello` as the first event and rejects duplicate
   handshakes or active data that arrives before a validated capability report;
+- framebuffer and clipboard data are accepted only after the corresponding
+  attempt has entered `Active`; a `Reconnecting` event starts a fresh
+  capability-to-active sequence, so stale data cannot cross the boundary while
+  a new connection is being established;
 - the parent applies a five-second deadline until the helper has completed its
   `Hello` and capability-report handshake, turning a silent or half-started
   helper into a failed session and reusing the bounded stop/reap path;
