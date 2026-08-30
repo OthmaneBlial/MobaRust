@@ -41,6 +41,31 @@ It is not a claim that MobaRust currently supports RDP.
 | Framebuffer bridge | Cross-platform Tauri surface and testable pixels | Input/display latency and copy cost | Select first |
 | Native window embedding | Potentially best latency | Window-handle lifecycle differs on Win/Linux/macOS | Later experiment |
 
+### Decision matrix
+
+The following is a qualitative architecture review from the pinned
+FreeRDP/Remmina source study and the isolated Rust experiment. It is not a
+benchmark and does not claim that an option is production-ready.
+
+| Option | Stability / maintainability | Security boundary | Performance / input latency | License | Packaging | Windows / Linux / macOS | Clipboard / audio / resize / multi-monitor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FreeRDP FFI | Mature engine, high unsafe ABI and callback maintenance | Weak unless wrapped in a helper | High potential, native event path | Apache-2.0 engine; dependency review required | High: ABI, plugins, codecs, data paths | Strong candidate, but each target needs native packaging evidence | Broad protocol surface, but each feature needs explicit bridge and tests |
+| Generated/native bindings | Less handwritten call glue; ABI still evolves | Same native-risk profile unless isolated | High potential | Depends on wrapped FreeRDP artifacts | High: headers, library, plugins, target toolchains | Same platform matrix as FreeRDP | Depends on exposed bindings and callback ownership |
+| Dynamically linked library | Smaller app and replaceable engine | Runtime library trust and ABI drift | High when library is present | Depends on exact distribution/linking choice | Very high: discovery, versions, plugins, installers | Conditional on a supported library on all targets | Potentially broad, but failures must degrade explicitly |
+| Controlled helper process | Clear crash/cancellation boundary and test seam | Strongest practical boundary in this repository | Good; framebuffer copy is measurable overhead | Helper engine still needs separate license review | Medium-high: one helper/resource per target | Portable shape; real evidence still required on each OS | Parent contract can expose only supported capabilities |
+| Isolated subprocess | Strong failure containment and independent dependency graph | Strong, if credentials use native IPC only | Good, with startup/IPC overhead | Isolated engine license remains visible | Medium-high; separate build and audit | Suitable for target-specific engines | Feature support is explicit rather than inferred |
+| Framebuffer bridge | Renderer-independent and easy to bound/test | Remote pixels remain untrusted data | Moderate; copy/encode cost and input round trips | Inherits engine license | Moderate; no native window handle ABI | Same renderer contract on all targets | Clipboard/audio/display changes require typed events |
+| Native window embedding | Lowest possible copy latency | Larger native handle and callback surface | Potentially best | Inherits engine and platform glue licenses | Very high; window handles differ by target | Requires separate Win32/X11/Wayland/AppKit work | Better native feature access, harder lifecycle and testing |
+
+The selected prototype is therefore an isolated controlled helper with a
+versioned framebuffer bridge. FreeRDP remains the mature-engine reference, but
+no FreeRDP library or executable is installed on the development Mac and no
+binding is shipped. The IronRDP candidate is kept in its own audited workspace
+until its dependency, trust-policy, packaging, and Windows interoperability
+gates are resolved. This decision is reversible after real measurements of
+startup, framebuffer throughput, input latency, clipboard/audio behavior,
+dynamic resize, and multi-monitor support on the target platforms.
+
 ## IronRDP candidate result
 
 The isolated `tools/rdp-helper` adapter confirms that a Rust-native candidate
@@ -71,16 +96,33 @@ silently write remote content into the Mac clipboard.
 
 Connector failures are reduced to stable categories at the helper boundary,
 including authentication/access rejection, protocol negotiation, malformed
-data, and TLS/certificate-or-transport validation. The candidate now selects
-IronRDP's `native-tls` backend, whose platform connector performs normal
-certificate-chain and hostname validation using the operating-system trust
-store. A deliberate self-signed acceptance/pinning policy is not exposed yet,
-so trust-policy UX and deterministic certificate fixtures remain promotion
-work. This backend also adds platform TLS packaging surface (Schannel on
-Windows, Security Framework on macOS, and OpenSSL/native-tls on Linux), which
-must be included in the future distribution matrix. The helper also refuses an
-inherited `SSLKEYLOGFILE` variable; no TLS key-log output is allowed during
-local experiments.
+data, and TLS/certificate-or-transport validation. A local source audit of the
+published `ironrdp-tls 0.2.2` implementation found that its `native-tls` builder
+calls `danger_accept_invalid_certs(true)` and disables SNI; its published
+Rustls path also uses a no-certificate-verification implementation. The helper
+experiment now patches that dependency inside its isolated workspace with
+`ironrdp-tls-validated`, a small compatibility crate that uses Rustls, platform
+certificate verification, and SNI. This improves the candidate's trust
+behavior but does not establish production interoperability: loopback
+restriction, certificate fixtures, Windows evidence, dependency audit, and
+packaging gates remain. RD Gateway remains deferred until its separate
+transport path has the same trust evidence.
+
+The helper continues to fail closed at runtime while this candidate is under
+review: it accepts only literal loopback IP targets (`127.0.0.1` or `::1`) and
+rejects hostnames and all other addresses before opening a socket. The local
+TLS adapter validates the presented certificate when a handshake is attempted,
+but this safety restriction remains until real interoperability evidence exists.
+
+This is a hard promotion blocker, not a missing preference in the UI:
+MobaRust must first select or patch an audited engine/backend with genuine
+certificate-chain and hostname validation, or a deliberate reviewed pinning
+policy. Deterministic certificate fixtures and Windows interoperability are
+also required. The local Rustls verifier adds platform trust-store and
+packaging surface on Windows, macOS, and Linux; that must be included in the
+future distribution matrix. The helper also refuses an inherited
+`SSLKEYLOGFILE` variable; no TLS key-log output is allowed during local
+experiments.
 The helper owns a 15-second startup deadline around the candidate's network
 handshake. When it expires, it requests a cooperative close and waits only a
 separate bounded grace period before forcing task termination. A stalled
@@ -114,9 +156,10 @@ remote protocol failure.
 
 ## Acceptance gates
 
-Before calling RDP implemented, test a real server with hostname, port,
-username, password, domain, certificate validation, resolution, dynamic
-resize, keyboard, mouse, clipboard, fullscreen, scaling, reconnect, color
-depth, audio configuration, gateway behavior, and connection diagnostics.
+Before calling RDP implemented, use a secure engine/backend to test a real
+server with hostname, port, username, password, domain, certificate
+validation, resolution, dynamic resize, keyboard, mouse, clipboard, fullscreen,
+scaling, reconnect, color depth, audio configuration, gateway behavior, and
+connection diagnostics.
 At least one Windows interoperability check is mandatory because Windows is
 the primary MobaXterm audience. No screenshot or static framebuffer counts.

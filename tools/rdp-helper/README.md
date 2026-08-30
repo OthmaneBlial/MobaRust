@@ -15,17 +15,36 @@ TLS key logging is refused even for direct helper launches. The helper rejects
 an inherited `SSLKEYLOGFILE` variable because TLS key material must never be
 written to an external log file.
 
+It also rejects ambient `SSL_CERT_FILE` and `SSL_CERT_DIR` overrides. Tests and
+future production configuration must use an explicit, reviewed certificate
+policy rather than silently reading an arbitrary user-selected path.
+
 This candidate is not staged into normal application bundles. Its separate
 lockfile currently fails the local audit because IronRDP's pinned `picky`
 dependency chain includes `rsa 0.10.0-rc.18` (`RUSTSEC-2023-0071`). It must
 pass a fresh audit before packaging or production claims.
 
 Connector failures are emitted as redacted categories rather than forwarding
-IronRDP's internal context or server text. The helper selects IronRDP's
-`native-tls` backend, so certificate chains and hostnames are checked through
-the operating-system trust store. Explicit self-signed acceptance or pinning
-policy is not wired yet; this remains an isolated candidate and must not be
-treated as a production RDP client.
+IronRDP's internal context or server text. The published `ironrdp-tls 0.2.2`
+implementation was audited locally and its TLS backends do not validate server
+identity. The helper therefore patches that dependency inside this isolated
+workspace with `ironrdp-tls-validated`, a small compatibility crate that uses
+Rustls, SNI, and `rustls-platform-verifier`. This improves the candidate's
+trust behavior but is not production evidence: the helper remains loopback-only
+and excluded from normal bundles. RD Gateway is also deferred until its
+separate transport path has the same trust policy.
+
+The helper enforces this boundary at runtime during the experiment: it accepts
+only literal loopback IP targets (`127.0.0.1` or `::1`) and rejects hostnames and
+all other addresses before opening a socket. The local TLS adapter validates
+the presented certificate when a handshake is attempted, but this restriction
+remains until real interoperability evidence exists.
+
+Promotion requires an audited engine/backend with real certificate-chain and
+hostname validation (or an explicit, reviewed pinning policy), deterministic
+certificate fixtures, and Windows interoperability evidence. The candidate
+remains excluded from normal bundles until those gates and the known RSA
+advisory are resolved.
 
 Audio redirection is not implemented. The desktop boundary and the helper
 both reject an audio request explicitly; it is never silently discarded.

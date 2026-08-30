@@ -21,7 +21,10 @@ events. This is an engineering evaluation, not a claim of interoperability.
 
 Keep the IronRDP adapter in the separate Cargo workspace at
 `tools/rdp-helper`. It uses `ironrdp-client 0.1.0`, `ironrdp-pdu 0.9.0`, and
-the `native-tls`/`clipboard` features. The helper:
+the `rustls`/`clipboard` features. A repository-local compatibility crate at
+`tools/rdp-helper/ironrdp-tls-validated` supplies the TLS API expected by
+IronRDP while delegating certificate verification to the platform verifier.
+The helper:
 
 - accepts only host metadata in process arguments;
 - receives the password through the versioned zeroizing native-pipe frame;
@@ -59,20 +62,44 @@ cooperative cancellation during the delay. This is lifecycle hardening only;
 the separate local/Windows fixture must prove that a real RDP session recovers
 before the feature can be promoted.
 
-The selected `ironrdp-tls 0.2.2` native-tls backend delegates certificate-chain
-and hostname validation to the platform connector and trust store. The helper
-does not yet expose a deliberate self-signed acceptance or certificate-pinning
-policy, so this trust-policy UX remains a promotion gate. The dependency audit,
-reconnect, audio, gateway, packaging, and real Windows interoperability gates
-also remain open.
+The published `ironrdp-tls 0.2.2` implementation was audited locally after the
+initial experiment. Its `native-tls` builder calls
+`danger_accept_invalid_certs(true)` and disables SNI; its published Rustls path
+also uses a no-certificate-verification implementation. The local compatibility
+crate replaces that behavior with `rustls-platform-verifier` and SNI. This is
+a security improvement for the isolated candidate, not production evidence:
+the helper remains loopback-only and excluded from normal bundles until real
+certificate fixtures, Windows interoperability, dependency audit, and
+packaging checks pass. RD Gateway remains deferred until its separate
+transport path has the same trust policy.
 
-This choice trades the intentionally disabled verifier in the rustls path for
-platform TLS dependencies: Schannel on Windows, Security Framework on macOS,
-and the native-tls/OpenSSL path on Linux. The eventual distribution matrix must
-package and audit those runtime requirements; the candidate remains excluded
-from normal bundles until that work and the existing RSA advisory are resolved.
+The helper continues to enforce a fail-closed experiment boundary at runtime:
+it accepts only literal loopback IP targets (`127.0.0.1` or `::1`) and rejects
+hostnames and other addresses before opening a socket. The local TLS adapter
+now validates the presented certificate when a handshake is attempted, but
+loopback restriction remains until real interoperability evidence exists.
+
+This is a hard security gate. Promotion requires an audited engine/backend with
+real certificate-chain and hostname validation, or an explicit reviewed
+pinning policy, plus deterministic certificate fixtures and Windows
+interoperability evidence. The eventual distribution matrix must also audit
+and package the platform TLS requirements (Windows certificate APIs, Security
+Framework on macOS, and the platform verifier's Linux trust sources). The
+candidate remains excluded from normal bundles until those requirements and
+the existing RSA advisory are resolved.
 
 ## Verification and next gate
+
+The architecture decision is intentionally broader than the current Rust
+candidate. FreeRDP FFI/bindings offer the strongest mature-engine and native
+performance path but carry the largest ABI, plugin, codec, and packaging
+surface. Dynamic linking reduces the application footprint but introduces
+runtime discovery and ABI drift. A controlled helper plus framebuffer bridge
+keeps crashes, credentials, cancellation, and untrusted pixels outside the
+React process at the cost of measurable IPC/copy latency. Native window
+embedding may reduce that cost later, but requires separate Win32, X11/Wayland,
+and AppKit lifecycle work. The comparative criteria and qualitative ratings
+are recorded in `docs/research/rdp.md`; they are not benchmark results.
 
 The isolated helper is validated locally with:
 

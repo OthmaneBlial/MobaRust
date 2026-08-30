@@ -9,9 +9,12 @@ license = "Apache-2.0"
 rust-version = "1.88"
 
 [dependencies]
-ironrdp-client = { version = "0.1.0", default-features = false, features = ["clipboard", "native-tls"] }
+ironrdp-client = { version = "0.1.0", default-features = false, features = ["clipboard", "rustls"] }
 ironrdp-connector = "0.10.0"
 ironrdp-pdu = "0.9.0"
 mobarust-remote-desktop = { path = "../../crates/mobarust-remote-desktop" }
 smallvec = "1.15"
 tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+
+[patch.crates-io]
+ironrdp-tls = { path = "ironrdp-tls-validated" }

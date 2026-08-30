@@ -13,6 +13,7 @@
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::net::IpAddr;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -42,6 +43,10 @@ const RDP_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const AUDIO_UNSUPPORTED: &str = "RDP audio redirection is not enabled in this helper";
+const RDP_TARGET_UNSUPPORTED: &str =
+    "RDP experiment is restricted to a loopback IP during candidate review";
+const TLS_ENVIRONMENT_UNSUPPORTED: &str =
+    "RDP helper refuses ambient TLS certificate override variables";
 
 #[derive(Debug)]
 struct Arguments {
@@ -83,6 +88,9 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(ArgumentError(
             "TLS key logging is disabled for the RDP helper".into(),
         )));
+    }
+    if tls_certificate_override_present() {
+        return Err(Box::new(ArgumentError(TLS_ENVIRONMENT_UNSUPPORTED.into())));
     }
     let arguments = parse_arguments(env::args().skip(1))?;
     let mut stdout = tokio::io::stdout();
@@ -614,7 +622,30 @@ fn build_config(
 }
 
 fn unsupported_option(arguments: &Arguments) -> Option<&'static str> {
-    arguments.audio_requested.then_some(AUDIO_UNSUPPORTED)
+    if arguments.audio_requested {
+        return Some(AUDIO_UNSUPPORTED);
+    }
+
+    // The pinned IronRDP TLS backends do not validate server identity. Keep
+    // this candidate fail-closed so an accidental launch cannot reach a real
+    // or private host while the dependency is being evaluated.
+    let loopback_ip = arguments
+        .host
+        .parse::<IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false);
+    (!loopback_ip).then_some(RDP_TARGET_UNSUPPORTED)
+}
+
+fn tls_certificate_override_present() -> bool {
+    std::env::vars_os().any(|(name, _)| is_tls_certificate_override(&name))
+}
+
+fn is_tls_certificate_override(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_string_lossy().to_ascii_uppercase().as_str(),
+        "SSL_CERT_FILE" | "SSL_CERT_DIR"
+    )
 }
 
 fn rdp_failure_message(error: &ironrdp_connector::ConnectorError) -> &'static str {
@@ -904,6 +935,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unsupported_option(&arguments), Some(AUDIO_UNSUPPORTED));
+    }
+
+    #[test]
+    fn insecure_tls_candidate_is_restricted_to_loopback_ip_literals() {
+        let mut arguments = Arguments {
+            host: "example.invalid".into(),
+            port: 3389,
+            username: "fixture-user".into(),
+            domain: None,
+            display: DisplaySize {
+                width: 320,
+                height: 200,
+            },
+            color_depth: 32,
+            audio_requested: false,
+        };
+        assert_eq!(unsupported_option(&arguments), Some(RDP_TARGET_UNSUPPORTED));
+
+        arguments.host = "127.0.0.1".into();
+        assert_eq!(unsupported_option(&arguments), None);
+        arguments.host = "::1".into();
+        assert_eq!(unsupported_option(&arguments), None);
+        arguments.host = "localhost".into();
+        assert_eq!(unsupported_option(&arguments), Some(RDP_TARGET_UNSUPPORTED));
+    }
+
+    #[test]
+    fn ambient_certificate_overrides_are_not_allowed() {
+        for name in ["SSL_CERT_FILE", "ssl_cert_dir"] {
+            assert!(is_tls_certificate_override(std::ffi::OsStr::new(name)));
+        }
+        assert!(!is_tls_certificate_override(std::ffi::OsStr::new("PATH")));
     }
 
     #[test]

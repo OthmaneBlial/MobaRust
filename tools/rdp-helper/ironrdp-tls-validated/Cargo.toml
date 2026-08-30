@@ -1,0 +1,26 @@
+[package]
+name = "ironrdp-tls"
+version = "0.2.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.89"
+description = "MobaRust-local IronRDP TLS adapter with platform certificate validation"
+
+[features]
+default = []
+rustls = [
+    "dep:rustls-platform-verifier",
+    "dep:tokio-rustls",
+    "dep:x509-cert",
+    "tokio-rustls/ring",
+]
+rustls-ring = ["rustls"]
+rustls-aws-lc-rs = ["rustls", "tokio-rustls/aws_lc_rs"]
+rustls-no-provider = ["rustls", "tokio-rustls/logging", "tokio-rustls/tls12"]
+stub = []
+
+[dependencies]
+rustls-platform-verifier = { version = "0.7", optional = true }
+tokio = { version = "1.52", features = ["io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, optional = true }
+x509-cert = { version = "0.2", default-features = false, features = ["std"], optional = true }
