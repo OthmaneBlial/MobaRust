@@ -1758,7 +1758,21 @@ fn portable_data_dir_for(executable: &Path) -> Option<PathBuf> {
         .then(|| parent.join("portable-data"))
 }
 
+fn cli_message(argument: Option<&str>) -> Option<String> {
+    match argument {
+        Some("--version") => Some(format!("MobaRust {}", env!("CARGO_PKG_VERSION"))),
+        Some("--help") => {
+            Some("MobaRust desktop application\n  --version  Print the version and exit".to_owned())
+        }
+        _ => None,
+    }
+}
+
 fn main() {
+    if let Some(message) = cli_message(std::env::args().nth(1).as_deref()) {
+        println!("{message}");
+        return;
+    }
     logging::init();
     tracing::info!(
         target: "mobarust::runtime",
@@ -1918,8 +1932,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_NATIVE_PICKER_PATHS, diagnostic_export, native_picker_file_name, native_picker_paths,
-        portable_data_dir_for,
+        MAX_NATIVE_PICKER_PATHS, cli_message, diagnostic_export, native_picker_file_name,
+        native_picker_paths, portable_data_dir_for,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1967,6 +1981,17 @@ mod tests {
                 "diagnostic export leaked forbidden value: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn cli_version_exits_before_initializing_the_desktop_runtime() {
+        assert_eq!(
+            cli_message(Some("--version")).as_deref(),
+            Some("MobaRust 0.1.0")
+        );
+        assert!(cli_message(Some("--help")).is_some());
+        assert_eq!(cli_message(Some("--unexpected")), None);
+        assert_eq!(cli_message(None), None);
     }
 
     #[test]

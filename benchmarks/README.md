@@ -32,3 +32,24 @@ The output is intentionally not committed: record a run only with its exact
 machine, toolchain, and command when making a performance claim. Startup,
 memory, SFTP, concurrent-session, and cross-platform measurements remain open
 until they have reproducible evidence.
+
+## App startup probe
+
+After building the local desktop binary, run:
+
+```text
+cargo xtask benchmark-app target/debug/mobarust
+```
+
+The command accepts only an explicit regular `mobarust` executable inside the
+repository. It launches the binary five times with `--version`, which exits
+before Tauri initialization, and reports the first process launch, the mean of
+the four repeated launches, and the executable byte size. The child receives a
+sanitized environment and disposable HOME/XDG directories; it opens no window,
+socket, shell, session store, vault, or clipboard.
+
+`first_run_ms` and `repeated_mean_ms` are process-launch measurements, not a
+full cold-start/warm-start claim. Filesystem cache state, desktop compositor
+startup, renderer readiness, memory, idle CPU, and real protocol throughput
+require a separately controlled platform run and must not be inferred from
+this probe.

@@ -1,8 +1,8 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
@@ -15,6 +15,7 @@ fn main() {
         "check-rdp-helper" => check_rdp_helper(),
         "check-vnc-helper" => check_vnc_helper(),
         "benchmark" => benchmark(),
+        "benchmark-app" => benchmark_app(arguments.collect()),
         "package-check" => package_check(),
         "package-layout-check" => package_layout_check(),
         "verify-platform-layout" => verify_platform_layout_command(arguments.collect()),
@@ -29,6 +30,9 @@ fn main() {
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
             println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
             println!("cargo xtask benchmark    Run synthetic local performance probes");
+            println!(
+                "cargo xtask benchmark-app <path>    Measure the explicit local app --version startup path"
+            );
             println!(
                 "cargo xtask package-check    Build and inspect an unsigned current-platform Tauri app bundle"
             );
@@ -1072,6 +1076,133 @@ fn benchmark() -> Result<(), String> {
     )
 }
 
+const APP_BENCHMARK_SAMPLES: usize = 5;
+const APP_BENCHMARK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Measure the lightweight version path of an already-built MobaRust binary.
+/// The path is explicit and repository-bounded; the app exits before Tauri
+/// initialization, so this command never opens a window or application data.
+fn benchmark_app(arguments: Vec<String>) -> Result<(), String> {
+    if arguments.len() != 1 {
+        return Err("benchmark-app requires exactly one repository-local app path".to_owned());
+    }
+    let root = repository_root()?;
+    let executable = resolve_benchmark_binary(&root, &arguments[0])?;
+    let size = fs::metadata(&executable)
+        .map_err(|error| format!("could not inspect benchmark app: {error}"))?
+        .len();
+    let mut samples = Vec::with_capacity(APP_BENCHMARK_SAMPLES);
+    let mut version = None;
+    for _ in 0..APP_BENCHMARK_SAMPLES {
+        let (elapsed, output) = run_app_version_probe(&executable, &root)?;
+        let output = output.trim();
+        if !output.starts_with("MobaRust ") {
+            return Err("benchmark app did not return the MobaRust version contract".to_owned());
+        }
+        version.get_or_insert_with(|| output.to_owned());
+        samples.push(elapsed);
+    }
+
+    let first = samples[0];
+    let repeated = samples.iter().skip(1).sum::<Duration>() / (APP_BENCHMARK_SAMPLES as u32 - 1);
+    println!(
+        "app_startup version={} bytes={} first_run_ms={:.3} repeated_mean_ms={:.3} samples={}",
+        version.unwrap_or_else(|| "unknown".to_owned()),
+        size,
+        first.as_secs_f64() * 1000.0,
+        repeated.as_secs_f64() * 1000.0,
+        APP_BENCHMARK_SAMPLES,
+    );
+    println!(
+        "app_startup_note=first_run_and_repeated_process_launch_only; no_gui_no_network_no_application_data"
+    );
+    Ok(())
+}
+
+fn resolve_benchmark_binary(root: &Path, supplied: &str) -> Result<PathBuf, String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("could not resolve repository root: {error}"))?;
+    let path = PathBuf::from(supplied);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        canonical_root.join(path)
+    };
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("benchmark app path is unavailable: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err("benchmark app must be a regular file, not a symlink or directory".to_owned());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("could not resolve benchmark app path: {error}"))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err("benchmark app must remain inside the repository".to_owned());
+    }
+    let name = canonical
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "benchmark app filename is invalid".to_owned())?;
+    if !matches!(name, "mobarust" | "mobarust.exe") {
+        return Err("benchmark-app accepts only a mobarust executable".to_owned());
+    }
+    Ok(canonical)
+}
+
+fn run_app_version_probe(executable: &Path, root: &Path) -> Result<(Duration, String), String> {
+    let isolated_home = create_sanitized_test_home()?;
+    let mut command = Command::new(executable);
+    sanitize_process_environment(&mut command);
+    apply_isolated_home(&mut command, &isolated_home);
+    command
+        .arg("--version")
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start benchmark app: {error}"))?;
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("could not poll benchmark app: {error}"))?
+        {
+            Some(status) => break status,
+            None if started.elapsed() >= APP_BENCHMARK_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = fs::remove_dir_all(&isolated_home);
+                return Err("benchmark app --version exceeded the 5 second timeout".to_owned());
+            }
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .map_err(|error| format!("could not read benchmark app output: {error}"))?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .map_err(|error| format!("could not read benchmark app diagnostics: {error}"))?;
+    }
+    let cleanup = fs::remove_dir_all(&isolated_home)
+        .map_err(|error| format!("could not remove benchmark test home: {error}"));
+    cleanup?;
+    if !status.success() {
+        return Err(format!("benchmark app exited with {status}"));
+    }
+    if !stderr.is_empty() {
+        return Err("benchmark app wrote unexpected diagnostics on --version".to_owned());
+    }
+    let output = String::from_utf8(stdout)
+        .map_err(|_| "benchmark app version output was not valid UTF-8".to_owned())?;
+    Ok((started.elapsed(), output))
+}
+
 fn check() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
     run_sanitized_test("cargo", ["test", "--locked", "--workspace"], None)?;
@@ -1524,6 +1655,41 @@ mod tests {
         assert!(!should_remove_process_variable(std::ffi::OsStr::new(
             "RUSTUP_HOME"
         )));
+    }
+
+    #[test]
+    fn benchmark_binary_scope_rejects_non_app_paths_and_symlinks() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-benchmark-scope-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let app = root.join("target/debug/mobarust");
+        fs::create_dir_all(app.parent().expect("app parent")).expect("create app directory");
+        fs::write(&app, b"fixture").expect("write app fixture");
+
+        assert_eq!(
+            resolve_benchmark_binary(&root, "target/debug/mobarust")
+                .expect("app fixture should be accepted"),
+            app.canonicalize().expect("canonical app")
+        );
+        let error = resolve_benchmark_binary(&root, "target/debug/not-mobarust")
+            .expect_err("only the app executable is accepted");
+        assert!(error.contains("unavailable"));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&app, root.join("target/debug/mobarust.exe"))
+                .expect("create app symlink");
+            let error = resolve_benchmark_binary(&root, "target/debug/mobarust.exe")
+                .expect_err("symlinked app must be rejected");
+            assert!(error.contains("symlink"));
+        }
+
+        fs::remove_dir_all(root).expect("remove benchmark scope fixture");
     }
 
     #[test]

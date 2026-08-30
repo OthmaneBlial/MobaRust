@@ -163,6 +163,17 @@ The validation path uses isolated home/XDG directories, repository-owned or disp
 
 `package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. They do not claim notarization, cross-platform release support, or RDP/VNC interoperability.
 
+For a repository-local process-start probe after building the desktop binary:
+
+```text
+cargo xtask benchmark-app target/debug/mobarust
+```
+
+This runs only the app's `--version` path before Tauri initialization with a
+sanitized environment. It reports process-launch timing and binary size; it
+does not claim full cold-start, warm-start, memory, idle-CPU, renderer, or
+cross-platform performance.
+
 On macOS, the isolated RDP trust fixture can be run explicitly:
 
 ```bash
