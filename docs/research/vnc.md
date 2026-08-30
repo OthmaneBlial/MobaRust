@@ -93,13 +93,15 @@ RFB client behind the native helper contract. It negotiates RFB 3.8, supports
 no-auth and VNC-password negotiation through the credential pipe, requests an
 RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
 pointer, and bounded Latin-1 clipboard input. Unsupported JPEG rectangles and
-server-side resize are reported rather than simulated.
+client-requested server-side resize are reported rather than simulated; a
+server-announced `DesktopSize` change is applied to the bounded canvas.
 
 `tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
 password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
 fixture verifies security-type selection and the DES challenge response before
 checking framebuffer, explicit server-side resize rejection, key, pointer,
-clipboard input, server-to-helper clipboard events, and clean stop. The current
+server-announced resize, clipboard input, server-to-helper clipboard events,
+and clean stop. The current
 Tauri UI is
 wired to the parent
 supervisor/renderer and offers explicit user-triggered reconnect after helper

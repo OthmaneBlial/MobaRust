@@ -17,6 +17,10 @@ const FIXTURE_SIZE: DisplaySize = DisplaySize {
     width: 320,
     height: 200,
 };
+const RESIZED_FIXTURE_SIZE: DisplaySize = DisplaySize {
+    width: 640,
+    height: 400,
+};
 const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
 const FIXTURE_CHALLENGE: [u8; 16] = [
     0x6d, 0x6f, 0x62, 0x61, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x76, 0x6e, 0x63, 0x2d, 0x31, 0x36, 0x21,
@@ -474,6 +478,7 @@ async fn exercise_fixture_with_quality(
     let mut saw_active = false;
     let mut saw_framebuffer = false;
     let mut saw_remote_clipboard = false;
+    let mut saw_resized_framebuffer = false;
     for _ in 0..12 {
         let event = match timeout(Duration::from_secs(3), next_event(&mut stdout)).await {
             Ok(event) => event,
@@ -498,7 +503,17 @@ async fn exercise_fixture_with_quality(
         {
             saw_remote_clipboard = true;
         }
-        if saw_active && saw_framebuffer && saw_remote_clipboard {
+        if matches!(
+            event,
+            HelperEvent::Framebuffer {
+                width: 640,
+                height: 400,
+                ref pixels,
+            } if pixels[..4] == [0x44, 0x55, 0x66, 0xff]
+        ) {
+            saw_resized_framebuffer = true;
+        }
+        if saw_active && saw_framebuffer && saw_remote_clipboard && saw_resized_framebuffer {
             break;
         }
     }
@@ -509,6 +524,10 @@ async fn exercise_fixture_with_quality(
     assert!(
         saw_remote_clipboard,
         "the helper did not forward the server clipboard event"
+    );
+    assert!(
+        saw_resized_framebuffer,
+        "the helper did not apply the server-announced framebuffer resize"
     );
 
     send_command(
@@ -805,6 +824,25 @@ async fn run_fixture(
     cut_text.extend_from_slice(remote_clipboard);
     stream
         .write_all(&cut_text)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut resize_update = vec![0_u8, 0, 0, 1];
+    resize_update.extend_from_slice(&[0, 0, 0, 0]);
+    resize_update.extend_from_slice(&RESIZED_FIXTURE_SIZE.width.to_be_bytes());
+    resize_update.extend_from_slice(&RESIZED_FIXTURE_SIZE.height.to_be_bytes());
+    resize_update.extend_from_slice(&(-223_i32).to_be_bytes());
+    stream
+        .write_all(&resize_update)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut resized_update = vec![0_u8, 0, 0, 1];
+    resized_update.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 1]);
+    resized_update.extend_from_slice(&[0, 0, 0, 0]);
+    resized_update.extend_from_slice(&[0x44, 0x55, 0x66, 0xff]);
+    stream
+        .write_all(&resized_update)
         .await
         .map_err(|error| error.to_string())?;
 
