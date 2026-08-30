@@ -153,6 +153,14 @@ into the one upstream-owned `String` required by that callback, avoiding an
 additional `to_string()` copy; the upstream-owned value itself is still not
 zeroizing.
 
+The real-process fixtures also wait for the helper to exit while the parent
+stdin pipe remains open. The helper reads frames on a dedicated native thread
+because Tokio's standard-input adapter uses an uncancellable blocking read;
+this keeps terminal failure, Stop, and reconnect shutdown from depending on a
+parent-side pipe close. The thread does not log or retain credential material,
+and its decoded frames remain zeroizing. This is process-lifecycle evidence,
+not cross-platform VNC interoperability evidence.
+
 Because the candidate does not provide a generally validated encrypted
 transport, the helper and the Tauri parent fail closed for safety: they accept
 only literal loopback IP targets (`127.0.0.1` or `::1`) and reject hostnames or

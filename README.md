@@ -54,7 +54,7 @@ The current baseline is implemented in the repository and covered by local unit,
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec/broadcast targets, network diagnostics, bounded port checks, remote monitoring, and privacy-conscious audit history |
 | **Legacy equipment** | Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
 | **RDP** | Isolated native candidate with framebuffer/input/lifecycle code and loopback-safe local experiments; mature-engine selection, real-server interoperability, Windows evidence, gateway, audio, clipboard, and production packaging remain open |
-| **VNC** | Real native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, and cancellation; cross-platform interoperability remains open |
+| **VNC** | Real native helper with local RFB fixtures, authentication, framebuffer updates, keyboard, mouse, clipboard, scaling, quality profiles, reconnect, cancellation, and pipe-independent process shutdown; cross-platform interoperability remains open |
 | **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server is a separate research and packaging decision |
 
 This is a serious foundation for a MobaXterm replacement — not a screenshot, a mock terminal, or a shell command wrapped in a web page.

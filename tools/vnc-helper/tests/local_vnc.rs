@@ -77,7 +77,6 @@ async fn helper_reports_server_disconnect_during_negotiation() {
     }
     assert!(saw_failed, "the helper did not report the RFB disconnect");
     server_task.await.unwrap();
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()
@@ -173,7 +172,6 @@ async fn helper_reconnects_after_a_connected_server_disconnects() {
     }
     assert!(saw_stopped, "the helper did not stop after reconnecting");
     server_task.await.unwrap();
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()
@@ -219,7 +217,6 @@ async fn helper_bounds_reconnect_attempts_after_the_fixture_goes_away() {
     .await
     .unwrap();
     server_task.await.unwrap();
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()
@@ -274,7 +271,6 @@ async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
         "the helper did not cancel negotiation promptly"
     );
     server_task.await.unwrap();
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()
@@ -346,7 +342,6 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
     );
     let _ = release_tx.send(());
     server_task.await.unwrap();
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()
@@ -511,7 +506,6 @@ async fn exercise_fixture(auth: FixtureAuth, password: &str) {
         }
     }
     assert!(saw_stopped, "the helper did not stop cleanly");
-    drop(stdin);
     timeout(Duration::from_secs(3), child.wait())
         .await
         .unwrap()

@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent,
     HelperProtocolError, HelperState, MAX_CLIPBOARD_BYTES, MAX_FRAME_BYTES, MAX_HOST_BYTES,
-    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, read_frame,
-    write_event_frame,
+    MAX_USERNAME_BYTES, decode_command_frame, decode_credential_frame, write_event_frame,
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -93,7 +92,10 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     }
 
     let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
-    let command_task = tokio::spawn(read_commands(tokio::io::stdin(), incoming_tx));
+    // Tokio's stdin adapter uses an uncancellable blocking read. A dedicated
+    // native thread lets this helper return after a terminal failure even if
+    // the parent keeps the pipe open while it consumes the final events.
+    let _command_thread = std::thread::spawn(move || read_commands(incoming_tx));
     let mut start_display = None;
     let mut credential = None;
 
@@ -102,7 +104,6 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
             Some(Incoming::Command(HelperCommand::Start { protocol, display })) => {
                 if protocol != DesktopProtocol::Vnc {
                     send_error(&mut stdout, "unsupported helper protocol").await?;
-                    command_task.abort();
                     return Ok(());
                 }
                 start_display = Some(display);
@@ -110,56 +111,80 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
             Some(Incoming::Credential(value)) => credential = Some(value),
             Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) => {
                 write_state(&mut stdout, HelperState::Stopped).await?;
-                command_task.abort();
                 return Ok(());
             }
             Some(Incoming::Invalid) | None => {
                 send_error(&mut stdout, "invalid helper input").await?;
                 write_state(&mut stdout, HelperState::Failed).await?;
-                command_task.abort();
                 return Ok(());
             }
             Some(Incoming::Command(_)) => {}
         }
 
         if let (Some(display), Some(secret)) = (start_display, credential.take()) {
-            let result =
-                run_vnc_session(&arguments, display, secret, &mut stdout, &mut incoming_rx).await;
-            command_task.abort();
-            return result;
+            return run_vnc_session(&arguments, display, secret, &mut stdout, &mut incoming_rx)
+                .await;
         }
     }
 }
 
-async fn read_commands(mut reader: tokio::io::Stdin, sender: mpsc::Sender<Incoming>) {
+fn read_commands(sender: mpsc::Sender<Incoming>) {
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
     loop {
-        let frame = match read_frame(&mut reader).await {
+        let frame = match read_frame_blocking(&mut reader) {
             Ok(Some(frame)) => frame,
             Ok(None) => {
-                let _ = sender.send(Incoming::End).await;
+                let _ = sender.blocking_send(Incoming::End);
                 return;
             }
             Err(_) => {
-                let _ = sender.send(Incoming::Invalid).await;
+                let _ = sender.blocking_send(Incoming::Invalid);
                 return;
             }
         };
 
         if let Ok(command) = decode_command_frame(&frame) {
-            if sender.send(Incoming::Command(command)).await.is_err() {
+            if sender.blocking_send(Incoming::Command(command)).is_err() {
                 return;
             }
             continue;
         }
         if let Ok(credential) = decode_credential_frame(&frame) {
-            if sender.send(Incoming::Credential(credential)).await.is_err() {
+            if sender
+                .blocking_send(Incoming::Credential(credential))
+                .is_err()
+            {
                 return;
             }
             continue;
         }
-        let _ = sender.send(Incoming::Invalid).await;
+        let _ = sender.blocking_send(Incoming::Invalid);
         return;
     }
+}
+
+fn read_frame_blocking<R: std::io::Read>(
+    reader: &mut R,
+) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, std::io::Error> {
+    let mut length_bytes = [0u8; 4];
+    match reader.read_exact(&mut length_bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let body_length = u32::from_be_bytes(length_bytes) as usize;
+    if body_length > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "helper frame exceeds the safety limit",
+        ));
+    }
+    let mut frame = zeroize::Zeroizing::new(vec![0u8; body_length.saturating_add(4)]);
+    frame[..4].copy_from_slice(&length_bytes);
+    reader.read_exact(&mut frame[4..])?;
+    Ok(Some(frame))
 }
 
 async fn run_vnc_session<W: AsyncWrite + Unpin>(
