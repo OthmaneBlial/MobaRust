@@ -21,6 +21,9 @@ const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
 const FIXTURE_CHALLENGE: [u8; 16] = [
     0x6d, 0x6f, 0x62, 0x61, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x76, 0x6e, 0x63, 0x2d, 0x31, 0x36, 0x21,
 ];
+const BALANCED_ENCODINGS: &[i32] = &[16, 1, 0, -239, -223];
+const LOW_LATENCY_ENCODINGS: &[i32] = &[0, 1, 16, -239, -223];
+const LOW_BANDWIDTH_ENCODINGS: &[i32] = &[16, 1, 0, -239, -223];
 
 #[derive(Clone, Copy)]
 enum FixtureAuth {
@@ -36,6 +39,17 @@ async fn helper_controls_a_real_rfb_fixture_over_loopback() {
 #[tokio::test]
 async fn helper_authenticates_with_vnc_password_fixture_over_loopback() {
     exercise_fixture(FixtureAuth::VncPassword, FIXTURE_PASSWORD).await;
+}
+
+#[tokio::test]
+async fn helper_sends_the_selected_quality_encodings_to_the_server() {
+    for (quality, expected_encodings) in [
+        ("balanced", BALANCED_ENCODINGS),
+        ("low-latency", LOW_LATENCY_ENCODINGS),
+        ("low-bandwidth", LOW_BANDWIDTH_ENCODINGS),
+    ] {
+        exercise_fixture_with_quality(FixtureAuth::None, "", quality, expected_encodings).await;
+    }
 }
 
 #[tokio::test]
@@ -431,47 +445,19 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
 }
 
 async fn exercise_fixture(auth: FixtureAuth, password: &str) {
+    exercise_fixture_with_quality(auth, password, "balanced", BALANCED_ENCODINGS).await;
+}
+
+async fn exercise_fixture_with_quality(
+    auth: FixtureAuth,
+    password: &str,
+    quality: &str,
+    expected_encodings: &[i32],
+) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server_task = tokio::spawn(run_fixture(listener, auth));
-
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-vnc-helper"))
-        .args([
-            "--mobarust-protocol",
-            "vnc",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-            "--width",
-            "320",
-            "--height",
-            "200",
-        ])
-        .env_remove("SSH_AUTH_SOCK")
-        .env_remove("SSH_AGENT_PID")
-        .env_remove("GIT_SSH_COMMAND")
-        .env_remove("GIT_CONFIG_GLOBAL")
-        .env_remove("GIT_CONFIG_SYSTEM")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    assert!(matches!(
-        next_event(&mut stdout).await,
-        HelperEvent::Hello { version: 1 }
-    ));
-    assert!(matches!(
-        next_event(&mut stdout).await,
-        HelperEvent::State {
-            state: HelperState::Starting
-        }
-    ));
+    let server_task = tokio::spawn(run_fixture(listener, auth, expected_encodings.to_vec()));
+    let (mut child, mut stdin, mut stdout) = spawn_helper_with_quality(port, quality).await;
 
     send_command(
         &mut stdin,
@@ -625,6 +611,31 @@ async fn spawn_helper_with_policy(
     tokio::process::ChildStdin,
     tokio::process::ChildStdout,
 ) {
+    spawn_helper_with_quality_and_policy(port, reconnect_enabled, reconnect_attempts, "balanced")
+        .await
+}
+
+async fn spawn_helper_with_quality(
+    port: u16,
+    quality: &str,
+) -> (
+    tokio::process::Child,
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+) {
+    spawn_helper_with_quality_and_policy(port, true, 3, quality).await
+}
+
+async fn spawn_helper_with_quality_and_policy(
+    port: u16,
+    reconnect_enabled: bool,
+    reconnect_attempts: u8,
+    quality: &str,
+) -> (
+    tokio::process::Child,
+    tokio::process::ChildStdin,
+    tokio::process::ChildStdout,
+) {
     let reconnect_flag = if reconnect_enabled {
         "--reconnect-enabled"
     } else {
@@ -643,6 +654,8 @@ async fn spawn_helper_with_policy(
             "320",
             "--height",
             "200",
+            "--quality",
+            quality,
             reconnect_flag,
             "--reconnect-attempts",
             &reconnect_attempts,
@@ -684,7 +697,11 @@ async fn next_event(stdout: &mut tokio::process::ChildStdout) -> HelperEvent {
     decode_event_frame(&frame).unwrap()
 }
 
-async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), String> {
+async fn run_fixture(
+    listener: TcpListener,
+    auth: FixtureAuth,
+    expected_encodings: Vec<i32>,
+) -> Result<(), String> {
     let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
     stream
         .write_all(b"RFB 003.008\n")
@@ -765,7 +782,12 @@ async fn run_fixture(listener: TcpListener, auth: FixtureAuth) -> Result<(), Str
         .map_err(|error| error.to_string())?;
 
     read_set_pixel_format(&mut stream).await?;
-    read_set_encodings(&mut stream).await?;
+    let actual_encodings = read_set_encodings(&mut stream).await?;
+    if actual_encodings != expected_encodings {
+        return Err(format!(
+            "helper sent unexpected VNC encodings: {actual_encodings:?}"
+        ));
+    }
     read_update_request(&mut stream).await?;
 
     let mut update = vec![0_u8, 0, 0, 1];
@@ -945,7 +967,7 @@ async fn read_set_pixel_format(stream: &mut TcpStream) -> Result<(), String> {
     Ok(())
 }
 
-async fn read_set_encodings(stream: &mut TcpStream) -> Result<(), String> {
+async fn read_set_encodings(stream: &mut TcpStream) -> Result<Vec<i32>, String> {
     let mut header = [0_u8; 4];
     stream
         .read_exact(&mut header)
@@ -960,7 +982,10 @@ async fn read_set_encodings(stream: &mut TcpStream) -> Result<(), String> {
         .read_exact(&mut encodings)
         .await
         .map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(encodings
+        .chunks_exact(4)
+        .map(|encoding| i32::from_be_bytes(encoding.try_into().unwrap()))
+        .collect())
 }
 
 async fn read_update_request(stream: &mut TcpStream) -> Result<(), String> {
