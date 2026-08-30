@@ -281,6 +281,78 @@ async fn helper_cancels_a_stalled_negotiation_without_waiting_for_timeout() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_data() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (release_tx, release_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        serve_framebuffer_connection(&mut stream, [0x11, 0x22, 0x33, 0xff])
+            .await
+            .unwrap();
+        let _ = release_rx.await;
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper(port).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(""))
+        .await
+        .unwrap();
+
+    let mut saw_framebuffer = false;
+    for _ in 0..8 {
+        if matches!(
+            timeout(Duration::from_secs(3), next_event(&mut stdout))
+                .await
+                .unwrap(),
+            HelperEvent::Framebuffer {
+                width: 320,
+                height: 200,
+                ref pixels
+            } if pixels[..4] == [0x11, 0x22, 0x33, 0xff]
+        ) {
+            saw_framebuffer = true;
+            break;
+        }
+    }
+    assert!(saw_framebuffer, "the helper did not become active");
+
+    send_command(&mut stdin, HelperCommand::Stop).await;
+    let mut saw_stopped = false;
+    for _ in 0..6 {
+        if matches!(
+            timeout(Duration::from_millis(500), next_event(&mut stdout))
+                .await
+                .unwrap(),
+            HelperEvent::State {
+                state: HelperState::Stopped
+            }
+        ) {
+            saw_stopped = true;
+            break;
+        }
+    }
+    assert!(
+        saw_stopped,
+        "the helper did not cancel an idle connected session promptly"
+    );
+    let _ = release_tx.send(());
+    server_task.await.unwrap();
+    drop(stdin);
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 async fn exercise_fixture(auth: FixtureAuth, password: &str) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();

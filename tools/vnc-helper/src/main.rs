@@ -32,6 +32,7 @@ use zeroize::Zeroizing;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const VNC_INPUT_TIMEOUT: Duration = Duration::from_secs(2);
+const VNC_EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const VNC_TARGET_UNSUPPORTED: &str =
@@ -400,8 +401,8 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
             }
             _ = sleep(Duration::from_millis(16)) => {
                 let connection_loss = loop {
-                    match client.poll_event().await {
-                        Ok(Some(event)) => {
+                    match timeout(VNC_EVENT_POLL_TIMEOUT, client.poll_event()).await {
+                        Ok(Ok(Some(event))) => {
                             match canvas.apply(event) {
                                 Ok(Some(event)) => {
                                     if !active_sent {
@@ -419,8 +420,9 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                                 }
                             }
                         }
-                        Ok(None) => break None,
-                        Err(_) => break Some("VNC session ended unexpectedly"),
+                        Ok(Ok(None)) => break None,
+                        Ok(Err(_)) => break Some("VNC session ended unexpectedly"),
+                        Err(_) => break None,
                     }
                 };
                 if let Some(reason) = connection_loss {

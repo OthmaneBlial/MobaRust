@@ -177,6 +177,8 @@ The connected-session loop also puts a dedicated two-second deadline on each
 keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
 the VNC engine. This prevents a full internal input queue from making a helper
 wait forever when a server stops accepting traffic; expiry follows the normal
-bounded reconnect path. `poll_event` remains non-blocking, and there is no
-idle-session timeout, so a quiet but healthy desktop is not disconnected merely
-because it has no framebuffer events.
+bounded reconnect path. The `vnc-rs` `poll_event` call is wrapped in a separate
+250 ms deadline, returning control to the outer command select so Stop and
+cancellation remain responsive even when a healthy server is quiet. A poll
+timeout is not an idle-session timeout: the helper keeps the session alive and
+does not disconnect merely because no framebuffer event arrived.
