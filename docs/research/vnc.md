@@ -115,6 +115,15 @@ capability-dependent and is reported rather than simulated. The VNC canvas
 keeps the negotiated server resolution and scales it locally to the viewport,
 with that limitation shown in the overlay.
 
+Clipboard opt-in is enforced at both sides of the native boundary. The parent
+rejects server clipboard events that were not requested, while the helper
+reports clipboard capability only when explicitly enabled, drops unsolicited
+server text otherwise, and refuses client clipboard input before calling the
+RFB engine. A loopback fixture verifies that the rejected client command
+produces a diagnostic and no `ClientCutText` message reaches the VNC server.
+The opt-in text path is still limited to the upstream engine's bounded
+Latin-1-compatible channel and does not establish encrypted VNC transport.
+
 The canvas input path accounts for that local scaling: the actual painted
 framebuffer rectangle is calculated inside the letterboxed viewport, so input
 in unused bands is not sent to the server. Pointer capture preserves drags
