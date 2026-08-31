@@ -125,8 +125,9 @@ the official `ironrdp-server` implementation on `127.0.0.1`. It creates a
 short-lived private CA and server certificate in a disposable temporary
 directory, passes that CA only to the test-feature client, and never modifies
 the macOS trust store. The fixture verifies the actual TLS/Hybrid handshake,
-authentication, decoded framebuffer, keyboard and mouse input, and clean
-Stop lifecycle. It is intentionally excluded from the normal helper check and
+authentication, decoded framebuffer, keyboard and mouse input, clean Stop
+lifecycle, and one real loss/recovery cycle with a fresh handshake and a new
+framebuffer. It is intentionally excluded from the normal helper check and
 from every package path:
 
 ```text
@@ -134,6 +135,7 @@ cargo xtask check-rdp-fixture
 ```
 
 This is stronger than a refused-port smoke test, but it remains local
-interoperability evidence only. Windows/Linux certificate stores, real Windows
-servers, Gateway interoperability, reconnect recovery, and production engine
-selection remain open gates.
+interoperability evidence for one controlled engine/server pairing only.
+Windows/Linux certificate stores, real Windows servers, Gateway interoperability,
+independent-server reconnect behavior, and production engine selection remain
+open gates.

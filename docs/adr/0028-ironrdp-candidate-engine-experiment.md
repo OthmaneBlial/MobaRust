@@ -69,9 +69,10 @@ to safe text operations, and isolated from automatic local clipboard writes.
 
 The helper now owns a bounded reconnect policy after an active-session loss:
 three attempts with exponential backoff, native credential reuse, and
-cooperative cancellation during the delay. This is lifecycle hardening only;
-the separate local/Windows fixture must prove that a real RDP session recovers
-before the feature can be promoted.
+cooperative cancellation during the delay. The opt-in local fixture now proves
+one real loopback loss/recovery cycle, including a fresh `Starting` state and a
+new framebuffer after the second TLS/Hybrid session. This is still lifecycle
+and one-engine/one-server evidence; broader interoperability remains a gate.
 
 After each helper start, the native boundary reports the actual candidate
 capabilities: the Windows clipboard backend is available only on Windows,
@@ -153,11 +154,12 @@ cargo xtask check-rdp-fixture
 That opt-in test runs the compiled helper against the official
 `ironrdp-server 0.13.0` implementation on loopback using a short-lived
 test-only CA. It verifies a real TLS/Hybrid handshake, authentication,
-framebuffer delivery, keyboard/mouse input, and clean stop without modifying
+framebuffer delivery, keyboard/mouse input, clean stop, and one real
+loss/recovery cycle with a fresh handshake and framebuffer. It does not modify
 the macOS trust store. The test-only CA branch is excluded from the normal
 helper and package paths.
 
-The next gate is a real loss-and-recovery cycle against a disposable fixture,
-followed by Windows interoperability and Gateway-specific trust checks.
+The next gates are Windows interoperability, Gateway-specific trust checks,
+and broader cross-platform server/packaging evidence.
 Until that evidence and packaging exist, the UI must not advertise RDP as
 implemented.

@@ -210,10 +210,12 @@ remote host.
 
 The test proves a real TLS/Hybrid handshake, configured credential acceptance,
 non-empty decoded framebuffer delivery, keyboard and mouse input reaching the
-server handler, and clean helper/server shutdown. It is substantially stronger
-than a port-open or refused-port smoke test. The fixture's explicit CA branch
-is not enabled by the normal helper build or package path, so it does not
-weaken the production candidate's platform certificate validation.
+server handler, clean helper/server shutdown, and one real loss/recovery cycle
+that reaches a fresh `Starting`/`Ready`/`Active` sequence and receives a new
+framebuffer. It is substantially stronger than a port-open or refused-port
+smoke test. The fixture's explicit CA branch is not enabled by the normal
+helper build or package path, so it does not weaken the production candidate's
+platform certificate validation.
 
 Run it with:
 
@@ -221,9 +223,10 @@ Run it with:
 cargo xtask check-rdp-fixture
 ```
 
-This closes the local real-server fixture gap only. It does not prove FreeRDP
-or Windows interoperability, platform trust-store behavior on Windows/Linux,
-Gateway interoperability, reconnect recovery, audio, clipboard, or production
+This closes the local real-server and one controlled reconnect-fixture gaps
+only. It does not prove FreeRDP or Windows interoperability, platform
+trust-store behavior on Windows/Linux, Gateway interoperability, reconnect
+behavior against independent servers, audio, clipboard, or production
 packaging.
 
 The helper also revalidates every dynamic resize at the final native command
