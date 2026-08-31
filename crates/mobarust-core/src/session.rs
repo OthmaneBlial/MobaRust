@@ -202,6 +202,10 @@ pub struct RemoteDesktopProfile {
     pub clipboard_enabled: bool,
     #[serde(default = "default_vnc_quality")]
     pub vnc_quality: String,
+    /// VNC is loopback-only unless the operator explicitly opts into its
+    /// unencrypted TCP transport. The flag is ignored by no other protocol.
+    #[serde(default)]
+    pub allow_insecure_vnc: bool,
     #[serde(default = "default_remote_desktop_reconnect_enabled")]
     pub reconnect_enabled: bool,
     #[serde(default = "default_remote_desktop_reconnect_attempts")]
@@ -246,6 +250,9 @@ impl RemoteDesktopProfile {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         if protocol == Protocol::Vnc && self.gateway.is_some() {
+            return Err(SessionValidationError::InvalidRemoteDesktopProfile);
+        }
+        if protocol != Protocol::Vnc && self.allow_insecure_vnc {
             return Err(SessionValidationError::InvalidRemoteDesktopProfile);
         }
         Ok(())
@@ -703,6 +710,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };
@@ -776,6 +784,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         };

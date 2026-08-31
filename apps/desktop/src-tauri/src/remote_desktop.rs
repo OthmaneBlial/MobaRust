@@ -3,7 +3,8 @@ use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential, HelperEvent,
     HelperLaunchConfig, HelperProtocolError, HelperSupervisor, MAX_CREDENTIAL_REFERENCE_BYTES,
     MAX_DOMAIN_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES,
-    MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy, decode_event_frame,
+    MAX_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, MAX_USERNAME_BYTES, ReconnectPolicy,
+    VNC_TRANSPORT_INSECURE_TCP, VNC_TRANSPORT_LOOPBACK_ONLY, decode_event_frame,
     encode_command_frame, read_frame, validate_gateway_endpoint, validate_rdp_color_depth,
     vnc_keysym_is_supported, write_frame_with_timeout,
 };
@@ -46,6 +47,8 @@ pub struct RemoteDesktopConnectRequest {
     pub color_depth: u16,
     #[serde(default = "default_vnc_quality")]
     pub vnc_quality: String,
+    #[serde(default)]
+    pub allow_insecure_vnc: bool,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
@@ -221,6 +224,7 @@ impl RemoteDesktopManager {
             audio_enabled: request.audio_enabled,
             clipboard_enabled: request.clipboard_enabled,
             vnc_quality: request.vnc_quality,
+            allow_insecure_vnc: request.allow_insecure_vnc,
             credential_ref: credential_id,
             reconnect_enabled: request.reconnect_enabled,
             reconnect_attempts: request.reconnect_attempts,
@@ -409,11 +413,16 @@ pub(crate) fn validate_request(request: &RemoteDesktopConnectRequest) -> Result<
         MAX_HOST_BYTES,
         "remote desktop host is invalid",
     )?;
-    if request.protocol == DesktopProtocol::Vnc && !is_loopback_ip_literal(&request.host) {
-        return Err(
-            "the experimental VNC helper is restricted to a loopback IP during candidate review"
-                .into(),
-        );
+    if request.protocol != DesktopProtocol::Vnc && request.allow_insecure_vnc {
+        return Err("insecure VNC transport is supported only for VNC".into());
+    }
+    if request.protocol == DesktopProtocol::Vnc
+        && !request.allow_insecure_vnc
+        && !is_loopback_ip_literal(&request.host)
+    {
+        return Err(format!(
+            "VNC transport must be {VNC_TRANSPORT_LOOPBACK_ONLY}; explicitly enable {VNC_TRANSPORT_INSECURE_TCP} for an unencrypted remote target"
+        ));
     }
     if (request.protocol == DesktopProtocol::Rdp && request.username.trim().is_empty())
         || request.username != request.username.trim()
@@ -1512,6 +1521,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS,
         }
@@ -1782,6 +1792,17 @@ mod tests {
         let error = validate_request(&request).unwrap_err();
         assert!(error.contains("VNC"));
         assert!(error.contains("loopback"));
+
+        request.allow_insecure_vnc = true;
+        validate_request(&request).unwrap();
+    }
+
+    #[test]
+    fn parent_boundary_rejects_insecure_vnc_flag_for_rdp() {
+        let mut request = request(DesktopProtocol::Rdp, "fixture-user");
+        request.allow_insecure_vnc = true;
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("only for VNC"));
     }
 
     #[test]

@@ -40,6 +40,14 @@ pub const RDP_EXTENDED_SCANCODE_MASK: u32 = 0x100;
 pub const VNC_UNICODE_KEYSYM_PREFIX: u32 = 0x0100_0000;
 pub const MAX_VNC_KEYSYM: u32 = 0x01ff_ffff;
 
+/// VNC has no transport encryption in the current `vnc-rs` candidate.
+///
+/// The safe default keeps the candidate usable only with disposable local
+/// fixtures or an operator-created tunnel. `InsecureTcp` is intentionally an
+/// explicit, persisted opt-in and is never selected implicitly.
+pub const VNC_TRANSPORT_LOOPBACK_ONLY: &str = "loopback-only";
+pub const VNC_TRANSPORT_INSECURE_TCP: &str = "insecure-tcp";
+
 /// Accept only bounded X11 keysyms at the native VNC boundary.
 pub fn vnc_keysym_is_supported(keysym: u32) -> bool {
     keysym != 0 && keysym <= MAX_VNC_KEYSYM
@@ -228,6 +236,10 @@ pub struct HelperLaunchConfig {
     pub clipboard_enabled: bool,
     /// VNC encoding/refresh profile. Ignored by RDP helpers.
     pub vnc_quality: String,
+    /// Explicitly permits plaintext VNC TCP to a non-loopback target.
+    /// Defaults to false so old configs remain loopback-only.
+    #[serde(default)]
+    pub allow_insecure_vnc: bool,
     /// Opaque vault identifier. The secret value is never part of this type.
     pub credential_ref: String,
     #[serde(default = "default_remote_desktop_reconnect_enabled")]
@@ -254,6 +266,7 @@ impl fmt::Debug for HelperLaunchConfig {
             .field("audio_enabled", &self.audio_enabled)
             .field("clipboard_enabled", &self.clipboard_enabled)
             .field("vnc_quality", &self.vnc_quality)
+            .field("allow_insecure_vnc", &self.allow_insecure_vnc)
             .field("credential_ref", &"<opaque-reference>")
             .field("reconnect_enabled", &self.reconnect_enabled)
             .field("reconnect_attempts", &self.reconnect_attempts)
@@ -477,6 +490,9 @@ impl HelperLaunchConfig {
         {
             return Err(HelperProtocolError::InvalidVncQuality);
         }
+        if self.protocol != DesktopProtocol::Vnc && self.allow_insecure_vnc {
+            return Err(HelperProtocolError::InsecureVncTransportOnly);
+        }
         ReconnectPolicy {
             enabled: self.reconnect_enabled,
             attempts: self.reconnect_attempts,
@@ -528,6 +544,9 @@ impl HelperLaunchConfig {
                 arguments.extend(["--gateway-username".into(), username.into()]);
             }
         } else {
+            if self.allow_insecure_vnc {
+                arguments.push("--allow-insecure-vnc".into());
+            }
             if self.clipboard_enabled {
                 arguments.push("--clipboard-enabled".into());
             }
@@ -888,6 +907,8 @@ pub enum HelperProtocolError {
     UnsupportedRdpColorDepth { depth: u16 },
     #[error("helper VNC quality is invalid")]
     InvalidVncQuality,
+    #[error("insecure VNC transport is supported only for VNC helpers")]
+    InsecureVncTransportOnly,
     #[error("helper capability list is too large: {count} entries")]
     CapabilitiesTooLarge { count: usize },
     #[error("helper capability color depth must be non-zero: {depth}")]
@@ -1267,6 +1288,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             credential_ref: "credential:test-only".into(),
             reconnect_enabled: true,
             reconnect_attempts: 3,
@@ -1433,6 +1455,32 @@ mod tests {
             .position(|argument| argument == "--quality")
             .unwrap();
         assert_eq!(arguments[quality_index + 1], "balanced");
+    }
+
+    #[test]
+    fn vnc_insecure_transport_is_an_explicit_non_secret_argument() {
+        let mut config = launch_config();
+        config.protocol = DesktopProtocol::Vnc;
+        config.allow_insecure_vnc = true;
+
+        config.validate().unwrap();
+        let arguments = config.process_arguments();
+        assert!(arguments.contains(&"--allow-insecure-vnc".into()));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("credential"))
+        );
+    }
+
+    #[test]
+    fn insecure_vnc_transport_cannot_cross_into_rdp() {
+        let mut config = launch_config();
+        config.allow_insecure_vnc = true;
+        assert_eq!(
+            config.validate(),
+            Err(HelperProtocolError::InsecureVncTransportOnly)
+        );
     }
 
     #[test]

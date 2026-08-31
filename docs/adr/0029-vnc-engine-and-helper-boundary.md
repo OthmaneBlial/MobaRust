@@ -74,10 +74,14 @@ forwards this metadata to the UI so the visible behavior matches the helper
 that is actually running. This does not replace the required cross-platform
 interoperability evidence.
 
-The candidate is currently restricted to local fixtures: both the helper and
-the Tauri parent accept only literal loopback IP targets (`127.0.0.1` or `::1`)
-and reject hostnames and other addresses before opening a socket. This fail-
-closed rule remains until an audited transport-security strategy is selected.
+The candidate defaults to local fixtures: both the helper and the Tauri parent
+accept only literal loopback IP targets (`127.0.0.1` or `::1`) unless the
+operator explicitly enables the `allow_insecure_vnc` profile setting. That
+setting permits a hostname or IP over the candidate's plaintext TCP transport,
+shows a warning, and requires connection confirmation. It is never inferred
+from the target, never silently enabled, and does not claim TLS or production
+transport security. A protected SSH tunnel or a future TLS-capable engine is
+preferred for remote use.
 
 Pointer and wheel coordinates are clamped to the active framebuffer dimensions
 inside the helper. This protects delayed input events that arrive after a

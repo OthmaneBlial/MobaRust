@@ -20,6 +20,7 @@ export type RemoteDesktopProfileValue = {
   audio_enabled: false;
   clipboard_enabled: boolean;
   vnc_quality: VncQuality;
+  allow_insecure_vnc: boolean;
   reconnect_enabled: boolean;
   reconnect_attempts: number;
 };
@@ -34,6 +35,7 @@ export type RemoteDesktopProfileDraft = {
   colorDepth: string;
   vncQuality: string | undefined;
   clipboardEnabled: boolean;
+  allowInsecureVnc?: boolean;
   reconnectEnabled: boolean;
   reconnectAttempts: string;
 };
@@ -180,6 +182,7 @@ export function parseRemoteDesktopProfile(
       audio_enabled: false,
       clipboard_enabled: draft.clipboardEnabled ?? false,
       vnc_quality: vncQuality as VncQuality,
+      allow_insecure_vnc: draft.allowInsecureVnc ?? false,
       reconnect_enabled: draft.reconnectEnabled ?? true,
       reconnect_attempts: reconnectAttempts,
     },

@@ -193,10 +193,15 @@ and its decoded frames remain zeroizing. This is process-lifecycle evidence,
 not cross-platform VNC interoperability evidence.
 
 Because the candidate does not provide a generally validated encrypted
-transport, the helper and the Tauri parent fail closed for safety: they accept
-only literal loopback IP targets (`127.0.0.1` or `::1`) and reject hostnames or
-other addresses before opening a socket. This is a local-fixture restriction,
-not a claim that VNC is ready for production use.
+transport, the helper and the Tauri parent fail closed by default: they accept
+only literal loopback IP targets (`127.0.0.1` or `::1`) unless the operator
+explicitly enables `allow_insecure_vnc`. That opt-in permits a bounded hostname
+or IP target over plaintext VNC TCP, shows a clear warning, and requires a
+second connection confirmation. It is suitable for a deliberately trusted
+lab or an operator-created protected tunnel only; it is not TLS, does not
+protect VNC credentials or framebuffer traffic in transit, and is not a claim
+that VNC is ready for production use. The local integration fixtures remain
+loopback-only and never exercise a real remote host.
 
 The VNC adapter requests an RGBA framebuffer and forwards four bytes per pixel
 to the desktop renderer. RDP-only settings such as color-depth selection,

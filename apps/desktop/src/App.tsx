@@ -177,6 +177,7 @@ type RemoteDesktopConnectRequest = {
   audioEnabled: boolean;
   clipboardEnabled: boolean;
   vncQuality: "balanced" | "low-latency" | "low-bandwidth";
+  allowInsecureVnc: boolean;
   reconnectEnabled: boolean;
   reconnectAttempts: number;
 };
@@ -410,6 +411,7 @@ type SavedSession = {
     audio_enabled: boolean;
     clipboard_enabled?: boolean;
     vnc_quality?: "balanced" | "low-latency" | "low-bandwidth";
+    allow_insecure_vnc?: boolean;
     reconnect_enabled?: boolean;
     reconnect_attempts?: number;
   } | null;
@@ -2344,6 +2346,9 @@ function App() {
   }, [recordAudit, refreshSavedSessions]);
 
   const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest, offerSave = true) => {
+    if (request.protocol === "vnc" && request.allowInsecureVnc && !window.confirm("VNC over TCP is unencrypted. Continue only if this target is trusted or protected by an external tunnel?")) {
+      return;
+    }
     setConnectionError(null);
     setSessionNotice(null);
     recordAudit("sessionOpened", request.protocol.toUpperCase());
@@ -2547,6 +2552,7 @@ function App() {
         audioEnabled: profile.audio_enabled,
         clipboardEnabled: profile.clipboard_enabled ?? false,
         vncQuality: profile.vnc_quality ?? "balanced",
+        allowInsecureVnc: profile.allow_insecure_vnc ?? false,
         reconnectEnabled: profile.reconnect_enabled ?? true,
         reconnectAttempts: profile.reconnect_attempts ?? 3,
       }, false);
@@ -4694,6 +4700,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [desktopColorDepth, setDesktopColorDepth] = useState(String(session.remote_desktop_profile?.color_depth ?? 32));
   const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState((session.remote_desktop_profile?.clipboard_enabled ?? false) && remoteDesktopClipboardAvailable);
   const [vncQuality, setVncQuality] = useState<NonNullable<SavedSession["remote_desktop_profile"]>["vnc_quality"]>(session.remote_desktop_profile?.vnc_quality ?? "balanced");
+  const [allowInsecureVnc, setAllowInsecureVnc] = useState(session.remote_desktop_profile?.allow_insecure_vnc ?? false);
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(session.remote_desktop_profile?.reconnect_enabled ?? true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState(String(session.remote_desktop_profile?.reconnect_attempts ?? 3));
   const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
@@ -4756,6 +4763,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         colorDepth: desktopColorDepth,
         vncQuality,
         clipboardEnabled: desktopClipboardEnabled,
+        allowInsecureVnc,
         reconnectEnabled: desktopReconnectEnabled,
         reconnectAttempts: desktopReconnectAttempts,
       });
@@ -4881,6 +4889,10 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
                 <option value="low-bandwidth">Low bandwidth</option>
               </select>
               <small>Controls client-side encoding preference and refresh cadence.</small>
+            </label>}
+            {session.protocol === "VNC" && <label className="quick-connect-wide quick-connect-check-row">
+              <input type="checkbox" checked={allowInsecureVnc} onChange={(event) => setAllowInsecureVnc(event.target.checked)} />
+              <span>Allow unencrypted VNC over TCP <small>explicit opt-in · use an SSH tunnel or TLS-capable VNC server when possible</small></span>
             </label>}
             {isRemoteDesktop && <label className="quick-connect-wide quick-connect-check-row">
               <input type="checkbox" checked={desktopClipboardEnabled} disabled={!remoteDesktopClipboardAvailable} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
@@ -5093,6 +5105,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [desktopHeight, setDesktopHeight] = useState("720");
   const [desktopColorDepth, setDesktopColorDepth] = useState("32");
   const [vncQuality, setVncQuality] = useState<RemoteDesktopConnectRequest["vncQuality"]>("balanced");
+  const [allowInsecureVnc, setAllowInsecureVnc] = useState(false);
   const [desktopClipboardEnabled, setDesktopClipboardEnabled] = useState(false);
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState("3");
@@ -5164,7 +5177,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const targetError = experimentalDesktopTargetError(protocol, host);
+    const targetError = experimentalDesktopTargetError(protocol, host, allowInsecureVnc);
     if (targetError) {
       setValidationError(targetError);
       return;
@@ -5215,6 +5228,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
         audioEnabled: false,
         clipboardEnabled: desktopClipboardEnabled && (protocol === "vnc" || nativeRdpClipboardAvailable),
         vncQuality,
+        allowInsecureVnc: protocol === "vnc" && allowInsecureVnc,
         reconnectEnabled: desktopReconnectEnabled,
         reconnectAttempts: parsedReconnectAttempts,
       });
@@ -5305,6 +5319,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
               onChange={(event) => {
                 const next = event.target.value as "ssh" | "telnet" | "serial" | DesktopProtocol;
                 setProtocol(next);
+                setAllowInsecureVnc(false);
                 setPort(next === "ssh" ? "22" : next === "telnet" ? "23" : next === "rdp" ? "3389" : next === "vnc" ? "5900" : "0");
                 setValidationError(null);
               }}
@@ -5377,7 +5392,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
               <label>
                 Host
                 <input autoFocus required value={host} onChange={(event) => setHost(event.target.value)} placeholder="bastion.example.com" />
-                {protocol === "rdp" ? <small>RDP accepts a hostname or IP through native certificate validation; untrusted certificates fail closed. Real-server interoperability remains experimental.</small> : protocol === "vnc" ? <small>Experimental local fixture only: use 127.0.0.1 or ::1. Real hosts are blocked until transport security is validated.</small> : null}
+                {protocol === "rdp" ? <small>RDP accepts a hostname or IP through native certificate validation; untrusted certificates fail closed. Real-server interoperability remains experimental.</small> : protocol === "vnc" ? <small>{allowInsecureVnc ? "Unencrypted TCP is explicitly enabled for this target; prefer an SSH tunnel or TLS-capable VNC server." : "Safe default: use 127.0.0.1 or ::1, including a local SSH-tunnel endpoint. Remote targets stay blocked until you opt in."}</small> : null}
               </label>
               <label>
                 Port
@@ -5525,6 +5540,10 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <select value={vncQuality} onChange={(event) => setVncQuality(event.target.value as RemoteDesktopConnectRequest["vncQuality"])}><option value="balanced">Balanced</option><option value="low-latency">Low latency</option><option value="low-bandwidth">Low bandwidth</option></select>
                     <small>Controls the VNC encoding preference and bounded refresh cadence.</small>
                   </label>}
+                  {protocol === "vnc" && <label className="quick-connect-wide quick-connect-check-row">
+                    <input type="checkbox" checked={allowInsecureVnc} onChange={(event) => setAllowInsecureVnc(event.target.checked)} />
+                    <span>Allow unencrypted VNC over TCP <small>explicit opt-in · use an SSH tunnel or TLS-capable VNC server when possible</small></span>
+                  </label>}
                   {(protocol === "rdp" || protocol === "vnc") && <label className="quick-connect-wide quick-connect-check-row">
                     <input type="checkbox" checked={desktopClipboardEnabled} disabled={protocol === "rdp" && !nativeRdpClipboardAvailable} onChange={(event) => setDesktopClipboardEnabled(event.target.checked)} />
                     <span>Enable clipboard redirection <small>{protocol === "vnc" ? "opt-in · local Latin-1 helper path" : nativeRdpClipboardAvailable ? "opt-in · native Windows backend" : "Windows only · unavailable in this build"}</small></span>
@@ -5539,7 +5558,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                     <small>0–10 retries after an active connection is lost.</small>
                   </label>
                   {protocol === "rdp" && <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>Audio redirection is not enabled in the current helper yet; the connection will use video and input only.</span></div>}
-                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP accepts a hostname or IP and uses native platform certificate validation; untrusted certificates fail closed. Real-server and Windows interoperability remain experimental." : "VNC is loopback-only in this candidate and uses legacy protocol transport; use a protected tunnel when the server does not provide transport encryption."}</span></div>
+                  <div className="quick-connect-wide quick-connect-hint"><ShieldCheck size={14} /><span>{protocol === "rdp" ? "RDP accepts a hostname or IP and uses native platform certificate validation; untrusted certificates fail closed. Real-server and Windows interoperability remain experimental." : allowInsecureVnc ? "VNC plaintext TCP is enabled only by this explicit opt-in. Prefer an SSH tunnel or TLS-capable VNC server; MobaRust does not add encryption." : "VNC defaults to IP-literal loopback targets and legacy transport; use a protected tunnel for a remote server, or explicitly opt in to unencrypted TCP."}</span></div>
                 </>
               ) : (
                 <>

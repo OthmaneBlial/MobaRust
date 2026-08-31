@@ -96,6 +96,7 @@ assert.equal(
   experimentalDesktopTargetError("vnc", "example.invalid"),
   EXPERIMENTAL_VNC_TARGET_ERROR,
 );
+assert.equal(experimentalDesktopTargetError("vnc", "example.invalid", true), null);
 assert.equal(experimentalDesktopTargetError("vnc", "::1"), null);
 assert.equal(experimentalDesktopTargetError("ssh", "example.invalid"), null);
 assert.equal(supportsNativeRdpClipboard("Win32"), true);
@@ -135,6 +136,7 @@ assert.deepEqual(
       audio_enabled: false,
       clipboard_enabled: false,
       vnc_quality: "balanced",
+      allow_insecure_vnc: false,
       reconnect_enabled: true,
       reconnect_attempts: 3,
     },
@@ -159,10 +161,22 @@ assert.deepEqual(
       audio_enabled: false,
       clipboard_enabled: false,
       vnc_quality: "low-latency",
+      allow_insecure_vnc: false,
       reconnect_enabled: true,
       reconnect_attempts: 3,
     },
   },
+);
+assert.equal(
+  parseRemoteDesktopProfile("VNC", {
+    domain: "",
+    width: "1280",
+    height: "720",
+    colorDepth: "24",
+    vncQuality: "balanced",
+    allowInsecureVnc: true,
+  }).profile.allow_insecure_vnc,
+  true,
 );
 assert.deepEqual(
   parseRemoteDesktopProfile("VNC", {
@@ -182,6 +196,7 @@ assert.deepEqual(
     audio_enabled: false,
     clipboard_enabled: true,
     vnc_quality: "balanced",
+    allow_insecure_vnc: false,
     reconnect_enabled: true,
     reconnect_attempts: 3,
   },
@@ -221,6 +236,7 @@ assert.deepEqual(
     audio_enabled: false,
     clipboard_enabled: false,
     vnc_quality: "balanced",
+    allow_insecure_vnc: false,
     reconnect_enabled: false,
     reconnect_attempts: 10,
   },

@@ -38,8 +38,7 @@ const VNC_INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 const VNC_EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_JPEG_BYTES: usize = 4 * 1024 * 1024;
-const VNC_TARGET_UNSUPPORTED: &str =
-    "VNC experiment is restricted to a loopback IP until transport security is available";
+const VNC_TARGET_UNSUPPORTED: &str = "VNC target requires an IP-literal loopback address unless explicit insecure TCP mode is enabled";
 
 #[derive(Debug)]
 struct Arguments {
@@ -47,6 +46,7 @@ struct Arguments {
     port: u16,
     display: DisplaySize,
     quality: String,
+    allow_insecure_vnc: bool,
     clipboard_enabled: bool,
     reconnect_enabled: bool,
     reconnect_attempts: u8,
@@ -92,7 +92,11 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     let mut stdout = tokio::io::stdout();
     write_event_frame(&mut stdout, &HelperEvent::Hello { version: 1 }).await?;
     write_state(&mut stdout, HelperState::Starting).await?;
-    if loopback_socket_address(&arguments.host, arguments.port).is_err() {
+    if !vnc_target_is_allowed(
+        &arguments.host,
+        arguments.port,
+        arguments.allow_insecure_vnc,
+    ) {
         send_error(&mut stdout, VNC_TARGET_UNSUPPORTED).await?;
         write_state(&mut stdout, HelperState::Failed).await?;
         return Ok(());
@@ -350,9 +354,25 @@ async fn connect_vnc_client(
     arguments: &Arguments,
     credential: &HelperCredential,
 ) -> Result<VncClient, &'static str> {
-    let address = loopback_socket_address(&arguments.host, arguments.port)
-        .map_err(|_| VNC_TARGET_UNSUPPORTED)?;
-    let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await {
+    if !vnc_target_is_allowed(
+        &arguments.host,
+        arguments.port,
+        arguments.allow_insecure_vnc,
+    ) {
+        return Err(VNC_TARGET_UNSUPPORTED);
+    }
+    let connect_result = if arguments.allow_insecure_vnc {
+        timeout(
+            CONNECT_TIMEOUT,
+            TcpStream::connect((arguments.host.as_str(), arguments.port)),
+        )
+        .await
+    } else {
+        let address = loopback_socket_address(&arguments.host, arguments.port)
+            .map_err(|_| VNC_TARGET_UNSUPPORTED)?;
+        timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await
+    };
+    let stream = match connect_result {
         Ok(Ok(stream)) => stream,
         Ok(Err(error)) => return Err(connection_error_message(&error)),
         Err(_) => return Err("VNC connection timed out"),
@@ -927,6 +947,7 @@ where
     let mut width = 1280_u16;
     let mut height = 720_u16;
     let mut quality = "balanced".to_owned();
+    let mut allow_insecure_vnc = false;
     let mut clipboard_enabled = false;
     let mut reconnect_enabled = DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED;
     let mut reconnect_attempts = DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS;
@@ -959,6 +980,7 @@ where
             "--width" => width = parse_u16("width", &next_argument(&mut iterator, "--width")?)?,
             "--height" => height = parse_u16("height", &next_argument(&mut iterator, "--height")?)?,
             "--quality" => quality = parse_quality(&next_argument(&mut iterator, "--quality")?)?,
+            "--allow-insecure-vnc" => allow_insecure_vnc = true,
             "--clipboard-enabled" => clipboard_enabled = true,
             "--reconnect-enabled" => reconnect_enabled = true,
             "--reconnect-disabled" => reconnect_enabled = false,
@@ -978,6 +1000,7 @@ where
         port: port.ok_or_else(|| ArgumentError("missing port".into()))?,
         display: DisplaySize { width, height },
         quality,
+        allow_insecure_vnc,
         clipboard_enabled,
         reconnect_enabled,
         reconnect_attempts,
@@ -1087,6 +1110,18 @@ fn loopback_socket_address(host: &str, port: u16) -> Result<SocketAddr, &'static
     Ok(SocketAddr::new(address, port))
 }
 
+fn vnc_target_is_allowed(host: &str, port: u16, allow_insecure_vnc: bool) -> bool {
+    if allow_insecure_vnc {
+        port != 0
+            && !host.trim().is_empty()
+            && host.len() <= MAX_HOST_BYTES
+            && !host.chars().any(char::is_control)
+            && host == host.trim()
+    } else {
+        loopback_socket_address(host, port).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,6 +1147,7 @@ mod tests {
         assert_eq!(arguments.host, "127.0.0.1");
         assert_eq!(arguments.port, 5900);
         assert_eq!(arguments.quality, "balanced");
+        assert!(!arguments.allow_insecure_vnc);
         assert!(!arguments.clipboard_enabled);
         assert!(arguments.reconnect_enabled);
         assert_eq!(arguments.reconnect_attempts, 3);
@@ -1272,6 +1308,39 @@ mod tests {
         assert!(loopback_socket_address("localhost", 5900).is_err());
         assert!(loopback_socket_address("example.invalid", 5900).is_err());
         assert!(loopback_socket_address("192.0.2.10", 5900).is_err());
+    }
+
+    #[test]
+    fn insecure_vnc_target_requires_an_explicit_flag_and_still_bounds_metadata() {
+        assert!(!vnc_target_is_allowed("example.invalid", 5900, false));
+        assert!(vnc_target_is_allowed("example.invalid", 5900, true));
+        assert!(vnc_target_is_allowed("192.0.2.10", 5900, true));
+        assert!(!vnc_target_is_allowed(" example.invalid", 5900, true));
+        assert!(!vnc_target_is_allowed("example.invalid", 0, true));
+        assert!(!vnc_target_is_allowed(
+            "h".repeat(MAX_HOST_BYTES + 1).as_str(),
+            5900,
+            true
+        ));
+    }
+
+    #[test]
+    fn parser_requires_the_explicit_insecure_vnc_flag_for_remote_metadata() {
+        let arguments = parse_arguments(
+            [
+                "--mobarust-protocol",
+                "vnc",
+                "--host",
+                "example.invalid",
+                "--port",
+                "5900",
+                "--allow-insecure-vnc",
+            ]
+            .into_iter()
+            .map(String::from),
+        )
+        .unwrap();
+        assert!(arguments.allow_insecure_vnc);
     }
 
     #[test]

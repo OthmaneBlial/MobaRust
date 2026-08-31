@@ -1435,6 +1435,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         });
@@ -1470,6 +1471,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         });
@@ -1637,6 +1639,7 @@ mod tests {
             audio_enabled: false,
             clipboard_enabled: false,
             vnc_quality: "balanced".into(),
+            allow_insecure_vnc: false,
             reconnect_enabled: true,
             reconnect_attempts: 3,
         });
