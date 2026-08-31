@@ -10,6 +10,7 @@ import {
   remoteDesktopCanResize,
   remoteDesktopCanReceiveClipboard,
   remoteDesktopCanSendClipboard,
+  remoteDesktopTransportLabel,
   supportsNativeRdpClipboard,
 } from "../src/remote-desktop-profile.ts";
 import {
@@ -103,18 +104,21 @@ assert.equal(supportsNativeRdpClipboard("Win32"), true);
 assert.equal(supportsNativeRdpClipboard("MacIntel"), false);
 assert.equal(supportsNativeRdpClipboard("Linux x86_64"), false);
 assert.equal(supportsNativeRdpClipboard(undefined), false);
-assert.equal(remoteDesktopCanResize("rdp", { serverResize: true, clipboard: false }), true);
+assert.equal(remoteDesktopTransportLabel(null), "Transport status unavailable");
+assert.equal(remoteDesktopTransportLabel({ serverResize: true, clipboard: false, transportEncrypted: true }), "TLS transport");
+assert.equal(remoteDesktopTransportLabel({ serverResize: false, clipboard: true, transportEncrypted: false }), "Unencrypted transport");
+assert.equal(remoteDesktopCanResize("rdp", { serverResize: true, clipboard: false, transportEncrypted: true }), true);
 assert.equal(remoteDesktopCanResize("rdp", null), false);
-assert.equal(remoteDesktopCanResize("vnc", { serverResize: true, clipboard: true }), false);
-assert.equal(remoteDesktopCanResize("rdp", { serverResize: false, clipboard: true }), false);
-assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: true }), true);
-assert.equal(remoteDesktopCanSendClipboard("rdp", false, { serverResize: true, clipboard: true }), false);
-assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: false }), false);
-assert.equal(remoteDesktopCanSendClipboard("vnc", true, { serverResize: false, clipboard: true }), true);
-assert.equal(remoteDesktopCanSendClipboard("vnc", false, { serverResize: false, clipboard: true }), false);
-assert.equal(remoteDesktopCanReceiveClipboard("rdp", true, { serverResize: true, clipboard: true }), true);
-assert.equal(remoteDesktopCanReceiveClipboard("rdp", false, { serverResize: true, clipboard: true }), false);
-assert.equal(remoteDesktopCanReceiveClipboard("vnc", true, { serverResize: false, clipboard: false }), false);
+assert.equal(remoteDesktopCanResize("vnc", { serverResize: true, clipboard: true, transportEncrypted: false }), false);
+assert.equal(remoteDesktopCanResize("rdp", { serverResize: false, clipboard: true, transportEncrypted: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: true, transportEncrypted: true }), true);
+assert.equal(remoteDesktopCanSendClipboard("rdp", false, { serverResize: true, clipboard: true, transportEncrypted: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("rdp", true, { serverResize: true, clipboard: false, transportEncrypted: true }), false);
+assert.equal(remoteDesktopCanSendClipboard("vnc", true, { serverResize: false, clipboard: true, transportEncrypted: false }), true);
+assert.equal(remoteDesktopCanSendClipboard("vnc", false, { serverResize: false, clipboard: true, transportEncrypted: false }), false);
+assert.equal(remoteDesktopCanReceiveClipboard("rdp", true, { serverResize: true, clipboard: true, transportEncrypted: true }), true);
+assert.equal(remoteDesktopCanReceiveClipboard("rdp", false, { serverResize: true, clipboard: true, transportEncrypted: true }), false);
+assert.equal(remoteDesktopCanReceiveClipboard("vnc", true, { serverResize: false, clipboard: false, transportEncrypted: false }), false);
 assert.equal(remoteDesktopCanReceiveClipboard("vnc", true, null), false);
 
 assert.deepEqual(

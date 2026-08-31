@@ -3,6 +3,7 @@ export type RemoteDesktopProtocol = "RDP" | "VNC";
 export type RemoteDesktopRuntimeCapabilities = {
   clipboard: boolean;
   serverResize: boolean;
+  transportEncrypted: boolean;
 };
 
 export type VncQuality = "balanced" | "low-latency" | "low-bandwidth";
@@ -60,6 +61,14 @@ export function remoteDesktopCanResize(
   capabilities: RemoteDesktopRuntimeCapabilities | null,
 ): boolean {
   return protocol === "rdp" && capabilities?.serverResize === true;
+}
+
+/** Keep the transport posture visible without inferring it from the protocol. */
+export function remoteDesktopTransportLabel(
+  capabilities: RemoteDesktopRuntimeCapabilities | null,
+): string {
+  if (!capabilities) return "Transport status unavailable";
+  return capabilities.transportEncrypted ? "TLS transport" : "Unencrypted transport";
 }
 
 /** Clipboard input is an explicit opt-in and requires helper support. */
