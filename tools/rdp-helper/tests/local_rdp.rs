@@ -29,6 +29,7 @@ const RESIZED_HEIGHT: u16 = 240;
 const FIXTURE_USER: &str = "fixture-user";
 const FIXTURE_DOMAIN: &str = "fixture-domain";
 const FIXTURE_PASSWORD: &str = "fixture-rdp-password";
+const FIXTURE_WRONG_PASSWORD: &str = "fixture-wrong-password";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputKind {
@@ -783,6 +784,160 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
             assert!(
                 server_result.is_ok(),
                 "RDP reconnect fixture server failed: {server_result:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn real_helper_reports_rejected_credentials_from_real_loopback_server() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let _ = ironrdp_server::tokio_rustls::rustls::crypto::ring::default_provider()
+                .install_default();
+            let fixture = fixture_directory();
+            let (certificate, private_key, ca_certificate) = create_fixture_identity(&fixture.0);
+            let identity = TlsIdentityCtx::init_from_paths(&certificate, &private_key)
+                .expect("load the disposable RDP fixture identity");
+            let (_display_sender, display_receiver) = queued_bitmap([0xff, 0x19, 0x4d, 0x74]).await;
+
+            let mut server = RdpServer::builder()
+                .with_addr(([127, 0, 0, 1], 0))
+                .with_hybrid(
+                    identity
+                        .make_acceptor()
+                        .expect("build fixture TLS acceptor"),
+                    identity.pub_key.clone(),
+                )
+                .with_no_input()
+                .with_display_handler(FixtureDisplay {
+                    size: DesktopSize {
+                        width: WIDTH,
+                        height: HEIGHT,
+                    },
+                    updates: VecDeque::from([display_receiver]),
+                    layouts: Arc::new(StdMutex::new(Vec::new())),
+                })
+                .with_connection_handler(Some(Box::new(StopAfterDisconnect::new(1))))
+                .build();
+            server.set_credentials(Some(Credentials {
+                username: FIXTURE_USER.to_owned(),
+                password: FIXTURE_PASSWORD.to_owned(),
+                domain: Some(FIXTURE_DOMAIN.to_owned()),
+            }));
+            let server_events = server.event_sender().clone();
+            let server_task = tokio::task::spawn_local(async move { server.run().await });
+            let port = server_port(&server_events).await;
+
+            let mut child = Command::new(env!("CARGO_BIN_EXE_mobarust-rdp-helper"))
+                .args([
+                    "--mobarust-protocol",
+                    "rdp",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    &port.to_string(),
+                    "--username",
+                    FIXTURE_USER,
+                    "--domain",
+                    FIXTURE_DOMAIN,
+                    "--reconnect-attempts",
+                    "0",
+                    "--width",
+                    &WIDTH.to_string(),
+                    "--height",
+                    &HEIGHT.to_string(),
+                    "--color-depth",
+                    "32",
+                ])
+                .env("MOBARUST_RDP_FIXTURE_CA", &ca_certificate)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("start the locally built RDP helper");
+            let mut stdin = child.stdin.take().expect("RDP helper stdin unavailable");
+            let mut stdout = child.stdout.take().expect("RDP helper stdout unavailable");
+
+            assert!(matches!(
+                next_event(&mut stdout, "hello").await,
+                HelperEvent::Hello { version: 1 }
+            ));
+            assert!(matches!(
+                next_event(&mut stdout, "starting").await,
+                HelperEvent::State {
+                    state: HelperState::Starting
+                }
+            ));
+            send_frame(
+                &mut stdin,
+                &encode_command_frame(&HelperCommand::Start {
+                    protocol: mobarust_remote_desktop::DesktopProtocol::Rdp,
+                    display: DisplaySize {
+                        width: WIDTH,
+                        height: HEIGHT,
+                    },
+                })
+                .expect("encode RDP start command"),
+            )
+            .await;
+            send_frame(
+                &mut stdin,
+                &encode_credential_frame(&HelperCredential::new(FIXTURE_WRONG_PASSWORD))
+                    .expect("encode incorrect RDP fixture credential"),
+            )
+            .await;
+            stdin.flush().await.expect("flush RDP start frames");
+
+            assert!(matches!(
+                next_event(&mut stdout, "ready").await,
+                HelperEvent::State {
+                    state: HelperState::Ready
+                }
+            ));
+            assert!(matches!(
+                next_event(&mut stdout, "capabilities").await,
+                HelperEvent::Capabilities { capabilities }
+                    if capabilities.protocol == mobarust_remote_desktop::DesktopProtocol::Rdp
+                        && capabilities.transport_encrypted
+            ));
+
+            let diagnostic = loop {
+                match next_event(&mut stdout, "rejected credentials").await {
+                    HelperEvent::Diagnostic { message, .. } => break message,
+                    HelperEvent::State {
+                        state: HelperState::Failed,
+                    } => panic!("RDP helper failed before reporting the auth diagnostic"),
+                    _ => {}
+                }
+            };
+            assert_eq!(diagnostic, "RDP authentication or access was rejected");
+            assert!(!diagnostic.contains(FIXTURE_PASSWORD));
+            assert!(!diagnostic.contains(FIXTURE_WRONG_PASSWORD));
+            assert!(matches!(
+                next_event(&mut stdout, "failed").await,
+                HelperEvent::State {
+                    state: HelperState::Failed
+                }
+            ));
+
+            let status = timeout(Duration::from_secs(5), child.wait())
+                .await
+                .expect("RDP helper did not exit after rejected credentials")
+                .expect("could not wait for RDP helper");
+            assert!(
+                status.success(),
+                "RDP helper exited unsuccessfully after rejected credentials: {status}"
+            );
+
+            let server_result = timeout(Duration::from_secs(5), server_task)
+                .await
+                .expect("RDP fixture server did not stop after rejected credentials")
+                .expect("RDP fixture server task panicked");
+            assert!(
+                server_result.is_ok(),
+                "RDP rejected-credentials fixture server failed: {server_result:?}"
             );
         })
         .await;

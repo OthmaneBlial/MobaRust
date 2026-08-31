@@ -209,7 +209,7 @@ not modify the macOS trust store, inspect personal certificates, or contact a
 remote host.
 
 The test proves a real TLS/Hybrid handshake, configured username/domain/password
-credential acceptance,
+credential acceptance and a wrong-password rejection,
 non-empty decoded framebuffer delivery, keyboard and mouse input reaching the
 server handler, a 400×240 monitor-layout request reaching the server display
 handler, clean helper/server shutdown, and one real loss/recovery cycle that
