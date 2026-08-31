@@ -339,14 +339,14 @@ enum ConnectedOutcome {
     Stopped,
 }
 
-enum CommandExecution {
-    Finished(Result<bool, Box<dyn Error>>),
+enum CommandExecution<T> {
+    Finished(T),
     Stopped,
 }
 
-async fn finish_vnc_command<F>(operation: F, stop_signal: &StopSignal) -> CommandExecution
+async fn finish_vnc_operation<F, T>(operation: F, stop_signal: &StopSignal) -> CommandExecution<T>
 where
-    F: Future<Output = Result<bool, Box<dyn Error>>>,
+    F: Future<Output = T>,
 {
     tokio::pin!(operation);
     tokio::select! {
@@ -519,7 +519,7 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        let command_execution = finish_vnc_command(
+                        let command_execution = finish_vnc_operation(
                             handle_command(client, command, canvas.size, stdout, clipboard_enabled),
                             stop_signal,
                         )
@@ -601,15 +601,25 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
                     write_event_frame(stdout, &canvas.framebuffer_event()).await?;
                 }
                 if last_refresh.elapsed() >= refresh_interval {
-                    if send_vnc_input(
-                        client.input(X11Event::Refresh),
-                        "VNC refresh failed",
-                        "VNC refresh timed out",
+                    match finish_vnc_operation(
+                        send_vnc_input(
+                            client.input(X11Event::Refresh),
+                            "VNC refresh failed",
+                            "VNC refresh timed out",
+                        ),
+                        stop_signal,
                     )
                     .await
-                    .is_err()
                     {
-                        return Ok(ConnectedOutcome::Lost("VNC refresh failed"));
+                        CommandExecution::Stopped => {
+                            close_vnc_client(client).await;
+                            write_state(stdout, HelperState::Stopped).await?;
+                            return Ok(ConnectedOutcome::Stopped);
+                        }
+                        CommandExecution::Finished(Err(_)) => {
+                            return Ok(ConnectedOutcome::Lost("VNC refresh failed"));
+                        }
+                        CommandExecution::Finished(Ok(())) => {}
                     }
                     last_refresh = Instant::now();
                 }
@@ -1663,7 +1673,7 @@ mod tests {
     async fn stop_signal_wakes_a_pending_protocol_operation() {
         let signal = StopSignal::default();
         let operation = std::future::pending::<Result<bool, Box<dyn Error>>>();
-        let task = finish_vnc_command(operation, &signal);
+        let task = finish_vnc_operation(operation, &signal);
         signal.request();
         assert!(matches!(
             timeout(Duration::from_millis(100), task)

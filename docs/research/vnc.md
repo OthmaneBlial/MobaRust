@@ -234,9 +234,9 @@ keyboard, pointer, wheel, clipboard, and framebuffer-refresh write passed to
 the VNC engine. This prevents a full internal input queue from making a helper
 wait forever when a server stops accepting traffic; expiry follows the normal
 bounded reconnect path. A Stop frame now also raises an out-of-band native
-cancellation signal, so an in-flight `vnc-rs` input operation is dropped
-cooperatively before the bounded close path runs. Ordinary input remains in
-the command queue and is not reordered by that signal. The `vnc-rs`
+cancellation signal, so an in-flight `vnc-rs` input or framebuffer-refresh
+operation is dropped cooperatively before the bounded close path runs. Ordinary
+input remains in the command queue and is not reordered by that signal. The `vnc-rs`
 `poll_event` call is wrapped in a separate 250 ms deadline, returning control
 to the outer command select so Stop and cancellation remain responsive even
 when a healthy server is quiet. A poll timeout is not an idle-session timeout:

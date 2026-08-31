@@ -96,11 +96,11 @@ surface.
 
 The helper's blocking stdin reader raises a separate native Stop signal when a
 Stop frame arrives. The connected-session loop selects that signal alongside
-each `vnc-rs` input future, allowing an in-flight keyboard, pointer, wheel, or
-clipboard operation to be cancelled cooperatively before the bounded close
-window. The typed command queue remains ordered for ordinary input. This is
-still lifecycle evidence only; it does not replace real-server interoperability
-testing.
+each `vnc-rs` input or refresh future, allowing an in-flight keyboard, pointer,
+wheel, clipboard, or framebuffer-refresh operation to be cancelled
+cooperatively before the bounded close window. The typed command queue remains
+ordered for ordinary input. This is still lifecycle evidence only; it does not
+replace real-server interoperability testing.
 
 Printable browser Unicode is encoded as an X11 keysym before the VNC command
 crosses the native boundary. The helper bounds the resulting keysym and rejects
