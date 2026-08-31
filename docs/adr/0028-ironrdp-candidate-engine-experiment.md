@@ -78,8 +78,10 @@ capabilities: the Windows clipboard backend is available only on Windows,
 audio is unavailable, 16/32-bit color are supported, Gateway metadata is
 accepted, and display resizing is exposed by the RDP candidate. The parent
 forwards this report to the UI so unsupported controls can be disabled before
-a user attempts an operation. This report is capability metadata, not
-interoperability evidence.
+a user attempts an operation. It also reports `transportEncrypted: true` for
+the candidate's TLS connector; the parent rejects an incompatible report and
+the UI shows the transport posture explicitly. This report is capability
+metadata, not interoperability evidence.
 
 The published `ironrdp-tls 0.2.2` implementation was audited locally after the
 initial experiment. Its `native-tls` builder calls

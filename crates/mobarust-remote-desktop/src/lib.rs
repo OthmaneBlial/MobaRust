@@ -113,8 +113,9 @@ pub struct HelperCapabilities {
     /// Whether the helper's current protocol transport encrypts the session.
     ///
     /// This is reported by the native helper instead of inferred by React
-    /// from the requested protocol. The default keeps older helpers
-    /// wire-compatible and safely treats an omitted value as unencrypted.
+    /// from the requested protocol. The default keeps older reports
+    /// decodable; the parent still fails closed when an RDP helper does not
+    /// explicitly report encrypted transport.
     #[serde(default)]
     pub transport_encrypted: bool,
     pub color_depths: Vec<u16>,
