@@ -48,6 +48,10 @@ attempts, including a bounded client-to-server clipboard message. A reconnect
 keeps the helper process and credential handoff inside the native boundary; it
 does not expose the password to the parent or React.
 
+A dedicated RFB 3.7 rejection fixture also verifies the categorized
+authentication failure path and asserts that the supplied password is absent
+from emitted helper events.
+
 The loopback fixture also sends maximum-width pointer and wheel coordinates
 after a `DesktopSize` resize and verifies that the socket receives the last
 valid pixel of the resized framebuffer. This is integration evidence for the

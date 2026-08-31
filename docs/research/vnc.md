@@ -124,7 +124,9 @@ The authenticated
 fixture verifies security-type selection and the DES challenge response before
 checking framebuffer, explicit server-side resize rejection, key, pointer,
 server-announced resize, clipboard input, server-to-helper clipboard events,
-and clean stop. After the server-announced resize, the fixture sends
+and clean stop. A separate RFB 3.7 fixture rejects the authentication result
+and verifies that the helper emits a stable diagnostic without echoing the
+password. After the server-announced resize, the fixture sends
 `u16::MAX` pointer and wheel coordinates and verifies that the real helper
 forwards them at the final framebuffer pixel `(639,399)`. It also sends the
 Unicode Euro keysym `0x010020ac` and checks the exact RFB key event received by

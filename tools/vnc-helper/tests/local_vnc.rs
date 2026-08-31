@@ -23,6 +23,7 @@ const RESIZED_FIXTURE_SIZE: DisplaySize = DisplaySize {
     height: 400,
 };
 const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
+const REJECTED_PASSWORD: &str = "fixture-auth-rejection-secret";
 const FIXTURE_KEYSYM: u32 = 0x0100_20ac;
 const FIXTURE_CHALLENGE: [u8; 16] = [
     0x6d, 0x6f, 0x62, 0x61, 0x72, 0x75, 0x73, 0x74, 0x2d, 0x76, 0x6e, 0x63, 0x2d, 0x31, 0x36, 0x21,
@@ -90,6 +91,68 @@ async fn helper_authenticates_rfb33_vnc_password_fixture() {
         FixtureVersion::Rfb33,
     )
     .await;
+}
+
+#[tokio::test]
+async fn helper_reports_vnc_authentication_rejection_without_echoing_secret() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        reject_vnc_password(&mut stream, REJECTED_PASSWORD).await
+    });
+
+    let (mut child, mut stdin, mut stdout) = spawn_helper_with_policy(port, false, 0).await;
+    send_command(
+        &mut stdin,
+        HelperCommand::Start {
+            protocol: DesktopProtocol::Vnc,
+            display: FIXTURE_SIZE,
+        },
+    )
+    .await;
+    write_credential_frame(&mut stdin, &HelperCredential::new(REJECTED_PASSWORD))
+        .await
+        .unwrap();
+
+    let mut saw_diagnostic = false;
+    let mut saw_failed = false;
+    for _ in 0..4 {
+        let event = timeout(Duration::from_secs(3), next_event(&mut stdout))
+            .await
+            .unwrap();
+        assert!(
+            !format!("{event:?}").contains(REJECTED_PASSWORD),
+            "VNC authentication secret appeared in a helper event"
+        );
+        match event {
+            HelperEvent::Diagnostic { ref message, .. }
+                if message == "VNC authentication was rejected" =>
+            {
+                saw_diagnostic = true;
+            }
+            HelperEvent::State {
+                state: HelperState::Failed,
+            } => {
+                saw_failed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_diagnostic,
+        "the helper did not categorize auth rejection"
+    );
+    assert!(
+        saw_failed,
+        "the helper did not fail closed after auth rejection"
+    );
+    server_task.await.unwrap().unwrap();
+    timeout(Duration::from_secs(3), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1413,6 +1476,49 @@ async fn serve_tight_framebuffer_connection(stream: &mut TcpStream) -> Result<()
     update.extend_from_slice(&jpeg);
     stream
         .write_all(&update)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn reject_vnc_password(stream: &mut TcpStream, password: &str) -> Result<(), String> {
+    stream
+        .write_all(FixtureVersion::Rfb37.wire())
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut client_version = [0_u8; 12];
+    stream
+        .read_exact(&mut client_version)
+        .await
+        .map_err(|error| error.to_string())?;
+    if &client_version != FixtureVersion::Rfb37.wire() {
+        return Err("unexpected RFB version for auth rejection fixture".into());
+    }
+    stream
+        .write_all(&[1, 2])
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut selected = [0_u8; 1];
+    stream
+        .read_exact(&mut selected)
+        .await
+        .map_err(|error| error.to_string())?;
+    if selected[0] != 2 {
+        return Err("helper did not select VNC password authentication".into());
+    }
+    stream
+        .write_all(&FIXTURE_CHALLENGE)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut response = [0_u8; 16];
+    stream
+        .read_exact(&mut response)
+        .await
+        .map_err(|error| error.to_string())?;
+    if response != vnc_auth_response(&FIXTURE_CHALLENGE, password) {
+        return Err("helper produced an invalid VNC password response".into());
+    }
+    stream
+        .write_all(&[0, 0, 0, 1])
         .await
         .map_err(|error| error.to_string())
 }
