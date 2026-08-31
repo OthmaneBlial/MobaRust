@@ -91,7 +91,9 @@ reconnect interoperability, audio, gateway behavior, packaging, and real
 Windows interoperability remain open gates. The helper now rebuilds a native
 RDP client after an active-session loss with a user-configurable, bounded
 0–10-attempt exponential-backoff policy; it keeps the credential inside the
-helper and honors Stop during the delay. Legacy profiles default to three
+helper and honors Stop during the delay. Each retry emits a fresh `Starting`
+state before the helper rebuilds its `Ready`/capabilities/`Active` cycle.
+Legacy profiles default to three
 enabled attempts, while users can disable reconnect or set zero attempts.
 No global package, personal credential, or remote server was used during the
 local validation.

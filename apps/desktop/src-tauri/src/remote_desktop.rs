@@ -867,6 +867,7 @@ fn validate_helper_event(
             if !progress.ready_seen {
                 return Err("remote desktop helper sent reconnecting state before ready state");
             }
+            progress.starting_seen = false;
             progress.ready_seen = false;
             progress.data_phase = HelperDataPhase::AwaitingCapabilities;
             progress.reported_capabilities = None;
@@ -1367,12 +1368,29 @@ mod tests {
             .is_err()
         );
 
+        let error = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            reconnecting.clone(),
+        )
+        .unwrap_err();
+        assert!(error.contains("before starting state"));
+        let restarting = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Starting,
+            },
+            requirements,
+            reconnecting,
+        )
+        .unwrap();
         let ready = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Ready,
             },
             requirements,
-            reconnecting,
+            restarting,
         )
         .unwrap();
         let awaiting_active = validate_helper_event(&capabilities, requirements, ready).unwrap();

@@ -45,9 +45,9 @@ messages before a process is started:
   trailing whitespace before it reaches a helper, listener, or protocol
   channel;
 - the parent requires `Hello` as the first event, `Starting` before the
-  initial `Ready`, `Ready` before each capability report, and rejects duplicate
-  handshakes, premature reconnects, or active data that arrives before a
-  validated capability report;
+  initial `Ready` and after every `Reconnecting` event, `Ready` before each
+  capability report, and rejects duplicate handshakes, premature reconnects,
+  or active data that arrives before a validated capability report;
 - framebuffer and clipboard data are accepted only after the corresponding
   attempt has entered `Active`; a `Reconnecting` event starts a fresh
   capability-to-active sequence, so stale data cannot cross the boundary while

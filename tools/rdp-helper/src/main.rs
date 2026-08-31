@@ -298,6 +298,9 @@ async fn run_rdp_session_with_policy<W: AsyncWrite + Unpin>(
         }
 
         let reconnecting = reconnect_attempt > 0;
+        if reconnecting {
+            write_state(stdout, HelperState::Starting).await?;
+        }
         match run_rdp_attempt(
             arguments,
             &credential,

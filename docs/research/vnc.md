@@ -172,7 +172,10 @@ rather than waiting for the connection timeout. Its helper-owned source copy of
 the credential is zeroizing. A connected-session loss now emits `Reconnecting`,
 retries with a user-configurable, bounded 0–10-attempt policy and exponential
 backoff, honors `Stop` during both the delay and handshake, and emits `Failed`
-after the final refused/failed attempt. The default remains three enabled
+after the final refused/failed attempt. Each reconnect attempt emits a fresh
+`Starting` state before rebuilding the `Ready`/capabilities/`Active` cycle, so
+the parent cannot accept stale readiness from the previous connection. The
+default remains three enabled
 attempts, and users can disable reconnect or set zero attempts. The loopback
 fixture verifies recovery to a second real framebuffer and bounded failure
 when the fixture disappears. A separate loopback fixture verifies that an

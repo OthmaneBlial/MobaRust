@@ -341,6 +341,7 @@ async fn helper_reconnects_after_a_connected_server_disconnects() {
         .unwrap();
 
     let mut saw_reconnecting = false;
+    let mut saw_reconnect_starting = false;
     let mut saw_reconnected_frame = false;
     for _ in 0..20 {
         let event = match timeout(Duration::from_secs(3), next_event(&mut stdout)).await {
@@ -358,6 +359,9 @@ async fn helper_reconnects_after_a_connected_server_disconnects() {
             HelperEvent::State {
                 state: HelperState::Reconnecting,
             } => saw_reconnecting = true,
+            HelperEvent::State {
+                state: HelperState::Starting,
+            } if saw_reconnecting => saw_reconnect_starting = true,
             HelperEvent::Framebuffer {
                 ref pixels,
                 width: 320,
@@ -372,6 +376,10 @@ async fn helper_reconnects_after_a_connected_server_disconnects() {
     assert!(
         saw_reconnecting,
         "the helper did not expose reconnecting state"
+    );
+    assert!(
+        saw_reconnect_starting,
+        "the helper did not start a fresh lifecycle cycle"
     );
     assert!(
         saw_reconnected_frame,

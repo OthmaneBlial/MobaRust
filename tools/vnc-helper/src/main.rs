@@ -399,6 +399,7 @@ async fn reconnect_vnc_client<W: AsyncWrite + Unpin>(
         if !wait_reconnect_backoff(backoff, stdout, incoming_rx).await? {
             return Ok(None);
         }
+        write_state(stdout, HelperState::Starting).await?;
         match wait_for_vnc_connection(arguments, credential, stdout, incoming_rx).await? {
             ConnectionOutcome::Connected(client) => return Ok(Some(client)),
             ConnectionOutcome::Failed(message) => {
