@@ -602,6 +602,51 @@ mod tests {
         assert!(output.contains("INPUT:hello"));
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn explicit_unix_shells_round_trip_through_a_native_pty_when_installed() {
+        for shell in [LocalShell::Bash, LocalShell::Zsh, LocalShell::Fish] {
+            let executable = shell_command(shell).expect("Unix shell should be supported");
+            if !executable_is_available(&executable) {
+                continue;
+            }
+
+            let system = portable_pty::native_pty_system();
+            let pair = system
+                .openpty(PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .expect("open explicit shell pty");
+            let _writer = pair
+                .master
+                .take_writer()
+                .expect("take explicit shell writer");
+            let mut command = CommandBuilder::new(&executable);
+            command.args(["-c", "printf 'MOBARUST_EXPLICIT_SHELL_OK\\n'"]);
+            let mut child = pair
+                .slave
+                .spawn_command(command)
+                .expect("spawn explicit Unix shell");
+            let mut reader = pair
+                .master
+                .try_clone_reader()
+                .expect("clone explicit shell reader");
+            let mut output = String::new();
+            reader
+                .read_to_string(&mut output)
+                .expect("read explicit shell output");
+            child.wait().expect("wait for explicit Unix shell");
+
+            assert!(
+                output.contains("MOBARUST_EXPLICIT_SHELL_OK"),
+                "{executable} did not round-trip through the PTY"
+            );
+        }
+    }
+
     #[test]
     fn closing_a_running_pty_terminates_and_reaps_the_fixture_child() {
         let system = portable_pty::native_pty_system();
@@ -763,6 +808,14 @@ mod tests {
             command.args(["-c", "sleep 30"]);
             command
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn executable_is_available(executable: &str) -> bool {
+        std::process::Command::new(executable)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
     }
 
     #[test]

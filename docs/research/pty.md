@@ -26,7 +26,9 @@ Unix and Windows even when the terminal disappears before the user clicks
 Close.
 
 The fixture command is explicit and platform-specific: `/bin/sh -c ...` on
-Unix and `cmd.exe /C ...` on Windows. The product launch contract now also
+Unix and `cmd.exe /C ...` on Windows. The local Unix test also launches each
+fixed `bash`, `zsh`, and `fish` target that is installed and checks a marker
+through a native PTY. The product launch contract now also
 accepts only typed shell choices: `powershell.exe`/`cmd.exe` on Windows and
 `bash`/`zsh`/`fish` on Unix, with the configured `SHELL` or `ComSpec` retained
 for the default target. It does not accept an arbitrary executable from the
