@@ -65,10 +65,12 @@ Before a user-authenticated push, the repository-only payload audit can be run
 without contacting GitHub:
 
 ```text
+cargo xtask license-check
 cargo xtask pre-push-check
 ```
 
-It verifies `main`, both staged and unstaged Git whitespace checks, the ignored
+The license check requires the canonical Apache-2.0 heading and complete terms
+so GitHub can identify the repository license. The payload audit verifies `main`, both staged and unstaged Git whitespace checks, the ignored
 `base/` boundary, the absence of GitHub workflow files, credential-like paths,
 and private-key PEM markers in the index. It reports the local
 `origin/main...HEAD` comparison but never invokes `git push`.

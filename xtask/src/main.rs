@@ -23,6 +23,7 @@ fn main() {
         "stage-helpers" => stage_helpers(),
         "stage-rdp-helper" => stage_experimental_rdp_helper(),
         "pre-push-check" => pre_push_check(),
+        "license-check" => license_check(),
         "verify-checksum" => verify_checksum_command(arguments.collect()),
         "verify-macos-signature" => verify_macos_signature_command(arguments.collect()),
         "help" | "--help" | "-h" => {
@@ -54,6 +55,9 @@ fn main() {
             );
             println!(
                 "cargo xtask pre-push-check    Audit the local Git payload without network access"
+            );
+            println!(
+                "cargo xtask license-check    Verify the repository's canonical Apache-2.0 license file"
             );
             println!(
                 "cargo xtask verify-checksum <artifact-dir> <manifest>    Verify an explicit artifact checksum manifest"
@@ -781,6 +785,8 @@ fn pre_push_check() -> Result<(), String> {
         return Err(".github/workflows exists; refusing push audit".into());
     }
 
+    license_check()?;
+
     let tracked = git_output(&["ls-files"])?;
     let untracked = git_output(&["ls-files", "--others", "--exclude-standard"])?;
     for path in tracked.stdout.lines().chain(untracked.stdout.lines()) {
@@ -821,6 +827,47 @@ fn pre_push_check() -> Result<(), String> {
         "pre-push audit passed: branch=main, base=ignored, private-key markers=none, commits={}",
         ahead.stdout.trim()
     );
+    Ok(())
+}
+
+/// Keep the license file recognizable by GitHub's license detector and by
+/// local release tooling. The canonical Apache heading must remain the first
+/// line; adding project metadata before it can make an otherwise complete
+/// Apache license appear unidentified.
+fn license_check() -> Result<(), String> {
+    let root = repository_root()?;
+    let path = root.join("LICENSE");
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("could not read canonical license file: {error}"))?;
+    verify_license_contents(&contents)?;
+    println!("verified canonical Apache-2.0 license: {}", path.display());
+    Ok(())
+}
+
+fn verify_license_contents(contents: &str) -> Result<(), String> {
+    let mut lines = contents.lines();
+    if lines.next() != Some("                                 Apache License")
+        || lines.next() != Some("                           Version 2.0, January 2004")
+        || lines.next() != Some("                        http://www.apache.org/licenses/")
+    {
+        return Err(
+            "LICENSE must begin with the canonical Apache-2.0 heading for GitHub detection"
+                .to_owned(),
+        );
+    }
+
+    for marker in [
+        "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+        "END OF TERMS AND CONDITIONS",
+        "Licensed under the Apache License, Version 2.0",
+        "limitations under the License.",
+    ] {
+        if !contents.contains(marker) {
+            return Err(format!(
+                "LICENSE is missing the Apache-2.0 marker: {marker}"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1714,6 +1761,24 @@ mod tests {
         assert!(!should_remove_process_variable(std::ffi::OsStr::new(
             "RUSTUP_HOME"
         )));
+    }
+
+    #[test]
+    fn license_check_requires_the_canonical_apache_heading_and_terms() {
+        let contents = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../LICENSE"));
+        verify_license_contents(contents).expect("repository license should be canonical");
+
+        let error = verify_license_contents(&format!(
+            "Copyright 2026 MobaRust contributors\n\n{contents}"
+        ))
+        .expect_err("metadata before the canonical heading must be rejected");
+        assert!(error.contains("canonical Apache-2.0 heading"));
+
+        let error = verify_license_contents(
+            "                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n",
+        )
+        .expect_err("a truncated license must be rejected");
+        assert!(error.contains("missing the Apache-2.0 marker"));
     }
 
     #[test]
