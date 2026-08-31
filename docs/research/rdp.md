@@ -219,7 +219,8 @@ smoke test. The fixture's explicit CA branch is not enabled by the normal
 helper build or package path, so it does not weaken the production candidate's
 platform certificate validation.
 
-Run it with:
+On macOS, the repository-wide `cargo xtask check` runs this opt-in fixture as
+part of its local validation. Run it alone with:
 
 ```text
 cargo xtask check-rdp-fixture

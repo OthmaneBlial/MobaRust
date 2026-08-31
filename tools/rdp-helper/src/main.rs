@@ -497,6 +497,11 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                         return Ok(RdpAttemptOutcome::Fatal);
                     }
                     Some(RdpOutputEvent::Terminated(Ok(_))) => {
+                        if !active_sent {
+                            send_error(stdout, "RDP authentication or access was rejected").await?;
+                            write_state(stdout, HelperState::Failed).await?;
+                            return Ok(RdpAttemptOutcome::Fatal);
+                        }
                         write_state(stdout, HelperState::Stopped).await?;
                         return Ok(RdpAttemptOutcome::Stopped);
                     }
@@ -566,7 +571,8 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                     send_error(stdout, "RDP helper engine stopped unexpectedly").await?;
                     write_state(stdout, HelperState::Crashed).await?;
                 } else {
-                    write_state(stdout, HelperState::Stopped).await?;
+                    send_error(stdout, "RDP authentication or access was rejected").await?;
+                    write_state(stdout, HelperState::Failed).await?;
                 }
                 return Ok(RdpAttemptOutcome::Fatal);
             }

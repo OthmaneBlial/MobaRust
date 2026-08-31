@@ -178,7 +178,8 @@ sanitized environment. It reports process-launch timing and binary size; it
 does not claim full cold-start, warm-start, memory, idle-CPU, renderer, or
 cross-platform performance.
 
-On macOS, the isolated RDP fixtures can be run explicitly:
+On macOS, `cargo xtask check` includes the isolated real-server RDP fixture.
+It can also be run explicitly:
 
 ```bash
 cargo xtask check-rdp-fixture

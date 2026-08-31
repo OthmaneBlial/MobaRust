@@ -31,6 +31,8 @@ const FIXTURE_DOMAIN: &str = "fixture-domain";
 const FIXTURE_PASSWORD: &str = "fixture-rdp-password";
 const FIXTURE_WRONG_PASSWORD: &str = "fixture-wrong-password";
 
+static LOCAL_RDP_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputKind {
     Keyboard,
@@ -265,6 +267,24 @@ async fn next_event(stdout: &mut ChildStdout, phase: &str) -> HelperEvent {
     decode_event_frame(&frame).expect("RDP helper emitted an invalid event frame")
 }
 
+async fn next_event_with_exit_info(
+    stdout: &mut ChildStdout,
+    child: &mut tokio::process::Child,
+    phase: &str,
+) -> HelperEvent {
+    let frame = timeout(Duration::from_secs(8), read_frame(stdout))
+        .await
+        .unwrap_or_else(|_| panic!("RDP helper event timed out during {phase}"))
+        .unwrap_or_else(|_| panic!("RDP helper event read failed during {phase}"));
+    let Some(frame) = frame else {
+        let status = child
+            .try_wait()
+            .expect("could not inspect RDP helper after event pipe close");
+        panic!("RDP helper closed its event pipe during {phase}; status={status:?}");
+    };
+    decode_event_frame(&frame).expect("RDP helper emitted an invalid event frame")
+}
+
 async fn send_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &[u8]) {
     write_frame_with_timeout(writer, frame)
         .await
@@ -286,6 +306,9 @@ async fn server_port(sender: &tokio::sync::mpsc::UnboundedSender<ServerEvent>) -
 
 #[tokio::test(flavor = "current_thread")]
 async fn real_helper_controls_a_real_loopback_rdp_server() {
+    let _test_lock = LOCAL_RDP_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     tokio::task::LocalSet::new()
         .run_until(async {
             let _ = ironrdp_server::tokio_rustls::rustls::crypto::ring::default_provider()
@@ -547,6 +570,9 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn real_helper_reconnects_after_real_loopback_server_loss() {
+    let _test_lock = LOCAL_RDP_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     tokio::task::LocalSet::new()
         .run_until(async {
             let _ = ironrdp_server::tokio_rustls::rustls::crypto::ring::default_provider()
@@ -555,9 +581,8 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
             let (certificate, private_key, ca_certificate) = create_fixture_identity(&fixture.0);
             let identity = TlsIdentityCtx::init_from_paths(&certificate, &private_key)
                 .expect("load the disposable RDP fixture identity");
-            let (_first_sender, first_receiver) = queued_bitmap([0xff, 0x19, 0x4d, 0x74]).await;
+            let (first_sender, first_receiver) = queued_bitmap([0xff, 0x19, 0x4d, 0x74]).await;
             let (second_sender, second_receiver) = queued_bitmap([0xff, 0xa4, 0x3f, 0x7a]).await;
-            drop(_first_sender);
 
             let mut server = RdpServer::builder()
                 .with_addr(([127, 0, 0, 1], 0))
@@ -665,7 +690,13 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
             let mut first_pixels = None;
             let mut first_active = false;
             for _ in 0..8 {
-                match next_event(&mut stdout, "first real server session").await {
+                match next_event_with_exit_info(
+                    &mut stdout,
+                    &mut child,
+                    "first real server session",
+                )
+                .await
+                {
                     HelperEvent::State {
                         state: HelperState::Active,
                     } => first_active = true,
@@ -694,6 +725,7 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
                 first_active,
                 "first RDP fixture session never became Active"
             );
+            drop(first_sender);
 
             let mut saw_reconnecting = false;
             let mut saw_fresh_starting = false;
@@ -791,6 +823,9 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn real_helper_reports_rejected_credentials_from_real_loopback_server() {
+    let _test_lock = LOCAL_RDP_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     tokio::task::LocalSet::new()
         .run_until(async {
             let _ = ironrdp_server::tokio_rustls::rustls::crypto::ring::default_provider()

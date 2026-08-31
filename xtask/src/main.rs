@@ -1382,6 +1382,9 @@ fn check() -> Result<(), String> {
     run("pnpm", ["run", "lint"], Some("apps/desktop"))?;
     run("pnpm", ["run", "build"], Some("apps/desktop"))?;
     check_rdp_helper()?;
+    if cfg!(target_os = "macos") {
+        check_rdp_fixture()?;
+    }
     check_vnc_helper()?;
     package_layout_check()?;
     check_fuzz()?;
