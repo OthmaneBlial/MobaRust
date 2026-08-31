@@ -24,6 +24,7 @@ fn main() {
         "stage-rdp-helper" => stage_experimental_rdp_helper(),
         "pre-push-check" => pre_push_check(),
         "verify-checksum" => verify_checksum_command(arguments.collect()),
+        "verify-macos-signature" => verify_macos_signature_command(arguments.collect()),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
@@ -56,6 +57,9 @@ fn main() {
             );
             println!(
                 "cargo xtask verify-checksum <artifact-dir> <manifest>    Verify an explicit artifact checksum manifest"
+            );
+            println!(
+                "cargo xtask verify-macos-signature <app-bundle>    Verify an explicit macOS app code signature"
             );
             Ok(())
         }
@@ -926,6 +930,55 @@ fn verify_checksum_command(arguments: Vec<String>) -> Result<(), String> {
         artifact_root.display(),
         manifest_path.display()
     );
+    Ok(())
+}
+
+/// Verify an explicitly selected macOS application bundle with Apple's local
+/// code-signature verifier. This command never signs, searches for an
+/// identity, opens Keychain data, or contacts a remote host. It is a release
+/// gate for an already-signed artifact, not a substitute for notarization or
+/// a clean-install check.
+fn verify_macos_signature_command(arguments: Vec<String>) -> Result<(), String> {
+    if arguments.len() != 1 {
+        return Err("usage: cargo xtask verify-macos-signature <app-bundle>".to_owned());
+    }
+    if !cfg!(target_os = "macos") {
+        return Err(
+            "macOS signature verification requires a macOS host; run it in the target release environment"
+                .to_owned(),
+        );
+    }
+
+    let app_bundle = PathBuf::from(&arguments[0]);
+    validate_macos_signature_target(&app_bundle)?;
+    let app_bundle = app_bundle
+        .to_str()
+        .ok_or_else(|| "macOS app bundle path must be valid UTF-8".to_owned())?;
+    let output = run_sanitized_output(
+        "/usr/bin/codesign",
+        &["--verify", "--deep", "--strict", "--verbose=2", app_bundle],
+        &repository_root()?,
+    )?;
+    if !output.status.success() {
+        return Err("macOS app code-signature verification failed".to_owned());
+    }
+    println!("verified macOS app code signature: {app_bundle}");
+    Ok(())
+}
+
+fn validate_macos_signature_target(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!("could not inspect macOS app bundle for signature verification: {error}")
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err("macOS app bundle must not be a symlink".to_owned());
+    }
+    if !metadata.is_dir() {
+        return Err("macOS signature target must be an app bundle directory".to_owned());
+    }
+    if path.extension().and_then(|value| value.to_str()) != Some("app") {
+        return Err("macOS signature target must have a .app extension".to_owned());
+    }
     Ok(())
 }
 
@@ -1805,6 +1858,52 @@ mod tests {
         assert_eq!(PackagePlatform::parse("linux"), Ok(PackagePlatform::Linux));
         let error = PackagePlatform::parse("current").expect_err("target must be explicit");
         assert!(error.contains("expected macos, windows, or linux"));
+    }
+
+    #[test]
+    fn macos_signature_target_accepts_only_an_explicit_app_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-macos-signature-target-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let app = root.join("MobaRust.app");
+        fs::create_dir_all(&app).expect("create app bundle fixture");
+        validate_macos_signature_target(&app).expect("explicit app directory should pass");
+
+        let file = root.join("MobaRust");
+        fs::write(&file, b"not an app bundle").expect("write file fixture");
+        let error = validate_macos_signature_target(&file)
+            .expect_err("regular file must not be accepted as an app bundle");
+        assert!(error.contains("app bundle directory"));
+
+        fs::remove_dir_all(root).expect("remove app bundle fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_signature_target_rejects_symlink_without_following_it() {
+        let root = std::env::temp_dir().join(format!(
+            "mobarust-xtask-macos-signature-symlink-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let source = root.join("source.app");
+        let alias = root.join("alias.app");
+        fs::create_dir_all(&source).expect("create source app fixture");
+        std::os::unix::fs::symlink(&source, &alias).expect("create app symlink fixture");
+
+        let error = validate_macos_signature_target(&alias)
+            .expect_err("a symlink must not be passed to codesign");
+        assert!(error.contains("must not be a symlink"));
+
+        fs::remove_dir_all(root).expect("remove app symlink fixture");
     }
 
     #[cfg(unix)]

@@ -57,6 +57,21 @@ the complete deterministic manifest before reporting success. It proves local
 artifact integrity only; it is not a signature verifier and does not establish
 publisher authenticity.
 
+On macOS, an already signed `.app` can be checked explicitly:
+
+```text
+cargo xtask verify-macos-signature <signed-app-bundle>
+```
+
+This invokes the fixed system path `/usr/bin/codesign` with deep, strict
+verification for the selected regular `.app` directory. It does not sign,
+search for a signing identity, access Keychain credentials, or contact a
+remote service. The command verifies the embedded code signature only; it does
+not prove notarization, Gatekeeper acceptance, or clean-install behavior.
+Unsigned local smoke artifacts are expected to fail this release-gate check.
+Signing and notarization therefore remain external release evidence, and no
+certificate or private signing key belongs in this repository.
+
 ## Cross-platform package layout contract
 
 `cargo xtask package-layout-check` validates the runtime shape expected by the

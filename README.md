@@ -157,12 +157,13 @@ cargo xtask package-check
 cargo xtask portable-check
 cargo xtask package-layout-check
 cargo xtask verify-platform-layout macos target/debug/bundle/macos/MobaRust.app
+cargo xtask verify-macos-signature <signed-app-bundle>
 cargo xtask pre-push-check
 ```
 
 The validation path uses isolated home/XDG directories, repository-owned or disposable fixture paths, and loopback-only protocol servers. It does **not** need your personal `~/.ssh`, GitHub keys, Keychain, SSH agent, real hosts, or attached hardware.
 
-`package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. `package-check` also exercises the built binary's minimal `--version` startup path without opening the desktop UI. They do not claim notarization, cross-platform release support, or RDP/VNC interoperability.
+`package-check` and `portable-check` currently produce unsigned macOS smoke artifacts. For a release artifact, `verify-macos-signature` checks an explicitly selected signed `.app` with macOS `codesign`; it never signs or accesses a signing identity. The command does not prove notarization or clean-install behavior. `package-check` also exercises the built binary's minimal `--version` startup path without opening the desktop UI. These checks do not claim cross-platform release support or RDP/VNC interoperability.
 
 For a repository-local process-start probe after building the desktop binary:
 
