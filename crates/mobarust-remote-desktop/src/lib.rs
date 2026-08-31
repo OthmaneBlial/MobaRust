@@ -110,6 +110,13 @@ pub struct HelperCapabilities {
     pub server_resize: bool,
     pub local_scaling: bool,
     pub gateway: bool,
+    /// Whether the helper's current protocol transport encrypts the session.
+    ///
+    /// This is reported by the native helper instead of inferred by React
+    /// from the requested protocol. The default keeps older helpers
+    /// wire-compatible and safely treats an omitted value as unencrypted.
+    #[serde(default)]
+    pub transport_encrypted: bool,
     pub color_depths: Vec<u16>,
 }
 
@@ -122,6 +129,7 @@ impl HelperCapabilities {
             server_resize: true,
             local_scaling: true,
             gateway: true,
+            transport_encrypted: true,
             color_depths: vec![16, 32],
         }
     }
@@ -134,6 +142,7 @@ impl HelperCapabilities {
             server_resize: false,
             local_scaling: true,
             gateway: false,
+            transport_encrypted: false,
             color_depths: Vec::new(),
         }
     }
@@ -690,6 +699,7 @@ impl fmt::Debug for HelperEvent {
                 .field("server_resize", &capabilities.server_resize)
                 .field("local_scaling", &capabilities.local_scaling)
                 .field("gateway", &capabilities.gateway)
+                .field("transport_encrypted", &capabilities.transport_encrypted)
                 .field("color_depths", &capabilities.color_depths)
                 .finish(),
             Self::State { state } => formatter
@@ -1685,6 +1695,7 @@ mod tests {
         assert!(!rdp.audio);
         assert!(rdp.server_resize);
         assert!(rdp.gateway);
+        assert!(rdp.transport_encrypted);
         assert_eq!(rdp.color_depths, vec![16, 32]);
 
         let vnc = HelperCapabilities::vnc();
@@ -1693,6 +1704,7 @@ mod tests {
         assert!(!vnc.server_resize);
         assert!(vnc.local_scaling);
         assert!(!vnc.gateway);
+        assert!(!vnc.transport_encrypted);
 
         let frame = encode_event_frame(&HelperEvent::Capabilities {
             capabilities: rdp.clone(),

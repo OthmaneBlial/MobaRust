@@ -54,7 +54,10 @@ byte counts before forwarding frames to the renderer. A static framebuffer,
 mock event stream, or screenshot does not count.
 
 VNC profiles must visibly distinguish legacy VNC authentication from transport
-encryption. Resize and clipboard are capability-dependent; unsupported
+encryption. The native capability contract reports
+`transportEncrypted: false` for the current candidate, and the parent/UI keep
+that warning visible instead of inferring security from the protocol name.
+Resize and clipboard are capability-dependent; unsupported
 operations must be reported rather than simulated. Remote clipboard events are
 treated as untrusted input: the desktop UI holds them transiently and requires
 an explicit user click before writing to the local clipboard. It never copies

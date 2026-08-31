@@ -110,6 +110,7 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
                 && capabilities.color_depths == vec![16, 32]
                 && !capabilities.audio
                 && capabilities.gateway
+                && capabilities.transport_encrypted
                 && capabilities.clipboard == cfg!(windows)
     ));
 

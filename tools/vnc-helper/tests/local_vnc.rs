@@ -607,7 +607,8 @@ async fn helper_cancels_an_idle_connected_session_without_waiting_for_remote_dat
                     && !capabilities.clipboard
                     && !capabilities.server_resize
                     && capabilities.local_scaling
-                    && !capabilities.gateway =>
+                    && !capabilities.gateway
+                    && !capabilities.transport_encrypted =>
             {
                 saw_capabilities = true;
             }

@@ -911,6 +911,9 @@ fn validate_helper_capabilities(
     if capabilities.protocol != requirements.protocol {
         return Err("remote desktop helper reported an incompatible protocol");
     }
+    if capabilities.transport_encrypted != (requirements.protocol == DesktopProtocol::Rdp) {
+        return Err("remote desktop helper reported incompatible transport security");
+    }
     if requirements.clipboard && !capabilities.clipboard {
         return Err("remote desktop helper does not support requested clipboard redirection");
     }
@@ -1216,6 +1219,27 @@ mod tests {
                 },
             )
             .is_err()
+        );
+        let mut insecure_rdp = HelperCapabilities::rdp();
+        insecure_rdp.transport_encrypted = false;
+        assert_eq!(
+            validate_helper_capabilities(&insecure_rdp, rdp_requirements),
+            Err("remote desktop helper reported incompatible transport security")
+        );
+        let mut encrypted_vnc = HelperCapabilities::vnc();
+        encrypted_vnc.transport_encrypted = true;
+        assert_eq!(
+            validate_helper_capabilities(
+                &encrypted_vnc,
+                HelperCapabilityRequirements {
+                    protocol: DesktopProtocol::Vnc,
+                    clipboard: false,
+                    audio: false,
+                    gateway: false,
+                    color_depth: None,
+                },
+            ),
+            Err("remote desktop helper reported incompatible transport security")
         );
         assert!(
             validate_helper_event(

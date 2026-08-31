@@ -74,6 +74,12 @@ forwards this metadata to the UI so the visible behavior matches the helper
 that is actually running. This does not replace the required cross-platform
 interoperability evidence.
 
+The same capability report includes an explicit `transportEncrypted` flag. The
+current VNC candidate reports `false` because `vnc-rs` uses legacy TCP without
+TLS; the parent validates that value and the UI displays the unencrypted
+transport state. RDP reports `true` for its TLS connector. React never infers
+transport security from a protocol label.
+
 The candidate defaults to local fixtures: both the helper and the Tauri parent
 accept only literal loopback IP targets (`127.0.0.1` or `::1`) unless the
 operator explicitly enables the `allow_insecure_vnc` profile setting. That
