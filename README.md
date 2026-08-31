@@ -101,6 +101,7 @@ MobaRust is designed for operators who cannot afford an accidental production ac
 - session configuration is separated from secret material;
 - credentials are resolved inside the native boundary when possible;
 - helper processes receive secrets through native channels, never command-line arguments;
+- remote-desktop helpers must complete a typed `Hello → Starting → Ready` handshake before capabilities or active data are accepted;
 - passwords, private keys, tokens, and sensitive environment values are redacted from logs;
 - native terminal, persistence, and vault errors do not echo local paths or raw OS/backend details;
 - broadcast input requires explicit target selection and has an emergency disable path;

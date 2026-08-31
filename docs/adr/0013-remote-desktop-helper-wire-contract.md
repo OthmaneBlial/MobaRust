@@ -42,9 +42,9 @@ messages before a process is started:
 - connection metadata is bounded and rejects control characters and leading or
   trailing whitespace before it reaches a helper, listener, or protocol
   channel;
-- the parent requires `Hello` as the first event, `Ready` before each
-  capability report, and rejects duplicate handshakes or active data that
-  arrives before a validated capability report;
+- the parent requires `Hello` as the first event, `Starting` before the
+  initial `Ready`, `Ready` before each capability report, and rejects duplicate
+  handshakes or active data that arrives before a validated capability report;
 - framebuffer and clipboard data are accepted only after the corresponding
   attempt has entered `Active`; a `Reconnecting` event starts a fresh
   capability-to-active sequence, so stale data cannot cross the boundary while

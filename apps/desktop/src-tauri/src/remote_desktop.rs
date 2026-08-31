@@ -125,6 +125,7 @@ enum HelperDataPhase {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct HelperEventProgress {
     hello_seen: bool,
+    starting_seen: bool,
     ready_seen: bool,
     capabilities_seen: bool,
     data_phase: HelperDataPhase,
@@ -834,8 +835,20 @@ fn validate_helper_event(
             Ok(progress)
         }
         HelperEvent::State {
+            state: mobarust_remote_desktop::HelperState::Starting,
+        } => {
+            progress.starting_seen = true;
+            Ok(progress)
+        }
+        HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Ready,
         } => {
+            if !progress.starting_seen {
+                return Err("remote desktop helper sent ready state before starting state");
+            }
+            if progress.ready_seen {
+                return Err("remote desktop helper sent a duplicate ready state");
+            }
             progress.ready_seen = true;
             Ok(progress)
         }
@@ -1041,6 +1054,60 @@ mod tests {
     }
 
     #[test]
+    fn helper_ready_requires_the_starting_state() {
+        let requirements = HelperCapabilityRequirements {
+            protocol: DesktopProtocol::Rdp,
+            clipboard: false,
+            audio: false,
+            gateway: false,
+            color_depth: Some(32),
+        };
+        let hello = validate_helper_event(
+            &HelperEvent::Hello {
+                version: WIRE_VERSION,
+            },
+            requirements,
+            Default::default(),
+        )
+        .unwrap();
+        let error = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            hello.clone(),
+        )
+        .unwrap_err();
+        assert!(error.contains("before starting state"));
+
+        let starting = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Starting,
+            },
+            requirements,
+            hello,
+        )
+        .unwrap();
+        let ready = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            starting,
+        )
+        .unwrap();
+        let error = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Ready,
+            },
+            requirements,
+            ready,
+        )
+        .unwrap_err();
+        assert!(error.contains("duplicate ready state"));
+    }
+
+    #[test]
     fn helper_capabilities_must_match_the_requested_session() {
         let rdp_capabilities = HelperEvent::Capabilities {
             capabilities: HelperCapabilities::rdp(),
@@ -1064,12 +1131,20 @@ mod tests {
         )
         .unwrap();
         assert!(handshake.hello_seen);
+        let starting = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Starting,
+            },
+            rdp_requirements,
+            handshake.clone(),
+        )
+        .unwrap();
         let ready = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Ready,
             },
             rdp_requirements,
-            handshake.clone(),
+            starting,
         )
         .unwrap();
         assert!(ready.ready_seen);
@@ -1129,7 +1204,7 @@ mod tests {
                 rdp_requirements,
                 handshake.clone(),
             )
-            .is_ok()
+            .is_err()
         );
         assert!(
             validate_helper_event(
@@ -1187,12 +1262,20 @@ mod tests {
         let capabilities = HelperEvent::Capabilities {
             capabilities: HelperCapabilities::rdp(),
         };
+        let starting = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Starting,
+            },
+            requirements,
+            hello,
+        )
+        .unwrap();
         let ready = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Ready,
             },
             requirements,
-            hello,
+            starting,
         )
         .unwrap();
         let awaiting_active = validate_helper_event(&capabilities, requirements, ready).unwrap();
@@ -1286,7 +1369,14 @@ mod tests {
                 state: HelperState::Ready,
             },
             requirements,
-            handshake,
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Starting,
+                },
+                requirements,
+                handshake,
+            )
+            .unwrap(),
         )
         .unwrap();
         let progress = validate_helper_event(&capability_event, requirements, ready).unwrap();
@@ -1314,6 +1404,7 @@ mod tests {
         };
         let mut active_without_clipboard = HelperEventProgress {
             hello_seen: true,
+            starting_seen: true,
             ready_seen: true,
             capabilities_seen: true,
             data_phase: HelperDataPhase::Active,
@@ -1354,7 +1445,14 @@ mod tests {
                 state: HelperState::Ready,
             },
             requested_clipboard,
-            handshake,
+            validate_helper_event(
+                &HelperEvent::State {
+                    state: HelperState::Starting,
+                },
+                requested_clipboard,
+                handshake,
+            )
+            .unwrap(),
         )
         .unwrap();
         let progress = validate_helper_event(
