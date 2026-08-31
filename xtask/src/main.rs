@@ -1982,6 +1982,14 @@ mod tests {
                     .expect_err("a non-executable runtime must be rejected");
                 assert!(error.contains("runtime executable is not executable"));
                 mark_fixture_executable(&runtime).expect("restore runtime executable bit");
+
+                let vnc_helper = package.join(platform.vnc_helper());
+                fs::set_permissions(&vnc_helper, fs::Permissions::from_mode(0o644))
+                    .expect("make VNC helper non-executable");
+                let error = verify_platform_package_layout(&package, platform)
+                    .expect_err("a non-executable VNC helper must be rejected");
+                assert!(error.contains("VNC helper is not executable"));
+                mark_fixture_executable(&vnc_helper).expect("restore VNC helper executable bit");
             }
 
             fs::write(package.join(platform.rdp_helper()), b"RDP candidate")
