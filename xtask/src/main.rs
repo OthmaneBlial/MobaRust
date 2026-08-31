@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use sha2::{Digest, Sha256};
 
 fn main() {
@@ -286,13 +289,13 @@ fn verify_platform_package_layout(
     platform: PackagePlatform,
 ) -> Result<(), String> {
     let executable = package_root.join(platform.executable());
-    require_regular_file(
+    require_executable_file(
         &executable,
         &format!("{} runtime executable", platform.label()),
     )?;
 
     let vnc_helper = package_root.join(platform.vnc_helper());
-    require_regular_file(&vnc_helper, &format!("{} VNC helper", platform.label()))?;
+    require_executable_file(&vnc_helper, &format!("{} VNC helper", platform.label()))?;
 
     let rdp_helper = package_root.join(platform.rdp_helper());
     match fs::symlink_metadata(&rdp_helper) {
@@ -325,6 +328,43 @@ fn require_regular_file(path: &Path, description: &str) -> Result<(), String> {
             path.display()
         ))
     }
+}
+
+fn require_executable_file(path: &Path, description: &str) -> Result<(), String> {
+    require_regular_file(path, description)?;
+
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "could not inspect executable permissions for {description} {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(format!(
+                "{description} is not executable: {}",
+                path.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn mark_fixture_executable(path: &Path) -> Result<(), String> {
+    let mut permissions = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect package fixture permissions: {error}"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+        .map_err(|error| format!("could not mark package fixture executable: {error}"))
+}
+
+#[cfg(not(unix))]
+fn mark_fixture_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn package_layout_check() -> Result<(), String> {
@@ -366,6 +406,8 @@ fn package_layout_check() -> Result<(), String> {
                 fs::write(package.join(platform.vnc_helper()), b"vnc-helper").map_err(|error| {
                     format!("could not write {} VNC fixture: {error}", platform.label())
                 })?;
+                mark_fixture_executable(&package.join(platform.executable()))?;
+                mark_fixture_executable(&package.join(platform.vnc_helper()))?;
                 verify_platform_package_layout(&package, platform)?;
             }
             Ok(())
@@ -1920,9 +1962,24 @@ mod tests {
             fs::write(package.join(platform.executable()), b"runtime").expect("write runtime");
             fs::write(package.join(platform.vnc_helper()), b"vnc helper")
                 .expect("write VNC helper");
+            mark_fixture_executable(&package.join(platform.executable()))
+                .expect("make runtime executable");
+            mark_fixture_executable(&package.join(platform.vnc_helper()))
+                .expect("make VNC helper executable");
 
             verify_platform_package_layout(&package, platform)
                 .expect("complete platform layout should pass");
+
+            #[cfg(unix)]
+            {
+                let runtime = package.join(platform.executable());
+                fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644))
+                    .expect("make runtime non-executable");
+                let error = verify_platform_package_layout(&package, platform)
+                    .expect_err("a non-executable runtime must be rejected");
+                assert!(error.contains("runtime executable is not executable"));
+                mark_fixture_executable(&runtime).expect("restore runtime executable bit");
+            }
 
             fs::write(package.join(platform.rdp_helper()), b"RDP candidate")
                 .expect("write forbidden RDP helper");

@@ -76,7 +76,8 @@ certificate or private signing key belongs in this repository.
 
 `cargo xtask package-layout-check` validates the runtime shape expected by the
 three desktop targets using repository-local fixtures. It checks that each
-package has its native `mobarust` executable, the current-platform VNC helper,
+package has its native executable, the current-platform executable VNC helper,
+and executable permissions on Unix,
 and no RDP candidate that has not passed its dependency and interoperability
 gates:
 
