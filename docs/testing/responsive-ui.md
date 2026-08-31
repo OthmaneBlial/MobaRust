@@ -16,8 +16,9 @@ On 2026-08-30, the following flows were checked in the local browser preview:
 - automatic mobile sidebar collapse and explicit drawer reopen/close;
 - command palette opening and keyboard dismissal;
 - Quick Connect modal opening while remaining inside the viewport;
-- Quick Connect visibly blocking `example.invalid` for experimental RDP/VNC
-  before any Tauri command could be invoked;
+- Quick Connect visibly blocking `example.invalid` for VNC until the explicit
+  unencrypted-TCP opt-in is selected, before any Tauri command could be
+  invoked;
 - no console errors during these flows.
 
 The mobile layout uses a single workspace column, horizontally scrollable
@@ -36,9 +37,11 @@ It feeds hostile markup to every supported highlighting mode and verifies that
 only escaped text and the editor's fixed local spans are emitted.
 
 The connection safety unit coverage also verifies that loopback IP literals are
-accepted, DNS names are rejected for experimental desktop protocols, and an
-IPv6 URI such as `rdp://fixture@[::1]:3389` is normalized to the native `::1`
-form without resolving it.
+accepted, DNS names remain rejected for VNC without the explicit opt-in, an
+opted-in VNC target is accepted by the form-level policy, and an IPv6 URI such
+as `rdp://fixture@[::1]:3389` is normalized to the native `::1` form without
+resolving it. URIs deliberately do not carry the insecure opt-in and therefore
+remain loopback-only for VNC.
 
 ## Safety boundary
 
