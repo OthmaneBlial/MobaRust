@@ -129,7 +129,7 @@ This proves a local macOS packaging path only. It does not prove signing,
 notarization, clean installation, Windows/Linux support, or protocol
 interoperability.
 
-On 2026-08-30 this smoke test passed on the local macOS ARM64 host. The bundle
+On 2026-08-31 this smoke test passed on the local macOS ARM64 host. The bundle
 was created at `target/debug/bundle/macos/MobaRust.app`; its main executable
 and the staged VNC helper resource (`mobarust-vnc-helper`) were verified as
 executable Mach-O arm64 files. The RDP candidate was intentionally not staged
