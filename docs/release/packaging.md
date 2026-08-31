@@ -138,6 +138,13 @@ because its separate lockfile currently fails the RSA timing-advisory audit.
 This is repository-local assembly evidence only; it does not prove a clean
 install, notarization, or remote-desktop interoperability.
 
+The same run assembled and re-verified the unsigned portable archive
+`MobaRust-macos-arm64.tar.gz`, including its extracted package manifest and
+separate archive SHA-256 manifest. The measured `mobarust --version` probe
+reported `MobaRust 0.1.0` and completed without opening a window, network
+connection, application store, vault, or clipboard. These are local artifact
+receipts, not publisher authenticity or cross-platform release evidence.
+
 At runtime, the desktop parent also opens helper resources with
 `symlink_metadata` and rejects symlinks, directories, and other non-regular
 files before spawning a protocol process. This complements the bundle smoke
