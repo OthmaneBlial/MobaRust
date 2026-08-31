@@ -32,10 +32,11 @@ It is not a claim that MobaRust currently supports RDP.
   its `picky` dependency pins `aes-gcm 0.11.0-rc.4`, which conflicts with the
   portable vault's `aes-gcm 0.11.1`. The vault dependency was not weakened for
   this experiment.
-- A current upstream manifest check on 2026-08-30 still shows
-  `ironrdp-connector` depending on `picky = 7.0.0-rc.25` and `sspi`; upstream
-  tracks removal of that deprecated CredSSP surface in [issue #1433](https://github.com/Devolutions/IronRDP/issues/1433),
-  which remains open. The [RustSec RSA advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
+- A current upstream manifest check on 2026-08-31 still shows the public
+  `ironrdp-connector 0.10.0` line depending on `picky = 7.0.0-rc.25` and
+  `sspi`; upstream tracks removal of that deprecated CredSSP surface in
+  [issue #1434](https://github.com/Devolutions/IronRDP/issues/1434), which
+  remains open. The [RustSec RSA advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)
   still reports no patched `rsa` release. This confirms that the candidate's
   dependency gate is still current rather than a stale local lockfile result.
 
