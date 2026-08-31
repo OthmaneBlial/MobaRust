@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -678,6 +678,132 @@ exit
     });
 }
 
+#[test]
+fn forwards_x11_setup_to_a_disposable_xvfb_server_when_available() {
+    let Some(xvfb) = LocalXvfb::start().expect("start disposable Xvfb fixture") else {
+        eprintln!("skipping real X11 server fixture: Xvfb is not installed");
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().expect("create real X11 test runtime");
+    runtime.block_on(async {
+        xvfb.wait_ready().await;
+        let fixture = LocalSshd::start_with_x11().expect("start local sshd X11 fixture");
+        wait_for_port(fixture.port).await;
+
+        let connection = SshConnection::connect(SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: fixture.port,
+            host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
+            timeout: Duration::from_secs(5),
+            keepalive_interval: None,
+            credentials: SshCredentials::private_key(
+                fixture.username.clone(),
+                fixture.client_key.clone(),
+                None::<String>,
+            ),
+            x11: Some(X11ForwardingOptions::new(X11Display::Tcp(xvfb.address), true)),
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
+        })
+        .await
+        .expect("connect local SSH X11 fixture");
+        let shell = connection.open_shell(100, 30).await.expect("open X11 shell");
+        let (mut reader, writer) = shell.split();
+        writer
+            .write(
+                br#"python3 -c 'import os,socket; d=os.environ["DISPLAY"]; h,rest=d.rsplit(":",1); p=int(rest.split(".",1)[0])+6000; s=socket.create_connection((h,p),5); s.sendall(b"l\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"); response=b"";
+while len(response)<8: response += s.recv(8-len(response)); assert response[0:1] == b"\x01"; s.close()'
+exit
+"#,
+            )
+            .await
+            .expect("request real X11 setup");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let channel = loop {
+            tokio::select! {
+                channel = connection.next_x11_channel() => {
+                    break channel.expect("real X11 channel was not opened");
+                }
+                _ = reader.next_output() => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    panic!("wait for real X11 channel timed out");
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), connection.bridge_x11_channel(channel))
+            .await
+            .expect("bridge real X11 channel timeout")
+            .expect("bridge real X11 channel");
+
+        let mut shell_output = Vec::new();
+        while let Some(message) = tokio::time::timeout(Duration::from_secs(5), reader.next_output())
+            .await
+            .expect("wait for real X11 command")
+        {
+            match message.expect("read real X11 command output") {
+                SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => shell_output.extend(bytes),
+                SshOutput::ExitStatus(status) => {
+                    assert_eq!(status, 0, "real X11 setup failed: {}", String::from_utf8_lossy(&shell_output));
+                    break;
+                }
+                SshOutput::Control => {}
+            }
+        }
+    });
+}
+
+struct LocalXvfb {
+    child: Child,
+    address: std::net::SocketAddr,
+}
+
+impl LocalXvfb {
+    fn start() -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        let Some(program) = find_xvfb() else {
+            return Ok(None);
+        };
+        let Some((display_number, address)) = reserve_xvfb_display() else {
+            return Ok(None);
+        };
+        let mut command = Command::new(program);
+        clear_credential_environment(&mut command);
+        let child = command
+            .arg(format!(":{display_number}"))
+            .args([
+                "-screen",
+                "0",
+                "640x480x24",
+                "-nolisten",
+                "unix",
+                "-nolock",
+                "-ac",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        Ok(Some(Self { child, address }))
+    }
+
+    async fn wait_ready(&self) {
+        for _ in 0..120 {
+            if TcpStream::connect(self.address).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("disposable Xvfb did not create its loopback TCP listener");
+    }
+}
+
+impl Drop for LocalXvfb {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 async fn assert_no_remote_editor_artifacts(sftp: &SftpConnection, remote_root: &str) {
     let entries = sftp
         .read_dir(remote_root)
@@ -788,6 +914,28 @@ fn find_command(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
+}
+
+fn find_xvfb() -> Option<PathBuf> {
+    [
+        PathBuf::from("/opt/X11/bin/Xvfb"),
+        PathBuf::from("/usr/bin/Xvfb"),
+        PathBuf::from("/usr/local/bin/Xvfb"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+    .or_else(|| find_command("Xvfb"))
+}
+
+fn reserve_xvfb_display() -> Option<(u16, std::net::SocketAddr)> {
+    (90..200).find_map(|display_number| {
+        let port = 6000_u16.checked_add(display_number)?;
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        std::net::TcpListener::bind(address)
+            .ok()
+            .map(drop)
+            .map(|_| (display_number, address))
+    })
 }
 
 impl Drop for LocalSshd {
