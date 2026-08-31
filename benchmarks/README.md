@@ -92,3 +92,16 @@ full cold-start/warm-start claim. Filesystem cache state, desktop compositor
 startup, renderer readiness, memory, idle CPU, and real protocol throughput
 require a separately controlled platform run and must not be inferred from
 this probe.
+
+## Recorded app-launch snapshot
+
+On 2026-08-31, the repository-bounded probe ran against the locally built
+macOS ARM64 debug executable:
+
+```text
+app_startup version=MobaRust 0.1.0 bytes=58757624 first_run_ms=16.373 repeated_mean_ms=8.479 samples=5
+app_startup_note=first_run_and_repeated_process_launch_only; no_gui_no_network_no_application_data
+```
+
+This is a process-launch receipt for the explicit binary path, not a claim
+about GUI startup, memory, idle CPU, or performance on another platform.
