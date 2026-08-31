@@ -107,7 +107,8 @@ pipe failure cannot produce duplicate crash events while cleanup is racing.
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`
-RFB client behind the native helper contract. It negotiates RFB 3.8, supports
+RFB client behind the native helper contract. It negotiates RFB 3.3, 3.7, and
+3.8, supports
 no-auth and VNC-password negotiation through the credential pipe, requests an
 RGBA framebuffer, decodes raw/copy-rect updates, and forwards keyboard,
 pointer, bounded Latin-1 clipboard input, and Tight/JPEG rectangles through a
@@ -117,8 +118,9 @@ bounded canvas. Browser text input maps printable Unicode characters to X11
 keysyms (including the `0x01000000 | code point` form), while the helper
 rejects zero and out-of-range keysyms before they reach the RFB engine.
 
-`tools/vnc-helper/tests/local_vnc.rs` runs deterministic no-auth and VNC
-password RFB fixtures on an OS-assigned `127.0.0.1` port. The authenticated
+`tools/vnc-helper/tests/local_vnc.rs` runs deterministic RFB 3.3, 3.7, and 3.8
+no-auth fixtures plus VNC-password fixtures on an OS-assigned `127.0.0.1` port.
+The authenticated
 fixture verifies security-type selection and the DES challenge response before
 checking framebuffer, explicit server-side resize rejection, key, pointer,
 server-announced resize, clipboard input, server-to-helper clipboard events,

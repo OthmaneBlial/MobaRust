@@ -37,6 +37,31 @@ enum FixtureAuth {
     VncPassword,
 }
 
+#[derive(Clone, Copy)]
+enum FixtureVersion {
+    Rfb33,
+    Rfb37,
+    Rfb38,
+}
+
+impl FixtureVersion {
+    fn wire(self) -> &'static [u8; 12] {
+        match self {
+            Self::Rfb33 => b"RFB 003.003\n",
+            Self::Rfb37 => b"RFB 003.007\n",
+            Self::Rfb38 => b"RFB 003.008\n",
+        }
+    }
+
+    fn uses_security_selection(self) -> bool {
+        !matches!(self, Self::Rfb33)
+    }
+
+    fn sends_no_auth_result(self) -> bool {
+        matches!(self, Self::Rfb38)
+    }
+}
+
 #[tokio::test]
 async fn helper_controls_a_real_rfb_fixture_over_loopback() {
     exercise_fixture(FixtureAuth::None, "").await;
@@ -45,6 +70,26 @@ async fn helper_controls_a_real_rfb_fixture_over_loopback() {
 #[tokio::test]
 async fn helper_authenticates_with_vnc_password_fixture_over_loopback() {
     exercise_fixture(FixtureAuth::VncPassword, FIXTURE_PASSWORD).await;
+}
+
+#[tokio::test]
+async fn helper_negotiates_rfb33_no_auth_fixture() {
+    exercise_fixture_with_version(FixtureAuth::None, "", FixtureVersion::Rfb33).await;
+}
+
+#[tokio::test]
+async fn helper_negotiates_rfb37_no_auth_fixture() {
+    exercise_fixture_with_version(FixtureAuth::None, "", FixtureVersion::Rfb37).await;
+}
+
+#[tokio::test]
+async fn helper_authenticates_rfb33_vnc_password_fixture() {
+    exercise_fixture_with_version(
+        FixtureAuth::VncPassword,
+        FIXTURE_PASSWORD,
+        FixtureVersion::Rfb33,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -783,7 +828,19 @@ async fn helper_rejects_clipboard_input_without_opt_in_at_the_socket_boundary() 
 }
 
 async fn exercise_fixture(auth: FixtureAuth, password: &str) {
-    exercise_fixture_with_quality(auth, password, "balanced", BALANCED_ENCODINGS).await;
+    exercise_fixture_with_version(auth, password, FixtureVersion::Rfb38).await;
+}
+
+async fn exercise_fixture_with_version(auth: FixtureAuth, password: &str, version: FixtureVersion) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_task = tokio::spawn(run_fixture_with_version(
+        listener,
+        auth,
+        BALANCED_ENCODINGS.to_vec(),
+        version,
+    ));
+    exercise_fixture_session(port, password, server_task).await;
 }
 
 async fn exercise_fixture_with_quality(
@@ -794,7 +851,29 @@ async fn exercise_fixture_with_quality(
 ) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server_task = tokio::spawn(run_fixture(listener, auth, expected_encodings.to_vec()));
+    let server_task = tokio::spawn(run_fixture_with_version(
+        listener,
+        auth,
+        expected_encodings.to_vec(),
+        FixtureVersion::Rfb38,
+    ));
+    exercise_fixture_session_with_quality(port, password, quality, server_task).await;
+}
+
+async fn exercise_fixture_session(
+    port: u16,
+    password: &str,
+    server_task: tokio::task::JoinHandle<Result<(), String>>,
+) {
+    exercise_fixture_session_with_quality(port, password, "balanced", server_task).await;
+}
+
+async fn exercise_fixture_session_with_quality(
+    port: u16,
+    password: &str,
+    quality: &str,
+    server_task: tokio::task::JoinHandle<Result<(), String>>,
+) {
     let (mut child, mut stdin, mut stdout) = spawn_helper_with_quality(port, quality).await;
 
     send_command(
@@ -1078,52 +1157,53 @@ async fn next_event(stdout: &mut tokio::process::ChildStdout) -> HelperEvent {
     decode_event_frame(&frame).unwrap()
 }
 
-async fn run_fixture(
+async fn run_fixture_with_version(
     listener: TcpListener,
     auth: FixtureAuth,
     expected_encodings: Vec<i32>,
+    version: FixtureVersion,
 ) -> Result<(), String> {
     let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
     stream
-        .write_all(b"RFB 003.008\n")
+        .write_all(version.wire())
         .await
         .map_err(|error| error.to_string())?;
-    let mut version = [0_u8; 12];
+    let mut client_version = [0_u8; 12];
     stream
-        .read_exact(&mut version)
+        .read_exact(&mut client_version)
         .await
         .map_err(|error| error.to_string())?;
-    if &version != b"RFB 003.008\n" {
+    if &client_version != version.wire() {
         return Err("unexpected RFB version".into());
     }
 
+    let security_type = match auth {
+        FixtureAuth::None => 1_u8,
+        FixtureAuth::VncPassword => 2_u8,
+    };
     match auth {
-        FixtureAuth::None => {
+        FixtureAuth::None | FixtureAuth::VncPassword if !version.uses_security_selection() => {
             stream
-                .write_all(&[1, 1])
+                .write_all(&u32::from(security_type).to_be_bytes())
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        FixtureAuth::VncPassword => {
+        FixtureAuth::None | FixtureAuth::VncPassword => {
             stream
-                .write_all(&[1, 2])
+                .write_all(&[1, security_type])
                 .await
                 .map_err(|error| error.to_string())?;
         }
     }
-    let mut selected = [0_u8; 1];
-    stream
-        .read_exact(&mut selected)
-        .await
-        .map_err(|error| error.to_string())?;
-    match auth {
-        FixtureAuth::None if selected[0] != 1 => {
-            return Err("helper did not select no-auth fixture mode".into());
+    if version.uses_security_selection() {
+        let mut selected = [0_u8; 1];
+        stream
+            .read_exact(&mut selected)
+            .await
+            .map_err(|error| error.to_string())?;
+        if selected[0] != security_type {
+            return Err("helper selected the wrong VNC fixture security mode".into());
         }
-        FixtureAuth::VncPassword if selected[0] != 2 => {
-            return Err("helper did not select VNC password fixture mode".into());
-        }
-        _ => {}
     }
 
     if matches!(auth, FixtureAuth::VncPassword) {
@@ -1141,10 +1221,12 @@ async fn run_fixture(
         }
     }
 
-    stream
-        .write_all(&[0, 0, 0, 0])
-        .await
-        .map_err(|error| error.to_string())?;
+    if matches!(auth, FixtureAuth::VncPassword) || version.sends_no_auth_result() {
+        stream
+            .write_all(&[0, 0, 0, 0])
+            .await
+            .map_err(|error| error.to_string())?;
+    }
 
     let mut shared = [0_u8; 1];
     stream

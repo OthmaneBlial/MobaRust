@@ -40,7 +40,8 @@ exist.
 - Windows, Linux, and macOS packaging/interoperability evidence;
 - dependency and license review.
 
-The isolated helper currently has loopback evidence for authentication,
+The isolated helper currently has loopback evidence for RFB 3.3, 3.7, and 3.8
+negotiation, authentication,
 framebuffer, bounded keyboard/pointer input, clean stop, negotiation disconnect,
 cooperative cancellation, connected-session loss, and bounded reconnect
 attempts, including a bounded client-to-server clipboard message. A reconnect
