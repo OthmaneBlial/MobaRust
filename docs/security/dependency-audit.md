@@ -5,6 +5,10 @@ This is a record of the repository-local `cargo audit --no-fetch` checks run on
 snapshot, not a permanent guarantee: refresh the advisory database and rerun
 the checks before a release.
 
+The same three lockfiles were rechecked locally on 2026-08-31 with the
+advisory database refresh enabled. The database contained 1,226 advisories at
+that time, and the results below were unchanged.
+
 ## Results
 
 | Lockfile | Result | Interpretation |
