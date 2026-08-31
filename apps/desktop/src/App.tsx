@@ -1148,7 +1148,16 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               setError(null);
               onStatusChange(workspaceId, "connected");
             }
-            if (helperEvent.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
+            if (helperEvent.payload.state === "reconnecting") {
+              capabilitiesRef.current = null;
+              setCapabilities(null);
+              setRemoteClipboard(null);
+              setClipboardCopied(false);
+              lastRemotePointerRef.current = null;
+              pressedRemoteKeysRef.current.clear();
+              pointerQueueRef.current = [];
+              onStatusChange(workspaceId, "reconnecting");
+            }
             if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") {
               setError((current) => preserveRemoteDesktopError(current, REMOTE_DESKTOP_FALLBACK_ERROR));
               onStatusChange(workspaceId, "error");

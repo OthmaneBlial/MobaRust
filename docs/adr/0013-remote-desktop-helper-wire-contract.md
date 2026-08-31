@@ -50,8 +50,9 @@ messages before a process is started:
   or active data that arrives before a validated capability report;
 - framebuffer and clipboard data are accepted only after the corresponding
   attempt has entered `Active`; a `Reconnecting` event starts a fresh
-  capability-to-active sequence, so stale data cannot cross the boundary while
-  a new connection is being established;
+  capability-to-active sequence, clears the cached capability report, and
+  clears remote input state in the UI, so stale data or pressed keys cannot
+  cross the boundary while a new connection is being established;
 - the parent applies a five-second deadline until the helper has completed its
   `Hello` and capability-report handshake, restarting that deadline after each
   `Reconnecting` event; a silent or half-started cycle becomes a failed session

@@ -780,6 +780,7 @@ async fn read_helper_events(
                 state: mobarust_remote_desktop::HelperState::Reconnecting,
             }
         ) {
+            *capabilities.lock().await = None;
             handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
         }
         if let HelperEvent::State { state } = &event {
