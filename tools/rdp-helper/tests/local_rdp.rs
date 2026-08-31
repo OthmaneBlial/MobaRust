@@ -27,6 +27,7 @@ const HEIGHT: u16 = 200;
 const RESIZED_WIDTH: u16 = 400;
 const RESIZED_HEIGHT: u16 = 240;
 const FIXTURE_USER: &str = "fixture-user";
+const FIXTURE_DOMAIN: &str = "fixture-domain";
 const FIXTURE_PASSWORD: &str = "fixture-rdp-password";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,7 +321,7 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
             server.set_credentials(Some(Credentials {
                 username: FIXTURE_USER.to_owned(),
                 password: FIXTURE_PASSWORD.to_owned(),
-                domain: None,
+                domain: Some(FIXTURE_DOMAIN.to_owned()),
             }));
             let server_events = server.event_sender().clone();
             let server_task = tokio::task::spawn_local(async move { server.run().await });
@@ -336,6 +337,8 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
                     &port.to_string(),
                     "--username",
                     FIXTURE_USER,
+                    "--domain",
+                    FIXTURE_DOMAIN,
                     "--reconnect-attempts",
                     "0",
                     "--width",
@@ -577,7 +580,7 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
             server.set_credentials(Some(Credentials {
                 username: FIXTURE_USER.to_owned(),
                 password: FIXTURE_PASSWORD.to_owned(),
-                domain: None,
+                domain: Some(FIXTURE_DOMAIN.to_owned()),
             }));
             let server_events = server.event_sender().clone();
             let server_task = tokio::task::spawn_local(async move { server.run().await });
@@ -593,6 +596,8 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
                     &port.to_string(),
                     "--username",
                     FIXTURE_USER,
+                    "--domain",
+                    FIXTURE_DOMAIN,
                     "--reconnect-enabled",
                     "--reconnect-attempts",
                     "1",
