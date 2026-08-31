@@ -6,7 +6,8 @@ Vite server on `127.0.0.1` and synthetic preview sessions.
 
 ## Verified locally
 
-On 2026-08-30, the following flows were checked in the local browser preview:
+On 2026-08-30 and 2026-08-31, the following flows were checked in the local
+browser preview:
 
 - desktop workspace rendering and terminal preview;
 - narrow mobile rendering at effective browser widths of approximately 433 px
@@ -15,11 +16,20 @@ On 2026-08-30, the following flows were checked in the local browser preview:
   `document.body.scrollWidth` matched the effective viewport width;
 - automatic mobile sidebar collapse and explicit drawer reopen/close;
 - command palette opening and keyboard dismissal;
+- command palette `Focus pane` appearing once and dismissing the palette when
+  activated;
 - Quick Connect modal opening while remaining inside the viewport;
 - Quick Connect visibly blocking `example.invalid` for VNC until the explicit
   unencrypted-TCP opt-in is selected, before any Tauri command could be
   invoked;
 - no console errors during these flows.
+
+The compact header was rechecked on 2026-08-31 at requested viewport settings
+of 320 px and 433 px. The browser backend reported effective widths of 355 px
+and 481 px respectively; in both cases the document scroll width matched the
+viewport and the header remained usable. At the smallest width, the `LOCAL`
+status label intentionally collapses to its live indicator so the account and
+action controls remain visible.
 
 The mobile layout uses a single workspace column, horizontally scrollable
 workspace tabs, wrapped action controls, and a sidebar drawer. The terminal

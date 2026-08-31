@@ -4383,13 +4383,13 @@ function CommandPalette({ keyboard, onClose, onNewTerminal, onNewShell, onNewWsl
             : action.label === "Open SFTP" ? onOpenFiles
               : action.label === "Settings" ? onOpenSettings
                 : action.label === "Credential vault" ? onOpenCredentials
-                  : action.label === "Snippets" ? onOpenSnippets
-                    : action.label === "Macros" ? onOpenMacros
-                      : action.label === "Audit history" ? onOpenAudit
-                      : onClose,
+                    : action.label === "Snippets" ? onOpenSnippets
+                      : action.label === "Macros" ? onOpenMacros
+                        : action.label === "Audit history" ? onOpenAudit
+                          : action.label === "Focus pane" ? onFocusPane
+                          : onClose,
       })),
     { label: "Toggle sidebar", hint: formatShortcut(keyboard.toggleSidebar), icon: PanelLeftClose, run: onToggleSidebar },
-    { label: "Focus pane", hint: formatShortcut(keyboard.focusPane), icon: PanelRight, run: onFocusPane },
   ].filter((action) => action.label.toLowerCase().includes(query.trim().toLowerCase()));
 
   useEffect(() => setActiveIndex(0), [query]);
