@@ -33,6 +33,28 @@ machine, toolchain, and command when making a performance claim. Startup,
 memory, SFTP, concurrent-session, and cross-platform measurements remain open
 until they have reproducible evidence.
 
+## Recorded local snapshot
+
+The following snapshot was recorded on 2026-08-31 with `cargo xtask benchmark`
+on a macOS ARM64 host (`environment.parallelism=8`, release harness,
+`iterations=5`). It is a reproducible reference point for the synthetic
+in-memory probes, not a general performance promise:
+
+```text
+terminal_output fixture=mixed-utf8-ansi lines=10000 bytes=513332 chunks=16 mean_ms=0.023 throughput_mib_s=21479.47
+terminal_output fixture=mixed-utf8-ansi lines=100000 bytes=5133332 chunks=157 mean_ms=0.203 throughput_mib_s=24144.66
+terminal_output fixture=mixed-utf8-ansi lines=1000000 bytes=51333332 chunks=1567 mean_ms=2.170 throughput_mib_s=22554.93
+terminal_output fixture=long-unicode-ansi lines=10000 bytes=8230000 chunks=252 mean_ms=0.319 throughput_mib_s=24616.42
+terminal_output fixture=progress-redraw lines=100000 bytes=5988890 chunks=183 mean_ms=0.236 throughput_mib_s=24184.83
+session_search profiles=10000 matches=1 mean_us=558.375
+session_serialization fields=secret-free bytes=562 mean_us=2.858
+```
+
+These numbers measure only the batching, search, and serialization functions
+under the stated local conditions. They do not measure GUI startup, memory,
+idle CPU, SFTP/network throughput, concurrent remote sessions, or another
+operating system; rerun the command before comparing a different environment.
+
 ## App startup probe
 
 After building the local desktop binary, run:
