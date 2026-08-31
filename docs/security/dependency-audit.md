@@ -1,7 +1,7 @@
 # Dependency audit record
 
 This is a record of the repository-local `cargo audit --no-fetch` checks run on
-2026-08-30 with the cached RustSec advisory database. It is an engineering
+2026-08-31 with the cached RustSec advisory database. It is an engineering
 snapshot, not a permanent guarantee: refresh the advisory database and rerun
 the checks before a release.
 
