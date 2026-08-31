@@ -26,9 +26,11 @@ configuration.
   EOF without opening a socket; the VNC integration fixture binds only to
   `127.0.0.1` and an OS-assigned port.
 - The optional real X11 fixture uses an already-installed Xvfb binary with
-  `-nolisten unix`, `-nolock`, and a bounded loopback TCP display. It does not
-  install an X server, inspect `DISPLAY` or `.Xauthority`, or use a personal
-  display.
+  `-nolisten tcp` and `-nolock`, using only the system Unix-socket directory
+  when it already exists. It does not install an X server, inspect `DISPLAY` or
+  `.Xauthority`, use a personal display, open a TCP listener, create a system
+  directory, or change its permissions. If the system directory is absent or
+  is not a real directory, the optional fixture skips cleanly.
 - Serial tests use configuration plus a disposable Unix pseudo-terminal
   fixture. They never enumerate host ports or open a physical adapter;
   hardware interoperability requires a separate, explicit manual test

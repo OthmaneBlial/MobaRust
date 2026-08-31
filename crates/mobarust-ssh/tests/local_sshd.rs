@@ -11,7 +11,7 @@ use mobarust_ssh::{
     inspect_host_key,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::oneshot;
 
 #[test]
@@ -681,7 +681,9 @@ exit
 #[test]
 fn forwards_x11_setup_to_a_disposable_xvfb_server_when_available() {
     let Some(xvfb) = LocalXvfb::start().expect("start disposable Xvfb fixture") else {
-        eprintln!("skipping real X11 server fixture: Xvfb is not installed");
+        eprintln!(
+            "skipping real X11 server fixture: Xvfb or a safe system Unix-socket directory is unavailable"
+        );
         return;
     };
     let runtime = tokio::runtime::Runtime::new().expect("create real X11 test runtime");
@@ -701,7 +703,7 @@ fn forwards_x11_setup_to_a_disposable_xvfb_server_when_available() {
                 fixture.client_key.clone(),
                 None::<String>,
             ),
-            x11: Some(X11ForwardingOptions::new(X11Display::Tcp(xvfb.address), true)),
+            x11: Some(X11ForwardingOptions::new(X11Display::Unix(xvfb.socket.clone()), true)),
             environment: Vec::new(),
             startup_directory: None,
             startup_command: None,
@@ -756,7 +758,7 @@ exit
 
 struct LocalXvfb {
     child: Child,
-    address: std::net::SocketAddr,
+    socket: PathBuf,
 }
 
 impl LocalXvfb {
@@ -764,9 +766,12 @@ impl LocalXvfb {
         let Some(program) = find_xvfb() else {
             return Ok(None);
         };
-        let Some((display_number, address)) = reserve_xvfb_display() else {
+        let Some((display_number, socket)) = reserve_xvfb_display() else {
             return Ok(None);
         };
+        if !prepare_xvfb_socket_dir()? {
+            return Ok(None);
+        }
         let mut command = Command::new(program);
         clear_credential_environment(&mut command);
         let child = command
@@ -776,24 +781,24 @@ impl LocalXvfb {
                 "0",
                 "640x480x24",
                 "-nolisten",
-                "unix",
+                "tcp",
                 "-nolock",
                 "-ac",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
-        Ok(Some(Self { child, address }))
+        Ok(Some(Self { child, socket }))
     }
 
     async fn wait_ready(&self) {
         for _ in 0..120 {
-            if TcpStream::connect(self.address).await.is_ok() {
+            if UnixStream::connect(&self.socket).await.is_ok() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        panic!("disposable Xvfb did not create its loopback TCP listener");
+        panic!("disposable Xvfb did not create its private Unix socket");
     }
 }
 
@@ -927,15 +932,30 @@ fn find_xvfb() -> Option<PathBuf> {
     .or_else(|| find_command("Xvfb"))
 }
 
-fn reserve_xvfb_display() -> Option<(u16, std::net::SocketAddr)> {
+const X11_SOCKET_DIR: &str = "/tmp/.X11-unix";
+
+fn reserve_xvfb_display() -> Option<(u16, PathBuf)> {
     (90..200).find_map(|display_number| {
-        let port = 6000_u16.checked_add(display_number)?;
-        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        std::net::TcpListener::bind(address)
-            .ok()
-            .map(drop)
-            .map(|_| (display_number, address))
+        let socket = PathBuf::from(format!("{X11_SOCKET_DIR}/X{display_number}"));
+        let lock = PathBuf::from(format!("/tmp/.X{display_number}-lock"));
+        match (fs::symlink_metadata(&socket), fs::symlink_metadata(lock)) {
+            (Err(socket_error), Err(lock_error))
+                if socket_error.kind() == std::io::ErrorKind::NotFound
+                    && lock_error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Some((display_number, socket))
+            }
+            _ => None,
+        }
     })
+}
+
+fn prepare_xvfb_socket_dir() -> Result<bool, Box<dyn std::error::Error>> {
+    match fs::symlink_metadata(X11_SOCKET_DIR) {
+        Ok(metadata) => Ok(metadata.is_dir() && !metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl Drop for LocalSshd {
