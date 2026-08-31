@@ -12,6 +12,8 @@ use std::future::Future;
 use std::io::Cursor;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use jpeg_decoder::{ColorTransform, Decoder, PixelFormat as JpegPixelFormat};
@@ -24,7 +26,7 @@ use mobarust_remote_desktop::{
 };
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::time::{sleep, timeout};
 use vnc::{
     ClientMouseEvent, PixelFormat, Rect, VncClient, VncConnector, VncEncoding, VncError, VncEvent,
@@ -82,6 +84,36 @@ impl fmt::Display for VncInputError {
 
 impl Error for VncInputError {}
 
+/// Out-of-band stop signal used to interrupt an in-flight protocol write.
+///
+/// The command reader is a blocking native thread, so a Stop frame may arrive
+/// while the async task is waiting on `vnc-rs` input I/O. Keeping this signal
+/// separate from the bounded command queue makes cancellation cooperative and
+/// does not require draining or reordering ordinary input commands.
+#[derive(Clone, Default)]
+struct StopSignal {
+    requested: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl StopSignal {
+    fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    async fn wait(&self) {
+        if self.requested.load(Ordering::Acquire) {
+            return;
+        }
+        let notified = self.notify.notified();
+        if self.requested.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     run_main().await
@@ -103,10 +135,13 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     }
 
     let (incoming_tx, mut incoming_rx) = mpsc::channel(8);
+    let stop_signal = StopSignal::default();
+    let command_stop_signal = stop_signal.clone();
     // Tokio's stdin adapter uses an uncancellable blocking read. A dedicated
     // native thread lets this helper return after a terminal failure even if
     // the parent keeps the pipe open while it consumes the final events.
-    let _command_thread = std::thread::spawn(move || read_commands(incoming_tx));
+    let _command_thread =
+        std::thread::spawn(move || read_commands(incoming_tx, command_stop_signal));
     let mut start_display = None;
     let mut credential = None;
 
@@ -128,6 +163,7 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
                 return Ok(());
             }
             Some(Incoming::Command(HelperCommand::Stop)) | Some(Incoming::End) => {
+                stop_signal.request();
                 write_state(&mut stdout, HelperState::Stopped).await?;
                 return Ok(());
             }
@@ -140,19 +176,27 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
         }
 
         if let (Some(display), Some(secret)) = (start_display, credential.take()) {
-            return run_vnc_session(&arguments, display, secret, &mut stdout, &mut incoming_rx)
-                .await;
+            return run_vnc_session(
+                &arguments,
+                display,
+                secret,
+                &mut stdout,
+                &mut incoming_rx,
+                &stop_signal,
+            )
+            .await;
         }
     }
 }
 
-fn read_commands(sender: mpsc::Sender<Incoming>) {
+fn read_commands(sender: mpsc::Sender<Incoming>, stop_signal: StopSignal) {
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
         let frame = match read_frame_blocking(&mut reader) {
             Ok(Some(frame)) => frame,
             Ok(None) => {
+                stop_signal.request();
                 let _ = sender.blocking_send(Incoming::End);
                 return;
             }
@@ -163,6 +207,9 @@ fn read_commands(sender: mpsc::Sender<Incoming>) {
         };
 
         if let Ok(command) = decode_command_frame(&frame) {
+            if matches!(&command, HelperCommand::Stop) {
+                stop_signal.request();
+            }
             if sender.blocking_send(Incoming::Command(command)).is_err() {
                 return;
             }
@@ -211,6 +258,7 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
     credential: HelperCredential,
     stdout: &mut W,
     incoming_rx: &mut mpsc::Receiver<Incoming>,
+    stop_signal: &StopSignal,
 ) -> Result<(), Box<dyn Error>> {
     display.validate()?;
     let reconnect_policy = ReconnectPolicy {
@@ -242,6 +290,7 @@ async fn run_vnc_session<W: AsyncWrite + Unpin>(
             incoming_rx,
             quality_refresh_interval(&arguments.quality),
             arguments.clipboard_enabled,
+            stop_signal,
         )
         .await?
         {
@@ -288,6 +337,22 @@ enum ConnectedOutcome {
     Lost(&'static str),
     Fatal,
     Stopped,
+}
+
+enum CommandExecution {
+    Finished(Result<bool, Box<dyn Error>>),
+    Stopped,
+}
+
+async fn finish_vnc_command<F>(operation: F, stop_signal: &StopSignal) -> CommandExecution
+where
+    F: Future<Output = Result<bool, Box<dyn Error>>>,
+{
+    tokio::pin!(operation);
+    tokio::select! {
+        result = &mut operation => CommandExecution::Finished(result),
+        _ = stop_signal.wait() => CommandExecution::Stopped,
+    }
 }
 
 async fn wait_for_vnc_connection<W: AsyncWrite + Unpin>(
@@ -439,23 +504,39 @@ async fn run_connected_vnc_session<W: AsyncWrite + Unpin>(
     incoming_rx: &mut mpsc::Receiver<Incoming>,
     refresh_interval: Duration,
     clipboard_enabled: bool,
+    stop_signal: &StopSignal,
 ) -> Result<ConnectedOutcome, Box<dyn Error>> {
     let mut active_sent = false;
     let mut last_refresh = Instant::now();
 
     loop {
         tokio::select! {
+            _ = stop_signal.wait() => {
+                close_vnc_client(client).await;
+                write_state(stdout, HelperState::Stopped).await?;
+                return Ok(ConnectedOutcome::Stopped);
+            }
             incoming = incoming_rx.recv() => {
                 match incoming {
                     Some(Incoming::Command(command)) => {
-                        match handle_command(client, command, canvas.size, stdout, clipboard_enabled).await {
-                            Ok(true) => {
+                        let command_execution = finish_vnc_command(
+                            handle_command(client, command, canvas.size, stdout, clipboard_enabled),
+                            stop_signal,
+                        )
+                        .await;
+                        match command_execution {
+                            CommandExecution::Stopped => {
                                 close_vnc_client(client).await;
                                 write_state(stdout, HelperState::Stopped).await?;
                                 return Ok(ConnectedOutcome::Stopped);
                             }
-                            Ok(false) => {}
-                            Err(_) => {
+                            CommandExecution::Finished(Ok(true)) => {
+                                close_vnc_client(client).await;
+                                write_state(stdout, HelperState::Stopped).await?;
+                                return Ok(ConnectedOutcome::Stopped);
+                            }
+                            CommandExecution::Finished(Ok(false)) => {}
+                            CommandExecution::Finished(Err(_)) => {
                                 send_error(stdout, "VNC input handling failed").await?;
                                 return Ok(ConnectedOutcome::Lost("VNC input handling failed"));
                             }
@@ -1576,5 +1657,19 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.to_string(), "input timed out");
+    }
+
+    #[tokio::test]
+    async fn stop_signal_wakes_a_pending_protocol_operation() {
+        let signal = StopSignal::default();
+        let operation = std::future::pending::<Result<bool, Box<dyn Error>>>();
+        let task = finish_vnc_command(operation, &signal);
+        signal.request();
+        assert!(matches!(
+            timeout(Duration::from_millis(100), task)
+                .await
+                .expect("stop signal should wake promptly"),
+            CommandExecution::Stopped
+        ));
     }
 }
