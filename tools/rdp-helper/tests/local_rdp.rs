@@ -24,6 +24,8 @@ use tokio::time::{sleep, timeout};
 
 const WIDTH: u16 = 320;
 const HEIGHT: u16 = 200;
+const RESIZED_WIDTH: u16 = 400;
+const RESIZED_HEIGHT: u16 = 240;
 const FIXTURE_USER: &str = "fixture-user";
 const FIXTURE_PASSWORD: &str = "fixture-rdp-password";
 
@@ -86,6 +88,7 @@ impl ConnectionHandler for StopAfterDisconnect {
 struct FixtureDisplay {
     size: DesktopSize,
     updates: VecDeque<mpsc::Receiver<DisplayUpdate>>,
+    layouts: Arc<StdMutex<Vec<(u32, u32)>>>,
 }
 
 struct FixtureDisplayUpdates {
@@ -111,6 +114,15 @@ impl RdpServerDisplay for FixtureDisplay {
             .pop_front()
             .expect("fixture display has no stream for this connection");
         Ok(Box::new(FixtureDisplayUpdates { updates }))
+    }
+
+    fn request_layout(&mut self, layout: ironrdp_displaycontrol::pdu::DisplayControlMonitorLayout) {
+        if let Some(monitor) = layout.monitors().first() {
+            self.layouts
+                .lock()
+                .expect("fixture layout mutex poisoned")
+                .push(monitor.dimensions());
+        }
     }
 }
 
@@ -281,6 +293,7 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
             let identity = TlsIdentityCtx::init_from_paths(&certificate, &private_key)
                 .expect("load the disposable RDP fixture identity");
             let input_events = Arc::new(StdMutex::new(Vec::new()));
+            let layouts = Arc::new(StdMutex::new(Vec::new()));
             let (_display_tx, display_rx) = queued_bitmap([0xff, 0x19, 0x4d, 0x74]).await;
 
             let mut server = RdpServer::builder()
@@ -300,6 +313,7 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
                         height: HEIGHT,
                     },
                     updates: VecDeque::from([display_rx]),
+                    layouts: Arc::clone(&layouts),
                 })
                 .with_connection_handler(Some(Box::new(StopAfterDisconnect::new(1))))
                 .build();
@@ -462,6 +476,34 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
 
             send_frame(
                 &mut stdin,
+                &encode_command_frame(&HelperCommand::Resize {
+                    display: DisplaySize {
+                        width: RESIZED_WIDTH,
+                        height: RESIZED_HEIGHT,
+                    },
+                })
+                .expect("encode RDP resize input"),
+            )
+            .await;
+            stdin.flush().await.expect("flush RDP resize frame");
+
+            timeout(Duration::from_secs(3), async {
+                loop {
+                    let received = layouts
+                        .lock()
+                        .expect("fixture layout mutex poisoned")
+                        .contains(&(u32::from(RESIZED_WIDTH), u32::from(RESIZED_HEIGHT)));
+                    if received {
+                        break;
+                    }
+                    sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("real RDP server did not receive the helper resize");
+
+            send_frame(
+                &mut stdin,
                 &encode_command_frame(&HelperCommand::Stop).expect("encode RDP stop command"),
             )
             .await;
@@ -528,6 +570,7 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
                         height: HEIGHT,
                     },
                     updates: VecDeque::from([first_receiver, second_receiver]),
+                    layouts: Arc::new(StdMutex::new(Vec::new())),
                 })
                 .with_connection_handler(Some(Box::new(StopAfterDisconnect::new(2))))
                 .build();

@@ -1864,6 +1864,7 @@ dependencies = [
  "bytes",
  "ironrdp-client",
  "ironrdp-connector",
+ "ironrdp-displaycontrol",
  "ironrdp-pdu",
  "ironrdp-server",
  "ironrdp-tls",

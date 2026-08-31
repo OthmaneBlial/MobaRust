@@ -154,7 +154,8 @@ cargo xtask check-rdp-fixture
 That opt-in test runs the compiled helper against the official
 `ironrdp-server 0.13.0` implementation on loopback using a short-lived
 test-only CA. It verifies a real TLS/Hybrid handshake, authentication,
-framebuffer delivery, keyboard/mouse input, clean stop, and one real
+framebuffer delivery, keyboard/mouse input, a real 400×240 monitor-layout
+request reaching the server display handler, clean stop, and one real
 loss/recovery cycle with a fresh handshake and framebuffer. It does not modify
 the macOS trust store. The test-only CA branch is excluded from the normal
 helper and package paths.

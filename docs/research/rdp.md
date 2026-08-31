@@ -210,8 +210,9 @@ remote host.
 
 The test proves a real TLS/Hybrid handshake, configured credential acceptance,
 non-empty decoded framebuffer delivery, keyboard and mouse input reaching the
-server handler, clean helper/server shutdown, and one real loss/recovery cycle
-that reaches a fresh `Starting`/`Ready`/`Active` sequence and receives a new
+server handler, a 400×240 monitor-layout request reaching the server display
+handler, clean helper/server shutdown, and one real loss/recovery cycle that
+reaches a fresh `Starting`/`Ready`/`Active` sequence and receives a new
 framebuffer. It is substantially stronger than a port-open or refused-port
 smoke test. The fixture's explicit CA branch is not enabled by the normal
 helper build or package path, so it does not weaken the production candidate's

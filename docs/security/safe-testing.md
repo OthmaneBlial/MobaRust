@@ -101,8 +101,8 @@ temporary directory, and passes the CA only to the test-feature helper. It
 does not modify the macOS trust store, inspect personal certificates, read SSH
 files, or connect to a remote host. The test-only CA feature is excluded from
 the normal helper and package paths; the fixture proves one local TLS/Hybrid
-engine/server pairing and one controlled loss/recovery cycle, not cross-platform
-or production interoperability.
+engine/server pairing, a bounded monitor-layout request, and one controlled
+loss/recovery cycle, not cross-platform or production interoperability.
 
 The isolated VNC helper check is repository-scoped:
 
