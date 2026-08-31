@@ -1149,6 +1149,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               onStatusChange(workspaceId, "connected");
             }
             if (helperEvent.payload.state === "reconnecting") {
+              canvas.width = request.width;
+              canvas.height = request.height;
+              canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+              setDimensions({ width: request.width, height: request.height });
               capabilitiesRef.current = null;
               setCapabilities(null);
               setRemoteClipboard(null);
