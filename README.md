@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE"><img src="https://img.shields.io/github/license/OthmaneBlial/MobaRust?style=flat-square" alt="Apache-2.0 license" /></a>
+  <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license" /></a>
   <a href="https://github.com/OthmaneBlial/MobaRust/stargazers"><img src="https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&label=stars" alt="GitHub stars" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
   <a href="https://tauri.app/"><img src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" alt="Tauri desktop application" /></a>
