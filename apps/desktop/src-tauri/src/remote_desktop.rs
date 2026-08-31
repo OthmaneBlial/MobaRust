@@ -855,6 +855,9 @@ fn validate_helper_event(
         HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Reconnecting,
         } => {
+            if !progress.ready_seen {
+                return Err("remote desktop helper sent reconnecting state before ready state");
+            }
             progress.ready_seen = false;
             progress.data_phase = HelperDataPhase::AwaitingCapabilities;
             progress.reported_capabilities = None;
@@ -1088,6 +1091,15 @@ mod tests {
             hello,
         )
         .unwrap();
+        let error = validate_helper_event(
+            &HelperEvent::State {
+                state: HelperState::Reconnecting,
+            },
+            requirements,
+            starting.clone(),
+        )
+        .unwrap_err();
+        assert!(error.contains("before ready state"));
         let ready = validate_helper_event(
             &HelperEvent::State {
                 state: HelperState::Ready,
