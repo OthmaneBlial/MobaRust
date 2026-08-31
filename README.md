@@ -83,7 +83,7 @@ The table below makes the current boundary explicit. “Verified locally” mean
 | **Local terminals** | Native PTY, shell lifecycle, resize, output batching, split panes, persistent tabs, child cleanup on close/EOF, explicit PowerShell/cmd/Unix shell targets, and WSL foundations |
 | **Operator tools** | Snippets with preview, visible macros, explicit multi-exec targets, bounded network diagnostics, bounded port checks, one-shot or opt-in low-frequency remote monitoring, privacy-conscious audit history, and sanitized diagnostic export |
 | **Telnet / serial** | Legacy Telnet with clear unencrypted labelling, plus serial configuration, terminal I/O, refresh, reconnect, and device-loss handling |
-| **RDP** | Isolated native candidate with framebuffer, protocol-aware bounded keyboard/mouse input, coalesced dynamic resize requests, lifecycle work, explicit hostname/IP and Gateway metadata, separate role-tagged native credential handoff, platform certificate validation, bounded configurable reconnect with fresh-handshake state reset and stale-frame clearing, an opt-in Windows-native clipboard path, a typed runtime capability report including TLS transport status, a macOS self-signed-certificate rejection fixture, and local process tests; mature-engine integration, real-server interoperability, Windows/Linux evidence, Gateway trust/interoperability, macOS/Linux clipboard backends, audio, and production packaging remain open |
+| **RDP** | Isolated native candidate with framebuffer, protocol-aware bounded keyboard/mouse input, coalesced dynamic resize requests, lifecycle work, explicit hostname/IP and Gateway metadata, separate role-tagged native credential handoff, platform certificate validation, bounded configurable reconnect with fresh-handshake state reset and stale-frame clearing, an opt-in Windows-native clipboard path, a typed runtime capability report including TLS transport status, a macOS self-signed-certificate rejection fixture, local process tests, and an opt-in real loopback IronRDP server fixture covering TLS/Hybrid handshake, framebuffer, keyboard/mouse input, and clean stop; mature-engine/FreeRDP integration, real-world server interoperability, Windows/Linux evidence, Gateway trust/interoperability, macOS/Linux clipboard backends, audio, and production packaging remain open |
 | **VNC** | Native helper with local RFB fixtures, authentication, raw/copy/Tight-JPEG framebuffer updates, bounded keyboard/mouse input with Unicode-to-X11 keysym mapping, explicit clipboard opt-in, scaling, quality profiles, bounded reconnect with stale capability/clipboard/input state cleared between attempts, cooperative cancellation for in-flight input and framebuffer refresh, clean shutdown, and visible unencrypted-transport capability reporting; remote hostname/IP targets are available only through an explicit unencrypted-TCP opt-in, while TLS-capable engines and broader interoperability remain open |
 | **X11** | Explicit SSH forwarding to a configured external display; an integrated cross-platform X server remains a separate research and packaging decision |
 
@@ -118,7 +118,7 @@ Read the [threat model](docs/security/threat-model.md) and [safe testing policy]
 
 The current engineering checklist is **61/68 items evidenced — approximately 89.7%**. This is a measure of verified repository work, not a claim of complete MobaXterm parity or production readiness on every operating system.
 
-The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, explicit local shell targets, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; VNC remote TCP is deliberately opt-in and unencrypted, a macOS-only TLS fixture proves that an untrusted self-signed RDP certificate is rejected, while real Windows/Linux shell interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
+The local implementation layer is ahead of the release matrix. SSH, SFTP/SCP, PTY, explicit local shell targets, sessions, tunnels, diagnostics, and the security boundaries have a substantial local test foundation. RDP/VNC helpers, macOS packaging, and cross-platform contracts are being developed incrementally; VNC remote TCP is deliberately opt-in and unencrypted, while an opt-in local RDP server fixture now proves the helper can complete a real TLS/Hybrid session, receive a real framebuffer, accept keyboard/mouse input, and stop cleanly. Real Windows/Linux shell and RDP interoperability, cross-platform certificate-store evidence, serial hardware, signed distribution, and broader desktop evidence still require their target environments.
 
 The next gates are visible in the [roadmap](ROADMAP.md):
 
@@ -178,17 +178,29 @@ sanitized environment. It reports process-launch timing and binary size; it
 does not claim full cold-start, warm-start, memory, idle-CPU, renderer, or
 cross-platform performance.
 
-On macOS, the isolated RDP trust fixture can be run explicitly:
+On macOS, the isolated RDP fixtures can be run explicitly:
 
 ```bash
+cargo xtask check-rdp-fixture
+
+# Or run the real-server fixture directly:
+cargo test --locked --manifest-path tools/rdp-helper/Cargo.toml \
+  --features local-rdp-fixture --test local_rdp
+
+# The platform trust-rejection fixture remains available separately:
 cargo test --locked --manifest-path tools/rdp-helper/Cargo.toml \
   platform_tls_rejects_a_self_signed_loopback_certificate -- --nocapture
 ```
 
-It creates only a short-lived synthetic certificate and key in a disposable
-temporary directory, connects only to `127.0.0.1`, and verifies that the
-platform trust verifier rejects the certificate. Windows/Linux certificate
-store fixtures and real RDP-server interoperability remain future gates.
+The real-server fixture creates only a short-lived synthetic CA, certificate,
+and key in a disposable temporary directory, connects only to `127.0.0.1`, and
+uses a test-only CA feature without modifying the macOS trust store. It starts
+the official IronRDP server implementation locally, then verifies the real
+helper handshake, framebuffer, keyboard/mouse input, and clean stop. The
+platform trust-rejection fixture separately verifies that an untrusted
+self-signed certificate is rejected. Windows/Linux certificate-store fixtures,
+real Windows interoperability, and production trust/packaging evidence remain
+future gates.
 
 The isolated RDP candidate is not staged by the normal build path. For an explicit repository-local development run, use `cargo xtask stage-rdp-helper` first. This does not make RDP production-ready, bypass its dependency audit, or provide Windows/Linux interoperability evidence.
 

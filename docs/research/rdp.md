@@ -198,6 +198,34 @@ neither fixture secret appears in diagnostics. This proves ordering and
 redaction at the native process boundary; it does not prove Gateway protocol
 interoperability.
 
+## Local real-server fixture
+
+The opt-in `local-rdp-fixture` test now runs the compiled helper against the
+official [`ironrdp-server`](https://docs.rs/ironrdp-server/0.13.0) implementation
+on `127.0.0.1`. The fixture generates a short-lived private CA and a separate
+server certificate with an IP SAN in a disposable temporary directory, then
+uses the test-only CA feature in the isolated TLS compatibility crate. It does
+not modify the macOS trust store, inspect personal certificates, or contact a
+remote host.
+
+The test proves a real TLS/Hybrid handshake, configured credential acceptance,
+non-empty decoded framebuffer delivery, keyboard and mouse input reaching the
+server handler, and clean helper/server shutdown. It is substantially stronger
+than a port-open or refused-port smoke test. The fixture's explicit CA branch
+is not enabled by the normal helper build or package path, so it does not
+weaken the production candidate's platform certificate validation.
+
+Run it with:
+
+```text
+cargo xtask check-rdp-fixture
+```
+
+This closes the local real-server fixture gap only. It does not prove FreeRDP
+or Windows interoperability, platform trust-store behavior on Windows/Linux,
+Gateway interoperability, reconnect recovery, audio, clipboard, or production
+packaging.
+
 The helper also revalidates every dynamic resize at the final native command
 handler before enqueueing it into IronRDP. Invalid dimensions therefore cannot
 mutate the remembered display size or reach the engine even if a future caller
@@ -244,7 +272,7 @@ For development-only parent-process experiments, `cargo xtask stage-rdp-helper`
 explicitly builds and stages the candidate under the repository's ignored
 helper directory. The normal `stage-helpers`, `package-check`, and release
 paths continue to remove or exclude it. This makes the existing Tauri/helper
-wire path runnable when a disposable RDP fixture is later available without
+wire path runnable alongside the explicit local-server fixture without
 silently turning the audited candidate into a shipped dependency.
 
 ```text

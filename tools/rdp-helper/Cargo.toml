@@ -8,15 +8,29 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.88"
 
+[features]
+default = []
+# Development-only protocol fixture. This feature is excluded from normal
+# builds and packaging; it permits a CA supplied by a disposable local test
+# fixture so the real RDP handshake can be exercised without modifying the
+# macOS trust store.
+local-rdp-fixture = ["dep:ironrdp-server", "ironrdp-tls/fixture-ca"]
+
 [dependencies]
 ironrdp-client = { version = "0.1.0", default-features = false, features = ["clipboard", "gateway", "rustls"] }
 ironrdp-tls = { path = "ironrdp-tls-validated", features = ["rustls"] }
 ironrdp-connector = "0.10.0"
 ironrdp-pdu = "0.9.0"
+ironrdp-server = { version = "0.13.0", default-features = false, features = ["helper"], optional = true }
 mobarust-remote-desktop = { path = "../../crates/mobarust-remote-desktop" }
 smallvec = "1.15"
 tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 zeroize = "1.9"
+
+[dev-dependencies]
+anyhow = "1.0"
+bytes = "1"
+async-trait = "0.1"
 
 [patch.crates-io]
 ironrdp-tls = { path = "ironrdp-tls-validated" }

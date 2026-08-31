@@ -13,6 +13,7 @@ fn main() {
         "check" => check(),
         "check-fuzz" => check_fuzz(),
         "check-rdp-helper" => check_rdp_helper(),
+        "check-rdp-fixture" => check_rdp_fixture(),
         "check-vnc-helper" => check_vnc_helper(),
         "benchmark" => benchmark(),
         "benchmark-app" => benchmark_app(arguments.collect()),
@@ -30,6 +31,9 @@ fn main() {
             println!("cargo xtask check    Run Rust and frontend validation locally");
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
+            println!(
+                "cargo xtask check-rdp-fixture    Exercise the opt-in real loopback RDP fixture"
+            );
             println!("cargo xtask check-vnc-helper    Validate the isolated VNC helper locally");
             println!("cargo xtask benchmark    Run synthetic local performance probes");
             println!(
@@ -1388,6 +1392,23 @@ fn check_rdp_helper() -> Result<(), String> {
             "--",
             "-D",
             "warnings",
+        ],
+        None,
+    )
+}
+
+fn check_rdp_fixture() -> Result<(), String> {
+    run_sanitized_test(
+        "cargo",
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            "tools/rdp-helper/Cargo.toml",
+            "--features",
+            "local-rdp-fixture",
+            "--test",
+            "local_rdp",
         ],
         None,
     )

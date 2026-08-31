@@ -119,3 +119,21 @@ starting the candidate transport, and the closed loopback Gateway outcome
 proves that the second frame is not mistaken for invalid input. Both fixture
 secrets are checked against diagnostics; this is ordering/redaction evidence,
 not Gateway interoperability evidence.
+
+An additional opt-in `local-rdp-fixture` feature runs the real helper against
+the official `ironrdp-server` implementation on `127.0.0.1`. It creates a
+short-lived private CA and server certificate in a disposable temporary
+directory, passes that CA only to the test-feature client, and never modifies
+the macOS trust store. The fixture verifies the actual TLS/Hybrid handshake,
+authentication, decoded framebuffer, keyboard and mouse input, and clean
+Stop lifecycle. It is intentionally excluded from the normal helper check and
+from every package path:
+
+```text
+cargo xtask check-rdp-fixture
+```
+
+This is stronger than a refused-port smoke test, but it remains local
+interoperability evidence only. Windows/Linux certificate stores, real Windows
+servers, Gateway interoperability, reconnect recovery, and production engine
+selection remain open gates.

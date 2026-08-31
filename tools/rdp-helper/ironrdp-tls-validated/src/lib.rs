@@ -24,6 +24,15 @@ compile_error!("select exactly one TLS backend: `rustls` or `stub`");
 #[cfg(any(feature = "stub", feature = "rustls"))]
 pub use implementation::{TlsStream, negotiated, upgrade};
 
+/// Install the ring provider for the isolated local RDP fixture process.
+///
+/// This is compiled only with `fixture-ca`; packaged/helper production builds
+/// never expose or call it.
+#[cfg(feature = "fixture-ca")]
+pub fn install_fixture_crypto_provider() {
+    implementation::install_fixture_crypto_provider();
+}
+
 /// Validate a destination using the same native TLS server-name parser used by
 /// [`upgrade`]. This is intentionally a pure pre-connect check so callers can
 /// reject malformed metadata before opening a socket.

@@ -89,6 +89,20 @@ The isolated RDP helper check is also repository-scoped:
 cargo xtask check-rdp-helper
 ```
 
+The real RDP protocol fixture is opt-in and remains loopback-only:
+
+```text
+cargo xtask check-rdp-fixture
+```
+
+It starts the official IronRDP server implementation inside a current-thread
+test, generates a short-lived CA and server identity under a disposable
+temporary directory, and passes the CA only to the test-feature helper. It
+does not modify the macOS trust store, inspect personal certificates, read SSH
+files, or connect to a remote host. The test-only CA feature is excluded from
+the normal helper and package paths; the fixture proves one local TLS/Hybrid
+engine/server pairing, not cross-platform or production interoperability.
+
 The isolated VNC helper check is repository-scoped:
 
 ```text

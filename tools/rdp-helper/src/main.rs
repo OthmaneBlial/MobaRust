@@ -97,6 +97,8 @@ impl Error for RdpInputError {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(feature = "local-rdp-fixture")]
+    ironrdp_tls::install_fixture_crypto_provider();
     LocalSet::new().run_until(run_main()).await
 }
 

@@ -143,11 +143,21 @@ cargo run --manifest-path tools/rdp-helper/Cargo.toml -- \
 
 The first command covers formatting, unit tests, and clippy. The second emits
 only the helper lifecycle handshake and exits on EOF; it does not open a socket.
-The helper's real connection path is still exercised only against a dedicated
-fixture when one is available.
+The real connection path is exercised separately by the explicit local-server
+fixture:
 
-The next gate is a disposable local/Windows RDP fixture, with a real
-framebuffer and controlled input, including a real loss and recovery cycle,
-followed by Gateway-specific trust and interoperability checks.
+```text
+cargo xtask check-rdp-fixture
+```
+
+That opt-in test runs the compiled helper against the official
+`ironrdp-server 0.13.0` implementation on loopback using a short-lived
+test-only CA. It verifies a real TLS/Hybrid handshake, authentication,
+framebuffer delivery, keyboard/mouse input, and clean stop without modifying
+the macOS trust store. The test-only CA branch is excluded from the normal
+helper and package paths.
+
+The next gate is a real loss-and-recovery cycle against a disposable fixture,
+followed by Windows interoperability and Gateway-specific trust checks.
 Until that evidence and packaging exist, the UI must not advertise RDP as
 implemented.
