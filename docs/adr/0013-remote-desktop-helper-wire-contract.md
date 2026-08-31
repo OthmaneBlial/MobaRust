@@ -53,8 +53,9 @@ messages before a process is started:
   capability-to-active sequence, so stale data cannot cross the boundary while
   a new connection is being established;
 - the parent applies a five-second deadline until the helper has completed its
-  `Hello` and capability-report handshake, turning a silent or half-started
-  helper into a failed session and reusing the bounded stop/reap path;
+  `Hello` and capability-report handshake, restarting that deadline after each
+  `Reconnecting` event; a silent or half-started cycle becomes a failed session
+  and reuses the bounded stop/reap path;
 - the parent stores the requested protocol policy with each live session and
   rejects protocol-unsupported commands before they enter the helper queue;
   VNC server resize is rejected, RDP/VNC clipboard input requires explicit

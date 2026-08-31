@@ -660,7 +660,7 @@ async fn read_helper_events(
         phase,
     } = context;
     let mut progress = HelperEventProgress::default();
-    let handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
+    let mut handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
     loop {
         let frame = match read_next_helper_frame(
             &mut stdout,
@@ -774,6 +774,14 @@ async fn read_helper_events(
         {
             *capabilities.lock().await = Some(reported.clone());
         }
+        if matches!(
+            &event,
+            HelperEvent::State {
+                state: mobarust_remote_desktop::HelperState::Reconnecting,
+            }
+        ) {
+            handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
+        }
         if let HelperEvent::State { state } = &event {
             *phase.lock().await = match state {
                 mobarust_remote_desktop::HelperState::Starting => HelperSessionPhase::Starting,
@@ -869,6 +877,7 @@ fn validate_helper_event(
             }
             progress.starting_seen = false;
             progress.ready_seen = false;
+            progress.capabilities_seen = false;
             progress.data_phase = HelperDataPhase::AwaitingCapabilities;
             progress.reported_capabilities = None;
             Ok(progress)
@@ -1356,6 +1365,8 @@ mod tests {
             reconnecting.data_phase,
             HelperDataPhase::AwaitingCapabilities
         );
+        assert!(!reconnecting.starting_seen);
+        assert!(!reconnecting.capabilities_seen);
         assert!(reconnecting.reported_capabilities.is_none());
         assert!(
             validate_helper_event(
