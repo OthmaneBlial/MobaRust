@@ -20,9 +20,12 @@ LibVNCClient and TigerVNC remain research/manual interoperability references,
 not dependencies of the Apache-2.0 parent. Their GPL licensing and native
 build surface require a separate legal and packaging decision before any
 bundling or linking. The historical `vnc` crate is not promoted without a
-maintenance, security, and cross-platform review. The newer `vnc-rs` candidate
-is also kept in a separate helper until parent integration and platform
-evidence exist.
+maintenance, security, and cross-platform review. IronVNC was also reviewed as
+an application-level Rust lead, but its documented plaintext session store,
+unpinned RA2 host key, and lack of a stable embeddable client boundary make it
+unsuitable for the current security bar. The newer `vnc-rs` candidate is also
+kept in a separate helper until parent integration and platform evidence
+exist.
 
 ## Required evidence before promotion
 

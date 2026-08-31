@@ -25,11 +25,20 @@ Official upstream references reviewed on 2026-08-30:
 - [RustVNC](https://github.com/rustvnc): promising Apache-2.0 RFB encoding
   work, but the public roadmap still separates the encoding libraries from a
   production desktop client.
+- [IronVNC](https://github.com/hkder/ironvnc): an interesting Rust viewer
+  candidate advertising RFB 3.3/3.7/3.8, modern encodings, and RA2/RSA-AES;
+  its public README currently reports a very small application project, stores
+  session passwords in plaintext `sessions.json`, accepts the RA2 host key
+  without pinning, and does not implement VeNCrypt/TLS. It therefore remains
+  research-only and is not suitable as a security-reviewed embedded engine or
+  library dependency at this stage.
 
 LibVNC and TigerVNC are not automatic choices for the Apache-2.0 MobaRust
 distribution. LibVNC's own documentation explains that linking its client
 creates a derivative work, so a helper does not remove the licensing question.
-The old `vnc` crate is a candidate for an isolated experiment only. Encoding
+The old `vnc` crate is a candidate for an isolated experiment only. IronVNC is
+an application rather than a stable embeddable protocol boundary and its
+current credential/trust defaults fail MobaRust's security bar. Encoding
 support by itself is not a VNC client.
 
 ## Candidate architecture
@@ -45,6 +54,12 @@ Evaluate, in order:
    workspace;
 4. direct FFI only if a measured helper limitation justifies its additional
    crash and ABI surface.
+
+IronVNC was reviewed as a fifth research lead, but is not selected: its
+current surface is a complete egui application, not a maintained client
+library contract, and its documented plaintext session store and unpinned
+modern-auth host key would require replacing security-critical behavior before
+it could enter the helper boundary.
 
 The helper must implement a real RFB loop: security negotiation,
 authentication, pixel-format and encoding selection, framebuffer rectangle
