@@ -145,6 +145,18 @@ reported `MobaRust 0.1.0` and completed without opening a window, network
 connection, application store, vault, or clipboard. These are local artifact
 receipts, not publisher authenticity or cross-platform release evidence.
 
+A second local recheck on 2026-08-31 produced the following process-launch
+receipts while rebuilding the same unsigned bundle and portable archive:
+
+```text
+package-check: app_startup version=MobaRust 0.1.0 bytes=58757624 first_run_ms=1647.752 repeated_mean_ms=16.796 samples=5
+portable-check: app_startup version=MobaRust 0.1.0 bytes=58757624 first_run_ms=1354.983 repeated_mean_ms=18.839 samples=5
+```
+
+The differing first-run values reinforce that these measurements cover only
+the bounded `--version` process path; they are not GUI cold-start, memory,
+idle-CPU, or cross-platform performance results.
+
 At runtime, the desktop parent also opens helper resources with
 `symlink_metadata` and rejects symlinks, directories, and other non-regular
 files before spawning a protocol process. This complements the bundle smoke
