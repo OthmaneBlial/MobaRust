@@ -90,4 +90,4 @@ jobs:
       - name: Publish preview with installers
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --prerelease --title "MobaRust $GITHUB_REF_NAME — desktop preview" --notes-file docs/release/preview-notes.md
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --prerelease --title "MobaRust $GITHUB_REF_NAME — Desktop Preview" --notes-file docs/release/preview-notes.md

@@ -3832,7 +3832,7 @@ function App() {
             </aside>
           </div>
 
-          <footer className="workspace-footer"><span><span className="footer-led" /> MobaRust core · v0.1.0</span><span>Rust PTY bridge</span><span>{navigator.platform.includes("Mac") ? "macOS" : navigator.platform.includes("Win") ? "Windows" : "Linux"} · local mode</span><span className="footer-spacer" /><span>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} CET</span></footer>
+          <footer className="workspace-footer"><span><span className="footer-led" /> MobaRust core · v0.1.1</span><span>Rust PTY bridge</span><span>{navigator.platform.includes("Mac") ? "macOS" : navigator.platform.includes("Win") ? "Windows" : "Linux"} · local mode</span><span className="footer-spacer" /><span>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} CET</span></footer>
         </section>
       </div>
 

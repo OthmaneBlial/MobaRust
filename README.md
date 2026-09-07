@@ -32,7 +32,7 @@ MobaRust is a real desktop application, not a terminal-shaped website. React and
 
 ## Download and install
 
-[**Download MobaRust desktop preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.0)
+[**Download MobaRust desktop preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.1)
 
 Choose the installer for your computer: Windows x64 `.exe`, macOS Apple Silicon or Intel `.dmg`, or Linux x64 `.deb` / `.AppImage`. No developer tools or source build required. Open the installer, install MobaRust, and start a local terminal or add an SSH connection.
 
@@ -143,7 +143,7 @@ RDP and VNC are labelled experiments until those gates are proven. That honesty 
 
 ## Quick start
 
-To use MobaRust, [download an installer](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.0). The commands below are for contributors building from source.
+To use MobaRust, [download an installer](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.1). The commands below are for contributors building from source.
 
 ### Requirements
 

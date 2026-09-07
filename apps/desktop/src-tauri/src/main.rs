@@ -1988,7 +1988,7 @@ mod tests {
     fn cli_version_exits_before_initializing_the_desktop_runtime() {
         assert_eq!(
             cli_message(Some("--version")).as_deref(),
-            Some("MobaRust 0.1.0")
+            Some(concat!("MobaRust ", env!("CARGO_PKG_VERSION")))
         );
         assert!(cli_message(Some("--help")).is_some());
         assert_eq!(cli_message(Some("--unexpected")), None);
