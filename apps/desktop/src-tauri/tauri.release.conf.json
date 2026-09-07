@@ -1,6 +1,11 @@
 {
   "bundle": {
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
+    "resources": {
+      "helpers/*": "helpers/",
+      "../../../LICENSE": "LICENSE",
+      "../../../NOTICE": "NOTICE"
+    },
     "macOS": { "signingIdentity": "-" }
   }
 }
