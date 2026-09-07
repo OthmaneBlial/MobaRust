@@ -1,5 +1,16 @@
 # Dependency audit record
 
+## Desktop preview recheck — 2026-09-07
+
+With a refreshed database of 1,239 advisories, both the workspace and shippable
+VNC-helper audits exit successfully. The workspace reports 18 warnings:
+the existing GTK3/GLib and Unicode maintenance/unsoundness notices, plus the
+yanked `wnaf 0.14.0` dependency. The VNC-helper audit reports no warnings.
+These warnings remain visible; no advisory was suppressed for distribution.
+The RDP candidate remains excluded from installers.
+
+## Earlier snapshot
+
 This is a record of the repository-local `cargo audit --no-fetch` checks run on
 2026-08-31 with the cached RustSec advisory database. It is an engineering
 snapshot, not a permanent guarantee: refresh the advisory database and rerun

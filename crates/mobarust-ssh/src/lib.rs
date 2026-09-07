@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional};
-use tokio::net::{TcpStream, UnixStream};
+use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -167,6 +169,8 @@ pub enum X11DisplayError {
     UnixPathNotAbsolute,
     #[error("Unix display path is empty or invalid")]
     InvalidUnixPath,
+    #[error("Unix display sockets are not supported on this platform; use a loopback TCP display")]
+    UnixNotSupported,
 }
 
 impl X11Display {
@@ -183,6 +187,9 @@ impl X11Display {
         }
 
         if let Some(path) = input.strip_prefix("unix://") {
+            if !cfg!(unix) {
+                return Err(X11DisplayError::UnixNotSupported);
+            }
             let path = PathBuf::from(path);
             if path.as_os_str().is_empty() {
                 return Err(X11DisplayError::InvalidUnixPath);
@@ -213,12 +220,15 @@ impl X11Display {
                     .map_err(|_| SshError::X11Transport("display connection timed out".into()))?
                     .map(X11Stream::Tcp)
             }
+            #[cfg(unix)]
             Self::Unix(path) => {
                 tokio::time::timeout(Duration::from_secs(5), UnixStream::connect(path))
                     .await
                     .map_err(|_| SshError::X11Transport("display connection timed out".into()))?
                     .map(X11Stream::Unix)
             }
+            #[cfg(not(unix))]
+            Self::Unix(_) => return Err(X11DisplayError::UnixNotSupported.into()),
         };
         result.map_err(map_x11_io_error)
     }
@@ -257,6 +267,7 @@ impl X11ForwardingOptions {
 
 enum X11Stream {
     Tcp(TcpStream),
+    #[cfg(unix)]
     Unix(UnixStream),
 }
 
@@ -268,6 +279,7 @@ impl AsyncRead for X11Stream {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Tcp(stream) => std::pin::Pin::new(stream).poll_read(cx, buffer),
+            #[cfg(unix)]
             Self::Unix(stream) => std::pin::Pin::new(stream).poll_read(cx, buffer),
         }
     }
@@ -281,6 +293,7 @@ impl AsyncWrite for X11Stream {
     ) -> std::task::Poll<std::io::Result<usize>> {
         match self.get_mut() {
             Self::Tcp(stream) => std::pin::Pin::new(stream).poll_write(cx, bytes),
+            #[cfg(unix)]
             Self::Unix(stream) => std::pin::Pin::new(stream).poll_write(cx, bytes),
         }
     }
@@ -291,6 +304,7 @@ impl AsyncWrite for X11Stream {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Tcp(stream) => std::pin::Pin::new(stream).poll_flush(cx),
+            #[cfg(unix)]
             Self::Unix(stream) => std::pin::Pin::new(stream).poll_flush(cx),
         }
     }
@@ -301,6 +315,7 @@ impl AsyncWrite for X11Stream {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Tcp(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
+            #[cfg(unix)]
             Self::Unix(stream) => std::pin::Pin::new(stream).poll_shutdown(cx),
         }
     }
@@ -3137,10 +3152,15 @@ mod tests {
             X11Display::Tcp("127.0.0.1:6000".parse::<SocketAddr>().unwrap())
         );
 
-        let unix = X11Display::parse("unix:///tmp/mobarust-x11.sock").unwrap();
+        #[cfg(unix)]
         assert_eq!(
-            unix,
+            X11Display::parse("unix:///tmp/mobarust-x11.sock").unwrap(),
             X11Display::Unix(PathBuf::from("/tmp/mobarust-x11.sock"))
+        );
+        #[cfg(not(unix))]
+        assert_eq!(
+            X11Display::parse("unix:///tmp/mobarust-x11.sock"),
+            Err(X11DisplayError::UnixNotSupported)
         );
 
         for invalid in [
