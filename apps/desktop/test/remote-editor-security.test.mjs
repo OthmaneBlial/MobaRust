@@ -103,7 +103,11 @@ assert.equal(experimentalDesktopTargetError("ssh", "example.invalid"), null);
 assert.equal(supportsNativeRdpClipboard("Win32"), true);
 assert.equal(supportsNativeRdpClipboard("MacIntel"), false);
 assert.equal(supportsNativeRdpClipboard("Linux x86_64"), false);
-assert.equal(supportsNativeRdpClipboard(undefined), false);
+assert.equal(supportsNativeRdpClipboard(""), false);
+assert.equal(
+  supportsNativeRdpClipboard(undefined),
+  typeof navigator !== "undefined" && navigator.platform.startsWith("Win"),
+);
 assert.equal(remoteDesktopTransportLabel(null), "Transport status unavailable");
 assert.equal(remoteDesktopTransportLabel({ serverResize: true, clipboard: false, transportEncrypted: true }), "TLS transport");
 assert.equal(remoteDesktopTransportLabel({ serverResize: false, clipboard: true, transportEncrypted: false }), "Unencrypted transport");

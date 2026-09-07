@@ -828,7 +828,14 @@ fn pre_push_check() -> Result<(), String> {
     }
 
     if Path::new(".github/workflows").exists() {
-        return Err(".github/workflows exists; refusing push audit".into());
+        for entry in fs::read_dir(".github/workflows").map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if entry.file_name() != "release.yml" || !entry.path().is_file() {
+                return Err(
+                    "only the desktop release workflow is allowed in the push audit".into(),
+                );
+            }
+        }
     }
 
     license_check()?;
