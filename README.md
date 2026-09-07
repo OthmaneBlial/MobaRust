@@ -32,6 +32,12 @@ MobaRust is a real desktop application, not a terminal-shaped website. React and
 
 ## Download and install
 
+[![Watch the MobaRust desktop demo — light mode first, then dark mode](site/media/mobarust-demo-poster.jpg)](https://othmaneblial.github.io/MobaRust/#demo)
+
+[**Watch the desktop demo**](https://othmaneblial.github.io/MobaRust/#demo) · [Download the video (MP4)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
+
+Real macOS capture: native terminal commands, split panes, SSH setup, snippets, and one-click light/dark switching. Recorded with an isolated demo profile and a local test API; no personal credentials or remote production hosts are used.
+
 [**Download MobaRust desktop preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.1)
 
 Choose the installer for your computer: Windows x64 `.exe`, macOS Apple Silicon or Intel `.dmg`, or Linux x64 `.deb` / `.AppImage`. No developer tools or source build required. Open the installer, install MobaRust, and start a local terminal or add an SSH connection.

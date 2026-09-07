@@ -51,6 +51,35 @@
   });
 
   const year = document.querySelector('[data-year]');
+  const demoVideo = document.querySelector('#desktop-demo-video');
+  const chapters = [...document.querySelectorAll('[data-demo-time]')];
+  if (demoVideo) {
+    chapters.forEach((button) => {
+      button.addEventListener('click', async () => {
+        try {
+          if (demoVideo.readyState === 0) {
+            await new Promise((resolve, reject) => {
+              const cleanup = () => {
+                demoVideo.removeEventListener('loadedmetadata', ready);
+                demoVideo.removeEventListener('error', failed);
+              };
+              const ready = () => { cleanup(); resolve(); };
+              const failed = () => { cleanup(); reject(new Error('Video unavailable')); };
+              demoVideo.addEventListener('loadedmetadata', ready);
+              demoVideo.addEventListener('error', failed);
+              demoVideo.load();
+            });
+          }
+          demoVideo.currentTime = Number(button.dataset.demoTime);
+          await demoVideo.play();
+        } catch { demoVideo.focus(); }
+      });
+    });
+    demoVideo.addEventListener('timeupdate', () => {
+      const active = chapters.findLast((button) => Number(button.dataset.demoTime) <= demoVideo.currentTime);
+      chapters.forEach((button) => button.setAttribute('aria-pressed', String(button === active)));
+    });
+  }
   if (year) year.textContent = String(new Date().getFullYear());
 
   if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {

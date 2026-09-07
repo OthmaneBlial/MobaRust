@@ -1,0 +1,17 @@
+.desktop-demo { padding-top: 105px; scroll-margin-top: 36px; }
+.demo-heading { display: grid; grid-template-columns: 1.5fr 1fr; align-items: end; gap: 48px; margin-bottom: 36px; }
+.demo-heading h2 { font-family: var(--display); font-size: clamp(38px, 4.7vw, 68px); font-weight: 400; letter-spacing: -.055em; line-height: 1.03; margin: 0; }
+.demo-heading > p { color: #abb6ad; font-size: 15px; line-height: 1.7; max-width: 390px; margin: 0 0 5px auto; }
+.demo-player { overflow: hidden; border: 1px solid rgba(193, 214, 195, .25); background: #f3f5ef; box-shadow: 0 24px 80px #0003; }
+.demo-player video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #f3f5ef; }
+.demo-chapters { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--line); border-top: 0; }
+.demo-chapters button { display: flex; gap: 13px; align-items: center; min-height: 67px; border: 0; border-right: 1px solid var(--line); padding: 15px; background: transparent; color: var(--lime); font: 12px var(--mono); text-align: left; cursor: pointer; }
+.demo-chapters button:last-child { border-right: 0; }
+.demo-chapters span { color: #c6d0c7; font-family: var(--body); font-size: 12px; }
+.demo-chapters button:hover, .demo-chapters button[aria-pressed="true"] { background: #ffffff09; }
+.demo-chapters button:focus-visible { outline: 2px solid var(--lime); outline-offset: -3px; }
+.demo-footnote { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; padding-top: 19px; }
+.demo-footnote p { max-width: 800px; margin: 0; color: #a4b0a6; font-size: 12px; line-height: 1.7; }
+.demo-footnote a { flex-shrink: 0; color: var(--lime); font-size: 12px; }
+@media (max-width: 900px) { .demo-heading { grid-template-columns: 1fr; gap: 22px; }.demo-heading > p { margin: 0; max-width: 580px; }.demo-chapters button { gap: 8px; padding: 12px 9px; flex-direction: column; align-items: flex-start; } }
+@media (max-width: 620px) { .desktop-demo { padding-top: 72px; }.demo-heading { margin-bottom: 25px; }.demo-heading h2 { font-size: 43px; }.demo-chapters { grid-template-columns: repeat(2, 1fr); }.demo-chapters button { border-bottom: 1px solid var(--line); flex-direction: row; align-items: center; min-height: 52px; }.demo-chapters button:last-child { grid-column: 1 / -1; }.demo-footnote { flex-direction: column; gap: 12px; } }

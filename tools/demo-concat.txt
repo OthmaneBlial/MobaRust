@@ -1,0 +1,7 @@
+file '../target/demo-video/intro.mp4'
+file '../target/demo-video/terminal.mp4'
+file '../target/demo-video/split.mp4'
+file '../target/demo-video/connect.mp4'
+file '../target/demo-video/snippets.mp4'
+file '../target/demo-video/dark.mp4'
+file '../target/demo-video/outro.mp4'

@@ -1,0 +1,26 @@
+WEBVTT
+
+00:00.000 --> 00:03.000
+MobaRust. A real desktop walkthrough, light mode first.
+
+00:03.000 --> 00:08.000
+Run commands in a native local terminal.
+
+00:08.000 --> 00:16.000
+This curl request reaches an isolated loopback demo API.
+
+00:16.000 --> 00:26.000
+Split the terminal to keep two independent shells side by side.
+
+00:26.000 --> 00:37.000
+Quick Connect parses an example SSH URI into connection fields.
+No SSH connection is made in this demonstration.
+
+00:37.000 --> 00:49.000
+Prepare a reusable command snippet and review it before execution.
+
+00:49.000 --> 00:58.000
+Switch to dark mode in one click. The terminal changes with the workspace.
+
+00:58.000 --> 01:02.000
+Download the desktop preview for Mac, Windows, and Linux.
