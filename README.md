@@ -36,13 +36,9 @@ MobaRust is a real desktop application, not a terminal-shaped website. React and
 
 [**Watch the desktop demo**](https://othmaneblial.github.io/MobaRust/#demo) · [Download the video (MP4)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
 
-<video controls playsinline preload="metadata" poster="https://othmaneblial.github.io/MobaRust/media/mobarust-demo-poster.jpg" width="100%" aria-label="MobaRust desktop demo — light mode first, then dark mode">
-  <source src="https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4" type="video/mp4" />
-  <track kind="captions" src="https://othmaneblial.github.io/MobaRust/media/mobarust-demo.en.vtt" srclang="en" label="English" default />
-  Your browser does not support the embedded player. [Download the MobaRust demo (MP4)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4).
-</video>
+[![Animated MobaRust desktop demo — light mode first, then dark mode](https://raw.githubusercontent.com/OthmaneBlial/MobaRust/main/site/media/mobarust-demo-preview.gif)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
 
-The player above works directly in README viewers that support HTML5 video. The poster and MP4 link remain available in viewers that sanitize embedded media.
+The animated preview above plays directly in GitHub. GitHub sanitizes external HTML5 video tags in repository READMEs, so use the **Watch the desktop demo** link for the full 62-second player with chapters and captions, or [download the full MP4](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4).
 
 Real macOS capture: native terminal commands, split panes, SSH setup, snippets, and one-click light/dark switching. Recorded with an isolated demo profile and a local test API; no personal credentials or remote production hosts are used.
 
