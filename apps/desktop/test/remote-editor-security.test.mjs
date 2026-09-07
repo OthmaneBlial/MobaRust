@@ -106,7 +106,7 @@ assert.equal(supportsNativeRdpClipboard("Linux x86_64"), false);
 assert.equal(supportsNativeRdpClipboard(""), false);
 assert.equal(
   supportsNativeRdpClipboard(undefined),
-  typeof navigator !== "undefined" && navigator.platform.startsWith("Win"),
+  Boolean(globalThis.navigator?.platform.startsWith("Win")),
 );
 assert.equal(remoteDesktopTransportLabel(null), "Transport status unavailable");
 assert.equal(remoteDesktopTransportLabel({ serverResize: true, clipboard: false, transportEncrypted: true }), "TLS transport");
