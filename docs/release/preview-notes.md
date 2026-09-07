@@ -2,11 +2,11 @@ Download the installer for your computer below. No Rust, Node.js, or source chec
 
 | Computer | Download | Install |
 | --- | --- | --- |
-| Windows x64 | `windows-x64.exe` | Run the setup wizard; it installs WebView2 if needed. |
-| Mac with Apple Silicon (M1 or newer) | `macos-arm64.dmg` | Open the disk image and drag MobaRust into Applications. |
-| Intel Mac | `macos-x64.dmg` | Open the disk image and drag MobaRust into Applications. |
-| Ubuntu/Debian x64 | `linux-x64.deb` | Run `sudo apt install ./MobaRust-0.1.0-linux-x64.deb`. |
-| Other Linux x64 desktops | `linux-x64.AppImage` | Make executable in file properties, then open it. WebKitGTK 4.1 and FUSE may be required. |
+| Windows x64 | [Download Windows installer (.exe)](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.0/MobaRust-0.1.0-windows-x64.exe) | Run the setup wizard; it installs WebView2 if needed. |
+| Mac with Apple Silicon (M1 or newer) | [Download Mac Apple Silicon (.dmg)](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.0/MobaRust-0.1.0-macos-arm64.dmg) | Open the disk image and drag MobaRust into Applications. |
+| Intel Mac | [Download Mac Intel (.dmg)](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.0/MobaRust-0.1.0-macos-x64.dmg) | Open the disk image and drag MobaRust into Applications. |
+| Ubuntu/Debian x64 | [Download Linux Debian (.deb)](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.0/MobaRust-0.1.0-linux-x64.deb) | Run `sudo apt install ./MobaRust-0.1.0-linux-x64.deb`. |
+| Other Linux x64 desktops | [Download Linux AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.0/MobaRust-0.1.0-linux-x64.AppImage) | Make executable in file properties, then open it. WebKitGTK 4.1 and FUSE may be required. |
 
 Asset names begin with `MobaRust-0.1.0-`. Choose an installer, not GitHub's automatically generated source archives.
 
