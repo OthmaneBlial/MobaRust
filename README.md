@@ -36,9 +36,9 @@ MobaRust is a real desktop application, not a terminal-shaped website. React and
 
 [**Watch the desktop demo**](https://othmaneblial.github.io/MobaRust/#demo) · [Download the video (MP4)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
 
-[![Animated MobaRust desktop demo — light mode first, then dark mode](https://raw.githubusercontent.com/OthmaneBlial/MobaRust/main/site/media/mobarust-demo-preview.gif)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
+[![Full 62-second animated MobaRust desktop demo — light mode first, then dark mode](https://raw.githubusercontent.com/OthmaneBlial/MobaRust/main/site/media/mobarust-demo-preview.gif)](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4)
 
-The animated preview above plays directly in GitHub. GitHub sanitizes external HTML5 video tags in repository READMEs, so use the **Watch the desktop demo** link for the full 62-second player with chapters and captions, or [download the full MP4](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4).
+The full 62-second preview above plays directly in GitHub from start to finish. GitHub sanitizes external HTML5 video tags in repository READMEs, so use the **Watch the desktop demo** link for the full-resolution player with chapters and captions, or [download the full MP4](https://othmaneblial.github.io/MobaRust/media/mobarust-desktop-demo.mp4).
 
 Real macOS capture: native terminal commands, split panes, SSH setup, snippets, and one-click light/dark switching. Recorded with an isolated demo profile and a local test API; no personal credentials or remote production hosts are used.
 
