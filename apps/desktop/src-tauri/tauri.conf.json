@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "sh ../../tools/prepare-desktop.sh",
+    "beforeBuildCommand": "node ../../tools/prepare-desktop.mjs",
     "frontendDist": "../dist"
   },
   "app": {

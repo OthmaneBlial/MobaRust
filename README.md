@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://othmaneblial.github.io/MobaRust/">Website</a> ·
+  <a href="https://github.com/OthmaneBlial/MobaRust/releases">Download</a> ·
   <a href="https://othmaneblial.github.io/MobaRust/docs.html">Documentation</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
   <a href="https://github.com/OthmaneBlial/MobaRust/issues">Feedback</a>
@@ -28,6 +29,14 @@
 MobaRust is independent and is not affiliated with Mobatek or MobaXterm. MobaXterm is a trademark of its respective owner.
 
 MobaRust is a real desktop application, not a terminal-shaped website. React and TypeScript render the interface inside Tauri; Rust owns the native networking, PTY, filesystem, process, persistence, cancellation, and credential boundaries.
+
+## Download and install
+
+[**Download MobaRust desktop preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.0)
+
+Choose the installer for your computer: Windows x64 `.exe`, macOS Apple Silicon or Intel `.dmg`, or Linux x64 `.deb` / `.AppImage`. No developer tools or source build required. Open the installer, install MobaRust, and start a local terminal or add an SSH connection.
+
+The first release is an **unsigned preview**: Windows and macOS may display security prompts. See the [installation instructions and known limitations](docs/release/preview-notes.md), including first-launch steps and checksum verification. RDP is excluded from downloads; VNC remains experimental.
 
 ## Stop juggling five tools for one server
 
@@ -132,7 +141,7 @@ RDP and VNC are labelled experiments until those gates are proven. That honesty 
 
 ## Quick start
 
-MobaRust is currently source-first. The commands below build and validate the local desktop application on macOS; target-specific runtime and signed-release checks belong in their respective Windows/Linux environments.
+To use MobaRust, [download an installer](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.0). The commands below are for contributors building from source.
 
 ### Requirements
 

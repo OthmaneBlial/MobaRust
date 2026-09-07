@@ -1,5 +1,18 @@
 # Desktop packaging boundary
 
+## Downloadable previews
+
+The `Release installers` workflow builds native Windows x64 NSIS, Linux x64
+Debian/AppImage, and macOS ARM64/x64 DMG packages. A `v*` tag must match the
+Cargo, frontend, and Tauri versions. All four builds must succeed before the
+workflow publishes a GitHub prerelease with installers and per-platform
+SHA-256 checksums. A manual workflow run builds downloadable Actions artifacts
+without publishing a release. See [preview installation notes](preview-notes.md).
+
+These unsigned previews are separate from the signed production distribution
+gates below. They do not establish publisher authenticity, notarization, full
+GUI clean-install behavior, or real-server interoperability.
+
 MobaRust packages the native VNC helper as an isolated resource. The desktop
 process resolves it from its Tauri resource directory and never launches a
 helper from an arbitrary user-provided path. The IronRDP candidate remains an
@@ -11,7 +24,7 @@ until its dependency audit is clean.
 From `apps/desktop`, the Tauri build hook runs:
 
 ```text
-sh ../../tools/prepare-desktop.sh
+node ../../tools/prepare-desktop.mjs
 ```
 
 That command builds the VNC helper workspace in release mode and copies only

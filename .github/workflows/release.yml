@@ -1,0 +1,91 @@
+name: Release installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows-x64
+            bundles: nsis
+          - runner: ubuntu-22.04
+            platform: linux-x64
+            bundles: deb,appimage
+          - runner: macos-15
+            platform: macos-arm64
+            bundles: dmg
+          - runner: macos-15-intel
+            platform: macos-x64
+            bundles: dmg
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.15.0'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tools/vnc-helper -> target
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node tools/release-assets.mjs check-version
+      - name: Frontend checks
+        working-directory: apps/desktop
+        run: pnpm check && pnpm lint && pnpm test:unit
+      - name: Generate native bundle icons
+        working-directory: apps/desktop
+        run: pnpm tauri icon src-tauri/icons/icon.png
+      - name: Build installers
+        working-directory: apps/desktop
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json -- --locked
+      - name: Check binary startup
+        shell: bash
+        run: |
+          binary=target/release/mobarust
+          if [[ "$RUNNER_OS" == Windows ]]; then binary="$binary.exe"; fi
+          "$binary" --version
+      - name: Collect installers and checksums
+        run: node tools/release-assets.mjs collect ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: target/release-assets/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish preview with installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --prerelease --title "MobaRust $GITHUB_REF_NAME — desktop preview" --notes-file docs/release/preview-notes.md
