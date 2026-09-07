@@ -38,6 +38,8 @@ Choose the installer for your computer: Windows x64 `.exe`, macOS Apple Silicon 
 
 The first release is an **unsigned preview**: Windows and macOS may display security prompts. See the [installation instructions and known limitations](docs/release/preview-notes.md), including first-launch steps and checksum verification. RDP is excluded from downloads; VNC remains experimental.
 
+Switch between light and dark mode using the button in the top bar. The choice is saved, and **Settings → Theme → System** follows your operating system.
+
 ## Stop juggling five tools for one server
 
 Remote work should not mean switching between a terminal, an SFTP client, a tunnel tool, a notes app, and a session list every few minutes. MobaRust puts the operator loop in one focused window:

@@ -23,6 +23,7 @@ import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
@@ -53,6 +54,7 @@ import {
   Maximize2,
   MoreHorizontal,
   Minimize2,
+  Moon,
   Network,
   PanelBottom,
   PanelLeftClose,
@@ -69,6 +71,7 @@ import {
   ShieldCheck,
   Star,
   Square,
+  Sun,
   Terminal as TerminalIcon,
   Trash2,
   Upload,
@@ -237,6 +240,7 @@ type SerialSessionEvent = {
 };
 
 type TerminalViewportProps = {
+  colorTheme: ColorTheme;
   workspaceId: string;
   instanceKey: number;
   remoteSessionId: string | null;
@@ -807,20 +811,21 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
+function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const terminalOptionsRef = useRef({ fontSize, scrollbackLines, cursorBlink });
+  const terminalOptionsRef = useRef({ fontSize, scrollbackLines, cursorBlink, colorTheme });
   const confirmMultilinePasteRef = useRef(confirmMultilinePaste);
 
   useEffect(() => {
-    terminalOptionsRef.current = { fontSize, scrollbackLines, cursorBlink };
+    terminalOptionsRef.current = { fontSize, scrollbackLines, cursorBlink, colorTheme };
     if (terminalRef.current) {
       terminalRef.current.options.fontSize = fontSize;
       terminalRef.current.options.cursorBlink = cursorBlink;
+      terminalRef.current.options.theme = terminalThemes[colorTheme];
     }
-  }, [cursorBlink, fontSize, scrollbackLines]);
+  }, [colorTheme, cursorBlink, fontSize, scrollbackLines]);
 
   useEffect(() => {
     confirmMultilinePasteRef.current = confirmMultilinePaste;
@@ -844,29 +849,7 @@ function TerminalViewport({ workspaceId, instanceKey, remoteSessionId, remotePro
       fontSize: terminalOptionsRef.current.fontSize,
       lineHeight: 1.35,
       scrollback: terminalOptionsRef.current.scrollbackLines,
-      theme: {
-        background: "#101514",
-        foreground: "#dce8dc",
-        cursor: "#e8b45c",
-        cursorAccent: "#101514",
-        selectionBackground: "#3b5148",
-        black: "#101514",
-        red: "#ee8d78",
-        green: "#9bc48a",
-        yellow: "#e8b45c",
-        blue: "#86a9cc",
-        magenta: "#c9a3c7",
-        cyan: "#77c4bb",
-        white: "#dce8dc",
-        brightBlack: "#63746b",
-        brightRed: "#f09f89",
-        brightGreen: "#b9dc9d",
-        brightYellow: "#f3ca78",
-        brightBlue: "#a7c6e2",
-        brightMagenta: "#e0bedf",
-        brightCyan: "#99e0d5",
-        brightWhite: "#f2f5eb",
-      },
+      theme: terminalThemes[terminalOptionsRef.current.colorTheme],
     });
     terminalRef.current = terminal;
     const fitAddon = new FitAddon();
@@ -1442,7 +1425,21 @@ function App() {
   const [macroRun, setMacroRun] = useState<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const [macroRecording, setMacroRecording] = useState<MacroRecordingState | null>(null);
   const [recordedMacroDraft, setRecordedMacroDraft] = useState<MacroRecord | null>(null);
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [settings, setSettings] = useState<AppSettings>(() => ({ ...defaultSettings, general: { ...defaultSettings.general, theme: cachedTheme() } }));
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const colorTheme: ColorTheme = settings.general.theme === "system" ? (systemDark ? "dark" : "light") : settings.general.theme;
+  const [themeSaving, setThemeSaving] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setSystemDark(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = colorTheme;
+    document.documentElement.style.colorScheme = colorTheme;
+    try { localStorage.setItem("mobarust-theme", settings.general.theme); } catch { /* Native settings still persist when browser storage is unavailable. */ }
+  }, [colorTheme, settings.general.theme]);
   const settingsRef = useRef(settings);
   const zoomPersistTimerRef = useRef<number | null>(null);
   const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
@@ -2055,6 +2052,21 @@ function App() {
       setConnectionError(`Settings could not be saved: ${String(error)}`);
     }
   }, []);
+
+  const toggleTheme = async () => {
+    if (themeSaving) return;
+    const next = { ...settingsRef.current, general: { ...settingsRef.current.general, theme: colorTheme === "dark" ? "light" as const : "dark" as const } };
+    setThemeSaving(true);
+    try {
+      const saved = IS_TAURI ? await invoke<AppSettings>("settings_save", { settings: next }) : next;
+      settingsRef.current = saved;
+      setSettings(saved);
+    } catch (error) {
+      setConnectionError(`Theme could not be saved: ${String(error)}`);
+    } finally {
+      setThemeSaving(false);
+    }
+  };
 
   const adjustTerminalFontSize = useCallback((action: "increase" | "decrease" | "reset") => {
     const current = settingsRef.current;
@@ -3618,11 +3630,11 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
-  }, [handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
+  }, [colorTheme, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
-    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${settings.general.theme}`}>
+    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${colorTheme}`}>
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
@@ -3642,6 +3654,10 @@ function App() {
           <span className="muted">{IS_TAURI ? "desktop runtime" : "browser preview"}</span>
         </div>
         <div className="topbar-actions">
+          <button className="theme-toggle" aria-label={`Switch to ${colorTheme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${colorTheme === "dark" ? "light" : "dark"} mode`} disabled={themeSaving} onClick={() => void toggleTheme()}>
+            {colorTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            <span>{colorTheme === "dark" ? "Light mode" : "Dark mode"}</span>
+          </button>
           <button className="icon-button" aria-label="Help" title="Help" onClick={() => setHelpOpen(true)}>
             <CircleHelp size={17} strokeWidth={1.7} />
           </button>

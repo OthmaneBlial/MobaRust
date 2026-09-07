@@ -14,6 +14,8 @@ This is an **unsigned desktop preview**. Windows may show an unknown-publisher/S
 
 Start with a local terminal, or add your SSH host, username, and authentication method. Verify the server host-key fingerprint before accepting a first connection. SSH, SFTP/SCP, saved sessions, and tunnels are the primary use cases. VNC is experimental and requires explicit consent for unencrypted remote TCP. The experimental RDP helper is excluded from these packages.
 
+Use **Light mode / Dark mode** in the top bar to switch the entire workspace and active terminal immediately. Your choice is saved. To follow your operating system instead, choose **Settings → Theme → System**.
+
 Installers are built on native GitHub runners and checked for binary startup. Full GUI clean-install and real-server interoperability across all platforms are still pending. This preview is not a production-readiness claim.
 
 Each platform includes a SHA-256 checksum file. Verify with `shasum -a 256 -c SHA256SUMS-macos-arm64.txt` on macOS, `sha256sum -c SHA256SUMS-linux-x64.txt` on Linux, or compare `Get-FileHash .\MobaRust-0.1.0-windows-x64.exe -Algorithm SHA256` with the Windows checksum file. Checksums detect corruption; they are not publisher signatures.
