@@ -133,6 +133,10 @@ pub enum SshError {
         "remote upload completed, but its backup could not be removed; inspect the nearby .mobarust-upload-backup file"
     )]
     RemoteUploadBackupCleanupFailed,
+    #[error(
+        "remote upload failed and its temporary file could not be removed; inspect the destination folder for a .part file"
+    )]
+    RemotePartialUploadCleanupFailed,
     #[error("remote text file exceeds the 4 MiB editor limit")]
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
@@ -2606,7 +2610,10 @@ impl SftpConnection {
         }
         .await;
         if result.is_err() && !matches!(&result, Err(SshError::RemoteUploadRestoreUncertain)) {
-            let _ = self.remove_file(temporary).await;
+            match self.remove_file(temporary).await {
+                Ok(()) | Err(SshError::SftpPathMissing) => {}
+                Err(_) => return Err(SshError::RemotePartialUploadCleanupFailed),
+            }
         }
         result
     }

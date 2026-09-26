@@ -163,6 +163,25 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             updated_entry.permissions.map(|mode| mode & 0o7777),
             Some(0o640)
         );
+        let cleanup_directory = fixture
+            .directory
+            .path()
+            .join(format!("mobarust-upload-cleanup-{}", std::process::id()));
+        fs::create_dir(&cleanup_directory).expect("create upload cleanup fixture directory");
+        let cleanup_temporary = cleanup_directory.join(".partial.part");
+        let cleanup_destination = cleanup_directory.join("existing.bin");
+        fs::create_dir(&cleanup_temporary).expect("create unremovable temporary fixture");
+        fs::write(&cleanup_destination, b"existing destination")
+            .expect("create existing upload destination");
+        let cleanup_temporary = cleanup_temporary.to_string_lossy().into_owned();
+        let cleanup_destination = cleanup_destination.to_string_lossy().into_owned();
+        assert!(matches!(
+            sftp.promote_uploaded_file(&cleanup_temporary, &cleanup_destination, false)
+                .await,
+            Err(SshError::RemotePartialUploadCleanupFailed)
+        ));
+        assert!(Path::new(&cleanup_temporary).is_dir());
+        fs::remove_dir_all(&cleanup_directory).expect("remove upload cleanup fixture directory");
         assert!(
             sftp.try_exists(&remote_path)
                 .await
