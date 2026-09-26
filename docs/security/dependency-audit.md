@@ -1,40 +1,31 @@
 # Dependency audit record
 
-## Desktop preview recheck — 2026-09-07
+## Desktop preview recheck — 2026-09-26
 
-With a refreshed database of 1,239 advisories, both the workspace and shippable
-VNC-helper audits exit successfully. The workspace reports 18 warnings:
-the existing GTK3/GLib and Unicode maintenance/unsoundness notices, plus the
-yanked `wnaf 0.14.0` dependency. The VNC-helper audit reports no warnings.
-These warnings remain visible; no advisory was suppressed for distribution.
-The RDP candidate remains excluded from installers.
-
-## Earlier snapshot
-
-This is a record of the repository-local `cargo audit --no-fetch` checks run on
-2026-08-31 with the cached RustSec advisory database. It is an engineering
-snapshot, not a permanent guarantee: refresh the advisory database and rerun
-the checks before a release.
-
-The same three lockfiles were rechecked locally on 2026-08-31 with the
-advisory database refresh enabled. The database contained 1,226 advisories at
-that time, and the results below were unchanged.
+The refreshed RustSec database contains 1,271 advisories (last updated
+2026-09-25). The workspace lockfile now uses `serialport 4.10.1` and `wnaf
+0.14.1`, replacing two yanked releases. The RDP helper lockfile now uses
+`cryptoki 0.12.1` and `rustls 0.23.45`, which fix the newly reported
+`cryptoki` out-of-bounds read and TLS handshake advisories
+([RUSTSEC-2026-0286](https://rustsec.org/advisories/RUSTSEC-2026-0286),
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)).
 
 ## Results
 
 | Lockfile | Result | Interpretation |
 | --- | --- | --- |
-| Workspace `Cargo.lock` | Exit 0; no vulnerability reported | 17 allowed maintenance/unsoundness warnings remain in the transitive GTK3/`glib` stack used by the Tauri/Wry Linux path. |
-| `tools/vnc-helper/Cargo.lock` | Exit 0; no warning or vulnerability reported | The isolated VNC helper passed the cached advisory check. This does not replace cross-platform interoperability evidence. |
-| `tools/rdp-helper/Cargo.lock` | Exit 1; one vulnerability | `rsa 0.10.0-rc.18`, `RUSTSEC-2023-0071` (Marvin timing attack), is pulled through the pinned IronRDP/`picky` chain and has no fixed upgrade available in this candidate. |
+| Workspace `Cargo.lock` (656 packages) | Exit 0; no vulnerability reported | Seven warnings remain: six unmaintained transitive Unicode/proc-macro crates and the GTK3/`glib 0.18.5` unsoundness advisory `RUSTSEC-2024-0429`. No yanked release remains in this lockfile. |
+| `tools/vnc-helper/Cargo.lock` (82 packages) | Exit 0; no warning or vulnerability reported | The isolated VNC helper passes the advisory check. This does not replace cross-platform interoperability evidence. |
+| `tools/rdp-helper/Cargo.lock` (374 packages) | Exit 1; one vulnerability | `cryptoki 0.12.1` and `rustls 0.23.45` clear the two newly fixed advisories. `rsa 0.10.0-rc.18` still triggers `RUSTSEC-2023-0071` (Marvin timing attack); no fixed release is available. Two transitive crates are also reported as unmaintained. |
 
 The RDP helper is therefore not staged into normal application bundles and is
 not a production RDP claim. Its separate lockfile and audit are intentional.
+No advisory is suppressed to make these results appear clean.
 
 ## Reproduce locally
 
 ```text
-cargo audit --no-fetch
+cargo audit
 cargo audit --no-fetch --file tools/vnc-helper/Cargo.lock
 cargo audit --no-fetch --file tools/rdp-helper/Cargo.lock
 ```
@@ -42,6 +33,13 @@ cargo audit --no-fetch --file tools/rdp-helper/Cargo.lock
 The commands are read-only with respect to the repository. They inspect lock
 files and the cached advisory database; they do not read SSH files, query the
 SSH agent, access Keychain entries, or connect to a remote protocol server.
+
+## Historical checks
+
+The 2026-09-07 check found 18 workspace warnings, including the now-replaced
+yanked `wnaf 0.14.0`. On 2026-08-31, the advisory database contained 1,226
+entries and the RDP lockfile still had the same RSA advisory. These are
+historical snapshots; use the current results above for release decisions.
 
 ## Follow-up policy
 
