@@ -31,6 +31,7 @@ import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
 } from "./remote-desktop-errors";
+import { isCurrentRemoteDirectoryRequest } from "./remote-directory";
 import {
   Activity,
   ArrowDownToLine,
@@ -1485,6 +1486,8 @@ function App() {
   const [remoteMonitorIntervalSeconds, setRemoteMonitorIntervalSeconds] = useState<number>(30);
   const remoteMonitorRequestRef = useRef(false);
   const remoteMonitorGenerationRef = useRef(0);
+  const remoteDirectoryRequestRef = useRef(0);
+  const remoteSessionIdRef = useRef<string | null>(null);
   const [networkHost, setNetworkHost] = useState("");
   const [networkPort, setNetworkPort] = useState("22");
   const [networkTimeout, setNetworkTimeout] = useState("1500");
@@ -1568,6 +1571,7 @@ function App() {
   const selectedTerminalId = activeTerminal?.id ?? "";
   selectedTerminalIdRef.current = selectedTerminalId;
   const remoteSessionId = activeTerminal?.remoteSessionId ?? null;
+  remoteSessionIdRef.current = remoteSessionId;
   const remoteProtocol = activeTerminal?.remoteProtocol ?? null;
   const remoteHost = activeTerminal?.remoteHost ?? null;
   const terminalStatus = activeTerminal?.status ?? "closed";
@@ -2763,16 +2767,26 @@ function App() {
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
     if (!remoteSessionId) return;
+    const requestId = ++remoteDirectoryRequestRef.current;
+    const sessionId = remoteSessionId;
+    const isCurrentRequest = () => isCurrentRemoteDirectoryRequest(
+      requestId,
+      remoteDirectoryRequestRef.current,
+      sessionId,
+      remoteSessionIdRef.current,
+    );
     setSftpStatus("loading");
     try {
       const entries = await invoke<RemoteEntry[]>("ssh_list_directory", {
-        terminalId: remoteSessionId,
+        terminalId: sessionId,
         path,
       });
+      if (!isCurrentRequest()) return;
       setRemoteEntries(entries);
       setRemotePath(path);
       setSftpStatus("ready");
     } catch (error) {
+      if (!isCurrentRequest()) return;
       setSftpStatus("error");
       setConnectionError(String(error));
     }

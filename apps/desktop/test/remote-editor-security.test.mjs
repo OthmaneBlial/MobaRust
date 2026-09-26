@@ -20,6 +20,7 @@ import {
 import { findTerminalHttpUrls } from "../src/terminal-links.ts";
 import { isMultilineTerminalPaste, shouldConfirmTerminalPaste } from "../src/terminal-paste.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
+import { isCurrentRemoteDirectoryRequest } from "../src/remote-directory.ts";
 import { terminalFontSizeAfterZoom } from "../src/terminal-zoom.ts";
 import {
   boundedRemoteDesktopSize,
@@ -83,6 +84,9 @@ assert.equal(isRemoteMonitorRefreshInterval(15), true);
 assert.equal(isRemoteMonitorRefreshInterval(60), true);
 assert.equal(isRemoteMonitorRefreshInterval(5), false);
 assert.equal(isRemoteMonitorRefreshInterval(61), false);
+assert.equal(isCurrentRemoteDirectoryRequest(3, 3, "ssh-current", "ssh-current"), true);
+assert.equal(isCurrentRemoteDirectoryRequest(2, 3, "ssh-current", "ssh-current"), false);
+assert.equal(isCurrentRemoteDirectoryRequest(3, 3, "ssh-old", "ssh-current"), false);
 
 assert.equal(isLoopbackIpLiteral("127.0.0.1"), true);
 assert.equal(isLoopbackIpLiteral("127.0.0.42"), true);
