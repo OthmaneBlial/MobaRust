@@ -3393,6 +3393,14 @@ fn commit_local_file(
         _ => {}
     }
 
+    #[cfg(unix)]
+    if !overwrite {
+        // Linking a complete sibling fails if another process created the destination.
+        std::fs::hard_link(temporary, destination).map_err(SshError::LocalIo)?;
+        std::fs::remove_file(temporary).map_err(SshError::LocalIo)?;
+        return Ok(());
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -3705,6 +3713,19 @@ mod tests {
         assert!(commit_local_file(&temporary, &destination, false).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"original");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn local_download_commit_without_overwrite_promotes_complete_file() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("download.txt");
+        let temporary = directory.path().join(".download.txt.mobarust.part");
+        fs::write(&temporary, b"complete file").unwrap();
+
+        commit_local_file(&temporary, &destination, false).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"complete file");
+        assert!(!temporary.exists());
     }
 
     #[cfg(unix)]
