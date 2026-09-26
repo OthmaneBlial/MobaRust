@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use encoding_rs::WINDOWS_1252;
@@ -561,6 +561,15 @@ struct ConnectionParts {
     x11_channels: mpsc::Receiver<SshX11Channel>,
 }
 
+fn lock_observed_fingerprint(
+    observation: &Mutex<Option<String>>,
+) -> MutexGuard<'_, Option<String>> {
+    // The snapshot holds only the server's public-key fingerprint.
+    observation
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
@@ -570,10 +579,7 @@ impl client::Handler for ClientHandler {
     ) -> Result<bool, Self::Error> {
         let public_key = server_public_key.public_key();
         let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
-        *self
-            .observed_fingerprint
-            .lock()
-            .expect("SSH fingerprint observation poisoned") = Some(fingerprint.clone());
+        *lock_observed_fingerprint(&self.observed_fingerprint) = Some(fingerprint.clone());
 
         if self.inspection_only {
             return Ok(true);
@@ -685,9 +691,7 @@ pub async fn inspect_host_key(
     )
     .await;
     let handle = map_connect_result(connect, Arc::clone(&observed_fingerprint))?;
-    let fingerprint = observed_fingerprint
-        .lock()
-        .expect("SSH fingerprint observation poisoned")
+    let fingerprint = lock_observed_fingerprint(&observed_fingerprint)
         .clone()
         .ok_or_else(|| SshError::Handshake("SSH server did not present a host key".into()))?;
 
@@ -1034,10 +1038,7 @@ impl SshConnection {
     }
 
     pub fn state(&self) -> ConnectionState {
-        self.lifecycle
-            .lock()
-            .expect("SSH lifecycle lock poisoned")
-            .state()
+        lock_lifecycle(&self.lifecycle).state()
     }
 
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshShell, SshError> {
@@ -1180,7 +1181,7 @@ impl SshConnection {
 
     async fn disconnect_one(&self) -> Result<(), SshError> {
         {
-            let mut lifecycle = self.lifecycle.lock().map_err(|_| SshError::Lifecycle)?;
+            let mut lifecycle = lock_lifecycle(&self.lifecycle);
             match lifecycle.state() {
                 ConnectionState::Disconnected | ConnectionState::Cancelled => return Ok(()),
                 ConnectionState::Disconnecting => {}
@@ -1197,9 +1198,7 @@ impl SshConnection {
             .await
             .map_err(SshError::Transport);
         if result.is_ok() {
-            self.lifecycle
-                .lock()
-                .map_err(|_| SshError::Lifecycle)?
+            lock_lifecycle(&self.lifecycle)
                 .apply(ConnectionEvent::Disconnected)
                 .map_err(|_| SshError::Lifecycle)?;
         }
@@ -1776,16 +1775,19 @@ fn map_connect_result(
         Err(_) => Err(SshError::Timeout),
         Ok(Ok(handle)) => Ok(handle),
         Ok(Err(error)) => {
-            if let Some(fingerprint) = observed_fingerprint
-                .lock()
-                .expect("SSH fingerprint observation poisoned")
-                .clone()
-            {
+            if let Some(fingerprint) = lock_observed_fingerprint(&observed_fingerprint).clone() {
                 return Err(SshError::HostKeyRejected { fingerprint });
             }
             Err(map_connect_error(error))
         }
     }
+}
+
+fn lock_lifecycle(lifecycle: &Mutex<ConnectionLifecycle>) -> MutexGuard<'_, ConnectionLifecycle> {
+    // Lifecycle stores only state and revision, so poison leaves a usable value.
+    lifecycle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn map_connect_error(error: anyhow::Error) -> SshError {
@@ -2989,6 +2991,44 @@ mod tests {
         assert_eq!(
             accepted_fingerprint(&HostKeyPolicy::RejectUnknown, "SHA256:any"),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn poisoned_lifecycle_keeps_ssh_state_available() {
+        let mut snapshot = ConnectionLifecycle::new();
+        snapshot.apply(ConnectionEvent::BeginConnect).unwrap();
+        snapshot
+            .apply(ConnectionEvent::BeginAuthentication)
+            .unwrap();
+        snapshot
+            .apply(ConnectionEvent::AuthenticationSucceeded)
+            .unwrap();
+        let lifecycle = Mutex::new(snapshot);
+
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lifecycle = lifecycle.lock().unwrap();
+            std::panic::resume_unwind(Box::new("poison SSH lifecycle lock"));
+        }));
+        assert!(poison.is_err());
+        assert_eq!(
+            lock_lifecycle(&lifecycle).state(),
+            ConnectionState::Connected
+        );
+    }
+
+    #[test]
+    fn poisoned_fingerprint_observation_keeps_the_recorded_key() {
+        let observation = Mutex::new(Some("SHA256:fixture".to_owned()));
+
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _observation = observation.lock().unwrap();
+            std::panic::resume_unwind(Box::new("poison fingerprint lock"));
+        }));
+        assert!(poison.is_err());
+        assert_eq!(
+            lock_observed_fingerprint(&observation).as_deref(),
+            Some("SHA256:fixture")
         );
     }
 
