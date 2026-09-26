@@ -2568,7 +2568,7 @@ where
             "recursive SCP transfers are not supported; use SFTP".into(),
         ));
     }
-    let metadata = fs::metadata(source).await.map_err(SshError::LocalIo)?;
+    let metadata = local_upload_metadata(source).await?;
     if !metadata.is_file() {
         return Err(SshError::LocalIo(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -2733,7 +2733,7 @@ async fn run_upload<F>(
 where
     F: FnMut(u64, Option<u64>),
 {
-    let metadata = fs::metadata(source).await.map_err(SshError::LocalIo)?;
+    let metadata = local_upload_metadata(source).await?;
     if metadata.is_dir() {
         if !recursive {
             return Err(SshError::LocalIo(std::io::Error::new(
@@ -2807,6 +2807,16 @@ where
 }
 
 const MAX_RECURSIVE_ENTRIES: usize = 100_000;
+
+async fn local_upload_metadata(source: &Path) -> Result<std::fs::Metadata, SshError> {
+    let metadata = fs::symlink_metadata(source)
+        .await
+        .map_err(SshError::LocalIo)?;
+    if metadata.file_type().is_symlink() {
+        return Err(SshError::LocalUploadSymlink);
+    }
+    Ok(metadata)
+}
 
 type RemoteDownloadFile = (String, PathBuf, u64);
 type LocalUploadFile = (PathBuf, String, u64);
@@ -3439,9 +3449,9 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
-        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
-        validate_tunnel_host,
+        local_upload_metadata, reconnect_with_backoff, remote_child_path,
+        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
+        validate_transfer_component, validate_tunnel_host,
     };
     use std::fs;
     use std::time::{Duration, Instant};
@@ -3472,6 +3482,38 @@ mod tests {
             error,
             SshManagerError::Input(mobarust_core::TerminalInputError::TooLarge)
         ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_source_metadata_refuses_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let file = directory.path().join("file.txt");
+        let missing = directory.path().join("missing");
+        fs::write(&file, b"private contents").unwrap();
+        assert!(local_upload_metadata(&file).await.unwrap().is_file());
+        assert!(
+            local_upload_metadata(directory.path())
+                .await
+                .unwrap()
+                .is_dir()
+        );
+
+        for (name, target) in [
+            ("file-link", file.as_path()),
+            ("directory-link", directory.path()),
+            ("dangling-link", missing.as_path()),
+        ] {
+            let link = directory.path().join(name);
+            symlink(target, &link).unwrap();
+            assert!(matches!(
+                local_upload_metadata(&link).await,
+                Err(mobarust_ssh::SshError::LocalUploadSymlink)
+            ));
+        }
+        assert_eq!(fs::read(file).unwrap(), b"private contents");
     }
 
     #[test]

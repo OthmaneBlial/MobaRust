@@ -131,6 +131,8 @@ pub enum SshError {
     RemoteTextEncodingUnsupported,
     #[error("SCP operation failed")]
     Scp(String),
+    #[error("upload source is a symbolic link; select a regular file or directory")]
+    LocalUploadSymlink,
     #[error("local file operation failed")]
     LocalIo(#[source] std::io::Error),
     #[error("SFTP transfer cancelled")]
