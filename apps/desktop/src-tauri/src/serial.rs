@@ -1,4 +1,6 @@
-use mobarust_core::{ConnectionState, OutputBatcher, TerminalInputError, validate_terminal_input};
+use mobarust_core::{
+    ConnectionState, TerminalInputError, Utf8OutputDecoder, validate_terminal_input,
+};
 use mobarust_serial::{
     SerialConnection, SerialDataBits, SerialFlowControl, SerialOptions, SerialParity,
     SerialStopBits,
@@ -12,7 +14,6 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
-const OUTPUT_BATCH_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 
 #[derive(Debug, Deserialize)]
@@ -255,18 +256,16 @@ async fn run_serial_session(
     mut commands: mpsc::Receiver<SerialCommand>,
 ) {
     manager.emit_state(&app, &terminal_id, SerialSessionState::Connected, None);
-    let mut output_batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
+    let mut output_decoder = Utf8OutputDecoder::default();
     let reason = 'session: loop {
         tokio::select! {
             read = connection.read(16 * 1024), if connection.state() == ConnectionState::Connected => {
                 match read {
                     Ok(bytes) if bytes.is_empty() => continue,
                     Ok(bytes) => {
-                        for chunk in output_batcher.push(&bytes) {
-                            manager.publish_output(&app, &terminal_id, String::from_utf8_lossy(&chunk.bytes).into_owned());
-                        }
-                        if let Some(chunk) = output_batcher.flush() {
-                            manager.publish_output(&app, &terminal_id, String::from_utf8_lossy(&chunk.bytes).into_owned());
+                        let text = output_decoder.push(&bytes);
+                        if !text.is_empty() {
+                            manager.publish_output(&app, &terminal_id, text);
                         }
                     }
                     Err(error) => {
@@ -307,7 +306,13 @@ async fn run_serial_session(
                         }
                         manager.emit_state(&app, &terminal_id, SerialSessionState::Reconnecting, None);
                         match connection.reconnect().await {
-                            Ok(()) => manager.emit_state(&app, &terminal_id, SerialSessionState::Connected, None),
+                            Ok(()) => {
+                                let tail = output_decoder.finish();
+                                if !tail.is_empty() {
+                                    manager.publish_output(&app, &terminal_id, tail);
+                                }
+                                manager.emit_state(&app, &terminal_id, SerialSessionState::Connected, None);
+                            }
                             Err(error) => manager.emit_state(&app, &terminal_id, SerialSessionState::Failed, Some(error.to_string())),
                         }
                     }
@@ -319,6 +324,10 @@ async fn run_serial_session(
         }
     };
 
+    let tail = output_decoder.finish();
+    if !tail.is_empty() {
+        manager.publish_output(&app, &terminal_id, tail);
+    }
     let _ = connection.close().await;
     manager.emit_state(&app, &terminal_id, SerialSessionState::Disconnected, None);
     let _ = app.emit(
