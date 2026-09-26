@@ -2612,14 +2612,16 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = sftp.remove_file(&temporary).await;
+            let cleanup = sftp.remove_partial_upload(&temporary).await;
             let _ = sftp.close().await;
+            cleanup?;
             return Err(error);
         }
     };
     if !overwrite && upload_destination_exists(&sftp, remote_path, &temporary).await? {
-        let _ = sftp.remove_file(&temporary).await;
+        let cleanup = sftp.remove_partial_upload(&temporary).await;
         let _ = sftp.close().await;
+        cleanup?;
         return Err(SshError::Scp(
             "upload destination appeared during transfer".into(),
         ));
@@ -2796,14 +2798,16 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = sftp.remove_file(&temporary).await;
+            let cleanup = sftp.remove_partial_upload(&temporary).await;
             let _ = sftp.close().await;
+            cleanup?;
             return Err(error);
         }
     };
     if !overwrite && upload_destination_exists(&sftp, remote_path, &temporary).await? {
-        let _ = sftp.remove_file(&temporary).await;
+        let cleanup = sftp.remove_partial_upload(&temporary).await;
         let _ = sftp.close().await;
+        cleanup?;
         return Err(SshError::Sftp(
             "upload destination appeared during transfer".into(),
         ));
@@ -3214,12 +3218,12 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = sftp.remove_file(&temporary).await;
+            sftp.remove_partial_upload(&temporary).await?;
             return Err(error);
         }
     };
     if !overwrite && upload_destination_exists(sftp, remote_path, &temporary).await? {
-        let _ = sftp.remove_file(&temporary).await;
+        sftp.remove_partial_upload(&temporary).await?;
         return Err(SshError::Sftp(
             "upload destination appeared during transfer".into(),
         ));
@@ -3313,7 +3317,7 @@ async fn upload_destination_exists(
     match sftp.try_exists(remote_path).await {
         Ok(exists) => Ok(exists),
         Err(error) => {
-            let _ = sftp.remove_file(temporary).await;
+            sftp.remove_partial_upload(temporary).await?;
             Err(error)
         }
     }

@@ -2610,10 +2610,7 @@ impl SftpConnection {
         }
         .await;
         if result.is_err() && !matches!(&result, Err(SshError::RemoteUploadRestoreUncertain)) {
-            match self.remove_file(temporary).await {
-                Ok(()) | Err(SshError::SftpPathMissing) => {}
-                Err(_) => return Err(SshError::RemotePartialUploadCleanupFailed),
-            }
+            self.remove_partial_upload(temporary).await?;
         }
         result
     }
@@ -2702,6 +2699,15 @@ impl SftpConnection {
 
     pub async fn remove_file(&self, path: impl Into<String>) -> Result<(), SshError> {
         self.session.remove_file(path).await.map_err(map_sftp_error)
+    }
+
+    /// Remove a partial transfer file, reporting cleanup failures while
+    /// treating an already-missing temporary file as clean.
+    pub async fn remove_partial_upload(&self, path: &str) -> Result<(), SshError> {
+        match self.remove_file(path).await {
+            Ok(()) | Err(SshError::SftpPathMissing) => Ok(()),
+            Err(_) => Err(SshError::RemotePartialUploadCleanupFailed),
+        }
     }
 
     pub async fn close(&self) -> Result<(), SshError> {
