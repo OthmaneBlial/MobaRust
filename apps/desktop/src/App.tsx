@@ -31,6 +31,15 @@ import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
 } from "./remote-desktop-errors";
+import {
+  appendMacroRecordingInput,
+  createRecordedMacroDraft,
+  type MacroAction,
+  type MacroApprovalPolicy,
+  type MacroKey,
+  type MacroRecord,
+  type MacroRecordingState,
+} from "./macro-recording";
 import { isCurrentSessionRequest } from "./session-request";
 import {
   Activity,
@@ -463,35 +472,6 @@ type SnippetRecord = {
   variables: string[];
 };
 
-type MacroKey = "enter" | "escape" | "tab" | "backspace" | "ctrlC" | "ctrlD" | "arrowUp" | "arrowDown" | "arrowLeft" | "arrowRight";
-type MacroApprovalPolicy = "beforeRun" | "eachAction";
-
-type MacroAction =
-  | { kind: "sendText"; text: string }
-  | { kind: "wait"; milliseconds: number }
-  | { kind: "sendKey"; key: MacroKey }
-  | { kind: "executeCommand"; command: string }
-  | { kind: "openSession"; sessionId: string }
-  | { kind: "switchWorkspace"; workspaceId: string };
-
-type MacroRecord = {
-  id: string;
-  title: string;
-  description: string;
-  tags: string[];
-  actions: MacroAction[];
-  approval: MacroApprovalPolicy;
-};
-
-type MacroRecordingState = {
-  terminalId: string;
-  terminalLabel: string;
-  actions: MacroAction[];
-  textBytes: number;
-};
-
-const MAX_RECORDED_MACRO_ACTIONS = 64;
-const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
 const MAX_SERVER_ALIVE_INTERVAL_SECONDS = 86_400;
 
 function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
@@ -524,49 +504,6 @@ function formatShortcut(shortcut: string): string {
 
 function normalizeMacroRecord(record: MacroRecord): MacroRecord {
   return { ...record, approval: record.approval ?? "beforeRun" };
-}
-
-function recordedMacroActions(data: string): MacroAction[] {
-  const controlKeys: Array<[string, MacroKey]> = [
-    ["\x1b[A", "arrowUp"],
-    ["\x1b[B", "arrowDown"],
-    ["\x1b[D", "arrowLeft"],
-    ["\x1b[C", "arrowRight"],
-    ["\r\n", "enter"],
-    ["\x03", "ctrlC"],
-    ["\x04", "ctrlD"],
-    ["\x7f", "backspace"],
-    ["\x1b", "escape"],
-    ["\t", "tab"],
-    ["\r", "enter"],
-    ["\n", "enter"],
-  ];
-  const actions: MacroAction[] = [];
-  let text = "";
-  const flushText = () => {
-    if (text) actions.push({ kind: "sendText", text });
-    text = "";
-  };
-  let index = 0;
-  while (index < data.length) {
-    const control = controlKeys.find(([sequence]) => data.startsWith(sequence, index));
-    if (control) {
-      flushText();
-      actions.push({ kind: "sendKey", key: control[1] });
-      index += control[0].length;
-      continue;
-    }
-    const code = data.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) {
-      flushText();
-      index += 1;
-      continue;
-    }
-    text += data[index];
-    index += 1;
-  }
-  flushText();
-  return actions;
 }
 
 type SshAuthRequest =
@@ -1675,18 +1612,11 @@ function App() {
     if (!recording) return;
     macroRecordingRef.current = null;
     setMacroRecording(null);
-    if (recording.actions.length === 0) {
+    const draft = createRecordedMacroDraft(recording, crypto.randomUUID());
+    if (!draft) {
       setSessionNotice("Macro recording stopped without captured input.");
       return;
     }
-    const draft: MacroRecord = {
-      id: crypto.randomUUID(),
-      title: `Recorded · ${recording.terminalLabel}`,
-      description: "Captured terminal input. Review every action before saving or running.",
-      tags: ["recorded"],
-      actions: recording.actions,
-      approval: "eachAction",
-    };
     setRecordedMacroDraft(draft);
     setMacrosOpen(true);
     setSessionNotice(`Captured ${recording.actions.length} bounded macro action${recording.actions.length === 1 ? "" : "s"}. Review before saving.`);
@@ -1782,22 +1712,21 @@ function App() {
   const recordTerminalInput = useCallback((workspaceId: string, data: string) => {
     const recording = macroRecordingRef.current;
     if (!recording || recording.terminalId !== workspaceId) return;
-    const actions = recordedMacroActions(data);
-    if (actions.length === 0) return;
-    const textBytes = recording.textBytes + new TextEncoder().encode(data).length;
-    const mergedActions = [...recording.actions];
-    for (const action of actions) {
-      const previous = mergedActions.at(-1);
-      if (previous?.kind === "sendText" && action.kind === "sendText") previous.text += action.text;
-      else mergedActions.push(action);
-    }
-    if (mergedActions.length > MAX_RECORDED_MACRO_ACTIONS || textBytes > MAX_RECORDED_MACRO_TEXT_BYTES) {
+    const next = appendMacroRecordingInput(recording, data);
+    if (!next) {
       macroRecordingRef.current = null;
       setMacroRecording(null);
-      setConnectionError("Macro recording stopped at its safe 64-action/64 KiB limit. Review the captured draft before saving.");
+      const draft = createRecordedMacroDraft(recording, crypto.randomUUID());
+      if (draft) {
+        setRecordedMacroDraft(draft);
+        setMacrosOpen(true);
+        setConnectionError("Macro recording stopped at its safe 64-action/64 KiB limit. Captured actions are open for review; input that exceeded the limit was not captured.");
+      } else {
+        setConnectionError("Macro recording stopped at its safe 64-action/64 KiB limit before any action was captured. The input that exceeded the limit was not captured.");
+      }
       return;
     }
-    const next = { ...recording, actions: mergedActions, textBytes };
+    if (next === recording) return;
     macroRecordingRef.current = next;
     setMacroRecording(next);
   }, []);
