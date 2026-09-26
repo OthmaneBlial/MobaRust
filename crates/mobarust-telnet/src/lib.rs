@@ -331,8 +331,9 @@ impl TelnetCodec {
                 }
             }
             WONT => {
-                self.remote_options.remove(&option);
-                responses.push(vec![IAC, DONT, option]);
+                if self.remote_options.remove(&option) {
+                    responses.push(vec![IAC, DONT, option]);
+                }
             }
             DO => {
                 if supports_local_option(option) {
@@ -348,8 +349,9 @@ impl TelnetCodec {
                 }
             }
             DONT => {
-                self.local_options.remove(&option);
-                responses.push(vec![IAC, WONT, option]);
+                if self.local_options.remove(&option) {
+                    responses.push(vec![IAC, WONT, option]);
+                }
             }
             _ => {}
         }
@@ -819,6 +821,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(output.responses, vec![terminal_type_response(&options)]);
+    }
+
+    #[test]
+    fn codec_does_not_acknowledge_already_disabled_options() {
+        let options = TelnetOptions::default();
+        let mut codec = TelnetCodec::default();
+        let disabled = [IAC, WONT, ECHO, IAC, DONT, NAWS];
+        assert!(
+            codec
+                .feed(&disabled, &options)
+                .unwrap()
+                .responses
+                .is_empty()
+        );
+
+        codec
+            .feed(&[IAC, WILL, ECHO, IAC, DO, NAWS], &options)
+            .unwrap();
+        assert_eq!(
+            codec.feed(&disabled, &options).unwrap().responses,
+            vec![vec![IAC, DONT, ECHO], vec![IAC, WONT, NAWS]]
+        );
+        assert!(
+            codec
+                .feed(&disabled, &options)
+                .unwrap()
+                .responses
+                .is_empty()
+        );
     }
 
     #[test]
