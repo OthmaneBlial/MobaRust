@@ -24,6 +24,10 @@ symlinks are refused, and Windows replacement does not delete an existing file
 before the replacement succeeds. Existing files require the explicit overwrite
 choice. Cancellation removes the in-flight temporary file and leaves no
 partial destination file presented as complete.
+Recursive downloads also refuse existing local subdirectory symlinks before
+creating files. A concurrent local process can still swap an ancestor after
+that check; directory-handle-relative operations would be needed to close
+that race across platforms.
 
 ## Consequences
 

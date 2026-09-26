@@ -2888,9 +2888,7 @@ where
     let (files, directories, total) =
         collect_remote_files(sftp, remote_root, local_root, cancel).await?;
     for directory in directories {
-        fs::create_dir_all(directory)
-            .await
-            .map_err(SshError::LocalIo)?;
+        ensure_local_download_directory(&directory).await?;
     }
 
     let mut transferred = 0_u64;
@@ -2918,6 +2916,31 @@ where
         on_progress(transferred, Some(total));
     }
     Ok(transferred)
+}
+
+async fn ensure_local_download_directory(path: &Path) -> Result<(), SshError> {
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => return Ok(()),
+        Ok(_) => {
+            return Err(SshError::Sftp(
+                "recursive download refuses a symlink or non-directory destination".into(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(SshError::LocalIo(error)),
+    }
+    match fs::create_dir(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(SshError::LocalIo(error)),
+    }
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err(SshError::Sftp(
+            "recursive download refuses a symlink or non-directory destination".into(),
+        )),
+        Err(error) => Err(SshError::LocalIo(error)),
+    }
 }
 
 async fn collect_remote_files(
@@ -2993,9 +3016,7 @@ where
         _ => {}
     }
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .await
-            .map_err(SshError::LocalIo)?;
+        ensure_local_download_directory(parent).await?;
     }
     let temporary = local_part_path(destination)?;
     let mut file = OpenOptions::new()
@@ -3509,10 +3530,10 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        download_destination_exists, local_part_path, local_upload_metadata,
-        open_local_upload_file, reconnect_with_backoff, remote_child_path, remove_partial_download,
-        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
-        validate_transfer_component, validate_tunnel_host,
+        download_destination_exists, ensure_local_download_directory, local_part_path,
+        local_upload_metadata, open_local_upload_file, reconnect_with_backoff, remote_child_path,
+        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
+        transfer_metrics, validate_transfer_component, validate_tunnel_host,
     };
     use std::fs;
     use std::time::{Duration, Instant};
@@ -3575,6 +3596,26 @@ mod tests {
             ));
         }
         assert_eq!(fs::read(file).unwrap(), b"private contents");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recursive_download_directory_refuses_existing_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let selected = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let redirected = selected.path().join("subdirectory");
+        symlink(outside.path(), &redirected).unwrap();
+        assert!(matches!(
+            ensure_local_download_directory(&redirected).await,
+            Err(mobarust_ssh::SshError::Sftp(_))
+        ));
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+
+        let real = selected.path().join("real-subdirectory");
+        ensure_local_download_directory(&real).await.unwrap();
+        assert!(fs::symlink_metadata(&real).unwrap().is_dir());
     }
 
     #[cfg(unix)]
