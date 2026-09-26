@@ -3768,6 +3768,7 @@ function App() {
               <button className="primary-button" onClick={() => startNewTerminal()}><Plus size={15} /> New terminal</button>
             </div>
           </div>
+          {connectionError && !quickConnectOpen && activeView !== "files" && <div className="connect-error workspace-error" role="alert"><span>{connectionError}</span><button type="button" className="outline-button" aria-label="Dismiss error" onClick={() => setConnectionError(null)}>Dismiss</button></div>}
           {sessionNotice && <div className="workspace-notice" role="status"><CheckCircle2 size={14} /><span>{sessionNotice}</span></div>}
 
           <div className="workspace-grid">
