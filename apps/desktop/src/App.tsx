@@ -1587,7 +1587,6 @@ function App() {
 
   useEffect(() => {
     remoteFileOpenRequestRef.current += 1;
-    setEditingRemoteFile(null);
   }, [remoteSessionId]);
 
   useEffect(() => {
@@ -2878,8 +2877,8 @@ function App() {
   }, [remoteSessionId]);
 
   const saveRemoteTextFile = useCallback(async (content: string, encoding: RemoteTextDocument["encoding"]) => {
-    if (!remoteSessionId || !editingRemoteFile || editingRemoteFile.sessionId !== remoteSessionId) return;
-    const sessionId = remoteSessionId;
+    if (!editingRemoteFile) return;
+    const sessionId = editingRemoteFile.sessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file", {
       terminalId: sessionId,
       path: editingRemoteFile.document.path,
@@ -2887,16 +2886,17 @@ function App() {
       content,
       encoding,
     });
-    if (remoteSessionIdRef.current !== sessionId) return;
-    setEditingRemoteFile({ sessionId, document: saved });
-    setConnectionError(null);
+    setEditingRemoteFile((current) => current === editingRemoteFile ? { sessionId, document: saved } : current);
     setSessionNotice(`Saved ${saved.path}. Remote changes were checked before temporary-file promotion.`);
-    void loadRemoteDirectory(remotePath);
-  }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
+    if (remoteSessionIdRef.current === sessionId) {
+      setConnectionError(null);
+      void loadRemoteDirectory(remotePath);
+    }
+  }, [editingRemoteFile, loadRemoteDirectory, remotePath]);
 
   const saveRemoteTextFileAs = useCallback(async (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => {
-    if (!remoteSessionId || !editingRemoteFile || editingRemoteFile.sessionId !== remoteSessionId) return;
-    const sessionId = remoteSessionId;
+    if (!editingRemoteFile) return;
+    const sessionId = editingRemoteFile.sessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file_as", {
       terminalId: sessionId,
       path,
@@ -2904,12 +2904,13 @@ function App() {
       encoding,
       overwrite,
     });
-    if (remoteSessionIdRef.current !== sessionId) return;
-    setEditingRemoteFile({ sessionId, document: saved });
-    setConnectionError(null);
+    setEditingRemoteFile((current) => current === editingRemoteFile ? { sessionId, document: saved } : current);
     setSessionNotice(`Saved a new remote file at ${saved.path}.`);
-    void loadRemoteDirectory(remotePath);
-  }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
+    if (remoteSessionIdRef.current === sessionId) {
+      setConnectionError(null);
+      void loadRemoteDirectory(remotePath);
+    }
+  }, [editingRemoteFile, loadRemoteDirectory, remotePath]);
 
   const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
@@ -3665,6 +3666,10 @@ function App() {
         }
         if (event.key === "Escape") return;
       }
+      if (editingRemoteFile) {
+        if (matchesShortcut(event, settings.keyboard.closeTab)) event.preventDefault();
+        return;
+      }
       const terminalTarget = event.target instanceof HTMLElement && Boolean(event.target.closest(".xterm"));
       if (isEditableKeyboardTarget(event.target) && !terminalTarget) return;
       if (terminalTarget && (event.metaKey || event.ctrlKey) && !event.altKey) {
@@ -3735,7 +3740,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -3975,7 +3980,7 @@ function App() {
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
-      {editingRemoteFile?.sessionId === remoteSessionId && <RemoteEditorModal key={editingRemoteFile.document.revision} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
+      {editingRemoteFile && <RemoteEditorModal key={`${editingRemoteFile.sessionId}:${editingRemoteFile.document.path}:${editingRemoteFile.document.revision}`} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal key={recordedMacroDraft?.id ?? "macros"} initialDraft={recordedMacroDraft ?? undefined} macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => { setMacrosOpen(false); setRecordedMacroDraft(null); }} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
@@ -4186,6 +4191,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   const language = remoteEditorLanguage(document.path);
 
   const close = () => {
+    if (busy) return;
     if (dirty && !window.confirm("Discard unsaved remote changes?")) return;
     onClose();
   };
@@ -4230,12 +4236,12 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   };
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={close}><section className="remote-editor-modal" role="dialog" aria-modal="true" aria-label={`Edit ${document.path}`} onMouseDown={(event) => event.stopPropagation()}>
-    <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close}><X size={17} /></button></div>
-    <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding"><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
+    <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close} disabled={busy}><X size={17} /></button></div>
+    <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding" disabled={busy}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
     {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error.includes("target already exists") ? "That remote target already exists. Choose Replace when using Save as if overwriting is intentional." : error}</span></div>}
     <div className="remote-editor-code-shell">
       <pre ref={highlightRef} className="remote-editor-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightRemoteCode(content, language) }} />
-      <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" />
+      <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" disabled={busy} />
     </div>
     <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
