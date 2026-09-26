@@ -37,7 +37,7 @@ or server is a pending result, not a reason to probe the local machine.
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
 | VNC | Isolated helper controls local RFB fixtures, including password auth and reconnect | Mature-engine selection, encrypted transport, and cross-platform packaging |
-| RDP | Isolated helper and wire/lifecycle tests only | A real desktop, Windows interoperability, certificate validation, audio, gateway, and multi-monitor behavior |
+| RDP | Isolated helper and a real loopback IronRDP server fixture cover TLS/Hybrid authentication, framebuffer, input, resize, and reconnect | Real Windows desktops, platform certificate stores, audio, gateway interoperability, and multi-monitor behavior |
 
 These rows must remain distinct from the release matrix below. A fixture or
 unit test must never be promoted to hardware or cross-platform evidence by
