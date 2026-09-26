@@ -2616,7 +2616,7 @@ where
         let _ = sftp.close().await;
         return Err(error);
     }
-    sftp.close().await?;
+    let _ = sftp.close().await;
     Ok(copied)
 }
 
