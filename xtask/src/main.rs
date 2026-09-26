@@ -830,9 +830,11 @@ fn pre_push_check() -> Result<(), String> {
     if Path::new(".github/workflows").exists() {
         for entry in fs::read_dir(".github/workflows").map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
-            if entry.file_name() != "release.yml" || !entry.path().is_file() {
+            let name = entry.file_name();
+            if (name != "release.yml" && name != "quality.yml") || !entry.path().is_file() {
                 return Err(
-                    "only the desktop release workflow is allowed in the push audit".into(),
+                    "only the desktop release and quality workflows are allowed in the push audit"
+                        .into(),
                 );
             }
         }
