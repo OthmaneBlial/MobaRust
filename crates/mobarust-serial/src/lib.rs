@@ -6,7 +6,7 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
@@ -242,6 +242,13 @@ impl std::fmt::Debug for SerialConnection {
 }
 
 impl SerialConnection {
+    fn lock_lifecycle(&self) -> MutexGuard<'_, ConnectionLifecycle> {
+        // Lifecycle stores only state and revision, so poison leaves a usable value.
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub async fn connect(options: SerialOptions) -> Result<Self, SerialError> {
         options.validate()?;
         let open_options = options.clone();
@@ -283,10 +290,7 @@ impl SerialConnection {
     }
 
     pub fn state(&self) -> ConnectionState {
-        self.lifecycle
-            .lock()
-            .expect("serial lifecycle lock poisoned")
-            .state()
+        self.lock_lifecycle().state()
     }
 
     pub fn options(&self) -> &SerialOptions {
@@ -358,9 +362,7 @@ impl SerialConnection {
     }
 
     pub async fn reconnect(&self) -> Result<(), SerialError> {
-        self.lifecycle
-            .lock()
-            .expect("serial lifecycle lock poisoned")
+        self.lock_lifecycle()
             .apply(ConnectionEvent::BeginReconnect)
             .map_err(|_| SerialError::Lifecycle)?;
         self.take_port()?;
@@ -383,7 +385,7 @@ impl SerialConnection {
             Ok(Ok(Ok(port))) => port,
         };
         *self.port.lock().map_err(|_| SerialError::Worker)? = Some(new_port);
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
+        let mut lifecycle = self.lock_lifecycle();
         lifecycle
             .apply(ConnectionEvent::BeginAuthentication)
             .map_err(|_| SerialError::Lifecycle)?;
@@ -394,19 +396,15 @@ impl SerialConnection {
     }
 
     pub fn mark_lost(&self) {
-        if let Ok(mut lifecycle) = self.lifecycle.lock() {
-            let _ = lifecycle.apply(ConnectionEvent::ConnectionLost);
-        }
+        let _ = self.lock_lifecycle().apply(ConnectionEvent::ConnectionLost);
     }
 
     fn mark_failed(&self) {
-        if let Ok(mut lifecycle) = self.lifecycle.lock() {
-            let _ = lifecycle.apply(ConnectionEvent::Fail);
-        }
+        let _ = self.lock_lifecycle().apply(ConnectionEvent::Fail);
     }
 
     pub async fn cancel(&self) -> Result<(), SerialError> {
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
+        let mut lifecycle = self.lock_lifecycle();
         if matches!(
             lifecycle.state(),
             ConnectionState::Connected
@@ -424,7 +422,7 @@ impl SerialConnection {
     }
 
     pub async fn close(&self) -> Result<(), SerialError> {
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
+        let mut lifecycle = self.lock_lifecycle();
         if matches!(
             lifecycle.state(),
             ConnectionState::Connected
@@ -438,7 +436,7 @@ impl SerialConnection {
         }
         drop(lifecycle);
         self.take_port()?;
-        let mut lifecycle = self.lifecycle.lock().map_err(|_| SerialError::Worker)?;
+        let mut lifecycle = self.lock_lifecycle();
         if lifecycle.state() == ConnectionState::Disconnecting {
             lifecycle
                 .apply(ConnectionEvent::Disconnected)
@@ -628,5 +626,27 @@ mod tests {
             .unwrap();
         lifecycle.apply(ConnectionEvent::Cancel).unwrap();
         assert_eq!(lifecycle.state(), ConnectionState::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_lifecycle_lock_keeps_state_and_close_available() {
+        use serialport::{SerialPort, TTYPort};
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let (_master, device) = TTYPort::pair().unwrap();
+            let options = SerialOptions::new(device.name().unwrap(), 115_200);
+            let connection = SerialConnection::from_open_port(options, Box::new(device)).unwrap();
+
+            let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _lifecycle = connection.lifecycle.lock().unwrap();
+                std::panic::resume_unwind(Box::new("poison lifecycle lock"));
+            }));
+            assert!(poison.is_err());
+            assert_eq!(connection.state(), ConnectionState::Connected);
+
+            connection.close().await.unwrap();
+            assert_eq!(connection.state(), ConnectionState::Disconnected);
+        });
     }
 }
