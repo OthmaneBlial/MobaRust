@@ -335,6 +335,7 @@ enum SshCommand {
     },
     StartTransfer {
         job: TransferJob,
+        cancel: oneshot::Receiver<()>,
     },
 }
 
@@ -520,7 +521,6 @@ struct TransferJob {
     local_path: PathBuf,
     overwrite: bool,
     recursive: bool,
-    cancel: Option<oneshot::Receiver<()>>,
     source: String,
     destination: String,
     created_at: Instant,
@@ -1107,7 +1107,6 @@ impl SshManager {
             local_path: local_path.clone(),
             overwrite: request.overwrite,
             recursive: request.recursive,
-            cancel: Some(cancel_receiver),
             source: transfer_source(&direction, &remote_path, &local_path),
             destination: transfer_destination(&direction, &remote_path, &local_path),
             created_at: Instant::now(),
@@ -1126,7 +1125,10 @@ impl SshManager {
 
         self.emit_transfer(&app, job.event(0, None, TransferState::Queued, None));
 
-        let command = SshCommand::StartTransfer { job };
+        let command = SshCommand::StartTransfer {
+            job,
+            cancel: cancel_receiver,
+        };
         if sender.send(command).await.is_err() {
             self.finish_transfer(&transfer_id);
             return Err(SshManagerError::Closed);
@@ -1856,12 +1858,12 @@ async fn run_shell_once(
                             .await;
                         });
                     }
-                    Some(SshCommand::StartTransfer { job }) => {
+                    Some(SshCommand::StartTransfer { job, cancel }) => {
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
                         let transfer_app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            run_transfer(transfer_app, transfer_manager, transfer_connection, job).await;
+                            run_transfer(transfer_app, transfer_manager, transfer_connection, job, cancel).await;
                         });
                     }
                     None => {
@@ -2353,13 +2355,12 @@ async fn run_transfer(
     app: AppHandle,
     manager: SshManager,
     connection: Arc<SshConnection>,
-    mut job: TransferJob,
+    job: TransferJob,
+    mut cancel: oneshot::Receiver<()>,
 ) {
     let mut lifecycle = TransferLifecycle::new();
     let mut transferred = 0_u64;
     let mut total_bytes = None;
-    let mut cancel = job.cancel.take().expect("transfer cancellation receiver");
-
     let permit = tokio::select! {
         _ = &mut cancel => {
             let _ = lifecycle.apply(TransferEvent::CancelRequested);
