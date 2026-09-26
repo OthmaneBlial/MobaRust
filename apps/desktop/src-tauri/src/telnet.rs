@@ -1,4 +1,6 @@
-use mobarust_core::{ConnectionState, OutputBatcher, TerminalInputError, validate_terminal_input};
+use mobarust_core::{
+    ConnectionState, TerminalInputError, Utf8OutputDecoder, validate_terminal_input,
+};
 use mobarust_telnet::{TelnetConnection, TelnetEncoding, TelnetError, TelnetOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,7 +12,6 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
-const OUTPUT_BATCH_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -262,7 +263,7 @@ async fn run_telnet_session(
     mut commands: mpsc::Receiver<TelnetCommand>,
 ) {
     manager.emit_state(&app, &terminal_id, TelnetSessionState::Connected, None);
-    let mut output_batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
+    let mut output_decoder = Utf8OutputDecoder::default();
     let mut buffer = vec![0_u8; 16 * 1024];
     let reason = 'session: loop {
         tokio::select! {
@@ -279,11 +280,12 @@ async fn run_telnet_session(
                         continue 'session;
                     }
                     Ok(Ok(bytes)) => {
-                        for chunk in output_batcher.push(&buffer[..bytes]) {
-                            manager.publish_output(&app, &terminal_id, connection.encoding().decode(&chunk.bytes));
-                        }
-                        if let Some(chunk) = output_batcher.flush() {
-                            manager.publish_output(&app, &terminal_id, connection.encoding().decode(&chunk.bytes));
+                        let text = match connection.encoding() {
+                            TelnetEncoding::Utf8 => output_decoder.push(&buffer[..bytes]),
+                            encoding => encoding.decode(&buffer[..bytes]),
+                        };
+                        if !text.is_empty() {
+                            manager.publish_output(&app, &terminal_id, text);
                         }
                     }
                     Ok(Err(error)) => {
@@ -337,7 +339,13 @@ async fn run_telnet_session(
                         }
                         manager.emit_state(&app, &terminal_id, TelnetSessionState::Reconnecting, None);
                         match connection.reconnect().await {
-                            Ok(()) => manager.emit_state(&app, &terminal_id, TelnetSessionState::Connected, None),
+                            Ok(()) => {
+                                let tail = output_decoder.finish();
+                                if !tail.is_empty() {
+                                    manager.publish_output(&app, &terminal_id, tail);
+                                }
+                                manager.emit_state(&app, &terminal_id, TelnetSessionState::Connected, None);
+                            }
                             Err(error) => manager.emit_state(&app, &terminal_id, TelnetSessionState::Failed, Some(error.to_string())),
                         }
                     }
@@ -349,6 +357,10 @@ async fn run_telnet_session(
         }
     };
 
+    let tail = output_decoder.finish();
+    if !tail.is_empty() {
+        manager.publish_output(&app, &terminal_id, tail);
+    }
     let _ = connection.close().await;
     manager.emit_state(&app, &terminal_id, TelnetSessionState::Disconnected, None);
     let _ = app.emit(
