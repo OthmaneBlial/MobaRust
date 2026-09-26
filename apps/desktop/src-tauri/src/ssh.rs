@@ -2607,7 +2607,7 @@ where
             return Err(error);
         }
     };
-    if !overwrite && sftp.try_exists(remote_path).await? {
+    if !overwrite && upload_destination_exists(&sftp, remote_path, &temporary).await? {
         let _ = sftp.remove_file(&temporary).await;
         let _ = sftp.close().await;
         return Err(SshError::Scp(
@@ -2792,7 +2792,7 @@ where
             return Err(error);
         }
     };
-    if !overwrite && sftp.try_exists(remote_path).await? {
+    if !overwrite && upload_destination_exists(&sftp, remote_path, &temporary).await? {
         let _ = sftp.remove_file(&temporary).await;
         let _ = sftp.close().await;
         return Err(SshError::Sftp(
@@ -3189,7 +3189,7 @@ where
             return Err(error);
         }
     };
-    if !overwrite && sftp.try_exists(remote_path).await? {
+    if !overwrite && upload_destination_exists(sftp, remote_path, &temporary).await? {
         let _ = sftp.remove_file(&temporary).await;
         return Err(SshError::Sftp(
             "upload destination appeared during transfer".into(),
@@ -3277,6 +3277,20 @@ async fn open_sftp_with_timeout(
     tokio::time::timeout(Duration::from_secs(12), connection.open_sftp())
         .await
         .map_err(|_| SshError::Timeout)?
+}
+
+async fn upload_destination_exists(
+    sftp: &mobarust_ssh::SftpConnection,
+    remote_path: &str,
+    temporary: &str,
+) -> Result<bool, SshError> {
+    match sftp.try_exists(remote_path).await {
+        Ok(exists) => Ok(exists),
+        Err(error) => {
+            let _ = sftp.remove_file(temporary).await;
+            Err(error)
+        }
+    }
 }
 
 fn validate_remote_file_path(path: &str) -> Result<String, SshManagerError> {
