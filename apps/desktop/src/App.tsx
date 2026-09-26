@@ -1474,7 +1474,7 @@ function App() {
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
-  const [editingRemoteFile, setEditingRemoteFile] = useState<RemoteTextDocument | null>(null);
+  const [editingRemoteFile, setEditingRemoteFile] = useState<{ sessionId: string; document: RemoteTextDocument } | null>(null);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [localDropActive, setLocalDropActive] = useState(false);
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
@@ -1488,6 +1488,7 @@ function App() {
   const remoteMonitorRequestSequenceRef = useRef(0);
   const remoteMonitorGenerationRef = useRef(0);
   const remoteDirectoryRequestRef = useRef(0);
+  const remoteFileOpenRequestRef = useRef(0);
   const remoteSessionIdRef = useRef<string | null>(null);
   const [networkHost, setNetworkHost] = useState("");
   const [networkPort, setNetworkPort] = useState("22");
@@ -1576,6 +1577,11 @@ function App() {
   const remoteProtocol = activeTerminal?.remoteProtocol ?? null;
   const remoteHost = activeTerminal?.remoteHost ?? null;
   const terminalStatus = activeTerminal?.status ?? "closed";
+
+  useEffect(() => {
+    remoteFileOpenRequestRef.current += 1;
+    setEditingRemoteFile(null);
+  }, [remoteSessionId]);
 
   useEffect(() => {
     if (!activeTerminalId && activeTerminal) setActiveTerminalId(activeTerminal.id);
@@ -2838,43 +2844,61 @@ function App() {
 
   const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId || entry.isDirectory) return;
+    const sessionId = remoteSessionId;
+    const requestId = ++remoteFileOpenRequestRef.current;
     try {
       const document = await invoke<RemoteTextDocument>("ssh_open_remote_text_file", {
-        terminalId: remoteSessionId,
+        terminalId: sessionId,
         path: entry.path,
       });
-      setEditingRemoteFile(document);
+      if (!isCurrentSessionRequest(
+        requestId,
+        remoteFileOpenRequestRef.current,
+        sessionId,
+        remoteSessionIdRef.current,
+      )) return;
+      setEditingRemoteFile({ sessionId, document });
       setConnectionError(null);
     } catch (error) {
+      if (!isCurrentSessionRequest(
+        requestId,
+        remoteFileOpenRequestRef.current,
+        sessionId,
+        remoteSessionIdRef.current,
+      )) return;
       setConnectionError(`Remote file could not be opened: ${String(error)}`);
     }
   }, [remoteSessionId]);
 
   const saveRemoteTextFile = useCallback(async (content: string, encoding: RemoteTextDocument["encoding"]) => {
-    if (!remoteSessionId || !editingRemoteFile) return;
+    if (!remoteSessionId || !editingRemoteFile || editingRemoteFile.sessionId !== remoteSessionId) return;
+    const sessionId = remoteSessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file", {
-      terminalId: remoteSessionId,
-      path: editingRemoteFile.path,
-      expectedRevision: editingRemoteFile.revision,
+      terminalId: sessionId,
+      path: editingRemoteFile.document.path,
+      expectedRevision: editingRemoteFile.document.revision,
       content,
       encoding,
     });
-    setEditingRemoteFile(saved);
+    if (remoteSessionIdRef.current !== sessionId) return;
+    setEditingRemoteFile({ sessionId, document: saved });
     setConnectionError(null);
     setSessionNotice(`Saved ${saved.path}. Remote changes were checked before temporary-file promotion.`);
     void loadRemoteDirectory(remotePath);
   }, [editingRemoteFile, loadRemoteDirectory, remotePath, remoteSessionId]);
 
   const saveRemoteTextFileAs = useCallback(async (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => {
-    if (!remoteSessionId || !editingRemoteFile) return;
+    if (!remoteSessionId || !editingRemoteFile || editingRemoteFile.sessionId !== remoteSessionId) return;
+    const sessionId = remoteSessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file_as", {
-      terminalId: remoteSessionId,
+      terminalId: sessionId,
       path,
       content,
       encoding,
       overwrite,
     });
-    setEditingRemoteFile(saved);
+    if (remoteSessionIdRef.current !== sessionId) return;
+    setEditingRemoteFile({ sessionId, document: saved });
     setConnectionError(null);
     setSessionNotice(`Saved a new remote file at ${saved.path}.`);
     void loadRemoteDirectory(remotePath);
@@ -3944,7 +3968,7 @@ function App() {
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
-      {editingRemoteFile && <RemoteEditorModal key={editingRemoteFile.revision} document={editingRemoteFile} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
+      {editingRemoteFile?.sessionId === remoteSessionId && <RemoteEditorModal key={editingRemoteFile.document.revision} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal key={recordedMacroDraft?.id ?? "macros"} initialDraft={recordedMacroDraft ?? undefined} macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => { setMacrosOpen(false); setRecordedMacroDraft(null); }} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
