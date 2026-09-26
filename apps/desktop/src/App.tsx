@@ -1004,10 +1004,17 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         onNativeTerminalId(workspaceId, terminalId);
         onStatusChange(workspaceId, "connected");
         fit();
+        await invoke("terminal_attach", { terminalId });
       } catch {
         if (disposed) {
           releaseListeners();
           return;
+        }
+        if (!remoteProtocol && terminalIdRef.current) {
+          const terminalId = terminalIdRef.current;
+          terminalIdRef.current = null;
+          onNativeTerminalId(workspaceId, null);
+          void invoke("terminal_close", { terminalId }).catch(() => undefined);
         }
         onStatusChange(workspaceId, "error");
         const message = remoteProtocol

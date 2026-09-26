@@ -1703,6 +1703,13 @@ fn terminal_spawn(
 }
 
 #[tauri::command]
+fn terminal_attach(manager: State<'_, TerminalManager>, terminal_id: String) -> Result<(), String> {
+    manager
+        .attach(&terminal_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn terminal_list_wsl() -> Result<Vec<String>, String> {
     tracing::debug!(
         target: "mobarust::terminal",
@@ -1921,6 +1928,7 @@ fn main() {
             serial_close,
             serial_reconnect,
             terminal_spawn,
+            terminal_attach,
             terminal_list_wsl,
             terminal_write,
             terminal_resize,

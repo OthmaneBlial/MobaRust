@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 const OUTPUT_BATCH_BYTES: usize = 32 * 1024;
 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Error)]
 pub enum TerminalError {
@@ -21,6 +22,8 @@ pub enum TerminalError {
     Open(#[source] anyhow::Error),
     #[error("terminal session not found")]
     Missing(String),
+    #[error("terminal session is already attached")]
+    AlreadyAttached,
     #[error("terminal I/O failed")]
     Io(#[source] std::io::Error),
     #[error("terminal resize failed")]
@@ -137,6 +140,7 @@ struct TerminalSession {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    start: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 #[derive(Clone, Default)]
@@ -240,10 +244,12 @@ impl TerminalManager {
             }
         }
         let id = Uuid::new_v4().to_string();
+        let (start, ready) = mpsc::channel();
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             child: Mutex::new(child),
+            start: Mutex::new(Some(start)),
         });
 
         self.sessions
@@ -253,9 +259,16 @@ impl TerminalManager {
 
         let manager = self.clone();
         let terminal_id = id.clone();
+        // The frontend must know the ID before any PTY output can be emitted.
         if let Err(error) = thread::Builder::new()
             .name(format!("mobarust-pty-{id}"))
-            .spawn(move || stream_output(app, manager, terminal_id, reader))
+            .spawn(move || match ready.recv_timeout(ATTACH_TIMEOUT) {
+                Ok(()) => stream_output(app, manager, terminal_id, reader),
+                Err(_) => {
+                    cleanup_stream_session(&manager, &terminal_id);
+                    let _ = app.emit("terminal://closed", TerminalClosed { terminal_id });
+                }
+            })
         {
             // The session is inserted before the stream worker starts so the
             // worker can race safely with an immediate close. If the OS
@@ -267,6 +280,22 @@ impl TerminalManager {
         }
 
         Ok(id)
+    }
+
+    pub fn attach(&self, id: &str) -> Result<(), TerminalError> {
+        let session = self.session(id)?;
+        let start = session
+            .start
+            .lock()
+            .expect("terminal start signal poisoned")
+            .take()
+            .ok_or(TerminalError::AlreadyAttached)?;
+        start.send(()).map_err(|_| {
+            if let Some(session) = self.take_session(id) {
+                let _ = cleanup_session(&session);
+            }
+            TerminalError::Io(std::io::ErrorKind::BrokenPipe.into())
+        })
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), TerminalError> {
@@ -664,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_running_pty_terminates_and_reaps_the_fixture_child() {
+    fn attaching_then_closing_a_running_pty_reaps_the_fixture_child() {
         let system = portable_pty::native_pty_system();
         let pair = system
             .openpty(PtySize {
@@ -679,6 +708,7 @@ mod tests {
             .slave
             .spawn_command(long_running_fixture_command())
             .expect("spawn cleanup fixture");
+        let (start, ready) = mpsc::channel();
         let manager = TerminalManager::default();
         manager
             .sessions
@@ -690,9 +720,18 @@ mod tests {
                     master: Mutex::new(pair.master),
                     writer: Mutex::new(writer),
                     child: Mutex::new(child),
+                    start: Mutex::new(Some(start)),
                 }),
             );
 
+        manager.attach("cleanup-fixture").expect("attach fixture");
+        ready
+            .recv_timeout(Duration::from_secs(1))
+            .expect("release reader after attach");
+        assert!(matches!(
+            manager.attach("cleanup-fixture"),
+            Err(TerminalError::AlreadyAttached)
+        ));
         manager
             .close("cleanup-fixture")
             .expect("close should reap the fixture child");
@@ -735,6 +774,7 @@ mod tests {
                     master: Mutex::new(pair.master),
                     writer: Mutex::new(writer),
                     child: Mutex::new(child),
+                    start: Mutex::new(None),
                 }),
             );
 
