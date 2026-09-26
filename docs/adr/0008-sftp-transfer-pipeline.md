@@ -28,6 +28,12 @@ file and rename it to the requested path only after completion. Replacing an
 existing destination requires an explicit `overwrite` flag. Local commits
 refuse symlink destinations; Windows uses the OS replace-existing move with
 write-through semantics instead of deleting an existing file first.
+Standard SFTP v3 rename refuses an existing target. For an explicit remote
+overwrite, the native layer tries direct promotion, then moves the old file
+to a nearby backup before promoting the complete temporary file. It restores
+the backup if promotion fails. If restoration cannot be confirmed, it keeps
+both files for manual recovery and reports the uncertainty; a failed backup
+cleanup is reported after the new file has been promoted.
 Single-file SFTP and SCP uploads reject selected local symlinks, including
 dangling links, before opening a remote transfer. On Unix, file uploads also
 open with `O_NOFOLLOW` and check the opened handle is a regular file, preventing

@@ -123,6 +123,14 @@ pub enum SshError {
         "remote file was saved, but its backup could not be removed; inspect the nearby .mobarust-edit-backup file"
     )]
     RemoteSaveBackupCleanupFailed,
+    #[error(
+        "remote upload failed and the original could not be confirmed restored; inspect the target and nearby .mobarust-upload files before retrying"
+    )]
+    RemoteUploadRestoreUncertain,
+    #[error(
+        "remote upload completed, but its backup could not be removed; inspect the nearby .mobarust-upload-backup file"
+    )]
+    RemoteUploadBackupCleanupFailed,
     #[error("remote text file exceeds the 4 MiB editor limit")]
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
@@ -2506,6 +2514,61 @@ impl SftpConnection {
             .rename(old_path, new_path)
             .await
             .map_err(map_sftp_error)
+    }
+
+    /// Promote a complete transfer. Standard SFTP v3 rename refuses an
+    /// existing destination, so explicit overwrite falls back to a rollback
+    /// copy when the server does not support replacement rename semantics.
+    pub async fn promote_uploaded_file(
+        &self,
+        temporary: &str,
+        destination: &str,
+        overwrite: bool,
+    ) -> Result<(), SshError> {
+        if temporary == destination {
+            return Err(SshError::Sftp(
+                "upload temporary path must differ from its destination".into(),
+            ));
+        }
+        let result = async {
+            if !overwrite && self.try_exists(destination).await? {
+                return Err(SshError::Sftp(
+                    "upload destination already exists; enable overwrite explicitly".into(),
+                ));
+            }
+            let initial_error = match self.rename(temporary, destination).await {
+                Ok(()) => return Ok(()),
+                Err(error) if !overwrite => return Err(error),
+                Err(error) => error,
+            };
+            if !self.try_exists(temporary).await? || !self.try_exists(destination).await? {
+                return Err(initial_error);
+            }
+            let (_, is_directory) = self.file_info(destination).await?;
+            if is_directory {
+                return Err(SshError::Sftp("upload destination is a directory".into()));
+            }
+
+            let backup = format!(
+                "{destination}.mobarust-upload-backup-{}",
+                uuid::Uuid::new_v4()
+            );
+            self.rename(destination, &backup).await?;
+            if let Err(error) = self.rename(temporary, destination).await {
+                if self.rename(&backup, destination).await.is_err() {
+                    return Err(SshError::RemoteUploadRestoreUncertain);
+                }
+                return Err(error);
+            }
+            self.remove_file(&backup)
+                .await
+                .map_err(|_| SshError::RemoteUploadBackupCleanupFailed)
+        }
+        .await;
+        if result.is_err() && !matches!(&result, Err(SshError::RemoteUploadRestoreUncertain)) {
+            let _ = self.remove_file(temporary).await;
+        }
+        result
     }
 
     pub async fn download_to<R>(

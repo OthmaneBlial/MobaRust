@@ -229,6 +229,57 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 .await
                 .expect("check new name")
         );
+        assert!(
+            sftp.promote_uploaded_file(&renamed_path, &renamed_path, false)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&renamed_path).expect("read original after invalid promotion"),
+            vec![b'R'; 128 * 1024]
+        );
+        let replacement_source = fixture.directory.path().join("replacement.bin");
+        fs::write(&replacement_source, b"replacement").expect("write replacement source");
+        let temporary_upload = format!("{renamed_path}.mobarust-upload-part");
+        sftp.upload_from(
+            tokio::fs::File::open(&replacement_source)
+                .await
+                .expect("open replacement source"),
+            &temporary_upload,
+        )
+        .await
+        .expect("upload complete temporary file");
+        assert!(
+            sftp.rename(&temporary_upload, &renamed_path).await.is_err(),
+            "standard SFTP rename must refuse an existing destination"
+        );
+        assert!(
+            sftp.promote_uploaded_file(&temporary_upload, &renamed_path, false)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(&renamed_path).expect("read original remote file"), vec![b'R'; 128 * 1024]);
+        assert!(!sftp.try_exists(&temporary_upload).await.expect("check rejected upload cleanup"));
+        sftp.upload_from(
+            tokio::fs::File::open(&replacement_source)
+                .await
+                .expect("open replacement source"),
+            &temporary_upload,
+        )
+        .await
+        .expect("upload replacement temporary file");
+        sftp.promote_uploaded_file(&temporary_upload, &renamed_path, true)
+            .await
+            .expect("replace existing remote file through SFTP v3");
+        assert_eq!(fs::read(&renamed_path).expect("read replaced remote file"), b"replacement");
+        assert!(!sftp.try_exists(&temporary_upload).await.expect("check promoted upload cleanup"));
+        assert!(
+            !sftp.read_dir(&remote_root)
+                .await
+                .expect("list remote directory after replacement")
+                .iter()
+                .any(|entry| entry.path.starts_with(&format!("{renamed_path}.mobarust-upload-backup-")))
+        );
         let directory_path = fixture
             .directory
             .path()

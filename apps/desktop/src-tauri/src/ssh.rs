@@ -2623,12 +2623,11 @@ where
             "upload destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = sftp.rename(&temporary, remote_path).await {
-        let _ = sftp.remove_file(&temporary).await;
-        let _ = sftp.close().await;
-        return Err(error);
-    }
+    let promotion = sftp
+        .promote_uploaded_file(&temporary, remote_path, overwrite)
+        .await;
     let _ = sftp.close().await;
+    promotion?;
     Ok(copied)
 }
 
@@ -2804,12 +2803,11 @@ where
             "upload destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = sftp.rename(&temporary, remote_path).await {
-        let _ = sftp.remove_file(&temporary).await;
-        let _ = sftp.close().await;
-        return Err(error);
-    }
+    let promotion = sftp
+        .promote_uploaded_file(&temporary, remote_path, overwrite)
+        .await;
     let _ = sftp.close().await;
+    promotion?;
     Ok(copied)
 }
 
@@ -3196,10 +3194,8 @@ where
             "upload destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = sftp.rename(&temporary, remote_path).await {
-        let _ = sftp.remove_file(&temporary).await;
-        return Err(error);
-    }
+    sftp.promote_uploaded_file(&temporary, remote_path, overwrite)
+        .await?;
     Ok(copied)
 }
 
