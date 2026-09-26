@@ -446,4 +446,6 @@ assert.equal(releaseQueue.length, MAX_REMOTE_DESKTOP_POINTER_QUEUE_ITEMS, "relea
 assert.equal(releaseQueue.at(-1)?.command.buttons, 0, "a saturated queue must retain the final release event");
 assert.equal(sanitizeTerminalTitle("  app\u0007 · ready  "), "app · ready");
 assert.equal(sanitizeTerminalTitle("\u0000\u001b[31mremote\u001b[0m"), "[31mremote[0m");
+assert.equal(sanitizeTerminalTitle("build\u202eexe.txt\u2069\u0085"), "buildexe.txt");
+assert.equal(sanitizeTerminalTitle("terminal 👩‍💻 جاهز"), "terminal 👩‍💻 جاهز");
 assert.equal(sanitizeTerminalTitle("x".repeat(MAX_TERMINAL_TITLE_LENGTH + 20)).length, MAX_TERMINAL_TITLE_LENGTH);

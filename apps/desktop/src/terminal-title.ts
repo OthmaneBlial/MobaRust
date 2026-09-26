@@ -4,8 +4,8 @@ export const MAX_TERMINAL_TITLE_LENGTH = 128;
 export function sanitizeTerminalTitle(value: string): string {
   const withoutControls = Array.from(value)
     .filter((character) => {
-      const code = character.charCodeAt(0);
-      return code > 0x1f && code !== 0x7f;
+      const code = character.codePointAt(0) ?? 0;
+      return code > 0x1f && (code < 0x7f || code > 0x9f) && !/\p{Bidi_Control}/u.test(character);
     })
     .join("")
     .trim();
