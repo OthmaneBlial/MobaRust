@@ -5,8 +5,8 @@ use mobarust_remote_desktop::{
     DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState, decode_event_frame,
     encode_command_frame, encode_credential_frame, read_frame, write_frame_with_timeout,
 };
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::process::{ChildStdout, Command};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::process::{Child, ChildStdout, Command};
 use tokio::time::timeout;
 
 const FIXTURE_SECRET: &str = "fixture-process-secret";
@@ -19,6 +19,22 @@ async fn next_event(stdout: &mut ChildStdout, phase: &str) -> HelperEvent {
         .unwrap_or_else(|_| panic!("RDP helper event read failed during {phase}"))
         .unwrap_or_else(|| panic!("RDP helper closed its event pipe during {phase}"));
     decode_event_frame(&frame).expect("RDP helper emitted an invalid event frame")
+}
+
+async fn first_event(child: &mut Child, stdout: &mut ChildStdout, phase: &str) -> HelperEvent {
+    let frame = timeout(Duration::from_secs(5), read_frame(stdout))
+        .await
+        .unwrap_or_else(|_| panic!("RDP helper event timed out during {phase}"))
+        .unwrap_or_else(|_| panic!("RDP helper event read failed during {phase}"));
+    if let Some(frame) = frame {
+        return decode_event_frame(&frame).expect("RDP helper emitted an invalid event frame");
+    }
+    let status = child.wait().await.expect("could not wait for RDP helper");
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_string(&mut stderr).await.unwrap();
+    }
+    panic!("RDP helper closed its event pipe during {phase}: {status}: {stderr}");
 }
 
 async fn send_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &[u8]) {
@@ -61,7 +77,7 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .expect("could not start the locally built RDP helper");
@@ -69,7 +85,7 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
     let mut stdout = child.stdout.take().expect("RDP helper stdout unavailable");
 
     assert!(matches!(
-        next_event(&mut stdout, "hello").await,
+        first_event(&mut child, &mut stdout, "hello").await,
         HelperEvent::Hello { version: 1 }
     ));
     assert!(matches!(
@@ -186,7 +202,7 @@ async fn real_helper_waits_for_the_gateway_credential_before_starting() {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .expect("could not start the locally built RDP helper");
@@ -194,7 +210,7 @@ async fn real_helper_waits_for_the_gateway_credential_before_starting() {
     let mut stdout = child.stdout.take().expect("RDP helper stdout unavailable");
 
     assert!(matches!(
-        next_event(&mut stdout, "gateway hello").await,
+        first_event(&mut child, &mut stdout, "gateway hello").await,
         HelperEvent::Hello { version: 1 }
     ));
     assert!(matches!(
