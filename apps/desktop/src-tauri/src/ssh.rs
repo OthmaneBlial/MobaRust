@@ -1,6 +1,6 @@
 use mobarust_core::{
     MAX_SERVER_ALIVE_INTERVAL_SECONDS, TerminalInputError, TransferEvent, TransferLifecycle,
-    TransferState, validate_terminal_input,
+    TransferState, Utf8OutputDecoder, validate_terminal_input,
 };
 use mobarust_ssh::{
     HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
@@ -387,6 +387,7 @@ struct SessionState {
     close: watch::Sender<bool>,
     attached: bool,
     pending_output: Vec<String>,
+    output_decoder: Utf8OutputDecoder,
 }
 
 struct RemoteSessionContext {
@@ -578,6 +579,7 @@ impl SshManager {
                     close,
                     attached: false,
                     pending_output: Vec::new(),
+                    output_decoder: Utf8OutputDecoder::default(),
                 },
             );
 
@@ -1158,34 +1160,44 @@ impl SshManager {
 
     fn emit_output(&self, app: &AppHandle, terminal_id: &str, bytes: &[u8]) {
         for chunk in bytes.chunks(OUTPUT_BUFFER_BYTES) {
-            let data = String::from_utf8_lossy(chunk).into_owned();
-            let should_emit = if let Ok(mut sessions) = self.sessions.lock() {
-                if let Some(state) = sessions.get_mut(terminal_id) {
-                    if state.attached {
-                        true
-                    } else {
-                        if state.pending_output.len() == PENDING_OUTPUT_CHUNKS {
-                            state.pending_output.remove(0);
-                        }
-                        state.pending_output.push(data.clone());
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if should_emit {
-                let _ = app.emit(
-                    "ssh://output",
-                    SshOutputEvent {
-                        terminal_id: terminal_id.to_owned(),
-                        data,
-                    },
-                );
-            }
+            self.emit_output_chunk(app, terminal_id, Some(chunk));
         }
+    }
+
+    fn finish_output(&self, app: &AppHandle, terminal_id: &str) {
+        self.emit_output_chunk(app, terminal_id, None);
+    }
+
+    fn emit_output_chunk(&self, app: &AppHandle, terminal_id: &str, chunk: Option<&[u8]>) {
+        let data = if let Ok(mut sessions) = self.sessions.lock() {
+            let Some(state) = sessions.get_mut(terminal_id) else {
+                return;
+            };
+            let data = match chunk {
+                Some(bytes) => state.output_decoder.push(bytes),
+                None => state.output_decoder.finish(),
+            };
+            if data.is_empty() {
+                return;
+            }
+            if !state.attached {
+                if state.pending_output.len() == PENDING_OUTPUT_CHUNKS {
+                    state.pending_output.remove(0);
+                }
+                state.pending_output.push(data);
+                return;
+            }
+            data
+        } else {
+            return;
+        };
+        let _ = app.emit(
+            "ssh://output",
+            SshOutputEvent {
+                terminal_id: terminal_id.to_owned(),
+                data,
+            },
+        );
     }
 
     fn remove(&self, terminal_id: &str) {
@@ -1519,7 +1531,7 @@ async fn run_remote_session(
     let mut connection_is_live = true;
 
     'session: loop {
-        match run_shell_once(
+        let shell_result = run_shell_once(
             &app,
             &manager,
             &terminal_id,
@@ -1529,8 +1541,9 @@ async fn run_remote_session(
             &mut commands,
             &mut close,
         )
-        .await
-        {
+        .await;
+        manager.finish_output(&app, &terminal_id);
+        match shell_result {
             ShellRunResult::Closed => break 'session,
             ShellRunResult::Lost(error) => {
                 connection_is_live = false;
