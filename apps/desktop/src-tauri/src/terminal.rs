@@ -24,6 +24,8 @@ pub enum TerminalError {
     Missing(String),
     #[error("terminal session is already attached")]
     AlreadyAttached,
+    #[error("local terminal state is unavailable")]
+    LockPoisoned,
     #[error("terminal I/O failed")]
     Io(#[source] std::io::Error),
     #[error("terminal resize failed")]
@@ -252,10 +254,15 @@ impl TerminalManager {
             start: Mutex::new(Some(start)),
         });
 
-        self.sessions
-            .lock()
-            .expect("terminal session map poisoned")
-            .insert(id.clone(), Arc::clone(&session));
+        let mut sessions = match self.sessions.lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                let _ = cleanup_session(&session);
+                return Err(TerminalError::LockPoisoned);
+            }
+        };
+        sessions.insert(id.clone(), Arc::clone(&session));
+        drop(sessions);
 
         let manager = self.clone();
         let terminal_id = id.clone();
@@ -287,21 +294,24 @@ impl TerminalManager {
         let start = session
             .start
             .lock()
-            .expect("terminal start signal poisoned")
+            .map_err(|_| TerminalError::LockPoisoned)?
             .take()
             .ok_or(TerminalError::AlreadyAttached)?;
-        start.send(()).map_err(|_| {
-            if let Some(session) = self.take_session(id) {
-                let _ = cleanup_session(&session);
-            }
-            TerminalError::Io(std::io::ErrorKind::BrokenPipe.into())
-        })
+        if start.send(()).is_err() {
+            let _ = self.take_session(id);
+            let _ = cleanup_session(&session);
+            return Err(TerminalError::Io(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        Ok(())
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), TerminalError> {
         validate_terminal_input(data)?;
         let session = self.session(id)?;
-        let mut writer = session.writer.lock().expect("terminal writer poisoned");
+        let mut writer = session
+            .writer
+            .lock()
+            .map_err(|_| TerminalError::LockPoisoned)?;
         writer.write_all(data).map_err(TerminalError::Io)?;
         writer.flush().map_err(TerminalError::Io)
     }
@@ -311,7 +321,7 @@ impl TerminalManager {
         session
             .master
             .lock()
-            .expect("terminal master poisoned")
+            .map_err(|_| TerminalError::LockPoisoned)?
             .resize(portable_pty::PtySize {
                 rows: rows.max(1),
                 cols: cols.max(1),
@@ -323,7 +333,7 @@ impl TerminalManager {
 
     pub fn close(&self, id: &str) -> Result<(), TerminalError> {
         let session = self
-            .take_session(id)
+            .take_session(id)?
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))?;
         cleanup_session(&session)
     }
@@ -331,17 +341,17 @@ impl TerminalManager {
     fn session(&self, id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
         self.sessions
             .lock()
-            .expect("terminal session map poisoned")
+            .map_err(|_| TerminalError::LockPoisoned)?
             .get(id)
             .cloned()
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))
     }
 
-    fn take_session(&self, id: &str) -> Option<Arc<TerminalSession>> {
+    fn take_session(&self, id: &str) -> Result<Option<Arc<TerminalSession>>, TerminalError> {
         self.sessions
             .lock()
-            .expect("terminal session map poisoned")
-            .remove(id)
+            .map(|mut sessions| sessions.remove(id))
+            .map_err(|_| TerminalError::LockPoisoned)
     }
 }
 
@@ -349,7 +359,10 @@ impl TerminalManager {
 /// removed from the manager. This is shared by explicit close, worker-start
 /// failure, and reader EOF so every local process has a deterministic owner.
 fn cleanup_session(session: &TerminalSession) -> Result<(), TerminalError> {
-    let mut child = session.child.lock().expect("terminal child poisoned");
+    let mut child = session
+        .child
+        .lock()
+        .map_err(|_| TerminalError::LockPoisoned)?;
     cleanup_child(child.as_mut())
 }
 
@@ -538,7 +551,7 @@ fn stream_output<R: Read + Send + 'static>(
 }
 
 fn cleanup_stream_session(manager: &TerminalManager, terminal_id: &str) {
-    if let Some(session) = manager.take_session(terminal_id) {
+    if let Ok(Some(session)) = manager.take_session(terminal_id) {
         // The stream has ended, so an otherwise-live child no longer has a
         // usable terminal. Reuse the same bounded kill-and-reap policy as an
         // explicit close; there is no silent orphan path on reader EOF.
@@ -606,6 +619,24 @@ fn shell_command(shell: LocalShell) -> Result<String, TerminalError> {
 mod tests {
     use super::*;
     use portable_pty::{CommandBuilder, PtySize};
+
+    #[test]
+    fn poisoned_session_map_does_not_panic_terminal_lookup() {
+        let manager = TerminalManager::default();
+        let sessions = Arc::clone(&manager.sessions);
+        assert!(
+            thread::spawn(move || {
+                let _sessions = sessions.lock().expect("lock test session map");
+                panic!("poison test session map");
+            })
+            .join()
+            .is_err()
+        );
+
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| manager.session("missing")));
+        assert!(matches!(result, Ok(Err(TerminalError::LockPoisoned))));
+    }
 
     #[test]
     fn native_pty_supports_resize_input_output_and_exit() {
