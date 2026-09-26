@@ -381,6 +381,7 @@ pub struct TelnetConnection {
     writer: Arc<AsyncMutex<OwnedWriteHalf>>,
     codec: TelnetCodec,
     pending: VecDeque<u8>,
+    responses: VecDeque<(Vec<u8>, usize)>,
     text_decoder: Utf8OutputDecoder,
     lifecycle: Mutex<ConnectionLifecycle>,
 }
@@ -429,6 +430,7 @@ impl TelnetConnection {
             writer: Arc::new(AsyncMutex::new(writer)),
             codec: TelnetCodec::default(),
             pending: VecDeque::new(),
+            responses: VecDeque::new(),
             text_decoder: Utf8OutputDecoder::default(),
             lifecycle: Mutex::new(lifecycle),
         };
@@ -511,6 +513,7 @@ impl TelnetConnection {
         }
 
         loop {
+            self.flush_responses().await?;
             if !self.pending.is_empty() {
                 return Ok(pop_pending(&mut self.pending, destination));
             }
@@ -526,11 +529,36 @@ impl TelnetConnection {
                 return Ok(0);
             }
             let decoded = self.codec.feed(&raw[..read], &self.options)?;
-            for response in decoded.responses {
-                self.write_control(response).await?;
-            }
             self.pending.extend(decoded.data);
+            self.responses
+                .extend(decoded.responses.into_iter().map(|response| (response, 0)));
         }
+    }
+
+    async fn flush_responses(&mut self) -> Result<(), TelnetError> {
+        if self.responses.is_empty() {
+            return Ok(());
+        }
+        tokio::time::timeout(self.options.operation_timeout, async {
+            let mut writer = self.writer.lock().await;
+            while let Some((response, written)) = self.responses.front_mut() {
+                // A cancelled single write leaves this offset ready for the next read.
+                let count = writer
+                    .write(&response[*written..])
+                    .await
+                    .map_err(|error| io_error("write", error))?;
+                if count == 0 {
+                    return Err(io_error("write", io::ErrorKind::WriteZero.into()));
+                }
+                *written += count;
+                if *written == response.len() {
+                    self.responses.pop_front();
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| TelnetError::Timeout)?
     }
 
     pub async fn read_text(&mut self, destination: &mut String) -> Result<usize, TelnetError> {
@@ -622,6 +650,7 @@ impl TelnetConnection {
         self.writer = Arc::new(AsyncMutex::new(writer));
         self.codec = TelnetCodec::default();
         self.pending.clear();
+        self.responses.clear();
         self.text_decoder = Utf8OutputDecoder::default();
         self.lifecycle
             .lock()
@@ -931,6 +960,54 @@ mod tests {
             continue_tx.send(()).unwrap();
             while connection.read_text(&mut text).await.unwrap() > 0 {}
             assert_eq!(text, "left 🌍 right �");
+            server.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn cancelled_negotiation_write_preserves_data_and_response() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let options = TelnetOptions::new(address.ip().to_string(), address.port());
+            let expected_naws = naws_response(&options);
+            let (send_tx, send_rx) = tokio::sync::oneshot::channel();
+            let (sent_tx, sent_rx) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut capabilities = [0_u8; 9];
+                socket.read_exact(&mut capabilities).await.unwrap();
+                send_rx.await.unwrap();
+                socket
+                    .write_all(&[IAC, DO, NAWS, b'p', b'a', b'y', b'l', b'o', b'a', b'd'])
+                    .await
+                    .unwrap();
+                sent_tx.send(()).unwrap();
+                let mut response = [0_u8; 12];
+                socket.read_exact(&mut response).await.unwrap();
+                assert_eq!(&response[..3], &[IAC, WILL, NAWS]);
+                assert_eq!(&response[3..], expected_naws);
+            });
+
+            let mut connection = TelnetConnection::connect(options).await.unwrap();
+            let writer = Arc::clone(&connection.writer);
+            let lock = writer.lock().await;
+            send_tx.send(()).unwrap();
+            sent_rx.await.unwrap();
+            let mut output = [0_u8; 32];
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), connection.read(&mut output))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                connection.pending.iter().copied().collect::<Vec<_>>(),
+                b"payload"
+            );
+            assert_eq!(connection.responses.len(), 2);
+            drop(lock);
+            let read = connection.read(&mut output).await.unwrap();
+            assert_eq!(&output[..read], b"payload");
             server.await.unwrap();
         });
     }
