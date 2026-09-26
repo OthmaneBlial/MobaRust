@@ -1,4 +1,4 @@
-import type { ILink, ILinkProvider } from "@xterm/xterm";
+import type { IBufferLine, ILink, ILinkProvider } from "@xterm/xterm";
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const MAX_LINKS_PER_LINE = 16;
@@ -33,19 +33,40 @@ export function findTerminalHttpUrls(line: string): Array<{ text: string; start:
 }
 
 export function createTerminalHttpLinkProvider(
-  lineSource: (bufferLineNumber: number) => string,
+  lineSource: (lineIndex: number) => IBufferLine | undefined,
   onActivate: (url: string) => void,
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const links: ILink[] = findTerminalHttpUrls(lineSource(bufferLineNumber)).map(({ text, start, end }) => ({
+      const line = lineSource(bufferLineNumber - 1);
+      if (!line) {
+        callback([]);
+        return;
+      }
+      const value = line.translateToString(true);
+      const matches = findTerminalHttpUrls(value);
+      if (matches.length === 0) {
+        callback([]);
+        return;
+      }
+      const columns: number[] = [];
+      let nextColumn = 0;
+      for (let column = 0; column < line.length && columns.length < value.length; column++) {
+        const cell = line.getCell(column);
+        if (!cell || cell.getWidth() === 0) continue;
+        const chars = cell.getChars() || " ";
+        for (let index = 0; index < chars.length; index++) columns.push(column);
+        nextColumn = column + cell.getWidth();
+      }
+      columns.push(nextColumn);
+      const links: ILink[] = matches.filter(({ end }) => columns[end] !== undefined).map(({ text, start, end }) => ({
         range: {
-          start: { x: start + 1, y: bufferLineNumber + 1 },
-          end: { x: end, y: bufferLineNumber + 1 },
+          start: { x: columns[start] + 1, y: bufferLineNumber },
+          end: { x: columns[end], y: bufferLineNumber },
         },
         text,
         decorations: { pointerCursor: true, underline: true },
-        activate: (_event, activatedText) => onActivate(activatedText),
+        activate: () => onActivate(text),
       }));
       callback(links);
     },

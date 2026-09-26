@@ -17,7 +17,7 @@ import {
   formatSessionEnvironment,
   parseSessionEnvironment,
 } from "../src/session-environment.ts";
-import { findTerminalHttpUrls } from "../src/terminal-links.ts";
+import { createTerminalHttpLinkProvider, findTerminalHttpUrls } from "../src/terminal-links.ts";
 import { isMultilineTerminalPaste, shouldConfirmTerminalPaste } from "../src/terminal-paste.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
 import { isCurrentSessionRequest } from "../src/session-request.ts";
@@ -348,6 +348,34 @@ assert.equal(
   findTerminalHttpUrls(Array.from({ length: 20 }, (_, index) => `https://example.com/${index}`).join(" ")).length,
   16,
 );
+for (const prefix of [["界", 2], ["e\u0301", 1]]) {
+  const url = "https://example.com";
+  const cells = [
+    { chars: prefix[0], width: prefix[1] },
+    ...Array.from({ length: prefix[1] - 1 }, () => ({ chars: "", width: 0 })),
+    ...Array.from(url, (chars) => ({ chars, width: 1 })),
+  ];
+  const line = {
+    length: cells.length,
+    translateToString: () => prefix[0] + url,
+    getCell: (column) => cells[column] && {
+      getChars: () => cells[column].chars,
+      getWidth: () => cells[column].width,
+    },
+  };
+  let links;
+  let activated;
+  let requestedLine;
+  createTerminalHttpLinkProvider((index) => { requestedLine = index; return line; }, (value) => { activated = value; })
+    .provideLinks(1, (value) => { links = value; });
+  assert.equal(requestedLine, 0);
+  assert.deepEqual(links?.[0]?.range, {
+    start: { x: prefix[1] + 1, y: 1 },
+    end: { x: prefix[1] + url.length, y: 1 },
+  });
+  links?.[0]?.activate({}, "https://untrusted.invalid");
+  assert.equal(activated, url);
+}
 
 assert.equal(terminalFontSizeAfterZoom(13, "increase"), 14);
 assert.equal(terminalFontSizeAfterZoom(8, "decrease"), 8);

@@ -874,7 +874,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     const bell = terminal.onBell(() => onBell(workspaceId));
     const searchResults = searchAddon.onDidChangeResults((event) => onSearchResults(workspaceId, event.resultIndex, event.resultCount));
     const terminalLinks = terminal.registerLinkProvider(createTerminalHttpLinkProvider(
-      (bufferLineNumber) => terminal.buffer.active.getLine(bufferLineNumber)?.translateToString(true) ?? "",
+      (bufferLineNumber) => terminal.buffer.active.getLine(bufferLineNumber),
       (url) => {
         if (window.confirm(`Open this external URL?\n\n${url}`)) window.open(url, "_blank", "noopener,noreferrer");
       },
