@@ -1052,11 +1052,14 @@ fn parse_openssh_config(contents: &str) -> (Vec<OpenSshHostBlock>, Vec<String>) 
         if line.is_empty() {
             continue;
         }
-        let Some((directive, value)) = line.split_once(char::is_whitespace) else {
+        let Some(separator) =
+            line.find(|character: char| character.is_whitespace() || character == '=')
+        else {
             continue;
         };
-        let directive = directive.to_ascii_lowercase();
-        let value = value.trim();
+        let directive = line[..separator].to_ascii_lowercase();
+        let value = line[separator..].trim_start();
+        let value = value.strip_prefix('=').unwrap_or(value).trim();
         if value.is_empty() {
             continue;
         }
@@ -1926,11 +1929,11 @@ mod tests {
                 Host *
                     ServerAliveInterval 30
                 Host prod bastion-alias
-                    HostName "prod.internal.example"
-                    User deploy
-                    Port 2201 # production port
-                    IdentityFile "~/.ssh/id#ed25519" # key path
-                    ProxyJump "jump.example"
+                    HostName = "prod.internal.example"
+                    User=deploy
+                    Port = 2201 # production port
+                    IdentityFile="~/.ssh/id#ed25519" # key path
+                    ProxyJump= "jump.example"
                     Include ~/.ssh/conf.d/*
                 Host staging
                     HostName staging.example
