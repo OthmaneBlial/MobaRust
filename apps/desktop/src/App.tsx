@@ -973,7 +973,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : "serial_close";
           const pendingOutput = await invoke<string[]>(attachCommand, { terminalId: remoteSessionId });
           if (disposed) {
-            void invoke(closeCommand, { terminalId: remoteSessionId });
+            void invoke(closeCommand, { terminalId: remoteSessionId }).catch(() => undefined);
             return;
           }
           pendingOutput.forEach((data) => terminal.write(data));
@@ -987,7 +987,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           target: localTarget,
         });
         if (disposed) {
-          void invoke("terminal_close", { terminalId });
+          void invoke("terminal_close", { terminalId }).catch(() => undefined);
           return;
         }
         terminalIdRef.current = terminalId;
@@ -1022,7 +1022,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       onNativeTerminalId(workspaceId, null);
       if (IS_TAURI && terminalId) {
         const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : remoteProtocol === "serial" ? "serial_close" : "terminal_close";
-        void invoke(closeCommand, { terminalId });
+        void invoke(closeCommand, { terminalId }).catch(() => undefined);
       }
       terminalIdRef.current = null;
       terminalRef.current = null;
@@ -1179,7 +1179,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
         }
         const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request });
         if (disposed) {
-          void invoke("remote_desktop_stop", { sessionId: response.sessionId });
+          void invoke("remote_desktop_stop", { sessionId: response.sessionId }).catch(() => undefined);
           return;
         }
         sessionIdRef.current = response.sessionId;
@@ -1211,7 +1211,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = null;
       onNativeTerminalId(workspaceId, null);
-      if (IS_TAURI && sessionId) void invoke("remote_desktop_stop", { sessionId });
+      if (IS_TAURI && sessionId) void invoke("remote_desktop_stop", { sessionId }).catch(() => undefined);
     };
   }, [connectAttempt, instanceKey, onNativeTerminalId, onStatusChange, request, workspaceId]);
 
