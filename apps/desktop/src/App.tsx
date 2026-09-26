@@ -32,8 +32,10 @@ import {
   REMOTE_DESKTOP_FALLBACK_ERROR,
 } from "./remote-desktop-errors";
 import {
+  appendMacroAction,
   appendMacroRecordingInput,
   createRecordedMacroDraft,
+  MAX_MACRO_ACTIONS,
   type MacroAction,
   type MacroApprovalPolicy,
   type MacroKey,
@@ -4735,7 +4737,8 @@ function MacroEditor({ record, isNew, savedSessions, terminals, targets, readyTe
   const [approval, setApproval] = useState<MacroApprovalPolicy>(record.approval ?? "beforeRun");
 
   const updateAction = (index: number, action: MacroAction) => setActions((current) => current.map((item, itemIndex) => itemIndex === index ? action : item));
-  const addAction = (kind: MacroAction["kind"]) => setActions((current) => [...current, newMacroAction(kind)]);
+  const addAction = (kind: MacroAction["kind"]) => setActions((current) => appendMacroAction(current, newMacroAction(kind)));
+  const actionLimitReached = actions.length >= MAX_MACRO_ACTIONS;
   const removeAction = (index: number) => setActions((current) => current.filter((_, itemIndex) => itemIndex !== index));
   const buildRecord = (): MacroRecord => ({ id: record.id, title: title.trim(), description: description.trim(), tags: [...new Set(tags.split(",").map((tag) => tag.trim()).filter(Boolean))], actions, approval });
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -4750,9 +4753,9 @@ function MacroEditor({ record, isNew, savedSessions, terminals, targets, readyTe
     <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this sequence does" rows={2} /></label>
     <label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="ops, maintenance" /></label>
     <label>Approval policy<select value={approval} onChange={(event) => setApproval(event.target.value as MacroApprovalPolicy)}><option value="beforeRun">Confirm before run</option><option value="eachAction">Confirm every action</option></select><small>{approval === "eachAction" ? "A second confirmation appears before each action; cancelling stops the sequence." : "One explicit confirmation appears before the visible, cancellable sequence."}</small></label>
-    <div className="macro-actions-heading"><span>Actions · {actions.length}/64</span><small>Each step runs in order and can be cancelled.</small></div>
+    <div className="macro-actions-heading"><span>Actions · {actions.length}/{MAX_MACRO_ACTIONS}</span><small>Each step runs in order and can be cancelled.</small></div>
     <div className="macro-actions-list">{actions.length === 0 && <div className="macro-empty">Add a typed action below. Saving or running an empty macro is blocked.</div>}{actions.map((action, index) => <MacroActionRow key={`${index}-${action.kind}`} index={index} action={action} savedSessions={savedSessions} terminals={terminals} onChange={updateAction} onRemove={removeAction} />)}</div>
-    <div className="macro-add-actions"><button type="button" className="outline-button" onClick={() => addAction("sendText")}><Plus size={13} /> Text</button><button type="button" className="outline-button" onClick={() => addAction("executeCommand")}><Plus size={13} /> Command</button><button type="button" className="outline-button" onClick={() => addAction("sendKey")}><Plus size={13} /> Key</button><button type="button" className="outline-button" onClick={() => addAction("wait")}><Plus size={13} /> Wait</button><button type="button" className="outline-button" onClick={() => addAction("openSession")}><Plus size={13} /> Open</button><button type="button" className="outline-button" onClick={() => addAction("switchWorkspace")}><Plus size={13} /> Switch</button></div>
+    <div className="macro-add-actions"><button type="button" className="outline-button" onClick={() => addAction("sendText")} disabled={actionLimitReached}><Plus size={13} /> Text</button><button type="button" className="outline-button" onClick={() => addAction("executeCommand")} disabled={actionLimitReached}><Plus size={13} /> Command</button><button type="button" className="outline-button" onClick={() => addAction("sendKey")} disabled={actionLimitReached}><Plus size={13} /> Key</button><button type="button" className="outline-button" onClick={() => addAction("wait")} disabled={actionLimitReached}><Plus size={13} /> Wait</button><button type="button" className="outline-button" onClick={() => addAction("openSession")} disabled={actionLimitReached}><Plus size={13} /> Open</button><button type="button" className="outline-button" onClick={() => addAction("switchWorkspace")} disabled={actionLimitReached}><Plus size={13} /> Switch</button></div>
     <div className="macro-targets"><div className="macro-targets-heading"><span>Explicit targets</span><small>{readyTerminals.length} ready · {targets.length} selected</small></div>{readyTerminals.length === 0 ? <p>No connected terminal is ready for a macro run.</p> : readyTerminals.map((terminal) => <label key={terminal.id} className="macro-target"><input type="checkbox" checked={targets.includes(terminal.id)} onChange={() => onTargetsChange(targets.includes(terminal.id) ? targets.filter((id) => id !== terminal.id) : [...targets, terminal.id])} /><span>{terminal.label}</span><small>{terminal.remoteHost ?? "local"}</small></label>)}</div>
     <div className="macro-safety"><ShieldAlert size={14} /><span>{hasSessionActions ? "This macro can change session focus or open a saved session; confirmation is required at run time." : "Do not put passwords, tokens, or private keys in macro text. MobaRust never logs macro contents."}</span></div>
     <div className="snippet-form-footer"><span><ShieldCheck size={13} /> Review + confirm before run</span><div><button type="button" className="outline-button" onClick={() => onRun(current)} disabled={actions.length === 0 || targets.length === 0}><Play size={13} /> Run on selected</button><button type="submit" className="primary-button" disabled={actions.length === 0}><CheckCircle2 size={14} /> Save macro</button></div></div>

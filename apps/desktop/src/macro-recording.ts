@@ -25,8 +25,13 @@ export type MacroRecordingState = {
   textBytes: number;
 };
 
-const MAX_RECORDED_MACRO_ACTIONS = 64;
+export const MAX_MACRO_ACTIONS = 64;
+const MAX_RECORDED_MACRO_ACTIONS = MAX_MACRO_ACTIONS;
 const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
+
+export function appendMacroAction(actions: MacroAction[], action: MacroAction): MacroAction[] {
+  return actions.length < MAX_MACRO_ACTIONS ? [...actions, action] : actions;
+}
 
 export function recordedMacroActions(data: string): MacroAction[] {
   const controlKeys: Array<[string, MacroKey]> = [

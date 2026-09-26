@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import {
+  appendMacroAction,
   appendMacroRecordingInput,
   createRecordedMacroDraft,
+  MAX_MACRO_ACTIONS,
 } from "../src/macro-recording.ts";
+
+const oneAction = { kind: "sendKey", key: "enter" };
+assert.deepEqual(appendMacroAction([], oneAction), [oneAction]);
+const maxActions = Array.from({ length: MAX_MACRO_ACTIONS }, () => oneAction);
+assert.equal(appendMacroAction(maxActions, oneAction), maxActions, "the editor must stop at the Rust validation limit");
 
 const recording = {
   terminalId: "terminal-1",
