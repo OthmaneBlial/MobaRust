@@ -330,28 +330,23 @@ impl TelnetCodec {
                     responses.push(vec![IAC, DONT, option]);
                 }
             }
-            WONT => {
-                if self.remote_options.remove(&option) {
-                    responses.push(vec![IAC, DONT, option]);
-                }
+            WONT if self.remote_options.remove(&option) => {
+                responses.push(vec![IAC, DONT, option]);
             }
             DO => {
                 if supports_local_option(option) {
                     if self.local_options.insert(option) {
                         responses.push(vec![IAC, WILL, option]);
-                        match option {
-                            NAWS => responses.push(naws_response(settings)),
-                            _ => {}
+                        if option == NAWS {
+                            responses.push(naws_response(settings));
                         }
                     }
                 } else {
                     responses.push(vec![IAC, WONT, option]);
                 }
             }
-            DONT => {
-                if self.local_options.remove(&option) {
-                    responses.push(vec![IAC, WONT, option]);
-                }
+            DONT if self.local_options.remove(&option) => {
+                responses.push(vec![IAC, WONT, option]);
             }
             _ => {}
         }
