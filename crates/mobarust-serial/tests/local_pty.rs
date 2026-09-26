@@ -6,11 +6,14 @@ use serialport::{SerialPort, TTYPort};
 use tokio::time::timeout;
 
 fn fixture_connection() -> (TTYPort, SerialConnection) {
-    let (master, slave) = TTYPort::pair().expect("create disposable serial PTY pair");
+    let (master, mut slave) = TTYPort::pair().expect("create disposable serial PTY pair");
     let device = slave.name().expect("read disposable PTY name");
     let mut options = SerialOptions::new(device, 115_200);
     options.io_timeout = Duration::from_millis(100);
     options.open_timeout = Duration::from_secs(2);
+    slave
+        .set_timeout(options.io_timeout)
+        .expect("set disposable PTY timeout");
     let connection = SerialConnection::from_open_port(options, Box::new(slave))
         .expect("adopt disposable PTY through serial transport");
     (master, connection)
@@ -47,6 +50,18 @@ async fn round_trips_through_a_disposable_pseudo_terminal() {
         b"host-to-device".len()
     );
     assert_eq!(read_task.await.expect("join PTY reader"), b"host-to-device");
+    connection.close().await.expect("close disposable PTY");
+}
+
+#[tokio::test]
+async fn idle_pseudo_terminal_read_returns_no_data_without_failing() {
+    let (_master, connection) = fixture_connection();
+
+    let received = timeout(Duration::from_secs(2), connection.read(64))
+        .await
+        .expect("idle device read should respect its configured timeout")
+        .expect("an idle read is not a session failure");
+    assert!(received.is_empty());
     connection.close().await.expect("close disposable PTY");
 }
 
