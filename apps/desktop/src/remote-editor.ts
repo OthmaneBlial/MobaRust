@@ -1,7 +1,7 @@
 export type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
 
 export function remoteEditorLanguage(path: string): RemoteEditorLanguage {
-  const lower = path.toLocaleLowerCase();
+  const lower = path.toLowerCase();
   if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   if (lower.endsWith(".ini") || lower.endsWith(".conf") || lower.endsWith(".cfg")) return "ini";

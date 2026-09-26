@@ -80,6 +80,7 @@ assert.equal(highlightRemoteCode("can't", "json"), "can&#39;t");
 assert.equal(highlightRemoteCode("42", "json"), '<span class="remote-editor-token-number">42</span>');
 
 assert.equal(remoteEditorLanguage("/tmp/settings.json"), "json");
+assert.equal(remoteEditorLanguage("/tmp/SETTINGS.INI"), "ini");
 assert.equal(remoteEditorLanguage("/tmp/profile"), "shell");
 assert.deepEqual(REMOTE_MONITOR_REFRESH_INTERVALS, [15, 30, 60]);
 assert.equal(isRemoteMonitorRefreshInterval(15), true);
