@@ -1023,7 +1023,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     };
   }, [instanceKey, localTarget, onBell, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
 
-  return <div className="terminal-host" ref={hostRef} aria-label="Local terminal" />;
+  return <div className="terminal-host" ref={hostRef} role="group" aria-label={remoteProtocol ? `${remoteProtocol.toUpperCase()} terminal` : "Local terminal"} />;
 }
 
 function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChange, onNativeTerminalId }: {
