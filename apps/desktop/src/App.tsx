@@ -1444,6 +1444,7 @@ function App() {
   const zoomPersistTimerRef = useRef<number | null>(null);
   const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [sessionListError, setSessionListError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -1933,8 +1934,9 @@ function App() {
       .then((sessions) => {
         setSavedSessions(sessions);
         setSessionRows(sessions.map(toSessionListItem));
+        setSessionListError(null);
       })
-      .catch(() => undefined);
+      .catch((error) => setSessionListError(`Saved sessions could not be loaded: ${String(error)}`));
   }, []);
 
   const refreshSettings = useCallback(() => {
@@ -3705,6 +3707,7 @@ function App() {
 
           <div className="session-list">
             <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
+            {sessionListError && <div className="connect-error" role="alert"><span>{sessionListError}</span><button type="button" className="outline-button" onClick={refreshSavedSessions}>Retry</button></div>}
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
               <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
