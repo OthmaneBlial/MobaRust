@@ -2576,6 +2576,8 @@ where
         )));
     }
 
+    let mut file = open_local_upload_file(source).await?;
+    let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
     let sftp = open_sftp_with_timeout(connection).await?;
     if sftp.try_exists(remote_path).await? {
         let (_, is_directory) = sftp.file_info(remote_path).await?;
@@ -2592,10 +2594,9 @@ where
     }
 
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
-    let mut file = fs::File::open(source).await.map_err(SshError::LocalIo)?;
     let copied = match connection
-        .scp_upload_with_cancel(&temporary, metadata.len(), &mut file, cancel, |bytes| {
-            on_progress(bytes, Some(metadata.len()))
+        .scp_upload_with_cancel(&temporary, source_size, &mut file, cancel, |bytes| {
+            on_progress(bytes, Some(source_size))
         })
         .await
     {
@@ -2762,6 +2763,8 @@ where
             "upload source is not a regular file",
         )));
     }
+    let mut file = open_local_upload_file(source).await?;
+    let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
     let sftp = open_sftp_with_timeout(connection).await?;
     if sftp.try_exists(remote_path).await? {
         let (_, is_directory) = sftp.file_info(remote_path).await?;
@@ -2776,10 +2779,9 @@ where
     }
 
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
-    let mut file = fs::File::open(source).await.map_err(SshError::LocalIo)?;
     let copied = match sftp
         .upload_from_with_cancel(&mut file, &temporary, cancel, |bytes| {
-            on_progress(bytes, Some(metadata.len()));
+            on_progress(bytes, Some(source_size));
         })
         .await
     {
@@ -2816,6 +2818,27 @@ async fn local_upload_metadata(source: &Path) -> Result<std::fs::Metadata, SshEr
         return Err(SshError::LocalUploadSymlink);
     }
     Ok(metadata)
+}
+
+async fn open_local_upload_file(source: &Path) -> Result<fs::File, SshError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = options.open(source).await.map_err(|error| {
+        #[cfg(unix)]
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return SshError::LocalUploadSymlink;
+        }
+        SshError::LocalIo(error)
+    })?;
+    if !file.metadata().await.map_err(SshError::LocalIo)?.is_file() {
+        return Err(SshError::LocalIo(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "upload source is not a regular file",
+        )));
+    }
+    Ok(file)
 }
 
 type RemoteDownloadFile = (String, PathBuf, u64);
@@ -3150,7 +3173,7 @@ where
         }
     }
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
-    let mut file = fs::File::open(source).await.map_err(SshError::LocalIo)?;
+    let mut file = open_local_upload_file(source).await?;
     let copied = match sftp
         .upload_from_with_cancel(&mut file, &temporary, progress.cancel, |bytes| {
             (progress.on_progress)(
@@ -3449,7 +3472,7 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        local_upload_metadata, reconnect_with_backoff, remote_child_path,
+        local_upload_metadata, open_local_upload_file, reconnect_with_backoff, remote_child_path,
         server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
         validate_transfer_component, validate_tunnel_host,
     };
@@ -3514,6 +3537,38 @@ mod tests {
             ));
         }
         assert_eq!(fs::read(file).unwrap(), b"private contents");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_open_refuses_a_symlink_swapped_after_metadata_check() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let selected = directory.path().join("selected.txt");
+        let target = directory.path().join("private.txt");
+        fs::write(&selected, b"selected").unwrap();
+        fs::write(&target, b"private").unwrap();
+        assert!(local_upload_metadata(&selected).await.unwrap().is_file());
+        assert_eq!(
+            open_local_upload_file(&selected)
+                .await
+                .unwrap()
+                .metadata()
+                .await
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(open_local_upload_file(directory.path()).await.is_err());
+        fs::remove_file(&selected).unwrap();
+        symlink(&target, &selected).unwrap();
+
+        assert!(matches!(
+            open_local_upload_file(&selected).await,
+            Err(mobarust_ssh::SshError::LocalUploadSymlink)
+        ));
+        assert_eq!(fs::read(target).unwrap(), b"private");
     }
 
     #[test]

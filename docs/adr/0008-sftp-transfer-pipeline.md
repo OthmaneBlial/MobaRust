@@ -29,8 +29,10 @@ existing destination requires an explicit `overwrite` flag. Local commits
 refuse symlink destinations; Windows uses the OS replace-existing move with
 write-through semantics instead of deleting an existing file first.
 Single-file SFTP and SCP uploads reject selected local symlinks, including
-dangling links, before opening a remote transfer. This path check does not
-prevent another local process from swapping the path before the file opens.
+dangling links, before opening a remote transfer. On Unix, file uploads also
+open with `O_NOFOLLOW` and check the opened handle is a regular file, preventing
+a final-path symlink swap between the initial check and open. Windows retains
+that local path-swap race.
 
 The frontend never receives an SSH connection, SFTP object, credential, or
 secret. It receives only paths, byte counters, lifecycle state, and sanitized

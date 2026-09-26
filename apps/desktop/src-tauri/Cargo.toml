@@ -31,6 +31,9 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 zeroize = { workspace = true, features = ["serde"] }
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
