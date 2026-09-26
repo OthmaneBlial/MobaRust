@@ -1,6 +1,6 @@
 use mobarust_core::{
-    OutputBatcher, TerminalInputError, validate_session_environment, validate_session_startup,
-    validate_terminal_input,
+    OutputBatcher, TerminalInputError, Utf8OutputDecoder, validate_session_environment,
+    validate_session_startup, validate_terminal_input,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -470,26 +470,29 @@ fn stream_output<R: Read + Send + 'static>(
     }
 
     let mut batcher = OutputBatcher::new(OUTPUT_BATCH_BYTES);
+    let mut decoder = Utf8OutputDecoder::default();
     loop {
         match receiver.recv_timeout(Duration::from_millis(8)) {
             Ok(bytes) => {
                 for chunk in batcher.push(&bytes) {
-                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                    emit_chunk(&app, &terminal_id, &mut decoder, chunk.bytes);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(chunk) = batcher.flush() {
-                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                    emit_chunk(&app, &terminal_id, &mut decoder, chunk.bytes);
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if let Some(chunk) = batcher.flush() {
-                    emit_chunk(&app, &terminal_id, chunk.bytes);
+                    emit_chunk(&app, &terminal_id, &mut decoder, chunk.bytes);
                 }
                 break;
             }
         }
     }
+
+    emit_text(&app, &terminal_id, decoder.finish());
 
     cleanup_stream_session(&manager, &terminal_id);
     let _ = app.emit(
@@ -510,12 +513,19 @@ fn cleanup_stream_session(manager: &TerminalManager, terminal_id: &str) {
     }
 }
 
-fn emit_chunk(app: &AppHandle, terminal_id: &str, bytes: Vec<u8>) {
+fn emit_chunk(app: &AppHandle, terminal_id: &str, decoder: &mut Utf8OutputDecoder, bytes: Vec<u8>) {
+    emit_text(app, terminal_id, decoder.push(&bytes));
+}
+
+fn emit_text(app: &AppHandle, terminal_id: &str, data: String) {
+    if data.is_empty() {
+        return;
+    }
     let _ = app.emit(
         "terminal://output",
         TerminalOutput {
             terminal_id: terminal_id.to_owned(),
-            data: String::from_utf8_lossy(&bytes).into_owned(),
+            data,
         },
     );
 }

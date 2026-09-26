@@ -25,9 +25,8 @@ pub struct OutputChunk {
     pub bytes: Vec<u8>,
 }
 
-/// Batches PTY reads into bounded chunks. It never splits a UTF-8 sequence on
-/// purpose (the renderer can decode lossily), and it never emits an unbounded
-/// allocation for a noisy process.
+/// Batches PTY reads into bounded byte chunks. Chunks can split UTF-8
+/// sequences; callers that emit text must decode across chunk boundaries.
 #[derive(Debug, Clone)]
 pub struct OutputBatcher {
     max_bytes: usize,
@@ -72,6 +71,59 @@ impl OutputBatcher {
     }
 }
 
+/// Decodes a byte stream without replacing a UTF-8 sequence split across reads.
+#[derive(Debug, Default)]
+pub struct Utf8OutputDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8OutputDecoder {
+    pub fn push(&mut self, bytes: &[u8]) -> String {
+        if self.pending.is_empty()
+            && let Ok(text) = std::str::from_utf8(bytes)
+        {
+            return text.to_owned();
+        }
+
+        let mut input = std::mem::take(&mut self.pending);
+        input.extend_from_slice(bytes);
+        let mut remaining = input.as_slice();
+        let mut output = String::new();
+        loop {
+            match std::str::from_utf8(remaining) {
+                Ok(text) => {
+                    output.push_str(text);
+                    break;
+                }
+                Err(error) => {
+                    let (valid, invalid) = remaining.split_at(error.valid_up_to());
+                    output.push_str(std::str::from_utf8(valid).expect("valid UTF-8 prefix"));
+                    match error.error_len() {
+                        Some(len) => {
+                            output.push(char::REPLACEMENT_CHARACTER);
+                            remaining = &invalid[len..];
+                        }
+                        None => {
+                            self.pending.extend_from_slice(invalid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    pub fn finish(&mut self) -> String {
+        if self.pending.is_empty() {
+            String::new()
+        } else {
+            self.pending.clear();
+            char::REPLACEMENT_CHARACTER.to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +143,26 @@ mod tests {
         assert_eq!(chunks[0].bytes, b"1234");
         assert_eq!(chunks[1].bytes, b"5678");
         assert_eq!(batcher.flush().unwrap().bytes, b"9");
+    }
+
+    #[test]
+    fn utf8_decoder_preserves_sequences_split_by_bounded_chunks() {
+        let mut batcher = OutputBatcher::new(4);
+        let mut decoder = Utf8OutputDecoder::default();
+        let chunks = batcher.push("abc€".as_bytes());
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(decoder.push(&chunks[0].bytes), "abc");
+        assert_eq!(decoder.push(&batcher.flush().unwrap().bytes), "€");
+        assert!(decoder.finish().is_empty());
+    }
+
+    #[test]
+    fn utf8_decoder_replaces_malformed_and_trailing_incomplete_sequences() {
+        let mut decoder = Utf8OutputDecoder::default();
+        assert_eq!(decoder.push(&[0xe2]), "");
+        assert_eq!(decoder.push(&[b'(', 0xf0]), "�(");
+        assert_eq!(decoder.finish(), "�");
+        assert!(decoder.finish().is_empty());
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub use settings::{
 };
 pub use snippet::{SnippetRecord, SnippetValidationError};
 pub use terminal::{
-    MAX_TERMINAL_INPUT_BYTES, OutputBatcher, OutputChunk, TerminalInputError,
+    MAX_TERMINAL_INPUT_BYTES, OutputBatcher, OutputChunk, TerminalInputError, Utf8OutputDecoder,
     validate_terminal_input,
 };
 pub use transfer::{TransferEvent, TransferLifecycle, TransferState};
