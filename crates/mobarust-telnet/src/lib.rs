@@ -36,6 +36,7 @@ const NAWS: u8 = 31;
 const TERMINAL_TYPE_IS: u8 = 0;
 const TERMINAL_TYPE_SEND: u8 = 1;
 
+const MAX_HOST_BYTES: usize = 255;
 const MAX_SUBNEGOTIATION_BYTES: usize = 4096;
 const MAX_READ_BYTES: usize = 16 * 1024;
 
@@ -122,7 +123,9 @@ impl TelnetOptions {
 
     pub fn validate(&self) -> Result<(), TelnetError> {
         if self.host.trim().is_empty()
-            || self.host.contains('\0')
+            || self.host != self.host.trim()
+            || self.host.len() > MAX_HOST_BYTES
+            || self.host.chars().any(char::is_control)
             || self.port == 0
             || self.terminal.trim().is_empty()
             || self.terminal.len() > 128
@@ -867,6 +870,22 @@ mod tests {
     #[test]
     fn options_reject_control_characters_and_invalid_dimensions() {
         let mut options = TelnetOptions::new("fixture", 23);
+        options.host = "bad\nhost".into();
+        assert!(matches!(
+            options.validate(),
+            Err(TelnetError::InvalidOptions)
+        ));
+        options.host = " fixture ".into();
+        assert!(matches!(
+            options.validate(),
+            Err(TelnetError::InvalidOptions)
+        ));
+        options.host = "h".repeat(MAX_HOST_BYTES + 1);
+        assert!(matches!(
+            options.validate(),
+            Err(TelnetError::InvalidOptions)
+        ));
+        options.host = "fixture".into();
         options.terminal = "xterm\n".into();
         assert!(matches!(
             options.validate(),
