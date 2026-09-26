@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use encoding_rs::WINDOWS_1252;
-use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
+use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState, Utf8OutputDecoder};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -381,6 +381,7 @@ pub struct TelnetConnection {
     writer: Arc<AsyncMutex<OwnedWriteHalf>>,
     codec: TelnetCodec,
     pending: VecDeque<u8>,
+    text_decoder: Utf8OutputDecoder,
     lifecycle: Mutex<ConnectionLifecycle>,
 }
 
@@ -428,6 +429,7 @@ impl TelnetConnection {
             writer: Arc::new(AsyncMutex::new(writer)),
             codec: TelnetCodec::default(),
             pending: VecDeque::new(),
+            text_decoder: Utf8OutputDecoder::default(),
             lifecycle: Mutex::new(lifecycle),
         };
         connection.send_initial_capabilities().await?;
@@ -534,7 +536,14 @@ impl TelnetConnection {
     pub async fn read_text(&mut self, destination: &mut String) -> Result<usize, TelnetError> {
         let mut bytes = vec![0_u8; MAX_READ_BYTES.min(8192)];
         let read = self.read(&mut bytes).await?;
-        if read > 0 {
+        if self.options.encoding == TelnetEncoding::Utf8 {
+            let text = if read == 0 {
+                self.text_decoder.finish()
+            } else {
+                self.text_decoder.push(&bytes[..read])
+            };
+            destination.push_str(&text);
+        } else if read > 0 {
             destination.push_str(&self.options.encoding.decode(&bytes[..read]));
         }
         Ok(read)
@@ -613,6 +622,7 @@ impl TelnetConnection {
         self.writer = Arc::new(AsyncMutex::new(writer));
         self.codec = TelnetCodec::default();
         self.pending.clear();
+        self.text_decoder = Utf8OutputDecoder::default();
         self.lifecycle
             .lock()
             .expect("Telnet lifecycle lock poisoned")
@@ -895,6 +905,33 @@ mod tests {
             server.await.unwrap();
             connection.close().await.unwrap();
             assert_eq!(connection.state(), ConnectionState::Disconnected);
+        });
+    }
+
+    #[test]
+    fn read_text_preserves_split_utf8_and_flushes_incomplete_eof() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (continue_tx, continue_rx) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut capabilities = [0_u8; 9];
+                socket.read_exact(&mut capabilities).await.unwrap();
+                socket.write_all(b"left \xf0\x9f").await.unwrap();
+                continue_rx.await.unwrap();
+                socket.write_all(b"\x8c\x8d right \xe2").await.unwrap();
+            });
+
+            let options = TelnetOptions::new(address.ip().to_string(), address.port());
+            let mut connection = TelnetConnection::connect(options).await.unwrap();
+            let mut text = String::new();
+            assert_eq!(connection.read_text(&mut text).await.unwrap(), 7);
+            assert_eq!(text, "left ");
+            continue_tx.send(()).unwrap();
+            while connection.read_text(&mut text).await.unwrap() > 0 {}
+            assert_eq!(text, "left 🌍 right �");
+            server.await.unwrap();
         });
     }
 
