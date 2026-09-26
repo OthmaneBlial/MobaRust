@@ -2976,9 +2976,13 @@ async fn collect_remote_files(
             if entry.is_directory {
                 directories.push(local_path.clone());
                 pending.push_back((remote_path, local_path));
-            } else {
+            } else if entry.is_regular {
                 total = total.saturating_add(entry.size);
                 files.push((remote_path, local_path, entry.size));
+            } else {
+                return Err(SshError::Sftp(
+                    "recursive download supports regular files and directories only".into(),
+                ));
             }
         }
     }
