@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted and implemented for single-file upload/download.
+Accepted and implemented for single-file SFTP and SCP jobs, recursive SFTP
+transfers (see [ADR 0018](0018-recursive-sftp-transfers.md)), and bounded
+remote text editing (see [ADR 0022](0022-bounded-remote-text-editor.md)).
 
 ## Decision
 
@@ -63,8 +65,8 @@ trusting a frontend-provided file type; deleting the remote root is rejected.
 
 ## Rationale
 
-- A single-file transfer can be useful immediately without pretending that
-  recursive transfers, pause/resume, or remote editing are complete.
+- The initial single-file transfer slice shipped independently; recursive
+  SFTP and remote editing were added later under their own decisions.
 - A separate SFTP channel allows terminal output to remain responsive while a
   transfer is active.
 - Bounded buffers avoid loading large files into memory.
@@ -72,14 +74,16 @@ trusting a frontend-provided file type; deleting the remote root is rejected.
   like a completed file.
 - Typed events keep the Tauri IPC surface narrow and auditable.
 
-## Rejected for this milestone
+## Rejected for the initial single-file milestone
 
 - sending file bytes through React or Tauri event payloads;
 - one unbounded task per user click;
 - silently overwriting local or remote files;
 - exposing a generic filesystem or shell command to the frontend;
 - claiming recursive transfer, pause/resume, or remote editing before their
-  cancellation and conflict semantics are implemented.
+  cancellation and conflict semantics were implemented. Recursive SFTP and
+  remote editing were later added; see ADRs 0018 and 0022. Pause/resume remains
+  unimplemented.
 
 The desktop SFTP view accepts an explicit native Tauri file-drop gesture for
 uploads and has separate file and folder picker actions. Each action receives
@@ -103,6 +107,5 @@ confirmation again.
 
 ## Follow-ups
 
-- recursive jobs with per-item conflict decisions;
+- per-item conflict decisions for recursive jobs;
 - pause/resume where the protocol and remote semantics support it;
-- remote editing with modification detection and atomic upload.

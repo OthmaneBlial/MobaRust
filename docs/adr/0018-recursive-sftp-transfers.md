@@ -39,8 +39,9 @@ that race across platforms.
 An interrupted directory transfer may contain files that completed before the
 interruption; the transfer manager reports cancellation and never claims the
 whole tree is atomic. Directory metadata and symbolic links are not silently
-recreated. SCP remains a separate single-file compatibility primitive until it
-has its own transfer-manager integration.
+recreated. The transfer manager routes single-file SCP jobs through the legacy
+SCP compatibility primitive; recursive SCP remains unsupported, and the UI
+directs directory transfers to SFTP.
 
 ## Verification
 
