@@ -145,6 +145,10 @@ pub enum SshError {
     LocalUploadSymlink,
     #[error("local file operation failed")]
     LocalIo(#[source] std::io::Error),
+    #[error(
+        "transfer failed and the partial download could not be removed; inspect the destination folder for a hidden .mobarust.part file"
+    )]
+    LocalPartialDownloadCleanupFailed,
     #[error("SFTP transfer cancelled")]
     Cancelled,
     #[error("SSH credential material is unavailable")]

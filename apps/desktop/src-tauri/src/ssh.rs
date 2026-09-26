@@ -2539,23 +2539,23 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            remove_partial_download(file, &temporary).await;
+            remove_partial_download(file, &temporary).await?;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        remove_partial_download(file, &temporary).await;
+        remove_partial_download(file, &temporary).await?;
         return Err(SshError::LocalIo(error));
     }
     drop(file);
     if !overwrite && download_destination_exists(destination, &temporary).await? {
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download_path(&temporary).await?;
         return Err(SshError::Scp(
             "download destination appeared during transfer".into(),
         ));
     }
     if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download_path(&temporary).await?;
         return Err(error);
     }
     Ok(copied)
@@ -2700,27 +2700,31 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            remove_partial_download(file, &temporary).await;
+            let cleanup = remove_partial_download(file, &temporary).await;
             let _ = sftp.close().await;
+            cleanup?;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        remove_partial_download(file, &temporary).await;
+        let cleanup = remove_partial_download(file, &temporary).await;
         let _ = sftp.close().await;
+        cleanup?;
         return Err(SshError::LocalIo(error));
     }
     drop(file);
     if !overwrite && download_destination_exists(destination, &temporary).await? {
-        let _ = fs::remove_file(&temporary).await;
+        let cleanup = remove_partial_download_path(&temporary).await;
         let _ = sftp.close().await;
+        cleanup?;
         return Err(SshError::Sftp(
             "download destination appeared during transfer".into(),
         ));
     }
     if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
-        let _ = fs::remove_file(&temporary).await;
+        let cleanup = remove_partial_download_path(&temporary).await;
         let _ = sftp.close().await;
+        cleanup?;
         return Err(error);
     }
     let _ = sftp.close().await;
@@ -3041,23 +3045,23 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            remove_partial_download(file, &temporary).await;
+            remove_partial_download(file, &temporary).await?;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        remove_partial_download(file, &temporary).await;
+        remove_partial_download(file, &temporary).await?;
         return Err(SshError::LocalIo(error));
     }
     drop(file);
     if !overwrite && download_destination_exists(destination, &temporary).await? {
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download_path(&temporary).await?;
         return Err(SshError::Sftp(
             "download destination appeared during transfer".into(),
         ));
     }
     if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download_path(&temporary).await?;
         return Err(error);
     }
     Ok(copied)
@@ -3322,7 +3326,7 @@ async fn download_destination_exists(
     match fs::try_exists(destination).await {
         Ok(exists) => Ok(exists),
         Err(error) => {
-            let _ = fs::remove_file(temporary).await;
+            remove_partial_download_path(temporary).await?;
             Err(SshError::LocalIo(error))
         }
     }
@@ -3375,9 +3379,17 @@ fn local_part_path(destination: &Path) -> Result<PathBuf, SshError> {
     Ok(destination.with_file_name(format!(".{name}.mobarust-{}.part", Uuid::new_v4())))
 }
 
-async fn remove_partial_download(file: fs::File, temporary: &Path) {
+async fn remove_partial_download(file: fs::File, temporary: &Path) -> Result<(), SshError> {
     drop(file);
-    let _ = fs::remove_file(temporary).await;
+    remove_partial_download_path(temporary).await
+}
+
+async fn remove_partial_download_path(temporary: &Path) -> Result<(), SshError> {
+    match fs::remove_file(temporary).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(SshError::LocalPartialDownloadCleanupFailed),
+    }
 }
 
 fn remote_part_path(remote_path: &str, transfer_id: &str) -> Result<String, SshError> {
@@ -3685,10 +3697,32 @@ mod tests {
             .await
             .unwrap();
 
-        remove_partial_download(file, &temporary).await;
+        remove_partial_download(file, &temporary).await.unwrap();
 
         assert!(!temporary.exists());
         fs::write(&temporary, b"next attempt").unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_partial_download_cleanup_is_reported() {
+        let directory = tempdir().unwrap();
+        let open_file_path = directory.path().join("open-file");
+        fs::write(&open_file_path, b"partial download").unwrap();
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&open_file_path)
+            .await
+            .unwrap();
+
+        let error = remove_partial_download(file, directory.path())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            mobarust_ssh::SshError::LocalPartialDownloadCleanupFailed
+        ));
+        assert!(directory.path().exists());
     }
 
     #[test]
