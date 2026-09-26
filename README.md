@@ -80,21 +80,25 @@ The project does not claim to replace every MobaXterm feature. See the [roadmap]
 - Node.js 22 and pnpm
 - Tauri prerequisites for your operating system
 
-    git clone https://github.com/OthmaneBlial/MobaRust.git
-    cd MobaRust
-    pnpm install --dir apps/desktop
-    cargo xtask check
-    cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
+```bash
+git clone https://github.com/OthmaneBlial/MobaRust.git
+cd MobaRust
+pnpm install --dir apps/desktop
+cargo xtask check
+cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
 
 The local checks use isolated home directories, disposable fixtures, and loopback networking. They do not need your personal SSH files, Keychain, GitHub keys, SSH agent, real hosts, or attached hardware.
 
 Useful focused checks:
 
-    cargo xtask package-check
-    cargo xtask portable-check
-    cargo xtask package-layout-check
-    cargo xtask license-check
-    cargo xtask pre-push-check
+```bash
+cargo xtask package-check
+cargo xtask portable-check
+cargo xtask package-layout-check
+cargo xtask license-check
+cargo xtask pre-push-check
+```
 
 ## Contribute
 
