@@ -127,6 +127,7 @@ impl Utf8OutputDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn batches_small_reads_until_flush() {
@@ -163,6 +164,22 @@ mod tests {
         assert_eq!(decoder.push(&[b'(', 0xf0]), "�(");
         assert_eq!(decoder.finish(), "�");
         assert!(decoder.finish().is_empty());
+    }
+
+    proptest! {
+        #[test]
+        fn utf8_decoder_matches_whole_buffer_across_chunks(
+            bytes in prop::collection::vec(any::<u8>(), 0..256),
+            chunk_size in 1usize..64,
+        ) {
+            let mut decoder = Utf8OutputDecoder::default();
+            let mut actual = String::new();
+            for chunk in bytes.chunks(chunk_size) {
+                actual.push_str(&decoder.push(chunk));
+            }
+            actual.push_str(&decoder.finish());
+            prop_assert_eq!(actual, String::from_utf8_lossy(&bytes));
+        }
     }
 
     #[test]
