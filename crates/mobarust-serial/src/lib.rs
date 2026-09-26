@@ -310,7 +310,7 @@ impl SerialConnection {
                     buffer.truncate(read);
                     Ok(buffer)
                 }
-                Err(error) => Err(classify_io_error("read", error)),
+                Err(error) => classify_read_error(error),
             }
         });
         let result = tokio::time::timeout(self.options.io_timeout.saturating_mul(2), operation)
@@ -492,6 +492,17 @@ fn classify_io_error(operation: &'static str, error: io::Error) -> SerialError {
     }
 }
 
+fn classify_read_error(error: io::Error) -> Result<Vec<u8>, SerialError> {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    ) {
+        Ok(Vec::new())
+    } else {
+        Err(classify_io_error("read", error))
+    }
+}
+
 impl From<SerialDataBits> for serialport::DataBits {
     fn from(value: SerialDataBits) -> Self {
         match value {
@@ -576,6 +587,17 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn read_timeouts_are_idle_reads_not_session_failures() {
+        for kind in [io::ErrorKind::TimedOut, io::ErrorKind::WouldBlock] {
+            assert!(
+                classify_read_error(io::Error::from(kind))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
