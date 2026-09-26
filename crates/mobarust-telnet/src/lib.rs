@@ -34,6 +34,7 @@ const SUPPRESS_GO_AHEAD: u8 = 3;
 const TERMINAL_TYPE: u8 = 24;
 const NAWS: u8 = 31;
 const TERMINAL_TYPE_IS: u8 = 0;
+const TERMINAL_TYPE_SEND: u8 = 1;
 
 const MAX_SUBNEGOTIATION_BYTES: usize = 4096;
 const MAX_READ_BYTES: usize = 16 * 1024;
@@ -280,6 +281,11 @@ impl TelnetCodec {
                 }
                 DecodeState::SubnegotiationIac => match byte {
                     SE => {
+                        if self.subnegotiation == [TERMINAL_TYPE, TERMINAL_TYPE_SEND]
+                            && self.local_options.contains(&TERMINAL_TYPE)
+                        {
+                            output.responses.push(terminal_type_response(options));
+                        }
                         self.state = DecodeState::Data;
                         self.subnegotiation.clear();
                     }
@@ -333,7 +339,6 @@ impl TelnetCodec {
                     if self.local_options.insert(option) {
                         responses.push(vec![IAC, WILL, option]);
                         match option {
-                            TERMINAL_TYPE => responses.push(terminal_type_response(settings)),
                             NAWS => responses.push(naws_response(settings)),
                             _ => {}
                         }
@@ -805,10 +810,15 @@ mod tests {
                 .iter()
                 .any(|response| response.starts_with(&[IAC, WILL, TERMINAL_TYPE]))
         );
-        assert!(output.responses.iter().any(|response| {
-            response.starts_with(&[IAC, SB, TERMINAL_TYPE, TERMINAL_TYPE_IS])
-                && response.ends_with(&[IAC, SE])
-        }));
+        assert_eq!(output.responses, vec![vec![IAC, WILL, TERMINAL_TYPE]]);
+
+        let output = codec
+            .feed(
+                &[IAC, SB, TERMINAL_TYPE, TERMINAL_TYPE_SEND, IAC, SE],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(output.responses, vec![terminal_type_response(&options)]);
     }
 
     #[test]
@@ -891,6 +901,12 @@ mod tests {
                         IAC,
                         DO,
                         TERMINAL_TYPE,
+                        IAC,
+                        SB,
+                        TERMINAL_TYPE,
+                        TERMINAL_TYPE_SEND,
+                        IAC,
+                        SE,
                         IAC,
                         DO,
                         NAWS,
