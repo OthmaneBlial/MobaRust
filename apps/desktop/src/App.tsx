@@ -989,7 +989,10 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         fit();
       } catch {
         onStatusChange(workspaceId, "error");
-        terminal.writeln("\r\n\x1b[38;5;203mUnable to start the local PTY.\x1b[0m");
+        const message = remoteProtocol
+          ? `Unable to initialize the ${remoteProtocol.toUpperCase()} terminal session.`
+          : "Unable to start the local PTY.";
+        terminal.writeln(`\r\n\x1b[38;5;203m${message}\x1b[0m`);
       }
     };
     void boot();
