@@ -31,7 +31,7 @@ import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
 } from "./remote-desktop-errors";
-import { isCurrentRemoteDirectoryRequest } from "./remote-directory";
+import { isCurrentSessionRequest } from "./session-request";
 import {
   Activity,
   ArrowDownToLine,
@@ -1484,7 +1484,8 @@ function App() {
   const [remoteMonitorError, setRemoteMonitorError] = useState<string | null>(null);
   const [remoteMonitorLive, setRemoteMonitorLive] = useState(false);
   const [remoteMonitorIntervalSeconds, setRemoteMonitorIntervalSeconds] = useState<number>(30);
-  const remoteMonitorRequestRef = useRef(false);
+  const remoteMonitorRequestRef = useRef<{ requestId: number; sessionId: string } | null>(null);
+  const remoteMonitorRequestSequenceRef = useRef(0);
   const remoteMonitorGenerationRef = useRef(0);
   const remoteDirectoryRequestRef = useRef(0);
   const remoteSessionIdRef = useRef<string | null>(null);
@@ -2769,7 +2770,7 @@ function App() {
     if (!remoteSessionId) return;
     const requestId = ++remoteDirectoryRequestRef.current;
     const sessionId = remoteSessionId;
-    const isCurrentRequest = () => isCurrentRemoteDirectoryRequest(
+    const isCurrentRequest = () => isCurrentSessionRequest(
       requestId,
       remoteDirectoryRequestRef.current,
       sessionId,
@@ -2804,19 +2805,34 @@ function App() {
       setRemoteMonitorError("Remote monitoring requires the desktop runtime.");
       return;
     }
-    if (remoteMonitorRequestRef.current) return;
-    remoteMonitorRequestRef.current = true;
+    const sessionId = remoteSessionId;
+    if (remoteMonitorRequestRef.current?.sessionId === sessionId) return;
+    const requestId = ++remoteMonitorRequestSequenceRef.current;
+    remoteMonitorRequestRef.current = { requestId, sessionId };
+    const isCurrentRequest = () => {
+      const current = remoteMonitorRequestRef.current;
+      return current !== null && isCurrentSessionRequest(
+        requestId,
+        current.requestId,
+        sessionId,
+        remoteSessionIdRef.current,
+      );
+    };
     setRemoteMonitorStatus("loading");
     setRemoteMonitorError(null);
     try {
-      const snapshot = await invoke<RemoteMonitorSnapshot>("ssh_collect_remote_monitor", { terminalId: remoteSessionId });
+      const snapshot = await invoke<RemoteMonitorSnapshot>("ssh_collect_remote_monitor", { terminalId: sessionId });
+      if (!isCurrentRequest()) return;
       setRemoteMonitor(snapshot);
       setRemoteMonitorStatus("ready");
     } catch (error) {
+      if (!isCurrentRequest()) return;
       setRemoteMonitorStatus("error");
       setRemoteMonitorError(String(error));
     } finally {
-      remoteMonitorRequestRef.current = false;
+      if (remoteMonitorRequestRef.current?.requestId === requestId) {
+        remoteMonitorRequestRef.current = null;
+      }
     }
   }, [remoteProtocol, remoteSessionId]);
 

@@ -1,4 +1,4 @@
-export function isCurrentRemoteDirectoryRequest(
+export function isCurrentSessionRequest(
   requestId: number,
   latestRequestId: number,
   requestSessionId: string,
