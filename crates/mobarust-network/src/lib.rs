@@ -485,6 +485,8 @@ fn bounded_trace_lines(bytes: &[u8]) -> Vec<String> {
 
 fn validate_host(host: &str) -> Result<(), NetworkDiagnosticError> {
     if host.trim().is_empty()
+        || host.trim() != host
+        || host.starts_with('-')
         || host.len() > 253
         || host.contains('\0')
         || host.chars().any(char::is_control)
@@ -498,6 +500,19 @@ fn validate_host(host: &str) -> Result<(), NetworkDiagnosticError> {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn diagnostic_host_validation_rejects_process_options_and_edge_whitespace() {
+        for host in ["-f", " localhost", "localhost "] {
+            assert!(
+                matches!(
+                    validate_host(host),
+                    Err(NetworkDiagnosticError::InvalidTarget)
+                ),
+                "accepted invalid diagnostic host {host:?}"
+            );
+        }
+    }
 
     #[test]
     fn options_require_explicit_bounded_targets() {
