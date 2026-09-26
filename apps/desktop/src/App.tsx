@@ -841,6 +841,16 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     let unlistenClosed: UnlistenFn | undefined;
     let unlistenState: UnlistenFn | undefined;
     let unlistenX11: UnlistenFn | undefined;
+    const releaseListeners = () => {
+      unlistenOutput?.();
+      unlistenClosed?.();
+      unlistenState?.();
+      unlistenX11?.();
+      unlistenOutput = undefined;
+      unlistenClosed = undefined;
+      unlistenState = undefined;
+      unlistenX11 = undefined;
+    };
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
@@ -961,10 +971,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           });
         }
         if (disposed) {
-          unlistenOutput?.();
-          unlistenClosed?.();
-          unlistenState?.();
-          unlistenX11?.();
+          releaseListeners();
           return;
         }
         if (remoteSessionId) {
@@ -996,7 +1003,10 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         onStatusChange(workspaceId, "connected");
         fit();
       } catch {
-        if (disposed) return;
+        if (disposed) {
+          releaseListeners();
+          return;
+        }
         onStatusChange(workspaceId, "error");
         const message = remoteProtocol
           ? `Unable to initialize the ${remoteProtocol.toUpperCase()} terminal session.`
@@ -1015,10 +1025,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       terminalLinks.dispose();
       host.removeEventListener("paste", onPaste, true);
       resizeObserver.disconnect();
-      unlistenOutput?.();
-      unlistenClosed?.();
-      unlistenState?.();
-      unlistenX11?.();
+      releaseListeners();
       const terminalId = terminalIdRef.current;
       onNativeTerminalId(workspaceId, null);
       if (IS_TAURI && terminalId) {
