@@ -911,11 +911,11 @@ impl SessionStore {
             };
             let identity = options
                 .get("identityfile")
-                .map(|value| strip_quotes(value.trim()).to_owned())
+                .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty());
             let username = options
                 .get("user")
-                .map(|value| strip_quotes(value.trim()).to_owned())
+                .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty());
             let jump_hosts = options
                 .get("proxyjump")
@@ -925,15 +925,12 @@ impl SessionStore {
                 .filter(|value| !value.is_empty() && *value != "none")
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
-            let notes = options.get("serveraliveinterval").map(|interval| {
-                format!(
-                    "Imported from OpenSSH; ServerAliveInterval={}",
-                    strip_quotes(interval.trim())
-                )
-            });
+            let notes = options
+                .get("serveraliveinterval")
+                .map(|interval| format!("Imported from OpenSSH; ServerAliveInterval={interval}"));
             let server_alive_interval = options
                 .get("serveraliveinterval")
-                .and_then(|interval| strip_quotes(interval.trim()).parse::<u64>().ok())
+                .and_then(|interval| interval.parse::<u64>().ok())
                 .filter(|seconds| *seconds > 0 && *seconds <= MAX_SERVER_ALIVE_INTERVAL_SECONDS);
             imported.push(SessionRecord {
                 id: SessionId::new(),
@@ -1051,10 +1048,7 @@ fn parse_openssh_config(contents: &str) -> (Vec<OpenSshHostBlock>, Vec<String>) 
     let mut seen_unsupported = HashSet::new();
 
     for raw_line in contents.lines() {
-        let line = raw_line
-            .split_once('#')
-            .map_or(raw_line, |(line, _)| line)
-            .trim();
+        let line = strip_openssh_comment(raw_line).trim();
         if line.is_empty() {
             continue;
         }
@@ -1076,13 +1070,34 @@ fn parse_openssh_config(contents: &str) -> (Vec<OpenSshHostBlock>, Vec<String>) 
             directive.as_str(),
             "hostname" | "user" | "port" | "identityfile" | "proxyjump" | "serveraliveinterval"
         ) {
-            current.options.push((directive, value.to_owned()));
+            current
+                .options
+                .push((directive, strip_quotes(value).to_owned()));
         } else if seen_unsupported.insert(directive.clone()) {
             unsupported.push(directive);
         }
     }
     blocks.push(current);
     (blocks, unsupported)
+}
+
+fn strip_openssh_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, character) in line.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' && quote.is_some() {
+            escaped = true;
+        } else if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() && (character == '"' || character == '\'') {
+            quote = Some(character);
+        } else if character == '#' && quote.is_none() {
+            return &line[..index];
+        }
+    }
+    line
 }
 
 fn effective_options(blocks: &[OpenSshHostBlock], alias: &str) -> BTreeMap<String, String> {
@@ -1911,11 +1926,11 @@ mod tests {
                 Host *
                     ServerAliveInterval 30
                 Host prod bastion-alias
-                    HostName prod.internal.example
+                    HostName "prod.internal.example"
                     User deploy
-                    Port 2201
-                    IdentityFile "~/.ssh/id_ed25519"
-                    ProxyJump jump.example
+                    Port 2201 # production port
+                    IdentityFile "~/.ssh/id#ed25519" # key path
+                    ProxyJump "jump.example"
                     Include ~/.ssh/conf.d/*
                 Host staging
                     HostName staging.example
@@ -1936,7 +1951,7 @@ mod tests {
         assert_eq!(
             report.imported[0].auth,
             AuthMethod::PrivateKey {
-                key_ref: "~/.ssh/id_ed25519".into(),
+                key_ref: "~/.ssh/id#ed25519".into(),
                 credential_ref: None,
             }
         );
