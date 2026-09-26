@@ -78,6 +78,9 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("SSL_CERT_FILE")
+        .env_remove("SSL_CERT_DIR")
+        .env_remove("SSLKEYLOGFILE")
         .kill_on_drop(true)
         .spawn()
         .expect("could not start the locally built RDP helper");
@@ -203,6 +206,9 @@ async fn real_helper_waits_for_the_gateway_credential_before_starting() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("SSL_CERT_FILE")
+        .env_remove("SSL_CERT_DIR")
+        .env_remove("SSLKEYLOGFILE")
         .kill_on_drop(true)
         .spawn()
         .expect("could not start the locally built RDP helper");
