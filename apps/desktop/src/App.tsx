@@ -4260,7 +4260,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
       <pre ref={highlightRef} className="remote-editor-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightRemoteCode(content, language) }} />
       <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" disabled={busy} />
     </div>
-    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + rollback-safe promotion</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
+    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + recovery copy</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
 }
 

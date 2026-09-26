@@ -22,10 +22,11 @@ also rejected. It writes the new content to a unique remote temporary file,
 reapplies the original mode, moves the old file to a unique rollback name,
 promotes the complete temporary file, and removes the rollback copy. If
 promotion fails, Rust attempts to restore the original before returning the
-error. Temporary paths are cleaned on handled failure paths. If the final
-rollback-copy cleanup itself fails after a successful promotion, Rust returns a
-distinct save error and deliberately leaves that backup as a recovery artifact
-instead of risking data loss by hiding the cleanup failure.
+error. If restoration also fails or its result is uncertain, Rust retains the
+backup and temporary copy for recovery and tells the operator to inspect the
+target before retrying. Other handled failures clean their temporary copy. If
+the final rollback-copy cleanup fails after a successful promotion, Rust
+reports that the new file was saved and leaves the backup for inspection.
 
 ## Security and reliability boundary
 
@@ -47,4 +48,5 @@ available.
 The local OpenSSH fixture exercises upload, permission metadata, read, save,
 permission preservation, conflict rejection, and cleanup over a real loopback
 SFTP session. TypeScript, ESLint, Rust tests, and the production build cover
-the command and editor wiring.
+the command and editor wiring. Unit tests cover the distinct recovery messages;
+the fixture does not inject a double rename failure.

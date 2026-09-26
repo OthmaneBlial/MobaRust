@@ -109,6 +109,14 @@ pub enum SshError {
     RemoteConflict,
     #[error("remote save target already exists")]
     RemoteTargetExists,
+    #[error(
+        "remote save failed and the original could not be confirmed restored; inspect the target and nearby .mobarust-edit files before retrying"
+    )]
+    RemoteSaveRestoreUncertain,
+    #[error(
+        "remote file was saved, but its backup could not be removed; inspect the nearby .mobarust-edit-backup file"
+    )]
+    RemoteSaveBackupCleanupFailed,
     #[error("remote text file exceeds the 4 MiB editor limit")]
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
@@ -2277,14 +2285,14 @@ impl SftpConnection {
             return Err(map_sftp_error(error));
         }
         if let Err(error) = self.session.rename(&temporary, &path).await {
-            let _ = self.session.rename(&backup, &path).await;
+            if self.session.rename(&backup, &path).await.is_err() {
+                return Err(SshError::RemoteSaveRestoreUncertain);
+            }
             let _ = self.session.remove_file(&temporary).await;
             return Err(map_sftp_error(error));
         }
         if let Err(_error) = self.session.remove_file(&backup).await {
-            return Err(SshError::Sftp(
-                "remote file saved but backup cleanup failed".into(),
-            ));
+            return Err(SshError::RemoteSaveBackupCleanupFailed);
         }
         self.read_text_document_with_encoding(path, encoding).await
     }
@@ -2418,14 +2426,14 @@ impl SftpConnection {
                 return Err(map_sftp_error(error));
             }
             if let Err(error) = self.session.rename(&temporary, &path).await {
-                let _ = self.session.rename(&backup, &path).await;
+                if self.session.rename(&backup, &path).await.is_err() {
+                    return Err(SshError::RemoteSaveRestoreUncertain);
+                }
                 let _ = self.session.remove_file(&temporary).await;
                 return Err(map_sftp_error(error));
             }
             if let Err(_error) = self.session.remove_file(&backup).await {
-                return Err(SshError::Sftp(
-                    "remote file saved but backup cleanup failed".into(),
-                ));
+                return Err(SshError::RemoteSaveBackupCleanupFailed);
             }
         } else if let Err(error) = self.session.rename(&temporary, &path).await {
             let _ = self.session.remove_file(&temporary).await;
@@ -3078,6 +3086,16 @@ mod tests {
                 && !message.contains("server response")
                 && !message.contains("remote path")
         }));
+    }
+
+    #[test]
+    fn remote_save_recovery_errors_distinguish_uncertain_restore_from_saved_file() {
+        let uncertain = SshError::RemoteSaveRestoreUncertain.to_string();
+        let saved = SshError::RemoteSaveBackupCleanupFailed.to_string();
+        assert!(uncertain.contains("could not be confirmed restored"));
+        assert!(uncertain.contains("before retrying"));
+        assert!(saved.contains("file was saved"));
+        assert!(saved.contains("backup could not be removed"));
     }
 
     #[test]
