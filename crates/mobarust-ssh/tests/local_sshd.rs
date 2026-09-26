@@ -272,6 +272,16 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("replace existing remote file through SFTP v3");
         assert_eq!(fs::read(&renamed_path).expect("read replaced remote file"), b"replacement");
+        let replaced_mode = sftp
+            .read_dir(&remote_root)
+            .await
+            .expect("list replaced remote file")
+            .into_iter()
+            .find(|entry| entry.path == renamed_path)
+            .expect("find replaced remote file")
+            .permissions
+            .map(|mode| mode & 0o7777);
+        assert_eq!(replaced_mode, Some(0o640));
         assert!(!sftp.try_exists(&temporary_upload).await.expect("check promoted upload cleanup"));
         assert!(
             !sftp.read_dir(&remote_root)

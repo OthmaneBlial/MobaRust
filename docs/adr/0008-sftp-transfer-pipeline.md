@@ -33,7 +33,9 @@ overwrite, the native layer tries direct promotion, then moves the old file
 to a nearby backup before promoting the complete temporary file. It restores
 the backup if promotion fails. If restoration cannot be confirmed, it keeps
 both files for manual recovery and reports the uncertainty; a failed backup
-cleanup is reported after the new file has been promoted.
+cleanup is reported after the new file has been promoted. When the existing
+target is a regular file, its permission bits are applied to the complete
+temporary file before promotion.
 Single-file SFTP and SCP uploads reject selected local symlinks, including
 dangling links, before opening a remote transfer. On Unix, file uploads also
 open with `O_NOFOLLOW` and check the opened handle is a regular file, preventing

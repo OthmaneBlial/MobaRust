@@ -2536,6 +2536,19 @@ impl SftpConnection {
                     "upload destination already exists; enable overwrite explicitly".into(),
                 ));
             }
+            if overwrite && self.try_exists(destination).await? {
+                let metadata = self
+                    .session
+                    .symlink_metadata(destination)
+                    .await
+                    .map_err(map_sftp_error)?;
+                if metadata.is_regular()
+                    && let Some(permissions) = metadata.permissions
+                {
+                    self.set_permissions(temporary, permissions & 0o7777)
+                        .await?;
+                }
+            }
             let initial_error = match self.rename(temporary, destination).await {
                 Ok(()) => return Ok(()),
                 Err(error) if !overwrite => return Err(error),
