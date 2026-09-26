@@ -1,100 +1,76 @@
-(() => {
-  const header = document.querySelector('[data-site-header]');
-  const menuToggle = document.querySelector('.menu-toggle');
-  const nav = document.querySelector('#site-nav');
+"use strict";
 
-  if (menuToggle && nav) {
-    menuToggle.addEventListener('click', () => {
-      const isOpen = nav.classList.toggle('open');
-      menuToggle.setAttribute('aria-expanded', String(isOpen));
-      menuToggle.textContent = isOpen ? 'Close' : 'Menu';
-    });
+const menuButton = document.querySelector(".menu-toggle");
+const siteNav = document.querySelector("#site-nav");
 
-    nav.querySelectorAll('a').forEach((link) => {
-      link.addEventListener('click', () => {
-        nav.classList.remove('open');
-        menuToggle.setAttribute('aria-expanded', 'false');
-        menuToggle.textContent = 'Menu';
-      });
-    });
-  }
+if (menuButton && siteNav) {
+  const closeMenu = () => {
+    menuButton.setAttribute("aria-expanded", "false");
+    siteNav.classList.remove("is-open");
+  };
 
-  const previewButtons = document.querySelectorAll('[data-preview-tab]');
-  const previewPanels = document.querySelectorAll('[data-preview-panel]');
-  const previewLabels = document.querySelectorAll('[data-preview-label]');
+  menuButton.addEventListener("click", () => {
+    const isOpen = menuButton.getAttribute("aria-expanded") === "true";
+    menuButton.setAttribute("aria-expanded", String(!isOpen));
+    siteNav.classList.toggle("is-open", !isOpen);
+  });
 
-  previewButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      const tab = button.dataset.previewTab;
-      previewButtons.forEach((item) => item.classList.toggle('active', item === button));
-      previewLabels.forEach((label) => label.classList.toggle('selected', label.dataset.previewLabel === tab));
-      previewPanels.forEach((panel) => {
-        panel.hidden = panel.dataset.previewPanel !== tab;
-      });
-      const crumb = document.querySelector('.crumb');
-      if (crumb) crumb.textContent = tab === 'files' ? 'SFTP / staging-files' : tab === 'local' ? 'LOCAL / local-shell' : 'SSH / edge-prod-01';
+  siteNav.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("a")) closeMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMenu();
+  });
+}
+
+document.querySelectorAll("[data-year]").forEach((node) => {
+  node.textContent = String(new Date().getFullYear());
+});
+
+const demo = document.querySelector("#desktop-demo");
+const chapterButtons = Array.from(document.querySelectorAll("[data-demo-time]"));
+
+if (demo && chapterButtons.length > 0) {
+  chapterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const seek = () => {
+        demo.currentTime = Number(button.dataset.demoTime);
+      };
+      if (demo.readyState >= 1) seek();
+      else demo.addEventListener("loadedmetadata", seek, { once: true });
     });
   });
 
-  document.querySelectorAll('[data-copy]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const original = button.textContent;
-      const value = button.dataset.copy;
-      try {
-        await navigator.clipboard.writeText(value);
-        button.textContent = 'Copied';
-      } catch {
-        button.textContent = 'Select manually';
-      }
-      window.setTimeout(() => { button.textContent = original; }, 1800);
+  demo.addEventListener("timeupdate", () => {
+    const seconds = demo.currentTime;
+    const starts = chapterButtons.map((button) => Number(button.dataset.demoTime));
+    const activeIndex = starts.reduce((active, start, index) => seconds >= start ? index : active, -1);
+    chapterButtons.forEach((button, index) => {
+      if (index === activeIndex) button.setAttribute("aria-current", "true");
+      else button.removeAttribute("aria-current");
     });
   });
+}
 
-  const year = document.querySelector('[data-year]');
-  const demoVideo = document.querySelector('#desktop-demo-video');
-  const chapters = [...document.querySelectorAll('[data-demo-time]')];
-  if (demoVideo) {
-    chapters.forEach((button) => {
-      button.addEventListener('click', async () => {
-        try {
-          if (demoVideo.readyState === 0) {
-            await new Promise((resolve, reject) => {
-              const cleanup = () => {
-                demoVideo.removeEventListener('loadedmetadata', ready);
-                demoVideo.removeEventListener('error', failed);
-              };
-              const ready = () => { cleanup(); resolve(); };
-              const failed = () => { cleanup(); reject(new Error('Video unavailable')); };
-              demoVideo.addEventListener('loadedmetadata', ready);
-              demoVideo.addEventListener('error', failed);
-              demoVideo.load();
-            });
-          }
-          demoVideo.currentTime = Number(button.dataset.demoTime);
-          await demoVideo.play();
-        } catch { demoVideo.focus(); }
-      });
-    });
-    demoVideo.addEventListener('timeupdate', () => {
-      const active = chapters.findLast((button) => Number(button.dataset.demoTime) <= demoVideo.currentTime);
-      chapters.forEach((button) => button.setAttribute('aria-pressed', String(button === active)));
-    });
-  }
-  if (year) year.textContent = String(new Date().getFullYear());
+document.querySelectorAll("[data-copy-target]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const target = document.getElementById(button.dataset.copyTarget);
+    const status = button.parentElement.querySelector(".copy-status");
+    if (!target || !status || !navigator.clipboard) {
+      if (status) status.textContent = "Clipboard access is unavailable here. Select the commands to copy them.";
+      return;
+    }
 
-  if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const observer = new IntersectionObserver((entries, currentObserver) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible');
-          currentObserver.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.12 });
-    document.querySelectorAll('.reveal').forEach((element) => observer.observe(element));
-  } else {
-    document.querySelectorAll('.reveal').forEach((element) => element.classList.add('is-visible'));
-  }
-
-  if (header) header.dataset.ready = 'true';
-})();
+    try {
+      await navigator.clipboard.writeText(target.textContent.trim());
+      button.textContent = "Copied";
+      status.textContent = "Commands copied. Nothing was executed.";
+      window.setTimeout(() => {
+        button.textContent = "Copy";
+      }, 1600);
+    } catch {
+      status.textContent = "Clipboard access was denied. Select the commands to copy them.";
+    }
+  });
+});

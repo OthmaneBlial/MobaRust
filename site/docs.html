@@ -1,64 +1,144 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#101511" />
-    <meta name="description" content="MobaRust docs — the free, open-source MobaXterm alternative built with Rust." />
-    <title>MobaRust — The free MobaXterm alternative</title>
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="styles.css" />
-    <style>
-      .docs-hero { max-width: 1380px; margin: 0 auto; padding: 105px 5vw 85px; }
-      .docs-hero h1 { font-size: clamp(58px, 8vw, 105px); margin-bottom: 25px; }
-      .docs-hero p { color: #aab5ad; font-size: 17px; line-height: 1.6; max-width: 590px; }
-      .docs-layout { display: grid; grid-template-columns: 220px minmax(0, 790px); gap: clamp(45px, 9vw, 145px); max-width: 1120px; margin: 0 auto; padding: 30px 5vw 140px; }
-      .docs-nav { align-self: start; position: sticky; top: 25px; }
-      .docs-nav small, .docs-kicker { color: #6e7d72; display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .13em; margin-bottom: 16px; text-transform: uppercase; }
-      .docs-nav a { border-left: 1px solid var(--line); color: #86948a; display: block; font-size: 12px; padding: 9px 0 9px 14px; }
-      .docs-nav a:hover { border-left-color: var(--lime); color: var(--lime); }
-      .docs-content section { border-top: 1px solid var(--line); padding: 54px 0 60px; }
-      .docs-content section:first-child { border-top: 0; padding-top: 0; }
-      .docs-content h2 { font-size: 43px; margin-bottom: 21px; }
-      .docs-content h3 { font-family: var(--display); font-size: 25px; font-weight: 400; letter-spacing: -.04em; margin: 34px 0 12px; }
-      .docs-content p, .docs-content li { color: #93a096; font-size: 14px; line-height: 1.75; }
-      .docs-content ul { padding-left: 19px; }
-      .docs-content li::marker { color: var(--lime); }
-      .docs-note { background: rgba(214, 243, 106, .07); border-left: 2px solid var(--lime); color: #b7c3b6; font-size: 13px; line-height: 1.65; margin: 25px 0; padding: 15px 17px; }
-      .docs-table-wrap { overflow-x: auto; }
-      .docs-table { border-collapse: collapse; min-width: 620px; width: 100%; }
-      .docs-table th, .docs-table td { border-bottom: 1px solid var(--line); padding: 13px 12px 13px 0; text-align: left; vertical-align: top; }
-      .docs-table th { color: #76847a; font-family: var(--mono); font-size: 8px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; }
-      .docs-table td { color: #a4b0a5; font-size: 12px; line-height: 1.5; }
-      .docs-table td:first-child { color: var(--lime); font-family: var(--mono); font-size: 10px; }
-      .docs-link { color: var(--lime); text-decoration: underline; text-decoration-color: rgba(214, 243, 106, .35); text-underline-offset: 4px; }
-      .status-pill { border: 1px solid currentColor; display: inline-block; font-family: var(--mono); font-size: 8px; letter-spacing: .08em; padding: 5px 7px; text-transform: uppercase; }
-      .status-pill.ready { color: var(--sage); }.status-pill.frontier { color: var(--amber); }.status-pill.open { color: var(--coral); }
-      @media (max-width: 760px) { .docs-hero { padding-top: 70px; }.docs-layout { display: block; padding-top: 0; }.docs-nav { background: #1a221c; border: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 0 15px; margin-bottom: 55px; padding: 13px; position: static; }.docs-nav small { flex-basis: 100%; margin: 3px 0 6px; }.docs-nav a { border-left: 0; padding: 6px 0; }.docs-content h2 { font-size: 39px; } }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f3f0e7">
+    <meta name="description" content="MobaRust documentation: installation, supported workflows, security boundaries, preview limits, and build instructions.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="MobaRust documentation">
+    <meta property="og:description" content="What works today, how to install it, and what still needs proof.">
+    <meta property="og:image" content="https://othmaneblial.github.io/MobaRust/media/mobarust-demo-poster.jpg">
+    <title>MobaRust documentation — Install, use, understand the limits</title>
+    <link rel="canonical" href="https://othmaneblial.github.io/MobaRust/docs.html">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
   </head>
   <body>
-    <div class="page-shell">
-      <header class="site-header" data-site-header><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><svg class="brand-symbol" viewBox="0 0 32 32"><path class="brand-glyph" d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z"/></svg></span><span>MobaRust</span></a><button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button><nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="index.html#capabilities">Capabilities</a><a href="index.html#architecture">Trust</a><a href="docs.html">Docs</a><a href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">GitHub <span class="arrow">↗</span></a><a class="nav-cta" href="https://github.com/OthmaneBlial/MobaRust" target="_blank" rel="noreferrer">View the source</a></nav></header>
-      <main>
-        <section class="docs-hero"><p class="eyebrow">MobaRust / open alternative</p><h1>Read the<br /><em>receipts.</em></h1><p>A compact guide to the free, open-source MobaXterm alternative: what MobaRust does today, where the native boundary lives, and which capabilities still need real platform evidence.</p></section>
-        <div class="docs-layout">
-          <aside class="docs-nav"><small>On this page</small><a href="#connect">Connect</a><a href="#move">Move files</a><a href="#operate">Operate</a><a href="#safety">Safety</a><a href="#clipboard-policy">Clipboard</a><a href="#frontier">Frontier</a></aside>
-          <div class="docs-content">
-            <section id="connect"><span class="docs-kicker">01 / connect</span><h2>Make the handshake legible.</h2><p>MobaRust keeps SSH connection work inside the Rust/native boundary. The session model separates connection configuration from secret material and exposes typed state to the UI.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Surface</th><th>Current focus</th><th>Status</th></tr></thead><tbody><tr><td>SSH</td><td>Host-key verification, auth paths, PTY, cancellation, timeout, reconnect state</td><td><span class="status-pill ready">evidenced</span></td></tr><tr><td>Local shell</td><td>Native PTY lifecycle, resize, output batching, explicit child cleanup, and typed PowerShell/cmd/bash/zsh/fish targets</td><td><span class="status-pill ready">evidenced</span></td></tr><tr><td>Remote desktop input</td><td>Protocol-specific RDP set-1 and VNC keys, including extended modifiers, navigation keys, function keys, and keypad values</td><td><span class="status-pill frontier">candidate</span></td></tr><tr><td>Telnet</td><td>Legacy connectivity, explicitly identified as unencrypted</td><td><span class="status-pill ready">foundation</span></td></tr><tr><td>Serial</td><td>Device settings, disconnect handling, refresh, terminal view</td><td><span class="status-pill frontier">matrix open</span></td></tr></tbody></table></div></section>
-            <section id="move"><span class="docs-kicker">02 / move</span><h2>Files belong beside the shell.</h2><p>SFTP and SCP operations use bounded, cancellable pipelines. Remote editing is designed around a temporary local representation, conflict detection where possible, an atomic upload path, and preservation of the original permission bits.</p><h3>The useful details</h3><ul><li>Recursive transfers report progress without spawning uncontrolled work.</li><li>Remote filenames are treated as untrusted input and normalized before local use.</li><li>Failed uploads remain visible instead of becoming silent partial writes.</li><li>Remote edits warn before overwriting a file changed since it was opened.</li></ul><p>See the source decisions for <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/tree/main/docs/adr" target="_blank" rel="noreferrer">transfers and remote editing ↗</a>.</p></section>
-            <section id="operate"><span class="docs-kicker">03 / operate</span><h2>Context is an operator feature.</h2><p>Saved sessions, groups, tags, snippets, tunnels, diagnostics, monitoring, and visible transfer state are designed as one operating surface. The goal is fewer hidden states, not more panels.</p><div class="docs-note">Broadcast input is explicit: the user selects target terminals, the UI shows a highly visible active indicator, and an emergency disable path remains available. Snippets are previewed before sending and never execute automatically. SSH monitoring is one-shot by default; live refresh requires an explicit 15/30/60-second choice and stops when the view closes.</div><h3>Built to stay responsive</h3><p>Search and storage are structured for large session collections. Every network operation has an operation-specific timeout and a cooperative cancellation path. Native RDP/VNC helper-pipe writes and VNC protocol input/refresh writes also have dedicated deadlines; a native Stop signal can cancel an in-flight VNC input or framebuffer-refresh operation before the bounded close path; remote-desktop helpers require a typed Hello → Starting → Ready sequence before capabilities or active data are accepted, and reconnecting is allowed only after a ready cycle; reconnecting also clears cached capabilities, remote clipboard text, the displayed framebuffer, pressed keys, and queued pointer motion before a new attempt; VNC event polling yields every 250 ms so Stop remains responsive during quiet sessions; connection metadata is bounded and rejects control characters and accidental leading/trailing whitespace before a listener, helper, or protocol channel is opened; diagnostics read native command output through a 64 KiB cap before buffering and apply a second line/count bound before IPC; RDP viewport resize requests are coalesced to the latest bounded size and cancelled when the view closes; RDP pointer and wheel coordinates are clamped to the negotiated surface before native input events are created; VNC pointer and wheel coordinates are clamped to the active framebuffer after server resize; framebuffer dimensions are bounded before launch or resize; RDP color depth is validated against the candidate's supported 16/32-bit contract; unsupported RDP audio is rejected before launch; RDP resize is revalidated inside the helper; closed RDP input/output channels route through a bounded, user-configurable 0–10-attempt reconnect policy and cleanup handling; one stable redacted crash diagnostic is emitted for a failure, reader exits trigger bounded helper cleanup/reaping, and reconnect uses bounded retries and backoff instead of an infinite loop.</p></section>
-            <section id="safety"><span class="docs-kicker">04 / safety</span><h2>Local-first does not mean careless.</h2><p>The repository's validation path is deliberately defensive. It uses isolated `HOME` and XDG directories, strips credential-related environment variables, and runs protocol fixtures only on loopback addresses.</p><ul><li>Personal `~/.ssh`, GitHub keys, SSH agents, Keychain, and real remote hosts are out of scope for tests.</li><li>Passwords, private key material, tokens, and sensitive environment variables are redacted from logs.</li><li>Frontend IPC is typed and narrow; there is no unrestricted `execute_anything(command)` bridge.</li><li>Native terminal, persistence, and vault errors do not echo local paths or raw OS/backend details.</li><li>Sanitized diagnostic export contains runtime metadata only; sessions, hosts, commands, paths, logs, and credentials are excluded.</li><li>Package smoke tests exercise only the built binary's no-window `--version` path; full GUI and cross-platform startup measurements remain separate.</li><li>Terminal output is untrusted content and is not promoted to arbitrary HTML.</li><li>Multiline terminal paste requires confirmation by default; it is never silently sent as a command.</li></ul><p>Read the full <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/safe-testing.md" target="_blank" rel="noreferrer">safe testing policy ↗</a>, <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md" target="_blank" rel="noreferrer">threat model ↗</a>, and <a class="docs-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/dependency-audit.md" target="_blank" rel="noreferrer">dependency audit ↗</a>.</p></section>
-            <section id="frontier"><span class="docs-kicker">05 / frontier</span><h2>What still needs proving.</h2><p>The project is approximately 89.7% through its current engineering checklist (61 of 68 items evidenced). The local implementation layer is further along than the release matrix; the remaining work is not hidden behind a vague “coming soon” label.</p><div class="docs-table-wrap"><table class="docs-table"><thead><tr><th>Area</th><th>What remains</th><th>Status</th></tr></thead><tbody><tr><td>RDP</td><td>The isolated native candidate now covers explicit Gateway metadata, ordered separate role-tagged native credential handoff, the native-pipe process smoke test, the macOS self-signed-certificate rejection fixture, and an opt-in real loopback IronRDP server fixture for TLS/Hybrid handshake, accepted and rejected authentication, framebuffer, keyboard/mouse input, and clean stop; mature-engine/FreeRDP integration, cross-platform certificate fixtures, Windows evidence, Gateway trust/interoperability, audio, clipboard, resize, and multi-monitor proof remain</td><td><span class="status-pill frontier">local candidate</span></td></tr><tr><td>VNC</td><td>The real helper and loopback fixtures now cover raw/copy/Tight-JPEG framebuffer decoding, bounded pointer/wheel input after a server resize, bounded Unicode/X11 keysyms, and an explicit unencrypted-TCP opt-in for remote hostname/IP targets; TLS-capable engine selection, cross-platform interoperability, and manual evidence beyond local fixtures remain</td><td><span class="status-pill frontier">local candidate</span></td></tr><tr><td>PTY / platforms</td><td>Target-aware PTY, typed PowerShell/cmd/Unix shell targets, WSL code, and explicit child reaping on close or reader EOF exist; real Windows/Linux/macOS runtime, WSL, hardware, multi-monitor matrix, and clipboard evidence remain</td><td><span class="status-pill open">matrix open</span></td></tr><tr><td>Release</td><td>Unsigned macOS packaging, target-aware layout fixtures, checksum verification, and an explicit macOS codesign verifier exist; signed portable packages, notarization, and clean-install evidence remain</td><td><span class="status-pill open">open</span></td></tr></tbody></table></div><p>That distinction matters. A local fixture proves lifecycle logic and one controlled engine/server pairing; it does not prove production interoperability on every desktop. The benchmark harness reports only measured, scoped probes; process-launch timings are not full application cold-start or cross-platform performance claims.</p></section>
-            <section id="clipboard-policy"><span class="docs-kicker">06 / clipboard</span><h2>Trust it before you bridge it.</h2><p>RDP clipboard redirection is disabled by default. An explicit profile opt-in selects IronRDP’s native Windows clipboard backend; macOS and Linux reject the option until reviewed native adapters exist. VNC also requires an explicit opt-in enforced by both the parent and helper before text reaches the RFB engine. Remote content is never copied to the Mac clipboard automatically.</p><div class="docs-note">The setting is deliberately visible in Quick Connect and saved profiles. The current macOS tests prove the safe rejection path without touching the host clipboard or any remote machine, including a loopback assertion that no RFB ClientCutText message is sent without opt-in. At runtime, the native helper also reports its actual capabilities, including transport encryption status, so the UI can keep unsupported or unsafe actions visible.</div></section>
-            <section id="rdp-proof"><span class="docs-kicker">07 / local receipt</span><h2>Recovery is tested<br /><em>as a state machine.</em></h2><p>The opt-in macOS RDP fixture runs the compiled helper against a real loopback IronRDP server, verifies both accepted and rejected synthetic username/domain/password credentials, sends a real 400×240 monitor-layout request to the server display handler, closes the first server-side session, and verifies <code>Reconnecting</code>, a fresh <code>Starting → Ready → Active</code> sequence, and a different framebuffer from the second session. This proves one controlled engine/server pairing only; Windows, independent-server reconnect behavior, Gateway interoperability, and production packaging remain open.</p></section>
-          </div>
-        </div>
-      <section class="closing section-narrow reveal" id="vnc-local-proof"><div class="closing-rule"></div><p class="eyebrow">VNC / local receipt</p><h2>Protocol coverage<br /><em>is explicit.</em></h2><p>The isolated VNC helper now exercises real RFB 3.3, 3.7, and 3.8 negotiation on disposable loopback fixtures, including no-auth, legacy VNC-password, and categorized authentication-rejection paths. The same native client path is tested for framebuffer delivery and bounded input, without echoing the supplied secret in helper events. This is local engine evidence; TLS-capable engine selection, independent-server interoperability, and Windows/Linux/macOS release checks remain open.</p></section>
-      <section class="closing section-narrow reveal" id="pty-local-proof"><div class="closing-rule"></div><p class="eyebrow">PTY / local receipt</p><h2>Shell targets stay<br /><em>typed and bounded.</em></h2><p>The macOS test suite launches each installed fixed Unix target—<code>bash</code>, <code>zsh</code>, and <code>fish</code>—inside a disposable native PTY and verifies a marker before clean exit. Windows PowerShell/cmd, WSL, Linux window-manager behavior, and the broader platform matrix still require their target environments.</p></section>
-      </main>
-      <footer class="site-footer"><div class="footer-brand"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><svg class="brand-symbol" viewBox="0 0 32 32"><path class="brand-glyph" d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z"/></svg></span><span>MobaRust</span></a><p>A free, open-source MobaXterm alternative<br />for people who operate systems.</p></div><div class="footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span><a href="index.html">Back to home ↑</a></span></div></footer>
-    </div>
-    <script src="app.js"></script>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="announcement"><span class="announcement-dot" aria-hidden="true"></span><span>Desktop preview <strong>v0.1.2</strong> · unsigned</span><a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.2">Release files <span aria-hidden="true">↗</span></a></div>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="index.html" aria-label="MobaRust home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z"/></svg></span><span>MobaRust</span></a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="index.html#workflows">Workflows</a><a href="index.html#demo">Demo</a><a href="index.html#trust">Trust</a><a href="docs.html" aria-current="page">Docs</a><a class="nav-source" href="https://github.com/OthmaneBlial/MobaRust">GitHub <span aria-hidden="true">↗</span></a><a class="nav-download" href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.2">Download preview</a></nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="docs-hero page-wrap">
+        <p class="eyebrow"><span class="eyebrow-line"></span> MobaRust / Field guide</p>
+        <h1>Facts before<br><em>features.</em></h1>
+        <p>Install the preview, see what it does, and understand what still needs real-world proof. This guide follows the code and release evidence.</p>
+        <div class="docs-meta"><span>VERSION 0.1.2</span><span>APACHE 2.0</span><span>LOCAL-FIRST</span></div>
+      </section>
+
+      <div class="docs-layout page-wrap">
+        <aside class="docs-nav" aria-label="On this page">
+          <p>ON THIS PAGE</p>
+          <a href="#install">Install the preview</a>
+          <a href="#workflows">Supported workflows</a>
+          <a href="#trust">Security boundaries</a>
+          <a href="#limits">Known limits</a>
+          <a href="#source">Build from source</a>
+          <a href="#evidence">Validation evidence</a>
+        </aside>
+
+        <article class="docs-content">
+          <section id="install">
+            <p class="docs-kicker">01 / Install</p>
+            <h2>Choose your desktop.</h2>
+            <p>v0.1.2 is an unsigned desktop preview. Choose an installer below. GitHub's autogenerated source archives are not installers.</p>
+            <div class="docs-downloads">
+              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.2/MobaRust-0.1.2-windows-x64.exe"><span>WINDOWS · X64</span><strong>Windows installer</strong><small>EXE · WebView2 is installed if needed</small></a>
+              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.2/MobaRust-0.1.2-macos-arm64.dmg"><span>MACOS · APPLE SILICON</span><strong>Apple Silicon</strong><small>DMG · drag MobaRust to Applications</small></a>
+              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.2/MobaRust-0.1.2-macos-x64.dmg"><span>MACOS · INTEL</span><strong>Intel Mac</strong><small>DMG · drag MobaRust to Applications</small></a>
+              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.2/MobaRust-0.1.2-linux-x64.deb"><span>LINUX · DEBIAN</span><strong>Ubuntu / Debian</strong><small>DEB · x64</small></a>
+              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.2/MobaRust-0.1.2-linux-x64.AppImage"><span>LINUX · PORTABLE</span><strong>Other Linux desktops</strong><small>AppImage · WebKitGTK 4.1 and FUSE may be required</small></a>
+              <a class="docs-download-all" href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.2"><span>CHECKSUMS · NOTES</span><strong>All release files</strong><small>SHA-256 files and install instructions ↗</small></a>
+            </div>
+            <aside class="docs-callout"><strong>Unsigned means unsigned.</strong> Windows may show SmartScreen. macOS may block first launch because the app is not Developer ID signed or notarized. Follow the OS's per-app review flow only if you trust the download. Never disable system security globally.</aside>
+            <p>Checksum files help detect download corruption. They do not verify who published an installer.</p>
+          </section>
+
+          <section id="workflows">
+            <p class="docs-kicker">02 / Workflows</p>
+            <h2>Built for the SSH workday.</h2>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead><tr><th>Area</th><th>Available now</th><th>Boundary</th></tr></thead>
+                <tbody>
+                  <tr><th>SSH</th><td>Host-key verification, agent/password/key-reference authentication, PTY resize, keepalives, cancellation, bounded reconnect, jump hosts.</td><td>Verify the fingerprint before trusting a new host.</td></tr>
+                  <tr><th>SFTP / SCP</th><td>Browser, streaming transfer, recursive SFTP, progress, cancellation, explicit overwrite, rollback and mode preservation.</td><td>Recursive SCP is not supported. Remote and local directory path swaps still have documented race limits.</td></tr>
+                  <tr><th>Sessions</th><td>Folders, tags, favorites, recents, search, OpenSSH config import, and secret-free profile export.</td><td>Profiles keep credential references, not secret contents.</td></tr>
+                  <tr><th>Local terminals</th><td>Native PTY, typed shell targets, resize, split panes, persistent tabs, and streamed UTF-8.</td><td>Windows, Linux, and WSL runtime evidence remains open.</td></tr>
+                  <tr><th>Operator tools</th><td>Tunnels, bounded SOCKS5, snippets, cancellable macros, explicit multi-exec, diagnostics, and optional monitoring.</td><td>Broadcast targets require explicit selection.</td></tr>
+                  <tr><th>Telnet / serial</th><td>Native Telnet negotiation and serial lifecycle controls.</td><td>Telnet is unencrypted. Serial hardware coverage is incomplete.</td></tr>
+                  <tr><th>RDP / VNC</th><td>Isolated experimental helpers and deterministic local fixtures.</td><td>RDP is excluded from installers. VNC remote TCP is unencrypted and opt-in.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="trust">
+            <p class="docs-kicker">03 / Security</p>
+            <h2>Clear edges, deliberate actions.</h2>
+            <ul class="docs-list">
+              <li>SSH host-key verification rejects unknown keys until the operator chooses a trust source.</li>
+              <li>Session configuration is separate from passwords and private keys. Native code resolves credentials when a protocol needs them.</li>
+              <li>Secrets are excluded from ordinary profile data, logs, and helper process arguments.</li>
+              <li>There is no unrestricted shell command bridge from the renderer.</li>
+              <li>Multiline shell paste is confirmed. Multi-exec shows selected targets and an emergency disable path.</li>
+              <li>Network jobs use bounded input/output, timeouts, cancellation, and cleanup.</li>
+              <li>Repository tests use disposable state and loopback fixtures. They do not inspect personal SSH files or connect to real hosts.</li>
+            </ul>
+            <p>Read the full <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md">threat model</a>, <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/safe-testing.md">safe testing policy</a>, and <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/dependency-audit.md">dependency audit</a>.</p>
+          </section>
+
+          <section id="limits">
+            <p class="docs-kicker">04 / Known limits</p>
+            <h2>Preview means work remains.</h2>
+            <ul class="docs-list">
+              <li>The release workflow builds installers on native GitHub runners and checks version, assets, checksums, and binary startup.</li>
+              <li>The installers are unsigned. Publisher signing and macOS notarization are not available in this release.</li>
+              <li>Build success does not prove full GUI clean-install behavior or remote-server interoperability.</li>
+              <li>RDP/VNC remain experiments. RDP is not packaged; VNC remote TCP has no transport encryption.</li>
+              <li>Windows/Linux hardware, WSL, clipboard, serial devices, and broader platform behavior need target-environment evidence.</li>
+            </ul>
+            <p>MobaRust is independent and is not affiliated with Mobatek or MobaXterm. There is no claim of feature-for-feature parity. See the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">roadmap</a> for open gates.</p>
+          </section>
+
+          <section id="source">
+            <p class="docs-kicker">05 / Build from source</p>
+            <h2>Run the local path.</h2>
+            <p>Requirements: Rust 1.88 or newer, Node.js 22, pnpm, and the <a href="https://v2.tauri.app/start/prerequisites/">Tauri prerequisites</a> for your operating system.</p>
+            <div class="command-block">
+              <button class="copy-button" type="button" data-copy-target="clone-command">Copy</button>
+              <pre id="clone-command"><code>git clone https://github.com/OthmaneBlial/MobaRust.git
+cd MobaRust
+pnpm install --dir apps/desktop
+cargo xtask check
+cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml</code></pre>
+              <p class="copy-status" role="status" aria-live="polite">Copies commands only. Nothing is executed.</p>
+            </div>
+            <p>The validation path uses isolated home directories, disposable fixtures, and loopback networking. It does not need personal SSH files, Keychain, GitHub keys, SSH agents, real hosts, or attached hardware.</p>
+          </section>
+
+          <section id="evidence">
+            <p class="docs-kicker">06 / Evidence</p>
+            <h2>Check the current receipts.</h2>
+            <p>The <a href="https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml">Quality workflow</a> runs workspace tests, strict Clippy, desktop unit tests, TypeScript checks, lint, production build, helper checks, package-layout checks, and fuzz-target compilation.</p>
+            <p>The v0.1.2 <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.2">release page</a> carries native-runner installers and SHA-256 files after all four target jobs succeed. These receipts do not replace signing, clean installation, or hardware evidence.</p>
+            <p>Report bugs with the operating system, architecture, and reproduction steps in <a href="https://github.com/OthmaneBlial/MobaRust/issues">GitHub Issues</a>. Remove credentials, hostnames, IP addresses, and private connection details first.</p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="page-wrap footer-main"><a class="brand brand-footer" href="index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z"/></svg></span><span>MobaRust</span></a><p>Free and open source.<br>Built for people who operate systems.</p><nav aria-label="Footer"><a href="index.html">Home</a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">Roadmap</a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE">Apache 2.0</a><a href="https://github.com/OthmaneBlial/MobaRust/issues">Issues</a></nav></div>
+      <div class="page-wrap footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span>Independent project · Not affiliated with Mobatek</span></div>
+    </footer>
   </body>
 </html>
