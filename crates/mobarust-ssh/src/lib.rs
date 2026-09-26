@@ -65,6 +65,8 @@ pub enum SshError {
     KeyboardInteractiveTooManyPrompts,
     #[error("SSH connection timed out")]
     Timeout,
+    #[error("SSH connection lifecycle transition failed")]
+    Lifecycle,
     #[error("SSH host could not be resolved")]
     DnsFailure,
     #[error("SSH connection was refused")]
@@ -654,6 +656,7 @@ impl client::Handler for ClientHandler {
 pub struct SshConnection {
     handle: Arc<client::Handle<ClientHandler>>,
     lifecycle: Mutex<ConnectionLifecycle>,
+    disconnect_guard: AsyncMutex<()>,
     parent: Option<Arc<SshConnection>>,
     forwarded_channels: AsyncMutex<mpsc::Receiver<SshForwardedChannel>>,
     x11_channels: AsyncMutex<mpsc::Receiver<SshX11Channel>>,
@@ -1019,6 +1022,7 @@ impl SshConnection {
         Ok(Self {
             handle: Arc::new(handle),
             lifecycle: Mutex::new(lifecycle),
+            disconnect_guard: AsyncMutex::new(()),
             parent,
             forwarded_channels: AsyncMutex::new(forwarded_channels),
             x11_channels: AsyncMutex::new(x11_channels),
@@ -1162,23 +1166,31 @@ impl SshConnection {
     }
 
     pub async fn disconnect(&self) -> Result<(), SshError> {
+        let _guard = self.disconnect_guard.lock().await;
         let result = self.disconnect_one().await;
-        if result.is_ok() {
-            let mut parent = self.parent.clone();
-            while let Some(connection) = parent {
-                parent = connection.parent.clone();
-                let _ = connection.disconnect_one().await;
-            }
+        // A broken leaf transport must not keep its otherwise-healthy jump
+        // hosts open after the caller has explicitly requested disconnect.
+        let mut parent = self.parent.clone();
+        while let Some(connection) = parent {
+            parent = connection.parent.clone();
+            let _ = connection.disconnect_one().await;
         }
         result
     }
 
     async fn disconnect_one(&self) -> Result<(), SshError> {
-        self.lifecycle
-            .lock()
-            .expect("SSH lifecycle lock poisoned")
-            .apply(ConnectionEvent::DisconnectRequested)
-            .expect("connected SSH session must disconnect through the lifecycle");
+        {
+            let mut lifecycle = self.lifecycle.lock().map_err(|_| SshError::Lifecycle)?;
+            match lifecycle.state() {
+                ConnectionState::Disconnected | ConnectionState::Cancelled => return Ok(()),
+                ConnectionState::Disconnecting => {}
+                _ => {
+                    lifecycle
+                        .apply(ConnectionEvent::DisconnectRequested)
+                        .map_err(|_| SshError::Lifecycle)?;
+                }
+            }
+        }
         let result = self
             .handle
             .disconnect(Disconnect::ByApplication, "", "en")
@@ -1187,9 +1199,9 @@ impl SshConnection {
         if result.is_ok() {
             self.lifecycle
                 .lock()
-                .expect("SSH lifecycle lock poisoned")
+                .map_err(|_| SshError::Lifecycle)?
                 .apply(ConnectionEvent::Disconnected)
-                .expect("disconnecting SSH session must finish as disconnected");
+                .map_err(|_| SshError::Lifecycle)?;
         }
         result
     }

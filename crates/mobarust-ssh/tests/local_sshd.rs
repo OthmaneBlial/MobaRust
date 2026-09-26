@@ -695,10 +695,14 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .await
             .expect("disconnect jumped SSH fixture");
 
-        connection
-            .disconnect()
-            .await
-            .expect("disconnect SSH fixture");
+        let (first_disconnect, second_disconnect) =
+            tokio::join!(connection.disconnect(), connection.disconnect());
+        first_disconnect.expect("disconnect SSH fixture");
+        second_disconnect.expect("concurrent disconnect should be idempotent");
+        assert_eq!(
+            connection.state(),
+            mobarust_core::ConnectionState::Disconnected
+        );
     });
 }
 
