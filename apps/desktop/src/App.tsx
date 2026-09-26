@@ -2932,7 +2932,12 @@ function App() {
       localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
     }
     if (!localPath?.trim()) return;
+    if (remoteSessionIdRef.current !== remoteSessionId) {
+      setSessionNotice("Download setup stopped because the active SSH session changed.");
+      return;
+    }
     const overwrite = window.confirm(entry.isDirectory ? "Allow replacing existing files inside this directory?" : "Allow replacing an existing local file?");
+    if (remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
@@ -2964,12 +2969,17 @@ function App() {
       paths = localPath?.trim() ? [localPath.trim()] : [];
     }
     for (const localPath of paths) {
+      if (remoteSessionIdRef.current !== remoteSessionId) {
+        setSessionNotice("Upload setup stopped because the active SSH session changed.");
+        return;
+      }
       const fallbackName = localPath.split(/[\\/]/).pop() || "upload.bin";
       const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
       const destination = window.prompt("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
       const overwrite = window.confirm("Allow replacing an existing remote file?");
       if (!overwrite) continue;
+      if (remoteSessionIdRef.current !== remoteSessionId) return;
       try {
         await invoke("ssh_upload", {
           terminalId: remoteSessionId,
