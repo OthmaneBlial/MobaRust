@@ -76,6 +76,8 @@ for (const language of ["plain", "shell", "json", "yaml", "ini"]) {
 const highlighted = highlightRemoteCode('<script>ssh $USER --port=22</script>', "shell");
 assert.equal(highlighted.includes('<span class="remote-editor-token-command">ssh</span>'), true);
 assert.equal(highlighted.includes("<script"), false);
+assert.equal(highlightRemoteCode("can't", "json"), "can&#39;t");
+assert.equal(highlightRemoteCode("42", "json"), '<span class="remote-editor-token-number">42</span>');
 
 assert.equal(remoteEditorLanguage("/tmp/settings.json"), "json");
 assert.equal(remoteEditorLanguage("/tmp/profile"), "shell");

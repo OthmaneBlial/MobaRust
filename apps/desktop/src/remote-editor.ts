@@ -35,7 +35,9 @@ export function highlightRemoteCode(value: string, language: RemoteEditorLanguag
     return escaped
       .replace(/(&quot;[^\n]*?&quot;)(?=\s*:)/g, '<span class="remote-editor-token-key">$1</span>')
       .replace(/\b(true|false|null)\b/g, '<span class="remote-editor-token-literal">$1</span>')
-      .replace(/\b-?\d+(?:\.\d+)?\b/g, '<span class="remote-editor-token-number">$&</span>');
+      .replace(/&#39;|\b-?\d+(?:\.\d+)?\b/g, (token) =>
+        token === "&#39;" ? token : `<span class="remote-editor-token-number">${token}</span>`,
+      );
   }
   const separator = language === "yaml" ? ":" : "=";
   const keyPattern = new RegExp(`(^|\\n)([A-Za-z][A-Za-z0-9_.-]*)(?=\\s*\\${separator})`, "gm");
