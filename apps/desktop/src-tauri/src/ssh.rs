@@ -2538,13 +2538,12 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = fs::remove_file(&temporary).await;
+            remove_partial_download(file, &temporary).await;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        drop(file);
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download(file, &temporary).await;
         return Err(SshError::LocalIo(error));
     }
     drop(file);
@@ -2701,14 +2700,13 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = fs::remove_file(&temporary).await;
+            remove_partial_download(file, &temporary).await;
             let _ = sftp.close().await;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        drop(file);
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download(file, &temporary).await;
         let _ = sftp.close().await;
         return Err(SshError::LocalIo(error));
     }
@@ -3019,13 +3017,12 @@ where
     {
         Ok(copied) => copied,
         Err(error) => {
-            let _ = fs::remove_file(&temporary).await;
+            remove_partial_download(file, &temporary).await;
             return Err(error);
         }
     };
     if let Err(error) = file.sync_all().await {
-        drop(file);
-        let _ = fs::remove_file(&temporary).await;
+        remove_partial_download(file, &temporary).await;
         return Err(SshError::LocalIo(error));
     }
     drop(file);
@@ -3357,6 +3354,11 @@ fn local_part_path(destination: &Path) -> Result<PathBuf, SshError> {
     Ok(destination.with_file_name(format!(".{name}.mobarust.part")))
 }
 
+async fn remove_partial_download(file: fs::File, temporary: &Path) {
+    drop(file);
+    let _ = fs::remove_file(temporary).await;
+}
+
 fn remote_part_path(remote_path: &str, transfer_id: &str) -> Result<String, SshError> {
     let trimmed = remote_path.trim_end_matches('/');
     let (parent, name) = trimmed.rsplit_once('/').unwrap_or((".", trimmed));
@@ -3504,9 +3506,9 @@ mod tests {
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
         download_destination_exists, local_upload_metadata, open_local_upload_file,
-        reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
-        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
-        validate_tunnel_host,
+        reconnect_with_backoff, remote_child_path, remove_partial_download,
+        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
+        validate_transfer_component, validate_tunnel_host,
     };
     use std::fs;
     use std::time::{Duration, Instant};
@@ -3621,6 +3623,23 @@ mod tests {
                 .is_err()
         );
         assert!(!temporary.exists());
+    }
+
+    #[tokio::test]
+    async fn failed_download_closes_partial_file_before_removal() {
+        let directory = tempdir().unwrap();
+        let temporary = directory.path().join(".download.txt.mobarust.part");
+        fs::write(&temporary, b"partial download").unwrap();
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
+            .await
+            .unwrap();
+
+        remove_partial_download(file, &temporary).await;
+
+        assert!(!temporary.exists());
+        fs::write(&temporary, b"next attempt").unwrap();
     }
 
     #[test]
