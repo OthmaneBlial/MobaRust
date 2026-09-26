@@ -3351,7 +3351,7 @@ fn local_part_path(destination: &Path) -> Result<PathBuf, SshError> {
         .file_name()
         .ok_or_else(|| SshError::Sftp("download destination must include a file name".into()))?
         .to_string_lossy();
-    Ok(destination.with_file_name(format!(".{name}.mobarust.part")))
+    Ok(destination.with_file_name(format!(".{name}.mobarust-{}.part", Uuid::new_v4())))
 }
 
 async fn remove_partial_download(file: fs::File, temporary: &Path) {
@@ -3505,8 +3505,8 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        download_destination_exists, local_upload_metadata, open_local_upload_file,
-        reconnect_with_backoff, remote_child_path, remove_partial_download,
+        download_destination_exists, local_part_path, local_upload_metadata,
+        open_local_upload_file, reconnect_with_backoff, remote_child_path, remove_partial_download,
         server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
         validate_transfer_component, validate_tunnel_host,
     };
@@ -3640,6 +3640,17 @@ mod tests {
 
         assert!(!temporary.exists());
         fs::write(&temporary, b"next attempt").unwrap();
+    }
+
+    #[test]
+    fn local_downloads_use_distinct_sibling_partial_files() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("download.txt");
+        let first = local_part_path(&destination).unwrap();
+        let second = local_part_path(&destination).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), destination.parent());
     }
 
     #[test]
