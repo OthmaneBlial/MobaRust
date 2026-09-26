@@ -347,12 +347,9 @@ impl RemoteDesktopManager {
     }
 
     pub async fn stop(&self, session_id: &str) -> Result<(), String> {
-        let session = self
-            .sessions
-            .lock()
-            .await
-            .remove(session_id)
-            .ok_or_else(|| "remote desktop session was not found".to_owned())?;
+        let Some(session) = self.sessions.lock().await.remove(session_id) else {
+            return Ok(());
+        };
         session.stop_requested.store(true, Ordering::Release);
         let _ = session.commands.send(HelperCommand::Stop).await;
         session
@@ -994,10 +991,10 @@ mod tests {
     use super::{
         HelperCapabilityRequirements, HelperDataPhase, HelperEventProgress, HelperFrameReadError,
         HelperSessionPhase, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
-        MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, SessionCommandPolicy,
-        claim_unexpected_helper_exit, helper_input_failure_message, read_next_helper_frame,
-        validate_command_for_session, validate_helper_capabilities, validate_helper_event,
-        validate_helper_resource, validate_request,
+        MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, RemoteDesktopManager,
+        SessionCommandPolicy, claim_unexpected_helper_exit, helper_input_failure_message,
+        read_next_helper_frame, validate_command_for_session, validate_helper_capabilities,
+        validate_helper_event, validate_helper_resource, validate_request,
     };
     use mobarust_remote_desktop::{
         DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DesktopProtocol, HelperCapabilities,
@@ -1013,6 +1010,14 @@ mod tests {
         let stop_requested = AtomicBool::new(false);
         assert!(claim_unexpected_helper_exit(&stop_requested));
         assert!(!claim_unexpected_helper_exit(&stop_requested));
+    }
+
+    #[tokio::test]
+    async fn stopping_an_already_removed_session_succeeds() {
+        RemoteDesktopManager::default()
+            .stop("already-removed")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
