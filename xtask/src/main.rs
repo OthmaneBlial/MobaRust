@@ -1366,6 +1366,7 @@ fn run_app_version_probe(executable: &Path, root: &Path) -> Result<(Duration, St
 
 fn check() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
+    stage_helpers()?;
     run_sanitized_test("cargo", ["test", "--locked", "--workspace"], None)?;
     run(
         "cargo",
