@@ -362,15 +362,19 @@ fn validate_wsl_distribution(distribution: &str) -> Result<String, TerminalError
 fn parse_wsl_distributions(bytes: &[u8]) -> Vec<String> {
     let text = if bytes.starts_with(&[0xff, 0xfe]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair));
         std::char::decode_utf16(units)
             .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect::<String>()
     } else if bytes.starts_with(&[0xfe, 0xff]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair));
         std::char::decode_utf16(units)
             .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect::<String>()

@@ -442,7 +442,9 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
                         assert_eq!(pixels.len(), usize::from(WIDTH) * usize::from(HEIGHT) * 4);
                         assert!(
                             pixels
-                                .chunks_exact(4)
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
                                 .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0),
                             "real RDP fixture returned only black pixels; first pixel: {:?}",
                             pixels.get(..4)

@@ -882,7 +882,7 @@ impl Canvas {
         let mut rgba = Vec::with_capacity(expected_rgba_bytes);
         match info.pixel_format {
             JpegPixelFormat::RGB24 => {
-                for pixel in decoded.chunks_exact(3) {
+                for pixel in decoded.as_chunks::<3>().0 {
                     rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0xff]);
                 }
             }
@@ -1564,7 +1564,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pixels.len(), 2 * 2 * 4);
-        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0xff));
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 0xff)
+        );
 
         let error = canvas
             .decode_jpeg(

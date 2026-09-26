@@ -190,7 +190,13 @@ async fn helper_decodes_tight_jpeg_framebuffer_fixture() {
             .await
             .unwrap()
         {
-            assert!(pixels[..8].chunks_exact(4).all(|pixel| pixel[3] == 0xff));
+            assert!(
+                pixels[..8]
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| pixel[3] == 0xff)
+            );
             saw_framebuffer = true;
             break;
         }
@@ -1585,9 +1591,13 @@ fn vnc_auth_response(challenge: &[u8; 16], password: &str) -> [u8; 16] {
     }
     let cipher = Des::new_from_slice(&key).expect("DES key has the required length");
     let mut response = [0_u8; 16];
-    for (source, destination) in challenge.chunks_exact(8).zip(response.chunks_exact_mut(8)) {
-        let mut block =
-            Block::<Des>::try_from(source).expect("RFB challenge is an exact DES block");
+    for (source, destination) in challenge
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .zip(response.as_chunks_mut::<8>().0.iter_mut())
+    {
+        let mut block = Block::<Des>::from(*source);
         cipher.encrypt_block(&mut block);
         destination.copy_from_slice(&block);
     }
@@ -1622,8 +1632,10 @@ async fn read_set_encodings(stream: &mut TcpStream) -> Result<Vec<i32>, String> 
         .await
         .map_err(|error| error.to_string())?;
     Ok(encodings
-        .chunks_exact(4)
-        .map(|encoding| i32::from_be_bytes(encoding.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|encoding| i32::from_be_bytes(*encoding))
         .collect())
 }
 
