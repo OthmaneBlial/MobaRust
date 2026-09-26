@@ -128,6 +128,13 @@ h1 em, h2 em { color: var(--accent); font-weight: 500; }
 
 .download-section { display: grid; grid-template-columns: minmax(16rem, .7fr) minmax(0, 1.3fr); gap: clamp(2.5rem, 7vw, 7rem); }
 .download-heading .text-link { display: inline-flex; gap: .5rem; margin-top: 1.2rem; color: var(--accent-dark); font-size: .8rem; font-weight: 700; text-decoration: none; }
+.release-update { margin-top: 1.8rem; padding: 1rem 1.1rem; border-left: 3px solid var(--accent); background: var(--sage); }
+.release-update-kicker { margin: 0; color: var(--accent-dark); font: 600 .58rem var(--mono); letter-spacing: .08em; }
+.release-update h3 { margin: .55rem 0 .75rem; font: 500 1.65rem/1 var(--display); letter-spacing: -.045em; }
+.release-update ul { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.release-update li { position: relative; padding-left: 1rem; color: var(--ink-soft); font-size: .72rem; line-height: 1.55; }
+.release-update li::before { position: absolute; left: 0; color: var(--accent); content: "+"; font-family: var(--mono); font-weight: 700; }
+.release-update .text-link { margin-top: 1rem; font-size: .72rem; }
 .download-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; align-content: start; }
 .download-card { min-height: 8rem; display: flex; flex-direction: column; justify-content: space-between; padding: 1rem; border: 1px solid var(--line); background: var(--white); text-decoration: none; transition: border-color .16s ease, transform .16s ease; }
 .download-card:hover { transform: translateY(-2px); border-color: var(--accent); color: var(--ink); }
