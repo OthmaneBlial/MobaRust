@@ -3416,6 +3416,8 @@ function App() {
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
+    }).catch((error) => {
+      if (!disposed) setConnectionError(`SSH tunnel updates are unavailable: ${String(error)}`);
     });
     return () => {
       disposed = true;
@@ -3449,6 +3451,11 @@ function App() {
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
+    }).catch((error) => {
+      if (!disposed) {
+        setNetworkScanStatus("failed");
+        setNetworkError(`Network scan updates are unavailable: ${String(error)}`);
+      }
     });
     return () => {
       disposed = true;
@@ -3477,6 +3484,11 @@ function App() {
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
+    }).catch((error) => {
+      if (!disposed) {
+        setNetworkDiagnosticStatus("failed");
+        setNetworkError(`Network diagnostic updates are unavailable: ${String(error)}`);
+      }
     });
     return () => {
       disposed = true;
@@ -3568,6 +3580,8 @@ function App() {
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
+    }).catch((error) => {
+      if (!disposed) setConnectionError(`Transfer updates are unavailable: ${String(error)}`);
     });
     return () => {
       disposed = true;
