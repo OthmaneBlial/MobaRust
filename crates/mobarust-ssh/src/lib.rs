@@ -2136,6 +2136,15 @@ impl SftpConnection {
         Ok((metadata.len(), metadata.is_dir()))
     }
 
+    pub async fn is_real_directory(&self, path: impl Into<String>) -> Result<bool, SshError> {
+        let metadata = self
+            .session
+            .symlink_metadata(path)
+            .await
+            .map_err(map_sftp_error)?;
+        Ok(metadata.is_dir() && !metadata.is_symlink())
+    }
+
     /// Change only the permission bits of a remote path. The caller validates
     /// the path and the bounded POSIX mode before this operation reaches the
     /// SFTP server; no shell command is involved.

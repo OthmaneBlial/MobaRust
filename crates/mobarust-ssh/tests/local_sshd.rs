@@ -305,6 +305,20 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 .expect("read directory info")
                 .1
         );
+        assert!(
+            sftp.is_real_directory(&directory_path)
+                .await
+                .expect("check real remote directory")
+        );
+        let directory_link = format!("{directory_path}-link");
+        std::os::unix::fs::symlink(&directory_path, &directory_link)
+            .expect("create remote directory symlink fixture");
+        assert!(
+            !sftp.is_real_directory(&directory_link)
+                .await
+                .expect("reject remote directory symlink")
+        );
+        fs::remove_file(&directory_link).expect("remove remote directory symlink fixture");
         sftp.remove_dir(&directory_path)
             .await
             .expect("remove remote directory");

@@ -3258,11 +3258,10 @@ async fn ensure_remote_directory(
         if !sftp.try_exists(current.clone()).await? {
             sftp.create_dir(current.clone()).await?;
         }
-        let (_, is_directory) = sftp.file_info(current.clone()).await?;
-        if !is_directory {
-            return Err(SshError::Sftp(format!(
-                "remote path component is not a directory: {current}"
-            )));
+        if !sftp.is_real_directory(current.clone()).await? {
+            return Err(SshError::Sftp(
+                "recursive upload refuses a remote symlink or non-directory component".into(),
+            ));
         }
     }
     Ok(())

@@ -16,6 +16,9 @@ The walk is capped at 100,000 entries. Local upload refuses to follow
 symbolic links and only accepts regular files and directories. Remote names
 are validated as single path components before they are joined, preventing a
 server-provided name from escaping the selected local destination.
+Recursive upload checks each remote destination directory without following
+symlinks, so an existing directory link cannot silently redirect its files.
+The SFTP request sequence cannot prevent a concurrent remote path swap.
 Recursive download accepts only entries identified as regular files or
 directories; remote symlinks and special files are refused rather than opened.
 
