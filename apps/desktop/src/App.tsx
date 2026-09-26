@@ -1880,6 +1880,32 @@ function App() {
     setActiveView("terminal");
   }, [selectedTerminalId, terminalTabs]);
 
+  const handleWorkspaceTabKeyDown = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const tabs = Array.from(event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+    if (tabs.length < 2) return;
+    const index = tabs.indexOf(event.currentTarget);
+    let nextIndex: number;
+    switch (event.key) {
+      case "ArrowRight":
+        nextIndex = (index + 1) % tabs.length;
+        break;
+      case "ArrowLeft":
+        nextIndex = (index + tabs.length - 1) % tabs.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    tabs[nextIndex].click();
+  }, []);
+
   const focusPane = useCallback(() => {
     setActiveView("terminal");
     terminalInstancesRef.current.get(selectedTerminalIdRef.current)?.terminal.focus();
@@ -3774,7 +3800,7 @@ function App() {
           {connectionError && !quickConnectOpen && activeView !== "files" && <div className="connect-error workspace-error" role="alert"><span>{connectionError}</span><button type="button" className="outline-button" aria-label="Dismiss error" onClick={() => setConnectionError(null)}>Dismiss</button></div>}
           {sessionNotice && <div className="workspace-notice" role="status"><CheckCircle2 size={14} /><span>{sessionNotice}</span></div>}
 
-          <div className="workspace-grid">
+          <div className="workspace-grid" id="workspace-view-panel" role="tabpanel" aria-labelledby={`workspace-tab-${activeView}`} tabIndex={0}>
             <div className="main-column">
               <div className="context-strip">
                 <div className="context-title"><span className="status-pulse" /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
@@ -3782,13 +3808,13 @@ function App() {
               </div>
 
               <div className="view-tabs" role="tablist" aria-label="Workspace views">
-                <button className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
-                <button className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
-                <button className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
-                {remoteSessionId && remoteProtocol === "ssh" && <button className={activeView === "monitor" ? "selected" : ""} onClick={() => setActiveView("monitor")} role="tab" aria-selected={activeView === "monitor"}><Gauge size={15} /> Monitor</button>}
-                <button className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
-                <button className={activeView === "transfers" ? "selected" : ""} onClick={() => setActiveView("transfers")} role="tab" aria-selected={activeView === "transfers"}><ArrowDownToLine size={15} /> Transfers <span className="tab-badge">{activeTransferCount}</span></button>
-                <button className={activeView === "audit" ? "selected" : ""} onClick={() => setActiveView("audit")} role="tab" aria-selected={activeView === "audit"}><History size={15} /> Audit</button>
+                <button type="button" id="workspace-tab-terminal" aria-controls="workspace-view-panel" tabIndex={activeView === "terminal" ? 0 : -1} className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
+                <button type="button" id="workspace-tab-files" aria-controls="workspace-view-panel" tabIndex={activeView === "files" ? 0 : -1} className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
+                <button type="button" id="workspace-tab-tunnels" aria-controls="workspace-view-panel" tabIndex={activeView === "tunnels" ? 0 : -1} className={activeView === "tunnels" ? "selected" : ""} onClick={() => setActiveView("tunnels")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "tunnels"}><Network size={15} /> Tunnels <span className="tab-badge">{activeTunnelCount}</span></button>
+                {remoteSessionId && remoteProtocol === "ssh" && <button type="button" id="workspace-tab-monitor" aria-controls="workspace-view-panel" tabIndex={activeView === "monitor" ? 0 : -1} className={activeView === "monitor" ? "selected" : ""} onClick={() => setActiveView("monitor")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "monitor"}><Gauge size={15} /> Monitor</button>}
+                <button type="button" id="workspace-tab-diagnostics" aria-controls="workspace-view-panel" tabIndex={activeView === "diagnostics" ? 0 : -1} className={activeView === "diagnostics" ? "selected" : ""} onClick={() => setActiveView("diagnostics")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "diagnostics"}><Activity size={15} /> Diagnostics</button>
+                <button type="button" id="workspace-tab-transfers" aria-controls="workspace-view-panel" tabIndex={activeView === "transfers" ? 0 : -1} className={activeView === "transfers" ? "selected" : ""} onClick={() => setActiveView("transfers")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "transfers"}><ArrowDownToLine size={15} /> Transfers <span className="tab-badge">{activeTransferCount}</span></button>
+                <button type="button" id="workspace-tab-audit" aria-controls="workspace-view-panel" tabIndex={activeView === "audit" ? 0 : -1} className={activeView === "audit" ? "selected" : ""} onClick={() => setActiveView("audit")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "audit"}><History size={15} /> Audit</button>
               </div>
 
               {activeView === "terminal" ? (

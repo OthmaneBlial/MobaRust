@@ -426,3 +426,4 @@ button:not(:disabled) { cursor: pointer; }
 .terminal-tab-close { width: 24px; flex: 0 0 24px; padding: 0; border: 0; background: transparent; }
 .terminal-tab-select:focus-visible, .terminal-tab-close:focus-visible { position: relative; z-index: 1; outline: 1px solid var(--amber); outline-offset: -2px; }
 .terminal-tab { cursor: default; }
+.view-tabs button:focus-visible { outline: 2px solid var(--amber); outline-offset: -3px; }
