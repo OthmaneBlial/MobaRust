@@ -211,6 +211,7 @@ h1 em, h2 em { color: var(--accent); font-weight: 500; }
 .docs-hero > p:not(.eyebrow) { max-width: 38rem; margin: 1.5rem 0 0; color: var(--muted); font-size: 1.02rem; line-height: 1.7; }
 .docs-meta { display: flex; flex-wrap: wrap; gap: .7rem 1.3rem; margin-top: 2rem; color: var(--accent-dark); font: 600 .62rem var(--mono); letter-spacing: .08em; }
 .docs-layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr); align-items: start; gap: clamp(2.5rem, 7vw, 7rem); padding-block: 3.5rem 7rem; }
+.docs-content { min-width: 0; }
 .docs-nav { position: sticky; top: 6.3rem; display: grid; gap: .2rem; }
 .docs-nav p { margin: 0 0 .65rem; color: var(--muted); font: 600 .59rem var(--mono); letter-spacing: .1em; }
 .docs-nav a { padding: .52rem .6rem; border-left: 2px solid var(--line); color: var(--ink-soft); font-size: .75rem; text-decoration: none; }
