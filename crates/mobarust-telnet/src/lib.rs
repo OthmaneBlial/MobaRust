@@ -7,7 +7,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use encoding_rs::WINDOWS_1252;
@@ -413,6 +413,13 @@ impl std::fmt::Debug for TelnetConnection {
 }
 
 impl TelnetConnection {
+    fn lock_lifecycle(&self) -> MutexGuard<'_, ConnectionLifecycle> {
+        // Lifecycle stores only state and revision, so poison leaves a usable value.
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub async fn connect(options: TelnetOptions) -> Result<Self, TelnetError> {
         options.validate()?;
         let stream = tokio::time::timeout(
@@ -474,19 +481,13 @@ impl TelnetConnection {
     }
 
     pub fn state(&self) -> ConnectionState {
-        self.lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned")
-            .state()
+        self.lock_lifecycle().state()
     }
 
     /// Records a transport loss without closing the reusable session object.
     /// The native manager can then wait for an explicit reconnect command.
     pub fn mark_connection_lost(&self) -> Result<(), TelnetError> {
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned");
+        let mut lifecycle = self.lock_lifecycle();
         if lifecycle.state() == ConnectionState::Connected {
             lifecycle
                 .apply(ConnectionEvent::ConnectionLost)
@@ -496,10 +497,7 @@ impl TelnetConnection {
     }
 
     fn mark_failed(&self) {
-        let mut lifecycle = self
-            .lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned");
+        let mut lifecycle = self.lock_lifecycle();
         if matches!(
             lifecycle.state(),
             ConnectionState::Connecting
@@ -625,15 +623,11 @@ impl TelnetConnection {
 
     pub async fn reconnect(&mut self) -> Result<(), TelnetError> {
         if self.state() == ConnectionState::Connected {
-            self.lifecycle
-                .lock()
-                .expect("Telnet lifecycle lock poisoned")
+            self.lock_lifecycle()
                 .apply(ConnectionEvent::ConnectionLost)
                 .map_err(|error| TelnetError::Protocol(error.to_string()))?;
         }
-        self.lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned")
+        self.lock_lifecycle()
             .apply(ConnectionEvent::BeginReconnect)
             .map_err(|error| TelnetError::Protocol(error.to_string()))?;
 
@@ -647,11 +641,7 @@ impl TelnetConnection {
         let stream = match result {
             Ok(stream) => stream,
             Err(error) => {
-                let _ = self
-                    .lifecycle
-                    .lock()
-                    .expect("Telnet lifecycle lock poisoned")
-                    .apply(ConnectionEvent::Fail);
+                let _ = self.lock_lifecycle().apply(ConnectionEvent::Fail);
                 return Err(error);
             }
         };
@@ -666,14 +656,10 @@ impl TelnetConnection {
         self.pending.clear();
         self.responses.clear();
         self.text_decoder = Utf8OutputDecoder::default();
-        self.lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned")
+        self.lock_lifecycle()
             .apply(ConnectionEvent::BeginAuthentication)
             .map_err(|error| TelnetError::Protocol(error.to_string()))?;
-        self.lifecycle
-            .lock()
-            .expect("Telnet lifecycle lock poisoned")
+        self.lock_lifecycle()
             .apply(ConnectionEvent::AuthenticationSucceeded)
             .map_err(|error| TelnetError::Protocol(error.to_string()))?;
         match self.send_initial_capabilities().await {
@@ -693,9 +679,7 @@ impl TelnetConnection {
                 | ConnectionState::Connecting
                 | ConnectionState::Authenticating
         ) {
-            self.lifecycle
-                .lock()
-                .expect("Telnet lifecycle lock poisoned")
+            self.lock_lifecycle()
                 .apply(ConnectionEvent::Cancel)
                 .map_err(|error| TelnetError::Protocol(error.to_string()))?;
         }
@@ -711,17 +695,13 @@ impl TelnetConnection {
                 | ConnectionState::Authenticating
                 | ConnectionState::Failed
         ) {
-            self.lifecycle
-                .lock()
-                .expect("Telnet lifecycle lock poisoned")
+            self.lock_lifecycle()
                 .apply(ConnectionEvent::DisconnectRequested)
                 .map_err(|error| TelnetError::Protocol(error.to_string()))?;
         }
         let result = self.shutdown_writer().await;
         if self.state() == ConnectionState::Disconnecting {
-            self.lifecycle
-                .lock()
-                .expect("Telnet lifecycle lock poisoned")
+            self.lock_lifecycle()
                 .apply(ConnectionEvent::Disconnected)
                 .map_err(|error| TelnetError::Protocol(error.to_string()))?;
         }
@@ -925,6 +905,38 @@ mod tests {
                 .to_string()
                 .contains("private-device-or-socket-detail")
         );
+    }
+
+    #[test]
+    fn poisoned_lifecycle_lock_keeps_state_and_close_available() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut capabilities = [0_u8; 9];
+                socket.read_exact(&mut capabilities).await.unwrap();
+                let mut byte = [0_u8; 1];
+                let _ = socket.read(&mut byte).await;
+            });
+            let mut connection = TelnetConnection::connect(TelnetOptions::new(
+                address.ip().to_string(),
+                address.port(),
+            ))
+            .await
+            .unwrap();
+
+            let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _lifecycle = connection.lifecycle.lock().unwrap();
+                std::panic::resume_unwind(Box::new("poison lifecycle lock"));
+            }));
+            assert!(poison.is_err());
+            assert_eq!(connection.state(), ConnectionState::Connected);
+
+            connection.close().await.unwrap();
+            assert_eq!(connection.state(), ConnectionState::Disconnected);
+            server.await.unwrap();
+        });
     }
 
     #[test]
