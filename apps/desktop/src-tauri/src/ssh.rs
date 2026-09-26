@@ -2534,11 +2534,7 @@ where
         return Err(SshError::LocalIo(error));
     }
     drop(file);
-    if !overwrite
-        && fs::try_exists(destination)
-            .await
-            .map_err(SshError::LocalIo)?
-    {
+    if !overwrite && download_destination_exists(destination, &temporary).await? {
         let _ = fs::remove_file(&temporary).await;
         return Err(SshError::Scp(
             "download destination appeared during transfer".into(),
@@ -2702,11 +2698,7 @@ where
         return Err(SshError::LocalIo(error));
     }
     drop(file);
-    if !overwrite
-        && fs::try_exists(destination)
-            .await
-            .map_err(SshError::LocalIo)?
-    {
+    if !overwrite && download_destination_exists(destination, &temporary).await? {
         let _ = fs::remove_file(&temporary).await;
         let _ = sftp.close().await;
         return Err(SshError::Sftp(
@@ -3021,11 +3013,7 @@ where
         SshError::LocalIo(error)
     })?;
     drop(file);
-    if !overwrite
-        && fs::try_exists(destination)
-            .await
-            .map_err(SshError::LocalIo)?
-    {
+    if !overwrite && download_destination_exists(destination, &temporary).await? {
         let _ = fs::remove_file(&temporary).await;
         return Err(SshError::Sftp(
             "download destination appeared during transfer".into(),
@@ -3293,6 +3281,19 @@ async fn upload_destination_exists(
     }
 }
 
+async fn download_destination_exists(
+    destination: &Path,
+    temporary: &Path,
+) -> Result<bool, SshError> {
+    match fs::try_exists(destination).await {
+        Ok(exists) => Ok(exists),
+        Err(error) => {
+            let _ = fs::remove_file(temporary).await;
+            Err(SshError::LocalIo(error))
+        }
+    }
+}
+
 fn validate_remote_file_path(path: &str) -> Result<String, SshManagerError> {
     let path = path.trim();
     if path.is_empty() || path == "." || path == "/" || path.contains('\0') {
@@ -3486,9 +3487,10 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        local_upload_metadata, open_local_upload_file, reconnect_with_backoff, remote_child_path,
-        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
-        validate_transfer_component, validate_tunnel_host,
+        download_destination_exists, local_upload_metadata, open_local_upload_file,
+        reconnect_with_backoff, remote_child_path, server_alive_interval_duration,
+        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
+        validate_tunnel_host,
     };
     use std::fs;
     use std::time::{Duration, Instant};
@@ -3583,6 +3585,26 @@ mod tests {
             Err(mobarust_ssh::SshError::LocalUploadSymlink)
         ));
         assert_eq!(fs::read(target).unwrap(), b"private");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn download_recheck_error_removes_temporary_file() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("download.txt");
+        let temporary = directory.path().join(".download.txt.part");
+        fs::write(&temporary, b"downloaded contents").unwrap();
+        symlink(&destination, &destination).unwrap();
+        assert!(fs::metadata(&destination).is_err());
+
+        assert!(
+            download_destination_exists(&destination, &temporary)
+                .await
+                .is_err()
+        );
+        assert!(!temporary.exists());
     }
 
     #[test]
