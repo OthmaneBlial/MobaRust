@@ -22,6 +22,10 @@ Each tunnel accepts at most 16 simultaneous clients. A tunnel is tied to
 the SSH terminal that created it; closing that terminal cooperatively cancels
 all of its tunnels. Each worker forwards bytes with bounded async I/O and
 shares the SSH connection without interrupting the interactive shell reader.
+The SSH handler queues at most 16 server-opened forwarded channels per
+connection and rejects further channel opens with `ResourceShortage` before
+accepting them. This bounds pending channels before the tunnel worker limit
+can act.
 
 Remote forwarding requests the SSH server's listener and connects each
 server-initiated channel to an explicit local TCP target. The manager currently

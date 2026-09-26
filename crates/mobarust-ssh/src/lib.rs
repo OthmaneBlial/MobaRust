@@ -33,6 +33,8 @@ use zeroize::Zeroizing;
 /// plus MFA prompt flows while failing closed on pathological fan-out.
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
 const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
+const MAX_QUEUED_X11_CHANNELS: usize = 8;
 pub const MAX_FORWARD_HOST_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -530,8 +532,8 @@ struct ClientHandler {
     policy: HostKeyPolicy,
     inspection_only: bool,
     observed_fingerprint: Arc<Mutex<Option<String>>>,
-    forwarded_channels: mpsc::UnboundedSender<SshForwardedChannel>,
-    x11_channels: mpsc::UnboundedSender<SshX11Channel>,
+    forwarded_channels: mpsc::Sender<SshForwardedChannel>,
+    x11_channels: mpsc::Sender<SshX11Channel>,
     x11_enabled: bool,
 }
 
@@ -539,8 +541,8 @@ struct ConnectionParts {
     observed_fingerprint: Arc<Mutex<Option<String>>>,
     handler: ClientHandler,
     config: Arc<client::Config>,
-    forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
-    x11_channels: mpsc::UnboundedReceiver<SshX11Channel>,
+    forwarded_channels: mpsc::Receiver<SshForwardedChannel>,
+    x11_channels: mpsc::Receiver<SshX11Channel>,
 }
 
 impl client::Handler for ClientHandler {
@@ -586,8 +588,12 @@ impl client::Handler for ClientHandler {
         let connected_address = connected_address.to_owned();
         let originator_address = originator_address.to_owned();
         async move {
+            let Ok(slot) = forwarded_channels.try_reserve() else {
+                reply.reject(ChannelOpenFailure::ResourceShortage).await;
+                return Ok(());
+            };
             reply.accept().await;
-            let _ = forwarded_channels.send(SshForwardedChannel {
+            slot.send(SshForwardedChannel {
                 channel,
                 connected_address,
                 connected_port,
@@ -616,8 +622,12 @@ impl client::Handler for ClientHandler {
                     .await;
                 return Ok(());
             }
+            let Ok(slot) = x11_channels.try_reserve() else {
+                reply.reject(ChannelOpenFailure::ResourceShortage).await;
+                return Ok(());
+            };
             reply.accept().await;
-            let _ = x11_channels.send(SshX11Channel {
+            slot.send(SshX11Channel {
                 channel,
                 originator_address,
                 originator_port,
@@ -631,8 +641,8 @@ pub struct SshConnection {
     handle: Arc<client::Handle<ClientHandler>>,
     lifecycle: Mutex<ConnectionLifecycle>,
     parent: Option<Arc<SshConnection>>,
-    forwarded_channels: AsyncMutex<mpsc::UnboundedReceiver<SshForwardedChannel>>,
-    x11_channels: AsyncMutex<mpsc::UnboundedReceiver<SshX11Channel>>,
+    forwarded_channels: AsyncMutex<mpsc::Receiver<SshForwardedChannel>>,
+    x11_channels: AsyncMutex<mpsc::Receiver<SshX11Channel>>,
     x11: Option<X11ForwardingOptions>,
     environment: Vec<(String, String)>,
     startup_directory: Option<String>,
@@ -964,8 +974,8 @@ impl SshConnection {
         options: SshConnectOptions,
         mut handle: client::Handle<ClientHandler>,
         parent: Option<Arc<SshConnection>>,
-        forwarded_channels: mpsc::UnboundedReceiver<SshForwardedChannel>,
-        x11_channels: mpsc::UnboundedReceiver<SshX11Channel>,
+        forwarded_channels: mpsc::Receiver<SshForwardedChannel>,
+        x11_channels: mpsc::Receiver<SshX11Channel>,
     ) -> Result<Self, SshError> {
         let x11 = options.x11.clone();
         let environment = options.environment.clone();
@@ -1703,8 +1713,8 @@ fn connection_parts_for(
     x11_enabled: bool,
 ) -> ConnectionParts {
     let observed_fingerprint = Arc::new(Mutex::new(None));
-    let (forwarded_sender, forwarded_receiver) = mpsc::unbounded_channel();
-    let (x11_sender, x11_receiver) = mpsc::unbounded_channel();
+    let (forwarded_sender, forwarded_receiver) = mpsc::channel(MAX_QUEUED_FORWARDED_CHANNELS);
+    let (x11_sender, x11_receiver) = mpsc::channel(MAX_QUEUED_X11_CHANNELS);
     let handler = ClientHandler {
         host: host.to_owned(),
         port,

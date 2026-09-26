@@ -28,6 +28,8 @@ make a normal SSH connection perform surprising local operations.
   Rust bridges each channel directly to the configured TCP or Unix display.
 - The bridge has a five-second display-connect timeout, cooperative task
   cancellation, and a maximum of eight simultaneous display channels.
+- The SSH handler queues at most eight pending X11 channels and rejects excess
+  opens with `ResourceShortage` before accepting them.
 - A disabled connection explicitly rejects incoming X11 channels instead of
   accepting and silently dropping them.
 
