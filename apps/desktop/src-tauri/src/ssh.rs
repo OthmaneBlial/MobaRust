@@ -2530,6 +2530,7 @@ where
         }
     };
     if let Err(error) = file.sync_all().await {
+        drop(file);
         let _ = fs::remove_file(&temporary).await;
         return Err(SshError::LocalIo(error));
     }
@@ -2693,6 +2694,7 @@ where
         }
     };
     if let Err(error) = file.sync_all().await {
+        drop(file);
         let _ = fs::remove_file(&temporary).await;
         let _ = sftp.close().await;
         return Err(SshError::LocalIo(error));
@@ -3008,10 +3010,11 @@ where
             return Err(error);
         }
     };
-    file.sync_all().await.map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        SshError::LocalIo(error)
-    })?;
+    if let Err(error) = file.sync_all().await {
+        drop(file);
+        let _ = fs::remove_file(&temporary).await;
+        return Err(SshError::LocalIo(error));
+    }
     drop(file);
     if !overwrite && download_destination_exists(destination, &temporary).await? {
         let _ = fs::remove_file(&temporary).await;
