@@ -959,6 +959,13 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
             else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
           });
         }
+        if (disposed) {
+          unlistenOutput?.();
+          unlistenClosed?.();
+          unlistenState?.();
+          unlistenX11?.();
+          return;
+        }
         if (remoteSessionId) {
           terminalIdRef.current = remoteSessionId;
           onNativeTerminalId(workspaceId, remoteSessionId);
@@ -988,6 +995,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         onStatusChange(workspaceId, "connected");
         fit();
       } catch {
+        if (disposed) return;
         onStatusChange(workspaceId, "error");
         const message = remoteProtocol
           ? `Unable to initialize the ${remoteProtocol.toUpperCase()} terminal session.`
@@ -1165,6 +1173,10 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
           }
           if (helperEvent.event === "diagnostic") setError(helperEvent.payload.message);
         });
+        if (disposed) {
+          unlisten();
+          return;
+        }
         const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request });
         if (disposed) {
           void invoke("remote_desktop_stop", { sessionId: response.sessionId });
