@@ -753,7 +753,12 @@ fn forwards_x11_setup_to_a_disposable_xvfb_server_when_available() {
         writer
             .write(
                 br#"python3 -c 'import os,socket; d=os.environ["DISPLAY"]; h,rest=d.rsplit(":",1); p=int(rest.split(".",1)[0])+6000; s=socket.create_connection((h,p),5); s.sendall(b"l\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00"); response=b"";
-while len(response)<8: response += s.recv(8-len(response)); assert response[0:1] == b"\x01"; s.close()'
+while len(response)<8:
+    chunk=s.recv(8-len(response))
+    if not chunk: raise EOFError("X11 setup reply ended early")
+    response+=chunk
+assert response[0:1] == b"\x01"
+s.close()'
 exit
 "#,
             )
