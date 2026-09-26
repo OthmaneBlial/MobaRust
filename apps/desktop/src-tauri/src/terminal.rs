@@ -597,6 +597,7 @@ mod tests {
 
         let command = fixture_command();
         let mut child = pair.slave.spawn_command(command).expect("spawn test shell");
+        drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("clone test reader");
         let mut writer = pair.master.take_writer().expect("take test writer");
         writer.write_all(b"hello\n").expect("write test input");
@@ -640,6 +641,7 @@ mod tests {
                 .slave
                 .spawn_command(command)
                 .expect("spawn explicit Unix shell");
+            drop(pair.slave);
             let mut reader = pair
                 .master
                 .try_clone_reader()
