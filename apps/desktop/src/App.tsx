@@ -1481,6 +1481,7 @@ function App() {
   const [editingSession, setEditingSession] = useState<SavedSession | null>(null);
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
+  const [remoteListingSessionId, setRemoteListingSessionId] = useState<string | null>(null);
   const [editingRemoteFile, setEditingRemoteFile] = useState<{ sessionId: string; document: RemoteTextDocument } | null>(null);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [localDropActive, setLocalDropActive] = useState(false);
@@ -2779,7 +2780,7 @@ function App() {
   }, [macroRun]);
 
   const loadRemoteDirectory = useCallback(async (path: string) => {
-    if (!remoteSessionId) return;
+    if (!remoteSessionId || remoteSessionIdRef.current !== remoteSessionId) return;
     const requestId = ++remoteDirectoryRequestRef.current;
     const sessionId = remoteSessionId;
     const isCurrentRequest = () => isCurrentSessionRequest(
@@ -2788,6 +2789,9 @@ function App() {
       sessionId,
       remoteSessionIdRef.current,
     );
+    setRemoteListingSessionId(sessionId);
+    setRemoteEntries([]);
+    setRemotePath(path);
     setSftpStatus("loading");
     try {
       const entries = await invoke<RemoteEntry[]>("ssh_list_directory", {
@@ -2806,7 +2810,6 @@ function App() {
   }, [remoteSessionId]);
 
   const navigateRemote = useCallback((path: string) => {
-    setRemotePath(path);
     void loadRemoteDirectory(path);
   }, [loadRemoteDirectory]);
 
@@ -2943,6 +2946,10 @@ function App() {
 
   const startUpload = useCallback(async (protocol: TransferProtocol, pickerKind: LocalUploadPickerKind = "files", droppedPaths: string[] = []) => {
     if (!remoteSessionId) return;
+    if (remoteListingSessionId !== remoteSessionId || sftpStatus !== "ready") {
+      setConnectionError("Wait for remote files to load before uploading.");
+      return;
+    }
     let paths = normalizeDroppedUploadPaths(droppedPaths);
     if (paths.length === 0 && IS_TAURI) {
       try {
@@ -2973,7 +2980,7 @@ function App() {
         setConnectionError(String(error));
       }
     }
-  }, [remotePath, remoteSessionId]);
+  }, [remoteListingSessionId, remotePath, remoteSessionId, sftpStatus]);
 
   useEffect(() => {
     if (!IS_TAURI || activeView !== "files" || !remoteSessionId || remoteProtocol !== "ssh") {
@@ -3935,7 +3942,7 @@ function App() {
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback {settings.terminal.scrollbackLines.toLocaleString()}</span><span>{settings.appearance.fontSize}px · Mod +/- zoom</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
                 </section>
               ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <RemoteFilesView entries={remoteEntries} path={remotePath} status={sftpStatus} error={connectionError} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
+                <RemoteFilesView entries={remoteListingSessionId === remoteSessionId && sftpStatus === "ready" ? remoteEntries : []} path={remoteListingSessionId === remoteSessionId ? remotePath : "."} status={remoteListingSessionId === remoteSessionId ? sftpStatus : "loading"} error={connectionError} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
@@ -4147,9 +4154,9 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
         <label className="transfer-protocol-select">Transport<select aria-label="Transfer transport" value={transferProtocol} onChange={(event) => setTransferProtocol(event.target.value as TransferProtocol)}><option value="sftp">SFTP · recommended</option><option value="scp">SCP · legacy files</option></select></label>
         <label className="transfer-protocol-select">Sort<select aria-label="Sort remote files" value={sort} onChange={(event) => setSort(event.target.value as RemoteFileSort)}><option value="name">Name</option><option value="type">Type</option><option value="size">Size</option><option value="modified">Modified</option></select></label>
         <label className="remote-files-hidden"><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Hidden</label>
-        <button className="outline-button" onClick={onCreateDirectory}><FolderPlus size={14} /> New folder</button>
-        <button className="outline-button" onClick={() => onUpload(transferProtocol, "files")}><Upload size={14} /> Upload files</button>
-        <button className="outline-button" onClick={() => onUpload("sftp", "directory")}><FolderPlus size={14} /> Upload folder</button>
+        <button className="outline-button" onClick={onCreateDirectory} disabled={status !== "ready"}><FolderPlus size={14} /> New folder</button>
+        <button className="outline-button" onClick={() => onUpload(transferProtocol, "files")} disabled={status !== "ready"}><Upload size={14} /> Upload files</button>
+        <button className="outline-button" onClick={() => onUpload("sftp", "directory")} disabled={status !== "ready"}><FolderPlus size={14} /> Upload folder</button>
         <button className="outline-button" onClick={() => onNavigate(path)} disabled={status === "loading"}><RefreshCw size={14} /> {status === "loading" ? "Refreshing" : "Refresh"}</button>
       </div>
     </div>
@@ -4157,7 +4164,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
     {localDropActive && <div className="remote-files-drop-zone" role="status"><Upload size={16} /><strong>Drop files or folders to upload with SFTP</strong><span>The destination and overwrite decision will still be confirmed.</span></div>}
     {error && <div className="remote-files-error" role="alert"><CircleX size={14} /><span>{error}</span></div>}
     <div className="remote-files-list">
-      <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
+      <div className="remote-file-row parent"><button className="remote-file-main" onClick={() => onNavigate(parentPath)} disabled={status !== "ready"}><span className="remote-file-icon"><Folder size={15} /></span><span>..</span><small>parent directory</small></button></div>
       {visibleEntries.map((entry) => <div className={`remote-file-row ${entry.isDirectory ? "directory" : ""}`} key={entry.path}>
         <button className="remote-file-main" onClick={() => entry.isDirectory ? onNavigate(entry.path) : undefined} aria-label={entry.isDirectory ? `Open ${entry.name}` : entry.name}>
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{remoteEntryDetails(entry)}</small>
