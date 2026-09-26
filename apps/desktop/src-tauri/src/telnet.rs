@@ -5,7 +5,6 @@ use mobarust_telnet::{TelnetConnection, TelnetEncoding, TelnetError, TelnetOptio
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -13,7 +12,6 @@ use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
-const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -267,10 +265,9 @@ async fn run_telnet_session(
     let mut buffer = vec![0_u8; 16 * 1024];
     let reason = 'session: loop {
         tokio::select! {
-            read = tokio::time::timeout(READ_POLL_INTERVAL, connection.read(&mut buffer)), if connection.state() == ConnectionState::Connected => {
+            read = connection.read(&mut buffer), if connection.state() == ConnectionState::Connected => {
                 match read {
-                    Err(_) => continue,
-                    Ok(Ok(0)) => {
+                    Ok(0) => {
                         manager.emit_state(
                             &app,
                             &terminal_id,
@@ -279,7 +276,7 @@ async fn run_telnet_session(
                         );
                         continue 'session;
                     }
-                    Ok(Ok(bytes)) => {
+                    Ok(bytes) => {
                         let text = match connection.encoding() {
                             TelnetEncoding::Utf8 => output_decoder.push(&buffer[..bytes]),
                             encoding => encoding.decode(&buffer[..bytes]),
@@ -288,7 +285,7 @@ async fn run_telnet_session(
                             manager.publish_output(&app, &terminal_id, text);
                         }
                     }
-                    Ok(Err(error)) => {
+                    Err(error) => {
                         let reason = error.to_string();
                         let _ = connection.mark_connection_lost();
                         manager.emit_state(
