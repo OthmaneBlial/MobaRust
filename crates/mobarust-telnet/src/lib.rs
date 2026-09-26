@@ -368,8 +368,17 @@ fn terminal_type_response(options: &TelnetOptions) -> Vec<u8> {
 
 fn naws_response(options: &TelnetOptions) -> Vec<u8> {
     let mut response = vec![IAC, SB, NAWS];
-    response.extend_from_slice(&options.columns.to_be_bytes());
-    response.extend_from_slice(&options.rows.to_be_bytes());
+    for byte in options
+        .columns
+        .to_be_bytes()
+        .into_iter()
+        .chain(options.rows.to_be_bytes())
+    {
+        response.push(byte);
+        if byte == IAC {
+            response.push(IAC);
+        }
+    }
     response.extend_from_slice(&[IAC, SE]);
     response
 }
@@ -769,6 +778,17 @@ mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn naws_escapes_iac_in_window_dimensions() {
+        let mut options = TelnetOptions::new("fixture", 23);
+        options.columns = 255;
+        options.rows = 65535;
+        assert_eq!(
+            naws_response(&options),
+            vec![IAC, SB, NAWS, 0, IAC, IAC, IAC, IAC, IAC, IAC, IAC, SE]
+        );
+    }
 
     #[test]
     fn codec_filters_iac_and_answers_supported_options() {
