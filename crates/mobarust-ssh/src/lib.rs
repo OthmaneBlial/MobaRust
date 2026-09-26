@@ -111,6 +111,10 @@ pub enum SshError {
     RemoteConflict,
     #[error("remote save target already exists")]
     RemoteTargetExists,
+    #[error("remote editor does not open symbolic links")]
+    RemoteFileSymlink,
+    #[error("remote editor requires a regular file with type metadata")]
+    RemoteFileNotRegular,
     #[error(
         "remote save failed and the original could not be confirmed restored; inspect the target and nearby .mobarust-edit files before retrying"
     )]
@@ -2038,6 +2042,10 @@ pub struct SftpConnection {
 }
 
 pub const MAX_REMOTE_EDITOR_BYTES: usize = 4 * 1024 * 1024;
+const SFTP_FILE_TYPE_MASK: u32 = 0o170000;
+const SFTP_DIRECTORY_TYPE: u32 = 0o040000;
+const SFTP_REGULAR_TYPE: u32 = 0o100000;
+const SFTP_SYMLINK_TYPE: u32 = 0o120000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -2066,6 +2074,8 @@ pub struct RemoteEntry {
     pub path: String,
     pub size: u64,
     pub is_directory: bool,
+    pub is_regular: bool,
+    pub is_symlink: bool,
     pub modified_unix_seconds: Option<u64>,
     pub uid: Option<u32>,
     pub owner: Option<String>,
@@ -2087,6 +2097,7 @@ impl SftpConnection {
         Ok(entries
             .map(|entry| {
                 let metadata = entry.metadata();
+                let file_type = metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK);
                 let modified_unix_seconds = metadata
                     .modified()
                     .ok()
@@ -2096,7 +2107,9 @@ impl SftpConnection {
                     name: entry.file_name(),
                     path: entry.path(),
                     size: metadata.len(),
-                    is_directory: metadata.is_dir(),
+                    is_directory: file_type == Some(SFTP_DIRECTORY_TYPE),
+                    is_regular: file_type == Some(SFTP_REGULAR_TYPE),
+                    is_symlink: file_type == Some(SFTP_SYMLINK_TYPE),
                     modified_unix_seconds,
                     uid: metadata.uid,
                     owner: metadata.user,
@@ -2151,9 +2164,18 @@ impl SftpConnection {
         encoding: RemoteTextEncoding,
     ) -> Result<RemoteTextDocument, SshError> {
         let path = path.into();
-        let metadata = self.session.metadata(&path).await.map_err(map_sftp_error)?;
-        if metadata.is_dir() {
-            return Err(SshError::Sftp("remote path is a directory".into()));
+        let metadata = self
+            .session
+            .symlink_metadata(&path)
+            .await
+            .map_err(map_sftp_error)?;
+        match metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK) {
+            Some(SFTP_SYMLINK_TYPE) => return Err(SshError::RemoteFileSymlink),
+            Some(SFTP_DIRECTORY_TYPE) => {
+                return Err(SshError::Sftp("remote path is a directory".into()));
+            }
+            Some(SFTP_REGULAR_TYPE) => {}
+            _ => return Err(SshError::RemoteFileNotRegular),
         }
         if metadata.len() > MAX_REMOTE_EDITOR_BYTES as u64 {
             return Err(SshError::RemoteFileTooLarge);
@@ -2324,6 +2346,9 @@ impl SftpConnection {
         }
         let path = path.into();
         let mut existing = if self.try_exists(path.clone()).await? {
+            if !overwrite {
+                return Err(SshError::RemoteTargetExists);
+            }
             Some(
                 self.read_text_document_with_encoding(path.clone(), encoding)
                     .await?,
@@ -2331,9 +2356,6 @@ impl SftpConnection {
         } else {
             None
         };
-        if existing.is_some() && !overwrite {
-            return Err(SshError::RemoteTargetExists);
-        }
 
         let temporary = format!(
             "{path}.mobarust-edit-{}-{}",
@@ -2454,7 +2476,15 @@ impl SftpConnection {
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
-        self.session.try_exists(path).await.map_err(map_sftp_error)
+        match self.session.symlink_metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(russh_sftp::client::error::Error::Status(status))
+                if status.status_code == russh_sftp::protocol::StatusCode::NoSuchFile =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(map_sftp_error(error)),
+        }
     }
 
     pub async fn create_dir(&self, path: impl Into<String>) -> Result<(), SshError> {

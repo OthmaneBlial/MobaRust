@@ -144,6 +144,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("find uploaded remote file");
         assert_eq!(uploaded_entry.size, 128 * 1024);
         assert!(!uploaded_entry.is_directory);
+        assert!(uploaded_entry.is_regular);
         assert!(uploaded_entry.permissions.is_some());
         assert!(uploaded_entry.uid.is_some() || uploaded_entry.owner.is_some());
         assert!(uploaded_entry.gid.is_some() || uploaded_entry.group.is_some());
@@ -330,6 +331,43 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("replace remote save-as target explicitly");
         assert_eq!(replaced.content, "replaced\n");
         assert_no_remote_editor_artifacts(&sftp, &remote_root).await;
+        let editor_link = fixture.directory.path().join("editor-link.txt");
+        std::os::unix::fs::symlink(&editor_path, &editor_link)
+            .expect("create remote editor symlink fixture");
+        let editor_link_path = editor_link.to_string_lossy().into_owned();
+        let link_entry = sftp
+            .read_dir(&remote_root)
+            .await
+            .expect("list remote editor symlink")
+            .into_iter()
+            .find(|entry| entry.path == editor_link_path)
+            .expect("find remote editor symlink");
+        assert!(link_entry.is_symlink);
+        assert!(!link_entry.is_regular);
+        assert!(matches!(
+            sftp.read_text_document(&editor_link_path).await,
+            Err(SshError::RemoteFileSymlink)
+        ));
+        assert!(matches!(
+            sftp.save_text_document_as(&editor_link_path, "blocked\n", RemoteTextEncoding::Utf8, true)
+                .await,
+            Err(SshError::RemoteFileSymlink)
+        ));
+        assert!(fs::symlink_metadata(&editor_link).expect("inspect editor link").file_type().is_symlink());
+        assert_eq!(sftp.read_text_document(&editor_path).await.expect("read unchanged link target").content, "after\n");
+        let dangling_link = fixture.directory.path().join("editor-dangling-link.txt");
+        std::os::unix::fs::symlink("missing-editor-target.txt", &dangling_link)
+            .expect("create dangling remote editor symlink fixture");
+        let dangling_path = dangling_link.to_string_lossy().into_owned();
+        assert!(sftp.try_exists(&dangling_path).await.expect("detect dangling remote symlink"));
+        assert!(matches!(
+            sftp.save_text_document_as(&dangling_path, "blocked\n", RemoteTextEncoding::Utf8, false)
+                .await,
+            Err(SshError::RemoteTargetExists)
+        ));
+        assert!(fs::symlink_metadata(&dangling_link).expect("inspect dangling link").file_type().is_symlink());
+        fs::remove_file(&editor_link).expect("remove remote editor symlink fixture");
+        fs::remove_file(&dangling_link).expect("remove dangling symlink fixture");
         sftp.remove_file(&save_as_path)
             .await
             .expect("remove save-as fixture");

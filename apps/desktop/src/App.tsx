@@ -649,6 +649,8 @@ type RemoteEntry = {
   path: string;
   size: number;
   isDirectory: boolean;
+  isRegular: boolean;
+  isSymlink: boolean;
   modifiedUnixSeconds?: number | null;
   uid?: number | null;
   owner?: string | null;
@@ -2852,7 +2854,7 @@ function App() {
   }, [remoteProtocol, remoteSessionId]);
 
   const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
-    if (!remoteSessionId || entry.isDirectory) return;
+    if (!remoteSessionId || !entry.isRegular) return;
     const sessionId = remoteSessionId;
     const requestId = ++remoteFileOpenRequestRef.current;
     try {
@@ -4180,7 +4182,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{remoteEntryDetails(entry)}</small>
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
-        {!entry.isDirectory && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
+        {entry.isRegular && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
         <button className="remote-file-action" onClick={() => onCopyPath(entry)} title={`Copy path for ${entry.name}`} aria-label={`Copy path for ${entry.name}`}><Copy size={14} /></button>
         <button className="remote-file-action" onClick={() => onSetPermissions(entry)} title={`Change permissions for ${entry.name}`} aria-label={`Change permissions for ${entry.name}`}><Settings2 size={14} /></button>
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
@@ -4461,7 +4463,7 @@ function formatRemoteModified(seconds?: number | null) {
 
 function remoteEntryDetails(entry: RemoteEntry) {
   const details = [
-    entry.isDirectory ? "directory" : formatBytes(entry.size),
+    entry.isDirectory ? "directory" : entry.isSymlink ? "symlink" : entry.isRegular ? formatBytes(entry.size) : "special file",
     formatRemoteModified(entry.modifiedUnixSeconds),
     formatRemotePermissions(entry.permissions),
     formatRemoteOwner(entry),

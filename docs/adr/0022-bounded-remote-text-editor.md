@@ -30,23 +30,29 @@ reports that the new file was saved and leaves the backup for inspection.
 
 ## Security and reliability boundary
 
-The editor refuses directories, invalid UTF-8 data, lossy Windows-1252 writes,
-and files above the 4 MiB limit. Remote content is untrusted text and is
-rendered only in a textarea;
-it is never interpreted as HTML or a command. The renderer receives file
+The editor requires remote metadata identifying a regular file. It refuses
+directories, symbolic links, other file types, invalid UTF-8 data, lossy
+Windows-1252 writes, and files above the 4 MiB limit. A dangling symlink
+still occupies its path for overwrite checks. Remote content is untrusted text
+and is rendered only in a textarea; it is never interpreted as HTML or a
+command. The renderer receives file
 content because editing requires it, but no credential or shell state is
 included.
 
 SFTP v3 rename behavior is not uniformly atomic when the destination exists.
 The implementation therefore promises complete-file promotion with rollback
 attempts and conflict refusal, not an unconditional zero-gap guarantee. A
-future server capability check may use a POSIX rename extension where
-available.
+server-side path replacement between metadata checks and open/rename remains
+a race because SFTP v3 offers no atomic no-follow compare-and-swap operation.
+The editor refuses links visible at each metadata check but cannot prove that
+the path stayed unchanged between requests. A future server capability check
+may use a POSIX rename extension where available.
 
 ## Verification
 
 The local OpenSSH fixture exercises upload, permission metadata, read, save,
 permission preservation, conflict rejection, and cleanup over a real loopback
-SFTP session. TypeScript, ESLint, Rust tests, and the production build cover
-the command and editor wiring. Unit tests cover the distinct recovery messages;
+SFTP session, including symlink and dangling-link refusal. TypeScript, ESLint,
+Rust tests, and the production build cover the command and editor wiring. Unit
+tests cover the distinct recovery messages;
 the fixture does not inject a double rename failure.
