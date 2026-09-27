@@ -25,10 +25,11 @@ a defaults block; exact aliases receive the first value found for each option,
 matching the important precedence rule without claiming full OpenSSH parser
 compatibility.
 
-Imported profiles are persisted in the existing versioned session store and
-are idempotent by protocol and alias. A repeated import updates the existing
-profile while preserving its session ID. `IdentityFile` remains a path
-reference and passwords are never read from the config or stored. Profiles
+Imported profiles are persisted in the existing versioned session store.
+Existing SSH profiles with the same alias are reported as skipped so a repeat
+import cannot overwrite credentials, host trust, or later profile edits.
+`IdentityFile` remains a path reference; passwords are never read from the
+config or stored. Profiles
 with `ProxyJump` reconnect when each alias resolves to a saved SSH profile.
 An explicit `user@host:port` entry overrides the saved hop username and port.
 Unresolved aliases remain visible but cannot start a connection.
@@ -39,7 +40,8 @@ Unresolved aliases remain visible but cannot start a connection.
 - A dedicated parser keeps the IPC contract narrow and avoids generic file
   access from React.
 - An import report makes partial compatibility reviewable.
-- Idempotency prevents repeated imports from flooding the session catalog.
+- Skipping existing aliases prevents repeated imports from flooding the catalog
+  or overwriting operator edits.
 
 ## Rejected for this milestone
 
@@ -52,8 +54,8 @@ Unresolved aliases remain visible but cannot start a connection.
 
 ## Verification
 
-Store tests cover global defaults, aliases, key and jump references, the
-  bounded keepalive mapping (including jump-hop profile persistence), notes,
-  unsupported directives, malformed ports, secret absence, persistence, and
-  repeat-import idempotency. Desktop TypeScript and Rust command compilation
-  must also pass before release.
+Store tests cover global defaults, aliases, key and jump references, bounded
+keepalive mapping (including jump-hop profile persistence), notes, unsupported
+directives, malformed ports, secret absence, persistence, and repeat-import
+preservation. Desktop TypeScript and Rust command compilation must also pass
+before release.

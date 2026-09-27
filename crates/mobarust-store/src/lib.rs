@@ -893,6 +893,14 @@ impl SessionStore {
             if !seen.insert(alias.clone()) {
                 continue;
             }
+            if self
+                .sessions
+                .iter()
+                .any(|session| session.protocol == Protocol::Ssh && session.name == *alias)
+            {
+                skipped_hosts.push(format!("{alias} (already exists)"));
+                continue;
+            }
             let options = effective_options(&blocks, alias);
             let hostname = options
                 .get("hostname")
@@ -973,17 +981,7 @@ impl SessionStore {
         }
         if !imported.is_empty() {
             let previous = self.sessions.clone();
-            for imported_session in &mut imported {
-                if let Some(existing) = self.sessions.iter_mut().find(|existing| {
-                    existing.protocol == imported_session.protocol
-                        && existing.name == imported_session.name
-                }) {
-                    imported_session.id = existing.id;
-                    *existing = imported_session.clone();
-                } else {
-                    self.sessions.push(imported_session.clone());
-                }
-            }
+            self.sessions.extend(imported.iter().cloned());
             if let Err(error) = self.persist() {
                 self.sessions = previous;
                 return Err(error);
@@ -2032,8 +2030,48 @@ mod tests {
         assert_eq!(store.list().len(), 3);
 
         let second_report = store.import_openssh_config(&path).unwrap();
-        assert_eq!(second_report.imported.len(), 3);
+        assert!(second_report.imported.is_empty());
+        assert_eq!(second_report.skipped_hosts.len(), 3);
         assert_eq!(store.list().len(), 3);
+    }
+
+    #[test]
+    fn openssh_reimport_preserves_existing_profile_edits() {
+        let directory = tempdir().unwrap();
+        let config = directory.path().join("config");
+        fs::write(&config, "Host prod\n  HostName first.example\n  User ops\n").unwrap();
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let mut edited = store
+            .import_openssh_config(&config)
+            .unwrap()
+            .imported
+            .remove(0);
+        edited.auth = AuthMethod::Password {
+            credential_ref: "saved-credential".into(),
+        };
+        edited.known_hosts_path = Some("/fixture/known_hosts".into());
+        edited.favorite = true;
+        edited.notes = Some("Keep this note".into());
+        store.save(edited.clone()).unwrap();
+
+        fs::write(
+            &config,
+            "Host prod\n  HostName changed.example\nHost new\n  HostName new.example\n",
+        )
+        .unwrap();
+        let report = store.import_openssh_config(&config).unwrap();
+        assert_eq!(report.skipped_hosts, vec!["prod (already exists)"]);
+        assert_eq!(report.imported.len(), 1);
+        assert_eq!(report.imported[0].name, "new");
+        let reopened = SessionStore::open(store.path()).unwrap();
+        assert_eq!(
+            reopened
+                .list()
+                .iter()
+                .find(|session| session.name == "prod"),
+            Some(&edited)
+        );
+        assert_eq!(reopened.list().len(), 2);
     }
 
     #[test]
