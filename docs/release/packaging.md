@@ -2,12 +2,10 @@
 
 ## Downloadable previews
 
-The `Release installers` workflow builds native Windows x64 NSIS, Linux x64
-Debian/AppImage, and macOS ARM64/x64 DMG packages. A `v*` tag must match the
-Cargo, frontend, and Tauri versions. All four builds must succeed before the
-workflow publishes a GitHub prerelease with installers and per-platform
-SHA-256 checksums. A manual workflow run builds downloadable Actions artifacts
-without publishing a release. See [preview installation notes](preview-notes.md).
+The v0.1.12 preview has Windows x64 NSIS, Linux x64 Debian/AppImage, and macOS
+ARM64/x64 DMG packages. Its release workflow is disabled; new builds and
+checks run locally. A release tag must match the Cargo, frontend, and Tauri
+versions. See [preview installation notes](preview-notes.md).
 
 These unsigned previews are separate from the signed production distribution
 gates below. They do not establish publisher authenticity, notarization, full
@@ -37,6 +35,22 @@ dependency is not cached. The generated files must never be committed.
 `cargo xtask stage-helpers` can be run directly when inspecting the staging
 step. `cargo xtask check` remains the normal validation command and does not
 turn the application into portable mode.
+
+On an Apple Silicon Mac, release DMGs can be built for both Mac architectures
+without starting the GUI. The target variable makes the build hook stage an
+Intel VNC helper for the Intel package; use it with the matching Tauri target:
+
+```bash
+cd apps/desktop
+pnpm tauri build --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
+MOBARUST_PACKAGE_TARGET=x86_64-apple-darwin pnpm tauri build --target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
+```
+
+The Intel DMG is under `target/x86_64-apple-darwin/release/bundle/dmg/`.
+Verify its mounted app and helper architectures with `lipo -archs`, its package
+layout with `cargo xtask verify-platform-layout`, and its signature with
+`cargo xtask verify-macos-signature`. Cross-building on Apple Silicon does not
+prove clean installation or GUI behavior on an Intel Mac.
 
 `cargo xtask package-check` builds an unsigned current-platform debug app
 bundle and verifies that the Tauri resource step completes. The bundle
@@ -182,10 +196,10 @@ replacement for signed distribution or operating-system protection.
 | --- | --- | --- | --- |
 | Windows x64 | Required on Windows | Pending real Windows build | Pending owner certificate |
 | Linux x64 | Required on Linux | Pending distro/package checks | Pending signing policy |
-| macOS ARM64 | Local unsigned `.app` smoke test passed; clean install pending | Pending notarized artifact | Pending Developer ID/notarization |
+| macOS ARM64 | Local ARM helper passed; clean install pending | Local DMG passed layout, integrity, and CLI startup checks | Developer ID/notarization pending |
 | Windows ARM64 | Cross-build/toolchain required | Pending | Pending |
 | Linux ARM64 | Cross-build/toolchain required | Pending | Pending |
-| macOS x64 | Cross-build/toolchain required | Pending | Pending |
+| macOS x64 | Local cross-built Intel VNC helper passed | Local DMG passed layout, integrity, and CLI startup checks; Intel GUI pending | Developer ID/notarization pending |
 
 Packaging is not a claim that RDP/VNC interoperability is complete. Real
 server tests, platform-specific input/clipboard/display behavior, dependency

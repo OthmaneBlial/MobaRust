@@ -147,8 +147,13 @@ fn build_and_stage_helper(
     sanitize_process_environment(&mut command);
     let isolated_home = create_sanitized_test_home()?;
     apply_isolated_home(&mut command, &isolated_home);
+    let package_target = std::env::var("MOBARUST_PACKAGE_TARGET").ok();
+    command.args(["build", "--locked", "--release"]);
+    if let Some(target) = &package_target {
+        command.args(["--target", target]);
+    }
     let status = command
-        .args(["build", "--locked", "--release", "--manifest-path"])
+        .arg("--manifest-path")
         .arg(&manifest_path)
         .current_dir(repository_root)
         .status()
@@ -162,10 +167,15 @@ fn build_and_stage_helper(
             "cargo failed while building {binary} with {status}"
         ));
     }
-    let source = manifest_path
+    let mut source = manifest_path
         .parent()
         .ok_or_else(|| format!("helper manifest has no parent: {}", manifest_path.display()))?
-        .join("target/release")
+        .join("target");
+    if let Some(target) = package_target {
+        source.push(target);
+    }
+    let source = source
+        .join("release")
         .join(format!("{binary}{executable_suffix}"));
     let source_metadata = fs::symlink_metadata(&source).map_err(|error| {
         format!(
