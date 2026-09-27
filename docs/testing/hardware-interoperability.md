@@ -61,6 +61,13 @@ The archive SHA-256 was
 The startup probe exercised only `mobarust --version`; this run did not open a
 GUI or add interoperability evidence.
 
+On 2026-09-27, source `04875af` passed both packaging checks again on macOS
+ARM64 after the SSH and session-import fixes. The unsigned app bundle, VNC
+helper, checksums, and portable archive were verified. The archive SHA-256 was
+`8b5b2c4cc821da44928264128aaeb6508f1666dfd675c82305e05d9c6f93cedb`.
+The packaged executable returned `MobaRust 0.1.12` on its CLI startup probe.
+This run did not open the GUI or test a packaged SSH connection.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
