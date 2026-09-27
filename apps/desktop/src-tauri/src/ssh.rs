@@ -3553,10 +3553,14 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        download_destination_exists, ensure_local_download_directory, local_part_path,
-        local_upload_metadata, open_local_upload_file, reconnect_with_backoff, remote_child_path,
-        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
-        transfer_metrics, validate_transfer_component, validate_tunnel_host,
+        local_part_path, reconnect_with_backoff, remote_child_path, remove_partial_download,
+        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
+        validate_transfer_component, validate_tunnel_host,
+    };
+    #[cfg(unix)]
+    use super::{
+        download_destination_exists, ensure_local_download_directory, local_upload_metadata,
+        open_local_upload_file,
     };
     use std::fs;
     use std::time::{Duration, Instant};
