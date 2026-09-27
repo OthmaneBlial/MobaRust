@@ -41,12 +41,15 @@ import {
   appendMacroAction,
   appendMacroRecordingInput,
   createRecordedMacroDraft,
+  macroTargetsStillBound,
   MAX_MACRO_ACTIONS,
+  pinMacroTargets,
   type MacroAction,
   type MacroApprovalPolicy,
   type MacroKey,
   type MacroRecord,
   type MacroRecordingState,
+  type MacroTargetBinding,
 } from "./macro-recording";
 import { isCurrentSessionRequest } from "./session-request";
 import { resolveSavedJumpAlias } from "./saved-jump-alias";
@@ -2693,16 +2696,11 @@ function App() {
     void connectSsh(request, false);
   }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
-  const writeToExplicitTargets = useCallback(async (targetIds: string[], data: string) => {
-    const targets = [...new Set(targetIds)].map((workspaceId) => ({
-      workspaceId,
-      nativeId: nativeTerminalIdsRef.current.get(workspaceId),
-    }));
-    const unavailable = targets.filter((target) => !target.nativeId);
-    if (targets.length === 0 || unavailable.length > 0) {
-      throw new Error("one or more selected terminals are not ready");
+  const writeToExplicitTargets = useCallback(async (targets: MacroTargetBinding[], data: string) => {
+    if (!macroTargetsStillBound(targets, nativeTerminalIdsRef.current)) {
+      throw new Error("a selected terminal changed or closed during the macro; this action was not sent");
     }
-    await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)));
+    await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId, data)));
   }, [writeTerminalInput]);
 
   const runMacro = useCallback(async (record: MacroRecord, targetIds: string[]) => {
@@ -2711,15 +2709,16 @@ function App() {
       return;
     }
     const targets = [...new Set(targetIds)];
-    const targetLabels = targets.map((id) => terminalTabsRef.current.find((terminal) => terminal.id === id)?.label ?? id);
     if (targets.length === 0) {
       setConnectionError("Select at least one ready terminal before running a macro.");
       return;
     }
-    if (targets.some((id) => !nativeTerminalIdsRef.current.has(id))) {
+    const targetBindings = pinMacroTargets(targets, nativeTerminalIdsRef.current);
+    if (!targetBindings) {
       setConnectionError("The macro was not started because every selected terminal must be ready.");
       return;
     }
+    const targetLabels = targets.map((id) => terminalTabsRef.current.find((terminal) => terminal.id === id)?.label ?? id);
     const warning = record.actions.some((action) => action.kind === "executeCommand" || action.kind === "openSession" || action.kind === "switchWorkspace")
       ? `Macro “${record.title}” includes command or session-control actions. Run it on ${targetLabels.join(", ")}?`
       : `Run macro “${record.title}” on ${targetLabels.join(", ")}?`;
@@ -2777,9 +2776,9 @@ function App() {
         const nextRunState = { title: record.title, step: index + 1, total: record.actions.length, targets: targetLabels };
         macroRunRef.current = nextRunState;
         setMacroRun(nextRunState);
-        if (action.kind === "sendText") await writeToExplicitTargets(targets, action.text);
-        if (action.kind === "executeCommand") await writeToExplicitTargets(targets, `${action.command}\r`);
-        if (action.kind === "sendKey") await writeToExplicitTargets(targets, keyData[action.key]);
+        if (action.kind === "sendText") await writeToExplicitTargets(targetBindings, action.text);
+        if (action.kind === "executeCommand") await writeToExplicitTargets(targetBindings, `${action.command}\r`);
+        if (action.kind === "sendKey") await writeToExplicitTargets(targetBindings, keyData[action.key]);
         if (action.kind === "wait") await wait(action.milliseconds);
         if (action.kind === "switchWorkspace") {
           if (!terminalTabsRef.current.some((terminal) => terminal.id === action.workspaceId)) throw new Error("workspace target no longer exists");

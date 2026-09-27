@@ -29,6 +29,22 @@ export const MAX_MACRO_ACTIONS = 64;
 const MAX_RECORDED_MACRO_ACTIONS = MAX_MACRO_ACTIONS;
 const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
 
+export type MacroTargetBinding = { workspaceId: string; nativeId: string };
+
+export function pinMacroTargets(ids: readonly string[], nativeIds: ReadonlyMap<string, string>): MacroTargetBinding[] | null {
+  const bindings: MacroTargetBinding[] = [];
+  for (const workspaceId of new Set(ids)) {
+    const nativeId = nativeIds.get(workspaceId);
+    if (!nativeId) return null;
+    bindings.push({ workspaceId, nativeId });
+  }
+  return bindings.length ? bindings : null;
+}
+
+export function macroTargetsStillBound(bindings: readonly MacroTargetBinding[], nativeIds: ReadonlyMap<string, string>): boolean {
+  return bindings.length > 0 && bindings.every(({ workspaceId, nativeId }) => nativeIds.get(workspaceId) === nativeId);
+}
+
 export function appendMacroAction(actions: MacroAction[], action: MacroAction): MacroAction[] {
   return actions.length < MAX_MACRO_ACTIONS ? [...actions, action] : actions;
 }
