@@ -33,7 +33,7 @@ or server is a pending result, not a reason to probe the local machine.
 | Area | Safe evidence available now | What it does not prove |
 | --- | --- | --- |
 | macOS ARM64 PTY | Native disposable-PTY fixture passes locally; explicit bash/zsh/fish targets are bounded in the local contract | Windows/Linux shell runtime behavior, real clipboard/window-manager behavior |
-| SSH | Local SSH fixture covers authentication, PTY I/O, resize, SFTP, and disconnect | Internet-host interoperability or the operator's SSH configuration |
+| SSH | Local SSH fixture covers authentication, PTY I/O, resize, SFTP, and disconnect; a native macOS app smoke test also connected to a disposable loopback server and loaded the SFTP browser | Internet-host interoperability, sustained GUI terminal input, or the operator's SSH configuration |
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
 | VNC | Isolated helper controls local RFB fixtures, including password auth and reconnect | Mature-engine selection, encrypted transport, and cross-platform packaging |
@@ -42,6 +42,16 @@ or server is a pending result, not a reason to probe the local machine.
 These rows must remain distinct from the release matrix below. A fixture or
 unit test must never be promoted to hardware or cross-platform evidence by
 inference.
+
+On 2026-09-27, an unsigned macOS ARM64 debug bundle built from `1f9bd93`
+passed `cargo xtask package-check`. A separate portable copy opened a native
+window without loading the installed app's sessions. A saved session connected
+to a loopback OpenSSH server with a generated key and an explicit fixture
+`known_hosts` file. The server accepted the key, the app recorded a successful
+connection, and the SFTP browser loaded a directory. Its parent control also
+completed without a listing error. The focused real-PTY loopback test passed.
+The GUI run did not verify sustained shell input, file transfer, or a remote
+host. The app and server were stopped, and generated SSH keys were removed.
 
 ## Required matrix
 
