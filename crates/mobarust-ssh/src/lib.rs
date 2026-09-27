@@ -1881,6 +1881,7 @@ fn sftp_entry_path(parent: &str, name: &str) -> Result<String, SshError> {
         || name == ".."
         || name.contains('/')
         || name.contains('\\')
+        || name.contains('\u{fffd}')
         || name.chars().any(char::is_control)
     {
         return Err(SshError::Sftp(
@@ -3407,6 +3408,7 @@ mod tests {
             "../private",
             "nested/file",
             "nested\\file",
+            "replacement\u{fffd}name",
             "line\nbreak",
             "nul\0byte",
         ] {
