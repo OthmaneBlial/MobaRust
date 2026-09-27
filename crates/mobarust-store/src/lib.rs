@@ -1276,10 +1276,13 @@ fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
         if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        return Ok(());
+        Ok(())
     }
 
-    fs::rename(temporary, destination)
+    #[cfg(not(windows))]
+    {
+        fs::rename(temporary, destination)
+    }
 }
 
 #[cfg(unix)]

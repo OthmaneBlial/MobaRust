@@ -3463,10 +3463,13 @@ fn commit_local_file(
         if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
             return Err(SshError::LocalIo(std::io::Error::last_os_error()));
         }
-        return Ok(());
+        Ok(())
     }
 
-    std::fs::rename(temporary, destination).map_err(SshError::LocalIo)
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(temporary, destination).map_err(SshError::LocalIo)
+    }
 }
 
 fn transfer_source(direction: &TransferDirection, remote_path: &str, local_path: &Path) -> String {

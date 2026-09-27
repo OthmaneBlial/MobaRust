@@ -634,10 +634,13 @@ fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
             if unsafe { MoveFileExW(temporary.as_ptr(), destination.as_ptr(), flags) } == 0 {
                 return Err(io::Error::last_os_error());
             }
-            return Ok(());
+            Ok(())
         }
 
-        fs::rename(&temporary_path, path)
+        #[cfg(not(windows))]
+        {
+            fs::rename(&temporary_path, path)
+        }
     })();
     if let Err(source) = write_result {
         let _ = fs::remove_file(&temporary_path);
