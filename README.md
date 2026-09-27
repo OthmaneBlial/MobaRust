@@ -6,7 +6,7 @@ Open SSH sessions, move files over SFTP/SCP, run local terminals, and manage tun
 
 [![Quality](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases)
 
-[**Download v0.1.10 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.10) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
+[**Download v0.1.11 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.11) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
 
 MobaRust is an independent MobaXterm alternative, not a feature-for-feature clone. SSH and SFTP are the focus; experimental protocols and platform gaps are stated plainly. No cloud account required. MobaRust is not affiliated with Mobatek.
 
@@ -18,15 +18,15 @@ The 62-second capture was recorded in MobaRust 0.1.1 on macOS with an isolated d
 
 ## Get the desktop preview
 
-The v0.1.10 preview provides native installers for Windows x64, macOS Apple Silicon and Intel, and Linux x64. No Rust, Node.js, or source checkout needed.
+The v0.1.11 preview provides native installers for Windows x64, macOS Apple Silicon and Intel, and Linux x64. No Rust, Node.js, or source checkout needed.
 
 | Platform | Installer | Install |
 | --- | --- | --- |
-| Windows x64 | [.exe installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.10/MobaRust-0.1.10-windows-x64.exe) | Run setup. WebView2 is installed if needed. |
-| macOS Apple Silicon | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.10/MobaRust-0.1.10-macos-arm64.dmg) | Open the image and move MobaRust to Applications. |
-| macOS Intel | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.10/MobaRust-0.1.10-macos-x64.dmg) | Open the image and move MobaRust to Applications. |
-| Ubuntu / Debian x64 | [.deb](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.10/MobaRust-0.1.10-linux-x64.deb) | sudo apt install ./MobaRust-0.1.10-linux-x64.deb |
-| Other Linux x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.10/MobaRust-0.1.10-linux-x64.AppImage) | Make executable and open. WebKitGTK 4.1 and FUSE may be required. |
+| Windows x64 | [.exe installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.11/MobaRust-0.1.11-windows-x64.exe) | Run setup. WebView2 is installed if needed. |
+| macOS Apple Silicon | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.11/MobaRust-0.1.11-macos-arm64.dmg) | Open the image and move MobaRust to Applications. |
+| macOS Intel | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.11/MobaRust-0.1.11-macos-x64.dmg) | Open the image and move MobaRust to Applications. |
+| Ubuntu / Debian x64 | [.deb](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.11/MobaRust-0.1.11-linux-x64.deb) | sudo apt install ./MobaRust-0.1.11-linux-x64.deb |
+| Other Linux x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.11/MobaRust-0.1.11-linux-x64.AppImage) | Make executable and open. WebKitGTK 4.1 and FUSE may be required. |
 
 This is an **unsigned preview**. Windows may show SmartScreen. macOS may block first launch because the app is not Developer ID signed or notarized; see [preview installation notes](docs/release/preview-notes.md). Checksums detect damaged downloads; they do not prove publisher identity.
 
@@ -44,14 +44,12 @@ Use the releases page for per-platform SHA-256 files and checksum commands. Down
 
 The app is local-first: create local sessions without a cloud account. React renders the workspace; Rust owns networking, PTYs, filesystem operations, persistence, process lifecycle, cancellation, and credential access behind typed Tauri commands.
 
-### What's new in v0.1.10
+### What's new in v0.1.11
 
-- OpenSSH imports now honor wildcard and excluded host patterns, and keep unsupported `Match` blocks from leaking settings into saved profiles.
-- Network scans and diagnostics have a native concurrency limit, and cancelling an operation that already finished no longer reports a false error.
-- Timed-out WSL discovery processes are stopped instead of being left running in the background.
-- The workspace footer shows the running app version and the machine's actual local time zone.
+- Serial discovery returns a clear timeout, and a stuck OS scan cannot spawn overlapping workers.
+- Device paths over 4096 bytes are rejected before reaching the serial driver.
 
-See the complete [v0.1.10 preview notes](docs/release/preview-notes.md) and [current release evidence](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.10).
+See the complete [v0.1.11 preview notes](docs/release/preview-notes.md) and [current release evidence](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.11).
 
 ## Built around clear boundaries
 
@@ -78,6 +76,8 @@ The project does not claim to replace every MobaXterm feature. See the [roadmap]
 - Rust stable (1.88 or newer)
 - Node.js 22 and pnpm
 - Tauri prerequisites for your operating system
+
+Clone the project and run these commands in your terminal, in order:
 
 ```bash
 git clone https://github.com/OthmaneBlial/MobaRust.git
