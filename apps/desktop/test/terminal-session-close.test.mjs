@@ -26,6 +26,8 @@ assert.equal(
 );
 assert.equal(remoteSessionStateError("local", "failed", "unexpected"), null);
 assert.equal(sanitizeTerminalErrorDetail("\u001b[31mhost unreachable\u001b[0m"), "[31mhost unreachable [0m");
+assert.equal(sanitizeTerminalErrorDetail("host\u202eeman\u202c unavailable"), "host eman unavailable");
+assert.equal(sanitizeTerminalErrorDetail("host\u2066 trusted\u2069 unavailable"), "host trusted unavailable");
 assert.equal(
   remoteSessionStateError("serial", "failed", "x".repeat(300)),
   `SERIAL failed: ${"x".repeat(237)}...`,

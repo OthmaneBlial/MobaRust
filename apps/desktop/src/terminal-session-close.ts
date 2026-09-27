@@ -1,5 +1,5 @@
 export function sanitizeTerminalErrorDetail(reason: string | null | undefined): string | null {
-  const safeReason = reason?.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
+  const safeReason = reason?.replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ").replace(/\s+/g, " ").trim();
   if (!safeReason) return null;
   return safeReason.length > 240 ? `${safeReason.slice(0, 237)}...` : safeReason;
 }
