@@ -87,8 +87,6 @@ struct NetworkDiagnosticEvent {
 
 #[derive(Debug, Error)]
 pub enum NetworkManagerError {
-    #[error("network scan is not found: {0}")]
-    MissingScan(String),
     #[error("network scan manager lock poisoned")]
     LockPoisoned,
     #[error("the concurrent network operation limit has been reached")]
@@ -219,9 +217,10 @@ impl NetworkManager {
         let Some(sender) = sender else {
             return Ok(false);
         };
-        sender
-            .send(true)
-            .map_err(|_| NetworkManagerError::MissingScan(scan_id.to_owned()))?;
+        if sender.send(true).is_err() {
+            self.remove(scan_id);
+            return Ok(false);
+        }
         Ok(true)
     }
 
@@ -373,9 +372,10 @@ impl NetworkManager {
         let Some(sender) = sender else {
             return Ok(false);
         };
-        sender
-            .send(true)
-            .map_err(|_| NetworkManagerError::MissingScan(operation_id.to_owned()))?;
+        if sender.send(true).is_err() {
+            self.remove_diagnostic(operation_id);
+            return Ok(false);
+        }
         Ok(true)
     }
 
@@ -447,5 +447,36 @@ mod tests {
             Err(NetworkManagerError::OperationLimit)
         ));
         assert_eq!(operations.lock().unwrap().len(), MAX_CONCURRENT_OPERATIONS);
+    }
+
+    #[test]
+    fn cancelling_finished_operations_returns_false_and_cleans_stale_entries() {
+        let manager = super::NetworkManager::default();
+        let (scan_sender, scan_receiver) = watch::channel(false);
+        drop(scan_receiver);
+        manager
+            .scans
+            .lock()
+            .unwrap()
+            .insert("finished-scan".into(), scan_sender);
+
+        let (diagnostic_sender, diagnostic_receiver) = watch::channel(false);
+        drop(diagnostic_receiver);
+        manager
+            .diagnostics
+            .lock()
+            .unwrap()
+            .insert("finished-diagnostic".into(), diagnostic_sender);
+
+        assert!(!manager.cancel_scan("finished-scan").unwrap());
+        assert!(!manager.scans.lock().unwrap().contains_key("finished-scan"));
+        assert!(!manager.cancel_diagnostic("finished-diagnostic").unwrap());
+        assert!(
+            !manager
+                .diagnostics
+                .lock()
+                .unwrap()
+                .contains_key("finished-diagnostic")
+        );
     }
 }
