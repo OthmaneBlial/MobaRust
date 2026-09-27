@@ -533,6 +533,8 @@ type SshConnectRequest = {
   environment?: Array<[string, string]>;
   startupDirectory?: string;
   startupCommand?: string;
+  reconnectAttempts?: number;
+  connectTimeoutMs?: number;
   cols: number;
   rows: number;
 };
@@ -2300,7 +2302,14 @@ function App() {
       return;
     }
     try {
-      const response = await invoke<SshConnectResponse>("ssh_connect", { request });
+      const sshSettings = settingsRef.current.ssh;
+      const response = await invoke<SshConnectResponse>("ssh_connect", {
+        request: {
+          ...request,
+          reconnectAttempts: sshSettings.reconnectEnabled ? sshSettings.reconnectAttempts : 0,
+          connectTimeoutMs: sshSettings.connectTimeoutMs,
+        },
+      });
       recordAudit("sessionOpened", "SSH");
       const terminal = createWorkspaceTerminal({
         label: `${request.username}@${response.host}`,

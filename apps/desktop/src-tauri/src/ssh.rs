@@ -30,7 +30,8 @@ const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
-const SSH_RECONNECT_ATTEMPTS: u8 = 3;
+const DEFAULT_SSH_RECONNECT_ATTEMPTS: u8 = 3;
+const DEFAULT_SSH_CONNECT_TIMEOUT_MS: u64 = 12_000;
 const SSH_STABLE_SHELL_DURATION: Duration = Duration::from_secs(30);
 const X11_CHANNEL_LIMIT: usize = 8;
 
@@ -60,10 +61,36 @@ pub struct SshConnectRequest {
     pub startup_directory: Option<String>,
     #[serde(default)]
     pub startup_command: Option<String>,
+    #[serde(default = "default_ssh_reconnect_attempts")]
+    pub reconnect_attempts: u8,
+    #[serde(default = "default_ssh_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
     #[serde(default = "default_terminal_cols")]
     pub cols: u32,
     #[serde(default = "default_terminal_rows")]
     pub rows: u32,
+}
+
+fn default_ssh_reconnect_attempts() -> u8 {
+    DEFAULT_SSH_RECONNECT_ATTEMPTS
+}
+
+fn default_ssh_connect_timeout_ms() -> u64 {
+    DEFAULT_SSH_CONNECT_TIMEOUT_MS
+}
+
+fn validate_ssh_connection_policy(request: &SshConnectRequest) -> Result<(), SshManagerError> {
+    if request.reconnect_attempts > 10 {
+        return Err(SshManagerError::InvalidRequest(
+            "reconnect attempts must be between 0 and 10".into(),
+        ));
+    }
+    if !(100..=60_000).contains(&request.connect_timeout_ms) {
+        return Err(SshManagerError::InvalidRequest(
+            "connect timeout must be between 100 and 60000 ms".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -562,6 +589,7 @@ impl SshManager {
         vault: Arc<dyn CredentialLookup>,
         request: SshConnectRequest,
     ) -> Result<SshConnectResponse, SshManagerError> {
+        validate_ssh_connection_policy(&request)?;
         let host = request.host.clone();
         let connection = connect_transport(vault.as_ref(), &request).await?;
         let connection = Arc::new(connection);
@@ -1310,7 +1338,7 @@ async fn connect_transport(
         host: request.host.clone(),
         port: request.port,
         host_key_policy,
-        timeout: Duration::from_secs(12),
+        timeout: Duration::from_millis(request.connect_timeout_ms),
         keepalive_interval,
         credentials,
         x11,
@@ -1329,7 +1357,7 @@ async fn connect_transport(
             host: jump.host.clone(),
             port: jump.port,
             host_key_policy,
-            timeout: Duration::from_secs(12),
+            timeout: Duration::from_millis(request.connect_timeout_ms),
             keepalive_interval: server_alive_interval_duration(jump.server_alive_interval)?,
             credentials,
             x11: None,
@@ -1461,18 +1489,19 @@ enum ReconnectOutcome<T> {
     Failed { attempts: u8, last_error: String },
 }
 
-fn next_shell_reconnect_count(previous: u8, shell_lifetime: Duration) -> Option<u8> {
+fn next_shell_reconnect_count(previous: u8, shell_lifetime: Duration, limit: u8) -> Option<u8> {
     let previous = if shell_lifetime >= SSH_STABLE_SHELL_DURATION {
         0
     } else {
         previous
     };
-    (previous < SSH_RECONNECT_ATTEMPTS).then(|| previous + 1)
+    (previous < limit).then(|| previous + 1)
 }
 
 async fn reconnect_with_backoff<T, Before, Attempt, AttemptFuture, Delay>(
     close: &mut watch::Receiver<bool>,
     initial_error: String,
+    attempts: u8,
     mut before_attempt: Before,
     mut attempt: Attempt,
     delay_for: Delay,
@@ -1484,7 +1513,7 @@ where
     Delay: Fn(u8) -> Duration,
 {
     let mut last_error = initial_error;
-    for attempt_number in 1..=SSH_RECONNECT_ATTEMPTS {
+    for attempt_number in 1..=attempts {
         if *close.borrow() {
             return ReconnectOutcome::Cancelled;
         }
@@ -1519,7 +1548,7 @@ where
         }
     }
     ReconnectOutcome::Failed {
-        attempts: SSH_RECONNECT_ATTEMPTS,
+        attempts,
         last_error,
     }
 }
@@ -1566,13 +1595,18 @@ async fn run_remote_session(
                 let Some(next_count) = next_shell_reconnect_count(
                     reconnects_since_stable_shell,
                     shell_started_at.elapsed(),
+                    request.reconnect_attempts,
                 ) else {
-                    let reason = "SSH shell closed repeatedly shortly after reconnecting";
+                    let reason = if request.reconnect_attempts == 0 {
+                        "SSH connection lost; reconnect is disabled"
+                    } else {
+                        "SSH shell closed repeatedly shortly after reconnecting"
+                    };
                     manager.emit_session_state(
                         &app,
                         &terminal_id,
                         SshSessionState::Failed,
-                        SSH_RECONNECT_ATTEMPTS,
+                        request.reconnect_attempts,
                         Some(reason.into()),
                     );
                     should_report_error = Some(reason.into());
@@ -1584,6 +1618,7 @@ async fn run_remote_session(
                 let outcome = reconnect_with_backoff(
                     &mut close,
                     error,
+                    request.reconnect_attempts,
                     |attempt, last_error| {
                         manager.emit_session_state(
                             &app,
@@ -1603,7 +1638,7 @@ async fn run_remote_session(
                             .map_err(|error| error.to_string())?;
                         Ok((new_connection, shell.split()))
                     },
-                    |attempt| Duration::from_secs(1_u64 << (attempt - 1)),
+                    |attempt| Duration::from_secs(1_u64 << (attempt - 1).min(5)),
                 )
                 .await;
                 match outcome {
@@ -3591,13 +3626,14 @@ fn validate_tunnel_host(value: &str, field: &str) -> Result<(), SshManagerError>
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
-        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, add_transfer_size,
-        commit_local_file, local_part_path, local_transfer_name, next_shell_reconnect_count,
-        reconnect_with_backoff, remote_child_path, remove_partial_download,
-        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
-        validate_local_file_path, validate_remote_directory_path, validate_remote_file_path,
-        validate_remote_mutation_path, validate_transfer_component, validate_tunnel_host,
+        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshConnectRequest, SshManager,
+        SshManagerError, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol,
+        add_transfer_size, commit_local_file, local_part_path, local_transfer_name,
+        next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
+        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
+        transfer_metrics, validate_local_file_path, validate_remote_directory_path,
+        validate_remote_file_path, validate_remote_mutation_path, validate_ssh_connection_policy,
+        validate_transfer_component, validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3996,6 +4032,7 @@ mod tests {
         let result = reconnect_with_backoff(
             &mut close,
             "shell channel closed".to_owned(),
+            3,
             |attempt, error| attempts.push((attempt, error.to_owned())),
             |attempt| async move { Err::<(), String>(format!("fixture failure {attempt}")) },
             |_| Duration::ZERO,
@@ -4023,16 +4060,49 @@ mod tests {
     fn repeated_short_lived_shells_exhaust_reconnect_budget() {
         let mut used = 0;
         for _ in 0..3 {
-            used = next_shell_reconnect_count(used, Duration::from_secs(1)).unwrap();
+            used = next_shell_reconnect_count(used, Duration::from_secs(1), 3).unwrap();
         }
         assert_eq!(
-            next_shell_reconnect_count(used, Duration::from_secs(1)),
+            next_shell_reconnect_count(used, Duration::from_secs(1), 3),
             None
         );
         assert_eq!(
-            next_shell_reconnect_count(used, Duration::from_secs(30)),
+            next_shell_reconnect_count(used, Duration::from_secs(30), 3),
             Some(1)
         );
+        assert_eq!(next_shell_reconnect_count(0, Duration::ZERO, 0), None);
+        assert_eq!(next_shell_reconnect_count(3, Duration::ZERO, 10), Some(4));
+    }
+
+    #[test]
+    fn ssh_connection_policy_defaults_and_rejects_out_of_range_values() {
+        let mut request: SshConnectRequest = serde_json::from_value(serde_json::json!({
+            "host": "127.0.0.1", "port": 22, "username": "fixture",
+            "auth": { "method": "agent" }
+        }))
+        .unwrap();
+        assert_eq!(request.reconnect_attempts, 3);
+        assert_eq!(request.connect_timeout_ms, 12_000);
+        assert!(validate_ssh_connection_policy(&request).is_ok());
+
+        let configured: SshConnectRequest = serde_json::from_value(serde_json::json!({
+            "host": "127.0.0.1", "port": 22, "username": "fixture",
+            "auth": { "method": "agent" },
+            "reconnectAttempts": 0, "connectTimeoutMs": 250
+        }))
+        .unwrap();
+        assert_eq!(configured.reconnect_attempts, 0);
+        assert_eq!(configured.connect_timeout_ms, 250);
+        assert!(validate_ssh_connection_policy(&configured).is_ok());
+
+        request.reconnect_attempts = 10;
+        request.connect_timeout_ms = 100;
+        assert!(validate_ssh_connection_policy(&request).is_ok());
+        request.reconnect_attempts = 11;
+        assert!(validate_ssh_connection_policy(&request).is_err());
+        request.reconnect_attempts = 0;
+        request.connect_timeout_ms = 60_001;
+        assert!(validate_ssh_connection_policy(&request).is_err());
     }
 
     #[tokio::test]
@@ -4041,6 +4111,7 @@ mod tests {
         let result = reconnect_with_backoff(
             &mut close,
             "shell channel closed".to_owned(),
+            3,
             |_attempt, _error| {},
             |attempt| async move {
                 if attempt == 2 {
@@ -4071,6 +4142,7 @@ mod tests {
             reconnect_with_backoff(
                 &mut close,
                 "shell channel closed".to_owned(),
+                3,
                 move |_attempt, _error| {
                     if let Some(sender) = started_sender.take() {
                         let _ = sender.send(());
