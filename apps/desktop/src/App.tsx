@@ -588,7 +588,7 @@ type SerialConnectResponse = {
 type RemoteEntry = {
   name: string;
   path: string;
-  size: number;
+  size: number | null;
   isDirectory: boolean;
   isRegular: boolean;
   isSymlink: boolean;
@@ -4136,7 +4136,11 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
     .slice()
     .sort((first, second) => {
       if (sort === "type" && first.isDirectory !== second.isDirectory) return first.isDirectory ? -1 : 1;
-      if (sort === "size" && first.size !== second.size) return second.size > first.size ? 1 : -1;
+      if (sort === "size" && first.size !== second.size) {
+        if (first.size == null) return 1;
+        if (second.size == null) return -1;
+        return second.size > first.size ? 1 : -1;
+      }
       if (sort === "modified" && first.modifiedUnixSeconds !== second.modifiedUnixSeconds) return (second.modifiedUnixSeconds ?? 0) > (first.modifiedUnixSeconds ?? 0) ? 1 : -1;
       return first.name.localeCompare(second.name, undefined, { sensitivity: "base", numeric: true });
     });
@@ -4445,7 +4449,7 @@ function formatRemoteModified(seconds?: number | null) {
 
 function remoteEntryDetails(entry: RemoteEntry) {
   const details = [
-    entry.isDirectory ? "directory" : entry.isSymlink ? "symlink" : entry.isRegular ? formatBytes(entry.size) : "special file",
+    entry.isDirectory ? "directory" : entry.isSymlink ? "symlink" : entry.isRegular ? (entry.size == null ? "size unknown" : formatBytes(entry.size)) : "special file",
     formatRemoteModified(entry.modifiedUnixSeconds),
     formatRemotePermissions(entry.permissions),
     formatRemoteOwner(entry),

@@ -142,7 +142,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .iter()
             .find(|entry| entry.path == remote_path)
             .expect("find uploaded remote file");
-        assert_eq!(uploaded_entry.size, 128 * 1024);
+        assert_eq!(uploaded_entry.size, Some(128 * 1024));
         assert!(!uploaded_entry.is_directory);
         assert!(uploaded_entry.is_regular);
         assert!(uploaded_entry.permissions.is_some());
@@ -191,7 +191,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             sftp.file_info(&remote_path)
                 .await
                 .expect("read remote file info"),
-            (128 * 1024, false)
+            (Some(128 * 1024), false)
         );
 
         let cancelled_destination = fixture.directory.path().join("cancelled.bin");

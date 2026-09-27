@@ -2151,7 +2151,7 @@ pub struct RemoteTextDocument {
 pub struct RemoteEntry {
     pub name: String,
     pub path: String,
-    pub size: u64,
+    pub size: Option<u64>,
     pub is_directory: bool,
     pub is_regular: bool,
     pub is_symlink: bool,
@@ -2233,7 +2233,7 @@ impl SftpConnection {
                         entries.push(RemoteEntry {
                             name: file.filename,
                             path: entry_path,
-                            size: metadata.size.unwrap_or_default(),
+                            size: metadata.size,
                             is_directory: file_type == Some(SFTP_DIRECTORY_TYPE),
                             is_regular: file_type == Some(SFTP_REGULAR_TYPE),
                             is_symlink: file_type == Some(SFTP_SYMLINK_TYPE),
@@ -2272,9 +2272,12 @@ impl SftpConnection {
         Ok(entries)
     }
 
-    pub async fn file_info(&self, path: impl Into<String>) -> Result<(u64, bool), SshError> {
+    pub async fn file_info(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<(Option<u64>, bool), SshError> {
         let metadata = self.session.metadata(path).await.map_err(map_sftp_error)?;
-        Ok((metadata.len(), metadata.is_dir()))
+        Ok((metadata.size, metadata.is_dir()))
     }
 
     pub async fn is_real_directory(&self, path: impl Into<String>) -> Result<bool, SshError> {

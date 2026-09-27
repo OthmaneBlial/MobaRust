@@ -2696,7 +2696,7 @@ where
     };
     let copied = match sftp
         .download_to_with_cancel(remote_path, &mut file, cancel, |bytes| {
-            on_progress(bytes, Some(total));
+            on_progress(bytes, total);
         })
         .await
     {
@@ -2853,12 +2853,12 @@ async fn open_local_upload_file(source: &Path) -> Result<fs::File, SshError> {
     Ok(file)
 }
 
-type RemoteDownloadFile = (String, PathBuf, u64);
+type RemoteDownloadFile = (String, PathBuf, Option<u64>);
 type LocalUploadFile = (PathBuf, String, u64);
 
 struct FileTransferProgress<'a, F> {
     base: u64,
-    total: u64,
+    total: Option<u64>,
     cancel: &'a mut oneshot::Receiver<()>,
     on_progress: &'a mut F,
 }
@@ -2901,7 +2901,7 @@ where
     }
 
     let mut transferred = 0_u64;
-    on_progress(0, Some(total));
+    on_progress(0, total);
     for (remote_path, local_path, size) in files {
         if cancel.try_recv().is_ok() {
             return Err(SshError::Cancelled);
@@ -2922,7 +2922,7 @@ where
         )
         .await?;
         transferred = transferred.saturating_add(copied);
-        on_progress(transferred, Some(total));
+        on_progress(transferred, total);
     }
     Ok(transferred)
 }
@@ -2957,11 +2957,11 @@ async fn collect_remote_files(
     remote_root: &str,
     local_root: &Path,
     cancel: &mut oneshot::Receiver<()>,
-) -> Result<(Vec<RemoteDownloadFile>, Vec<PathBuf>, u64), SshError> {
+) -> Result<(Vec<RemoteDownloadFile>, Vec<PathBuf>, Option<u64>), SshError> {
     let mut pending = VecDeque::from([(remote_root.to_owned(), local_root.to_owned())]);
     let mut files = Vec::new();
     let mut directories = vec![local_root.to_owned()];
-    let mut total = 0_u64;
+    let mut total = Some(0_u64);
     let mut seen = 0_usize;
 
     while let Some((remote_directory, local_directory)) = pending.pop_front() {
@@ -2986,7 +2986,7 @@ async fn collect_remote_files(
                 directories.push(local_path.clone());
                 pending.push_back((remote_path, local_path));
             } else if entry.is_regular {
-                total = total.saturating_add(entry.size);
+                total = add_transfer_size(total, entry.size);
                 files.push((remote_path, local_path, entry.size));
             } else {
                 return Err(SshError::Sftp(
@@ -3002,7 +3002,7 @@ async fn download_file_atomically<F>(
     sftp: &mobarust_ssh::SftpConnection,
     remote_path: &str,
     destination: &Path,
-    total_size: u64,
+    total_size: Option<u64>,
     overwrite: bool,
     progress: &mut FileTransferProgress<'_, F>,
 ) -> Result<u64, SshError>
@@ -3042,7 +3042,9 @@ where
         .download_to_with_cancel(remote_path, &mut file, progress.cancel, |bytes| {
             (progress.on_progress)(
                 progress.base.saturating_add(bytes),
-                Some(progress.total.max(total_size)),
+                progress
+                    .total
+                    .map(|total| total.max(total_size.unwrap_or_default())),
             );
         })
         .await
@@ -3099,7 +3101,7 @@ where
         }
         let mut progress = FileTransferProgress {
             base: transferred,
-            total,
+            total: Some(total),
             cancel,
             on_progress,
         };
@@ -3211,7 +3213,7 @@ where
         .upload_from_with_cancel(&mut file, &temporary, progress.cancel, |bytes| {
             (progress.on_progress)(
                 progress.base.saturating_add(bytes),
-                Some(progress.total.max(total_size)),
+                progress.total.map(|total| total.max(total_size)),
             );
         })
         .await
@@ -3294,6 +3296,10 @@ fn validate_transfer_component(component: &str) -> Result<(), SshError> {
 fn local_transfer_name(name: std::ffi::OsString) -> Result<String, SshError> {
     name.into_string()
         .map_err(|_| SshError::Sftp("recursive upload requires UTF-8 local file names".into()))
+}
+
+fn add_transfer_size(total: Option<u64>, size: Option<u64>) -> Option<u64> {
+    total?.checked_add(size?)
 }
 
 fn remote_child_path(parent: &str, name: &str) -> String {
@@ -3557,10 +3563,11 @@ fn validate_tunnel_host(value: &str, field: &str) -> Result<(), SshManagerError>
 mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
-        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        local_part_path, local_transfer_name, reconnect_with_backoff, remote_child_path,
-        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
-        transfer_metrics, validate_transfer_component, validate_tunnel_host,
+        SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, add_transfer_size,
+        commit_local_file, local_part_path, local_transfer_name, reconnect_with_backoff,
+        remote_child_path, remove_partial_download, server_alive_interval_duration,
+        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
+        validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3768,6 +3775,14 @@ mod tests {
             );
         }
         assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
+
+    #[test]
+    fn recursive_download_totals_stay_unknown_for_missing_sizes_or_overflow() {
+        assert_eq!(add_transfer_size(Some(10), Some(5)), Some(15));
+        assert_eq!(add_transfer_size(Some(10), None), None);
+        assert_eq!(add_transfer_size(None, Some(5)), None);
+        assert_eq!(add_transfer_size(Some(u64::MAX), Some(1)), None);
     }
 
     #[cfg(unix)]
