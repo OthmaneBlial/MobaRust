@@ -915,11 +915,12 @@ mod tests {
     fn fixture_command() -> CommandBuilder {
         #[cfg(target_os = "windows")]
         {
-            let mut command = CommandBuilder::new("cmd.exe");
+            let mut command = CommandBuilder::new("powershell.exe");
             command.args([
-                "/V:ON",
-                "/C",
-                "echo MOBARUST_PTY_OK && set /p line= && echo. && echo INPUT:!line!",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Write-Output 'MOBARUST_PTY_OK'; $line = [Console]::ReadLine(); Write-Output ('INPUT:' + $line)",
             ]);
             command
         }
