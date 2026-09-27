@@ -68,6 +68,7 @@ pub enum TcpPortStatus {
     Open,
     Closed,
     TimedOut,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,14 +92,22 @@ pub async fn check_tcp(options: TcpCheckOptions) -> Result<TcpCheckResult, Netwo
             drop(stream);
             TcpPortStatus::Open
         }
-        Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused => TcpPortStatus::Closed,
-        Ok(Err(_)) | Err(_) => TcpPortStatus::TimedOut,
+        Ok(Err(error)) => tcp_error_status(error.kind()),
+        Err(_) => TcpPortStatus::TimedOut,
     };
     Ok(TcpCheckResult {
         host,
         port: options.port,
         status,
     })
+}
+
+fn tcp_error_status(kind: io::ErrorKind) -> TcpPortStatus {
+    match kind {
+        io::ErrorKind::ConnectionRefused => TcpPortStatus::Closed,
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => TcpPortStatus::TimedOut,
+        _ => TcpPortStatus::Failed,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +546,22 @@ mod tests {
             invalid.validate(),
             Err(NetworkDiagnosticError::InvalidTarget)
         ));
+    }
+
+    #[test]
+    fn tcp_checks_keep_immediate_failures_distinct_from_timeouts() {
+        assert_eq!(
+            tcp_error_status(io::ErrorKind::ConnectionRefused),
+            TcpPortStatus::Closed
+        );
+        assert_eq!(
+            tcp_error_status(io::ErrorKind::TimedOut),
+            TcpPortStatus::TimedOut
+        );
+        assert_eq!(
+            tcp_error_status(io::ErrorKind::PermissionDenied),
+            TcpPortStatus::Failed
+        );
     }
 
     #[test]
