@@ -22,6 +22,10 @@ attempt releases the in-flight transport future; the final cleanup still emits
 the normal disconnected state.
 
 On success the worker replaces its shell reader/writer and emits `connected`.
+Three successful reconnects that each lose their shell within 30 seconds also
+exhaust the budget. A shell that stays open for at least 30 seconds resets this
+short-lived-shell count. This prevents an accepted transport followed by an
+immediate shell close from starting unbounded retry cycles.
 On exhaustion it emits `failed`, cleans up transfers/tunnels owned by the
 session, and emits the existing terminal close event with an actionable
 reason. A normal shell exit is not retried when the channel reports an exit

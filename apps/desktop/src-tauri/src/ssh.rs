@@ -31,6 +31,7 @@ const PENDING_OUTPUT_CHUNKS: usize = 32;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const TRANSFER_PROGRESS_MIN_BYTES: u64 = 8 * 1024 * 1024;
 const SSH_RECONNECT_ATTEMPTS: u8 = 3;
+const SSH_STABLE_SHELL_DURATION: Duration = Duration::from_secs(30);
 const X11_CHANNEL_LIMIT: usize = 8;
 
 #[derive(Deserialize)]
@@ -1460,6 +1461,15 @@ enum ReconnectOutcome<T> {
     Failed { attempts: u8, last_error: String },
 }
 
+fn next_shell_reconnect_count(previous: u8, shell_lifetime: Duration) -> Option<u8> {
+    let previous = if shell_lifetime >= SSH_STABLE_SHELL_DURATION {
+        0
+    } else {
+        previous
+    };
+    (previous < SSH_RECONNECT_ATTEMPTS).then(|| previous + 1)
+}
+
 async fn reconnect_with_backoff<T, Before, Attempt, AttemptFuture, Delay>(
     close: &mut watch::Receiver<bool>,
     initial_error: String,
@@ -1531,6 +1541,8 @@ async fn run_remote_session(
     } = context;
     let mut should_report_error = None;
     let mut connection_is_live = true;
+    let mut shell_started_at = Instant::now();
+    let mut reconnects_since_stable_shell = 0;
 
     'session: loop {
         let shell_result = run_shell_once(
@@ -1548,6 +1560,25 @@ async fn run_remote_session(
         match shell_result {
             ShellRunResult::Closed => break 'session,
             ShellRunResult::Lost(error) => {
+                if *close.borrow() {
+                    break 'session;
+                }
+                let Some(next_count) = next_shell_reconnect_count(
+                    reconnects_since_stable_shell,
+                    shell_started_at.elapsed(),
+                ) else {
+                    let reason = "SSH shell closed repeatedly shortly after reconnecting";
+                    manager.emit_session_state(
+                        &app,
+                        &terminal_id,
+                        SshSessionState::Failed,
+                        SSH_RECONNECT_ATTEMPTS,
+                        Some(reason.into()),
+                    );
+                    should_report_error = Some(reason.into());
+                    break 'session;
+                };
+                reconnects_since_stable_shell = next_count;
                 connection_is_live = false;
                 let _ = connection.disconnect().await;
                 let outcome = reconnect_with_backoff(
@@ -1590,6 +1621,7 @@ async fn run_remote_session(
                             terminal_id.clone(),
                         );
                         connection_is_live = true;
+                        shell_started_at = Instant::now();
                         manager.emit_session_state(
                             &app,
                             &terminal_id,
@@ -3561,11 +3593,11 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, add_transfer_size,
-        commit_local_file, local_part_path, local_transfer_name, reconnect_with_backoff,
-        remote_child_path, remove_partial_download, server_alive_interval_duration,
-        should_emit_transfer_progress, transfer_metrics, validate_local_file_path,
-        validate_remote_directory_path, validate_remote_file_path, validate_remote_mutation_path,
-        validate_transfer_component, validate_tunnel_host,
+        commit_local_file, local_part_path, local_transfer_name, next_shell_reconnect_count,
+        reconnect_with_backoff, remote_child_path, remove_partial_download,
+        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
+        validate_local_file_path, validate_remote_directory_path, validate_remote_file_path,
+        validate_remote_mutation_path, validate_transfer_component, validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3985,6 +4017,22 @@ mod tests {
                 last_error
             } if last_error == "fixture failure 3"
         ));
+    }
+
+    #[test]
+    fn repeated_short_lived_shells_exhaust_reconnect_budget() {
+        let mut used = 0;
+        for _ in 0..3 {
+            used = next_shell_reconnect_count(used, Duration::from_secs(1)).unwrap();
+        }
+        assert_eq!(
+            next_shell_reconnect_count(used, Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            next_shell_reconnect_count(used, Duration::from_secs(30)),
+            Some(1)
+        );
     }
 
     #[tokio::test]
