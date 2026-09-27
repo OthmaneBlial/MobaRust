@@ -37,7 +37,8 @@ status. There is no infinite reconnect loop.
 The retry policy stores hostnames, ports, auth references, and host-trust
 configuration only; it does not cache plaintext passwords or private-key
 material. The configured connect timeout (100–60,000 ms; default 12,000 ms)
-applies to the target and each jump host. Cancellation is cooperative first: it
+applies to the target and each jump host, including shell and jump-channel
+establishment. Cancellation is cooperative first: it
 drops the active delay or transport future, then lets the session worker perform
 bounded protocol cleanup.
 

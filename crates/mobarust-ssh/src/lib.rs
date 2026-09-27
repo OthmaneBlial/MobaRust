@@ -672,6 +672,7 @@ impl client::Handler for ClientHandler {
 
 pub struct SshConnection {
     handle: Arc<client::Handle<ClientHandler>>,
+    connect_timeout: Duration,
     lifecycle: Mutex<ConnectionLifecycle>,
     disconnect_guard: AsyncMutex<()>,
     parent: Option<Arc<SshConnection>>,
@@ -1036,6 +1037,7 @@ impl SshConnection {
 
         Ok(Self {
             handle: Arc::new(handle),
+            connect_timeout: options.timeout,
             lifecycle: Mutex::new(lifecycle),
             disconnect_guard: AsyncMutex::new(()),
             parent,
@@ -1053,7 +1055,7 @@ impl SshConnection {
     }
 
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshShell, SshError> {
-        tokio::time::timeout(Duration::from_secs(12), async {
+        tokio::time::timeout(self.connect_timeout, async {
             let channel = self
                 .handle
                 .channel_open_session()
@@ -1411,7 +1413,7 @@ impl SshConnection {
         let target_host = target_host.into();
         validate_forward_host(&target_host)?;
         let channel = tokio::time::timeout(
-            Duration::from_secs(12),
+            self.connect_timeout,
             self.handle
                 .channel_open_direct_tcpip(target_host, target_port, "127.0.0.1", 0),
         )
