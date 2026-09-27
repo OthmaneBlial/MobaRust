@@ -23,7 +23,7 @@ import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
-import { remoteSessionCloseError } from "./terminal-session-close";
+import { remoteSessionCloseError, remoteSessionStateError } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
@@ -783,6 +783,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     let unlistenClosed: UnlistenFn | undefined;
     let unlistenState: UnlistenFn | undefined;
     let unlistenX11: UnlistenFn | undefined;
+    let hasReportedRemoteError = false;
     const releaseListeners = () => {
       unlistenOutput?.();
       unlistenClosed?.();
@@ -872,6 +873,26 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       }
 
       try {
+        const reportStateError = (state: "reconnecting" | "failed", reason: string | null | undefined) => {
+          const error = remoteSessionStateError(remoteProtocol, state, reason);
+          if (!error) return;
+          terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
+          hasReportedRemoteError = true;
+        };
+        const updateRemoteState = (terminalId: string, state: SshSessionEvent["state"], error?: string | null) => {
+          if (terminalId !== terminalIdRef.current) return;
+          if (state === "connected") {
+            hasReportedRemoteError = false;
+            onStatusChange(workspaceId, "connected");
+          } else if (state === "reconnecting") {
+            reportStateError("reconnecting", error);
+            if (!error) hasReportedRemoteError = false;
+            onStatusChange(workspaceId, "reconnecting");
+          } else if (state === "failed") {
+            reportStateError("failed", error);
+            onStatusChange(workspaceId, "error");
+          } else if (state === "disconnected") onStatusChange(workspaceId, "closed");
+        };
         const outputEvent = remoteProtocol === "ssh" ? "ssh://output" : remoteProtocol === "telnet" ? "telnet://output" : remoteProtocol === "serial" ? "serial://output" : "terminal://output";
         const closedEvent = remoteProtocol === "ssh" ? "ssh://closed" : remoteProtocol === "telnet" ? "telnet://closed" : remoteProtocol === "serial" ? "serial://closed" : "terminal://closed";
         unlistenOutput = await listen<TerminalOutputEvent>(outputEvent, (event) => {
@@ -880,15 +901,12 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
           if (event.payload.terminalId !== terminalIdRef.current) return;
           const error = remoteSessionCloseError(remoteProtocol, event.payload.reason);
-          if (error) terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
+          if (error && !hasReportedRemoteError) terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
           onStatusChange(workspaceId, "closed");
         });
         if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
-            if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
-            else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
-            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
+            updateRemoteState(event.payload.terminalId, event.payload.state, event.payload.error);
           });
           unlistenX11 = await listen<SshX11Event>("ssh://x11", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
@@ -899,20 +917,12 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         }
         if (remoteProtocol === "telnet") {
           unlistenState = await listen<TelnetSessionEvent>("telnet://state", (event) => {
-            if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
-            else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
-            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
-            else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
+            updateRemoteState(event.payload.terminalId, event.payload.state, event.payload.error);
           });
         }
         if (remoteProtocol === "serial") {
           unlistenState = await listen<SerialSessionEvent>("serial://state", (event) => {
-            if (event.payload.terminalId !== terminalIdRef.current) return;
-            if (event.payload.state === "connected") onStatusChange(workspaceId, "connected");
-            else if (event.payload.state === "reconnecting") onStatusChange(workspaceId, "reconnecting");
-            else if (event.payload.state === "failed") onStatusChange(workspaceId, "error");
-            else if (event.payload.state === "disconnected") onStatusChange(workspaceId, "closed");
+            updateRemoteState(event.payload.terminalId, event.payload.state, event.payload.error);
           });
         }
         if (disposed) {
