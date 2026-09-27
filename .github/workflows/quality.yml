@@ -41,4 +41,12 @@ jobs:
       - name: Linux desktop prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: macOS X11 test prerequisite
+        if: runner.os == 'macOS'
+        run: brew install xauth
+      - name: Prepare native bundle icons
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm tauri icon src-tauri/icons/icon.png
       - run: cargo xtask check
