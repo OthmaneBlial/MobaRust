@@ -33,7 +33,7 @@ try canvas("intro") {
     text("In a clearer workspace.", x: 104, y: 491, size: 112, ink: 0x946015, bold: true)
     text("Real desktop capture. Light first. Dark when you want it.", x: 112, y: 368, size: 34, ink: 0x5f7167)
     text("NATIVE TERMINALS     /     QUICK CONNECT     /     ONE-CLICK THEMES", x: 112, y: 155, size: 23, ink: 0x39744b, bold: true)
-    text("MobaRust 0.1.1  ·  macOS", x: 112, y: 102, size: 22, ink: 0x62756a)
+    text("MobaRust 0.1.11  ·  macOS", x: 112, y: 102, size: 22, ink: 0x62756a)
 }
 let chapters: [(String, String, String)] = [
     ("terminal", "01 / A real shell. A clear view.", "Native PTY · light mode"),
@@ -58,5 +58,5 @@ try canvas("outro") {
     text("Free. Open source. Local-first.", x: 112, y: 392, size: 38, ink: 0x5f7167)
     text("DOWNLOAD FOR MAC, WINDOWS & LINUX", x: 112, y: 245, size: 25, ink: 0x39744b, bold: true)
     text("othmaneblial.github.io/MobaRust", x: 112, y: 184, size: 34, ink: 0x1e2c25)
-    text("Desktop preview · macOS not notarized · RDP excluded from installers", x: 112, y: 80, size: 22, ink: 0x62756a)
+    text("v0.1.11 unsigned preview · macOS is not notarized · RDP is not included", x: 112, y: 80, size: 22, ink: 0x62756a)
 }

@@ -1349,20 +1349,32 @@ function TerminalLayoutView({
   onAdjustResize: (event: ReactKeyboardEvent<HTMLDivElement>, path: SplitPath, direction: Exclude<SplitDirection, "none">) => void;
   onResetResize: (path: SplitPath) => void;
 }) {
-  const visibleIds = new Set(layoutTerminalIds(node));
-
-  const renderNode = (current: TerminalLayoutNode, path: SplitPath): ReactNode => {
+  const paneBounds = new Map<string, { left: number; top: number; width: number; height: number }>();
+  const collectBounds = (current: TerminalLayoutNode, left: number, top: number, width: number, height: number) => {
     if (current.kind === "pane") {
-      const terminal = terminals.find((item) => item.id === current.terminalId);
-      return <div key={`pane-${current.terminalId}`} className="terminal-pane terminal-layout-pane active" onMouseDown={() => onFocus(current.terminalId)} onFocusCapture={() => onFocus(current.terminalId)}>{terminal ? renderPane(terminal) : null}</div>;
+      paneBounds.set(current.terminalId, { left, top, width, height });
+      return;
     }
+    if (current.direction === "right") {
+      const firstWidth = width * current.ratio / 100;
+      collectBounds(current.first, left, top, firstWidth, height);
+      collectBounds(current.second, left + firstWidth, top, width - firstWidth, height);
+    } else {
+      const firstHeight = height * current.ratio / 100;
+      collectBounds(current.first, left, top, width, firstHeight);
+      collectBounds(current.second, left, top + firstHeight, width, height - firstHeight);
+    }
+  };
+  collectBounds(node, 0, 0, 100, 100);
 
+  const renderGuides = (current: TerminalLayoutNode, path: SplitPath): ReactNode => {
+    if (current.kind === "pane") return <div key={`slot-${current.terminalId}`} />;
+    const dividerPath = path;
     const gridStyle = current.direction === "right"
       ? { gridTemplateColumns: `minmax(0, ${current.ratio}%) 1px minmax(0, ${100 - current.ratio}%)` }
       : { gridTemplateRows: `minmax(0, ${current.ratio}%) 1px minmax(0, ${100 - current.ratio}%)` };
-    const dividerPath = path;
     return <div key={`split-${path.join("-") || "root"}`} className={`terminal-layout-split terminal-layout-split-${current.direction}`} style={gridStyle}>
-      {renderNode(current.first, [...path, "first"])}
+      {renderGuides(current.first, [...path, "first"])}
       <div
         className={`terminal-split-divider terminal-split-divider-${current.direction}`}
         role="separator"
@@ -1376,16 +1388,23 @@ function TerminalLayoutView({
         onDoubleClick={() => onResetResize(dividerPath)}
         onKeyDown={(event) => onAdjustResize(event, dividerPath, current.direction)}
       />
-      {renderNode(current.second, [...path, "second"])}
+      {renderGuides(current.second, [...path, "second"])}
     </div>;
   };
 
-  return <>
-    <div className="terminal-layout-root">{renderNode(node, [])}</div>
-    <div className="terminal-hidden-panes" aria-hidden="true">
-      {terminals.filter((terminal) => !visibleIds.has(terminal.id)).map((terminal) => <div key={`hidden-${terminal.id}`} className="terminal-pane terminal-pane-hidden">{renderPane(terminal)}</div>)}
-    </div>
-  </>;
+  return <div className="terminal-layout-root">
+    {terminals.map((terminal) => {
+      const bounds = paneBounds.get(terminal.id);
+      const style = bounds ? {
+        left: `${bounds.left}%`,
+        top: `${bounds.top}%`,
+        width: `${bounds.width}%`,
+        height: `${bounds.height}%`,
+      } : undefined;
+      return <div key={`pane-${terminal.id}`} className={`terminal-pane terminal-layout-pane ${bounds ? "active" : "terminal-pane-hidden"}`} style={style} aria-hidden={!bounds} onMouseDown={() => onFocus(terminal.id)} onFocusCapture={() => onFocus(terminal.id)}>{renderPane(terminal)}</div>;
+    })}
+    {node.kind === "split" && <div className="terminal-layout-guides">{renderGuides(node, [])}</div>}
+  </div>;
 }
 
 function App() {
@@ -3892,8 +3911,7 @@ function App() {
                 <button type="button" id="workspace-tab-audit" aria-controls="workspace-view-panel" tabIndex={activeView === "audit" ? 0 : -1} className={activeView === "audit" ? "selected" : ""} onClick={() => setActiveView("audit")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "audit"}><History size={15} /> Audit</button>
               </div>
 
-              {activeView === "terminal" ? (
-                <section className="terminal-card" aria-label="Terminal workspace">
+              <section hidden={activeView !== "terminal"} className="terminal-card" aria-label="Terminal workspace">
                   <div className="terminal-toolbar">
                     <div className="terminal-tab-strip" role="group" aria-label="Terminal sessions">{terminalTabs.map((terminal) => {
                       const selected = terminal.id === selectedTerminalId;
@@ -3916,8 +3934,8 @@ function App() {
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
                   <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback {settings.terminal.scrollbackLines.toLocaleString()}</span><span>{settings.appearance.fontSize}px · Mod +/- zoom</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
-                </section>
-              ) : activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
+              </section>
+              {activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteListingSessionId === remoteSessionId && sftpStatus === "ready" ? remoteEntries : []} path={remoteListingSessionId === remoteSessionId ? remotePath : "."} status={remoteListingSessionId === remoteSessionId ? sftpStatus : "loading"} error={connectionError} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
@@ -3929,7 +3947,7 @@ function App() {
                 <AuditHistoryView events={auditEvents} onClear={() => void clearAudit()} />
               ) : activeView === "diagnostics" ? (
                 <NetworkDiagnosticsView host={networkHost} port={networkPort} timeout={networkTimeout} status={networkStatus} addresses={networkAddresses} result={networkResult} fingerprint={networkFingerprint} error={networkError} scanId={networkScanId} scanStatus={networkScanStatus} scanStart={networkScanStart} scanEnd={networkScanEnd} scanConcurrency={networkScanConcurrency} scanScanned={networkScanScanned} scanTotal={networkScanTotal} scanResults={networkScanResults} diagnosticKind={networkDiagnosticKind} diagnosticStatus={networkDiagnosticStatus} pingResult={networkPingResult} tracerouteResult={networkTracerouteResult} traceMaxHops={networkTraceMaxHops} onHostChange={setNetworkHost} onPortChange={setNetworkPort} onTimeoutChange={setNetworkTimeout} onTraceMaxHopsChange={setNetworkTraceMaxHops} onResolve={resolveNetworkHost} onCheckTcp={checkNetworkTcp} onInspectFingerprint={inspectNetworkHostKey} onPing={startNetworkPing} onTraceroute={startNetworkTraceroute} onCancelDiagnostic={cancelNetworkDiagnostic} onScanStartChange={setNetworkScanStart} onScanEndChange={setNetworkScanEnd} onScanConcurrencyChange={setNetworkScanConcurrency} onStartScan={startNetworkScan} onCancelScan={cancelNetworkScan} />
-              ) : (
+              ) : activeView === "terminal" ? null : (
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" || activeView === "monitor" ? () => setQuickConnectOpen(true) : undefined} />
               )}
 

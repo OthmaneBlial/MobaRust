@@ -7,7 +7,7 @@ It is deliberately silent; the chapter titles are baked into the video.
 
 ## Recording provenance
 
-- Actual MobaRust v0.1.1 macOS Apple Silicon desktop binary, not the browser preview.
+- Actual MobaRust v0.1.11 macOS Apple Silicon desktop binary, not the browser preview.
 - A separate copy of the app used a disposable portable profile under ignored
   `target/demo-video/`; the installed app and its personal session records were not edited.
 - Only the selected MobaRust window was recorded. The native title bar was cropped

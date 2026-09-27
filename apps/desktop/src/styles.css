@@ -70,12 +70,12 @@ button:not(:disabled) { cursor: pointer; }
 .terminal-frame-single, .terminal-frame-has-layout { padding: 0; }
 .terminal-frame-single { background: #101514; }
 .terminal-frame-has-layout { background: var(--line); }
-.terminal-layout-root { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.terminal-layout-root { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.terminal-layout-guides { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
 .terminal-layout-split { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 0; background: var(--line); }
-.terminal-layout-pane { display: block !important; min-width: 0; min-height: 0; padding: 15px 16px 12px; background: #101514; overflow: hidden; }
-.terminal-hidden-panes { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.terminal-layout-pane { position: absolute; z-index: 1; display: block !important; min-width: 0; min-height: 0; padding: 15px 16px 12px; background: #101514; overflow: hidden; }
 .terminal-pane-hidden { display: none !important; }
-.terminal-split-divider { z-index: 2; background: var(--line-strong); outline: 0; }
+.terminal-split-divider { z-index: 2; background: var(--line-strong); outline: 0; pointer-events: auto; }
 .terminal-split-divider-right { cursor: col-resize; }
 .terminal-split-divider-down { cursor: row-resize; }
 .terminal-split-divider:focus-visible { background: var(--amber); box-shadow: 0 0 0 1px var(--amber); }

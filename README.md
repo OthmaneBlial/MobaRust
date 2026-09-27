@@ -4,7 +4,7 @@
 
 Open SSH sessions, move files over SFTP/SCP, run local terminals, and manage tunnels alongside each connection. MobaRust is a free, open-source Rust and Tauri desktop app for developers, sysadmins, DevOps teams, and homelabs.
 
-[![Quality](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases)
+[![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases)
 
 [**Download v0.1.11 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.11) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
 
@@ -14,7 +14,7 @@ MobaRust is an independent MobaXterm alternative, not a feature-for-feature clon
   <a href="https://othmaneblial.github.io/MobaRust/#demo"><img src="site/media/mobarust-demo-preview.gif" alt="MobaRust desktop walkthrough: local terminal, split panes, SSH setup, snippets, and theme switching" width="800" /></a>
 </p>
 
-The 62-second capture was recorded in MobaRust 0.1.1 on macOS with an isolated demo profile and a loopback API. Example SSH details are not used to connect. [Watch the full-resolution video with chapters and captions](https://othmaneblial.github.io/MobaRust/#demo).
+The 62-second capture was recorded in MobaRust 0.1.11 on macOS with an isolated demo profile and a loopback API. Example SSH details are not used to connect. [Watch the full-resolution video with chapters and captions](https://othmaneblial.github.io/MobaRust/#demo).
 
 ## Get the desktop preview
 

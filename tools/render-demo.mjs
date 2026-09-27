@@ -18,7 +18,7 @@ for (const [name, title, duration] of [['terminal','terminal',13], ['split','spl
   const input = `${root}/${name}.mov`;
   const metadata = JSON.parse(run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', input]));
   const video = metadata.streams.find(s => s.codec_type === 'video');
-  if (video?.width !== 2560 || video.height !== 1426) throw Error(`Unexpected window geometry: ${name}`);
+  if (video?.width !== 2560 || ![1426, 1436].includes(video.height)) throw Error(`Unexpected window geometry: ${name}`);
   if (Number(metadata.format.duration) < duration - .2) throw Error(`Incomplete recording: ${name}`);
   const background = name === 'dark' ? '0x101615' : '0xf3f5ef';
   // Remove only the native title bar. Keep the entire application content.

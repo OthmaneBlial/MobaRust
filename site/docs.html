@@ -128,7 +128,7 @@ cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml</code></pre>
           <section id="evidence">
             <p class="docs-kicker">06 / Evidence</p>
             <h2>Check the current receipts.</h2>
-            <p>The <a href="https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml">Quality workflow</a> runs workspace tests, strict Clippy, desktop unit tests, TypeScript checks, lint, production build, helper checks, package-layout checks, and fuzz-target compilation.</p>
+            <p>Quality checks run locally with <code>cargo xtask check</code>; GitHub Actions is reserved for release installer builds.</p>
             <p>The v0.1.11 <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.11">release page</a> carries native-runner installers and SHA-256 files after all four target jobs succeed. These receipts do not replace signing, clean installation, or hardware evidence.</p>
             <p>Report bugs with the operating system, architecture, and reproduction steps in <a href="https://github.com/OthmaneBlial/MobaRust/issues">GitHub Issues</a>. Remove credentials, hostnames, IP addresses, and private connection details first.</p>
           </section>
