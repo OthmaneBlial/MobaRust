@@ -676,12 +676,57 @@ mod tests {
         drop(writer);
 
         let mut output = String::new();
-        reader
-            .read_to_string(&mut output)
-            .expect("read test pty output");
-        child.wait().expect("wait for test shell");
+        let (output_tx, output_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0; 1024];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => {
+                        let _ = output_tx.send(Err("PTY closed before expected output".into()));
+                        break;
+                    }
+                    Ok(size) => {
+                        if output_tx.send(Ok(buffer[..size].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = output_tx.send(Err(format!("PTY read failed: {error}")));
+                        break;
+                    }
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !output.contains("INPUT:hello") {
+            match output_rx
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(Ok(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                Ok(Err(error)) => panic!("{error}; captured PTY output: {output:?}"),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("timed out waiting for test PTY output; captured: {output:?}");
+                }
+            }
+        }
 
-        assert!(output.contains("MOBARUST_PTY_OK"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll test shell") {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("test shell did not exit after writing its output");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        assert!(status.success());
+        assert!(output.contains("MOBARUST_PTY_OK"), "{output:?}");
         assert!(output.contains("INPUT:hello"));
     }
 
