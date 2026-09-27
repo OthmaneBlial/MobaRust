@@ -1140,6 +1140,12 @@ fn effective_options(blocks: &[OpenSshHostBlock], alias: &str) -> BTreeMap<Strin
 }
 
 fn host_pattern_matches(pattern: &str, host: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if !pattern.contains(['*', '?']) {
+        return pattern == host;
+    }
     let pattern = pattern.chars().collect::<Vec<_>>();
     let host = host.chars().collect::<Vec<_>>();
     let (mut pattern_index, mut host_index) = (0, 0);
@@ -2122,6 +2128,9 @@ mod tests {
             Some("2222")
         );
         assert!(!super::effective_options(&blocks, "app-xy").contains_key("port"));
+        assert!(super::host_pattern_matches("prod", "prod"));
+        assert!(!super::host_pattern_matches("prod", "production"));
+        assert!(super::host_pattern_matches("*", "staging"));
     }
 
     #[test]
