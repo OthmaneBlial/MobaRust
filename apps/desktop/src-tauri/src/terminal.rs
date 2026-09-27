@@ -465,7 +465,8 @@ pub async fn list_wsl_distributions() -> Result<Vec<String>, TerminalError> {
                 .args(["--list", "--quiet"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
                 .output(),
         )
         .await
