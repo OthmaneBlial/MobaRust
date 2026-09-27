@@ -178,7 +178,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         assert!(matches!(
             sftp.promote_uploaded_file(&cleanup_temporary, &cleanup_destination, false)
                 .await,
-            Err(SshError::RemotePartialUploadCleanupFailed)
+            Err(SshError::RemoteTemporaryCleanupFailed)
         ));
         assert!(Path::new(&cleanup_temporary).is_dir());
         fs::remove_dir_all(&cleanup_directory).expect("remove upload cleanup fixture directory");

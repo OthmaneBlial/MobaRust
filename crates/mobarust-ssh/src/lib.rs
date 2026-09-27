@@ -134,9 +134,9 @@ pub enum SshError {
     )]
     RemoteUploadBackupCleanupFailed,
     #[error(
-        "remote upload failed and its temporary file could not be removed; inspect the destination folder for a .part file"
+        "operation failed and a temporary remote file could not be removed; inspect the destination folder for a hidden .mobarust-* file"
     )]
-    RemotePartialUploadCleanupFailed,
+    RemoteTemporaryCleanupFailed,
     #[error("remote text file exceeds the 4 MiB editor limit")]
     RemoteFileTooLarge,
     #[error("remote file is not valid UTF-8 text")]
@@ -2298,11 +2298,11 @@ impl SftpConnection {
         let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
         let close_result = file.shutdown().await.map_err(map_sftp_io_error);
         if let Err(error) = write_result {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
         if let Err(error) = close_result {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
         if let Some(permissions) = current.permissions {
@@ -2311,18 +2311,18 @@ impl SftpConnection {
             let file = match self.session.open(&temporary).await {
                 Ok(file) => file,
                 Err(error) => {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(map_sftp_error(error));
                 }
             };
             let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
             let close_result = file.close().await.map_err(map_sftp_io_error);
             if let Err(error) = set_result {
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(error);
             }
             if let Err(error) = close_result {
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(error);
             }
         }
@@ -2336,12 +2336,12 @@ impl SftpConnection {
         {
             Ok(document) => document,
             Err(error) => {
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(error);
             }
         };
         if latest.revision != current.revision {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(SshError::RemoteConflict);
         }
 
@@ -2354,14 +2354,14 @@ impl SftpConnection {
             next_editor_temp_id()
         );
         if let Err(error) = self.session.rename(&path, &backup).await {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(map_sftp_error(error));
         }
         if let Err(error) = self.session.rename(&temporary, &path).await {
             if self.session.rename(&backup, &path).await.is_err() {
                 return Err(SshError::RemoteSaveRestoreUncertain);
             }
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(map_sftp_error(error));
         }
         if let Err(_error) = self.session.remove_file(&backup).await {
@@ -2411,11 +2411,11 @@ impl SftpConnection {
         let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
         let close_result = file.shutdown().await.map_err(map_sftp_io_error);
         if let Err(error) = write_result {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
         if let Err(error) = close_result {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
 
@@ -2426,13 +2426,13 @@ impl SftpConnection {
             let appeared = match self.try_exists(path.clone()).await {
                 Ok(appeared) => appeared,
                 Err(error) => {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
                 }
             };
             if appeared {
                 if !overwrite {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(SshError::RemoteTargetExists);
                 }
                 existing = match self
@@ -2441,7 +2441,7 @@ impl SftpConnection {
                 {
                     Ok(document) => Some(document),
                     Err(error) => {
-                        let _ = self.session.remove_file(&temporary).await;
+                        self.cleanup_temporary_file(&temporary).await?;
                         return Err(error);
                     }
                 };
@@ -2455,18 +2455,18 @@ impl SftpConnection {
                 let file = match self.session.open(&temporary).await {
                     Ok(file) => file,
                     Err(error) => {
-                        let _ = self.session.remove_file(&temporary).await;
+                        self.cleanup_temporary_file(&temporary).await?;
                         return Err(map_sftp_error(error));
                     }
                 };
                 let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
                 let close_result = file.close().await.map_err(map_sftp_io_error);
                 if let Err(error) = set_result {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
                 }
                 if let Err(error) = close_result {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
                 }
             }
@@ -2477,7 +2477,7 @@ impl SftpConnection {
             {
                 Ok(document) => document,
                 Err(error) => {
-                    let _ = self.session.remove_file(&temporary).await;
+                    self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
                 }
             };
@@ -2485,7 +2485,7 @@ impl SftpConnection {
                 .as_ref()
                 .is_some_and(|document| latest.revision != document.revision)
             {
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(SshError::RemoteConflict);
             }
 
@@ -2495,21 +2495,21 @@ impl SftpConnection {
                 next_editor_temp_id()
             );
             if let Err(error) = self.session.rename(&path, &backup).await {
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(map_sftp_error(error));
             }
             if let Err(error) = self.session.rename(&temporary, &path).await {
                 if self.session.rename(&backup, &path).await.is_err() {
                     return Err(SshError::RemoteSaveRestoreUncertain);
                 }
-                let _ = self.session.remove_file(&temporary).await;
+                self.cleanup_temporary_file(&temporary).await?;
                 return Err(map_sftp_error(error));
             }
             if let Err(_error) = self.session.remove_file(&backup).await {
                 return Err(SshError::RemoteSaveBackupCleanupFailed);
             }
         } else if let Err(error) = self.session.rename(&temporary, &path).await {
-            let _ = self.session.remove_file(&temporary).await;
+            self.cleanup_temporary_file(&temporary).await?;
             return Err(map_sftp_error(error));
         }
 
@@ -2610,7 +2610,7 @@ impl SftpConnection {
         }
         .await;
         if result.is_err() && !matches!(&result, Err(SshError::RemoteUploadRestoreUncertain)) {
-            self.remove_partial_upload(temporary).await?;
+            self.cleanup_temporary_file(temporary).await?;
         }
         result
     }
@@ -2701,12 +2701,12 @@ impl SftpConnection {
         self.session.remove_file(path).await.map_err(map_sftp_error)
     }
 
-    /// Remove a partial transfer file, reporting cleanup failures while
-    /// treating an already-missing temporary file as clean.
-    pub async fn remove_partial_upload(&self, path: &str) -> Result<(), SshError> {
+    /// Remove a temporary remote file, reporting cleanup failures while
+    /// treating an already-missing file as clean.
+    pub async fn cleanup_temporary_file(&self, path: &str) -> Result<(), SshError> {
         match self.remove_file(path).await {
             Ok(()) | Err(SshError::SftpPathMissing) => Ok(()),
-            Err(_) => Err(SshError::RemotePartialUploadCleanupFailed),
+            Err(_) => Err(SshError::RemoteTemporaryCleanupFailed),
         }
     }
 
