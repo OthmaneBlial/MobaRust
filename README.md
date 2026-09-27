@@ -72,7 +72,7 @@ git clone https://github.com/OthmaneBlial/MobaRust.git
 cd MobaRust
 pnpm install --dir apps/desktop
 cargo xtask check
-cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --dir apps/desktop tauri dev
 ```
 
 `cargo xtask check` runs the local validation suite. Tests use isolated state and disposable fixtures; they do not need your personal SSH files, Keychain, GitHub keys, SSH agent, real hosts, or attached hardware.

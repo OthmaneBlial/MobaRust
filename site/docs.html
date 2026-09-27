@@ -119,7 +119,7 @@
 cd MobaRust
 pnpm install --dir apps/desktop
 cargo xtask check
-cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml</code></pre>
+pnpm --dir apps/desktop tauri dev</code></pre>
               <p class="copy-status" role="status" aria-live="polite">Copies commands only. Nothing is executed.</p>
             </div>
             <p>The validation path uses isolated home directories, disposable fixtures, and loopback networking. It does not need personal SSH files, Keychain, GitHub keys, SSH agents, real hosts, or attached hardware.</p>
