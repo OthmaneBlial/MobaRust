@@ -2518,7 +2518,7 @@ function App() {
     touchSavedSession(session.id);
     startNewTerminal({
       type: "default",
-      cwd: session.startup_directory?.trim() || undefined,
+      cwd: session.startup_directory?.trim() ? session.startup_directory : undefined,
       environment: session.environment?.length ? session.environment : undefined,
       startupCommand: startupCommand || undefined,
     }, session.name);
@@ -4922,7 +4922,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
           setAuthError("Enter the private-key path or reference. MobaRust will not read it while editing.");
           return;
         }
-        auth = { kind: "privateKey", keyRef: keyRef.trim(), credentialRef: credentialRef.trim() || null };
+        auth = { kind: "privateKey", keyRef, credentialRef: credentialRef.trim() || null };
       } else {
         auth = { kind: "agent" };
       }
@@ -4955,7 +4955,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
       folder: folder.trim() || null,
       tags: normalizedTags,
       favorite,
-      startup_directory: startupDirectory.trim() || null,
+      startup_directory: startupDirectory.trim() ? startupDirectory : null,
       startup_command: supportsStartup ? startupCommand.trim() || null : session.startup_command,
       notes: notes.trim() || null,
       environment,
