@@ -1063,12 +1063,19 @@ fn parse_openssh_config(contents: &str) -> (Vec<OpenSshHostBlock>, Vec<String>) 
         if value.is_empty() {
             continue;
         }
-        if directive == "host" {
+        if directive == "host" || directive == "match" {
             blocks.push(current);
             current = OpenSshHostBlock {
-                patterns: value.split_whitespace().map(str::to_owned).collect(),
+                patterns: if directive == "host" {
+                    value.split_whitespace().map(str::to_owned).collect()
+                } else {
+                    Vec::new()
+                },
                 options: Vec::new(),
             };
+            if directive == "match" && seen_unsupported.insert(directive.clone()) {
+                unsupported.push(directive);
+            }
         } else if matches!(
             directive.as_str(),
             "hostname" | "user" | "port" | "identityfile" | "proxyjump" | "serveraliveinterval"
@@ -2039,6 +2046,22 @@ mod tests {
             Some("2222")
         );
         assert!(!super::effective_options(&blocks, "app-xy").contains_key("port"));
+    }
+
+    #[test]
+    fn unsupported_match_blocks_do_not_leak_options_into_host_profiles() {
+        let (blocks, unsupported) = super::parse_openssh_config(
+            "Host production\n  HostName prod.example\nMatch user deploy\n  User conditional\nHost staging\n  User stage\n",
+        );
+
+        assert!(unsupported.contains(&"match".to_owned()));
+        assert!(!super::effective_options(&blocks, "production").contains_key("user"));
+        assert_eq!(
+            super::effective_options(&blocks, "staging")
+                .get("user")
+                .map(String::as_str),
+            Some("stage")
+        );
     }
 
     #[test]
