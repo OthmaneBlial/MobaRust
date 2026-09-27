@@ -847,12 +847,13 @@ impl SessionStore {
         let mut skipped = Vec::new();
         let mut changed = false;
         let previous = self.sessions.clone();
+        let mut known_ids: HashSet<_> = self.sessions.iter().map(|session| session.id).collect();
         for session in file.sessions {
             if let Err(error) = session.validate() {
                 skipped.push(format!("{}: {error}", session.name));
                 continue;
             }
-            if self.sessions.iter().any(|item| item.id == session.id) {
+            if !known_ids.insert(session.id) {
                 skipped.push(format!("{}: session ID already exists", session.name));
                 continue;
             }
@@ -1858,6 +1859,25 @@ mod tests {
         );
         assert_eq!(target.list().len(), 1);
         assert_eq!(SessionStore::open(&target_path).unwrap().list(), &[edited]);
+    }
+
+    #[test]
+    fn session_import_skips_duplicate_ids_within_one_export() {
+        let directory = tempdir().unwrap();
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let session = remote_session();
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "sessions": [session.clone(), session.clone()],
+        });
+
+        let report = store.import_json(&payload.to_string()).unwrap();
+        assert_eq!(report.imported_count, 1);
+        assert_eq!(
+            report.skipped,
+            vec!["Production bastion: session ID already exists"]
+        );
+        assert_eq!(SessionStore::open(store.path()).unwrap().list(), &[session]);
     }
 
     #[test]
