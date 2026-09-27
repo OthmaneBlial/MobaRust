@@ -28,6 +28,7 @@ import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
+import desktopPackage from "../package.json";
 import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
@@ -1435,6 +1436,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const [appVersion, setAppVersion] = useState(desktopPackage.version);
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [recentOnly, setRecentOnly] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
@@ -3441,6 +3443,15 @@ function App() {
   useEffect(() => {
     if (!IS_TAURI) return;
     let disposed = false;
+    void invoke<{ version: string }>("app_snapshot").then(({ version }) => {
+      if (!disposed) setAppVersion(version);
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let disposed = false;
     let unlisten: UnlistenFn | undefined;
     void listen<SshTunnelEvent>("ssh://tunnel", (event) => {
       setTunnels((current) => {
@@ -3941,7 +3952,7 @@ function App() {
             </aside>
           </div>
 
-          <footer className="workspace-footer"><span><span className="footer-led" /> MobaRust core · v0.1.1</span><span>Rust PTY bridge</span><span>{navigator.platform.includes("Mac") ? "macOS" : navigator.platform.includes("Win") ? "Windows" : "Linux"} · local mode</span><span className="footer-spacer" /><span>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} CET</span></footer>
+          <footer className="workspace-footer"><span><span className="footer-led" /> MobaRust core · v{appVersion}</span><span>Rust PTY bridge</span><span>{navigator.platform.includes("Mac") ? "macOS" : navigator.platform.includes("Win") ? "Windows" : "Linux"} · local mode</span><span className="footer-spacer" /><span>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</span></footer>
         </section>
       </div>
 
