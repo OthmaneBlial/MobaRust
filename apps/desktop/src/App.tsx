@@ -1868,10 +1868,14 @@ function App() {
       return;
     }
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(selection);
-      else window.prompt("Copy this terminal selection", selection);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(selection);
+        setSessionNotice("Terminal selection copied explicitly.");
+      } else {
+        setSessionNotice(null);
+        window.prompt("Copy this terminal selection", selection);
+      }
       setConnectionError(null);
-      setSessionNotice("Terminal selection copied explicitly.");
     } catch (error) {
       setConnectionError(`Terminal selection could not be copied: ${String(error)}`);
     }
@@ -2082,9 +2086,13 @@ function App() {
 
   const copySnippet = useCallback(async (command: string) => {
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
-      else window.prompt("Copy this rendered snippet and paste it manually", command);
-      setSessionNotice("Rendered snippet copied. Review it, then paste manually; MobaRust does not auto-send it.");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+        setSessionNotice("Rendered snippet copied. Review it, then paste manually; MobaRust does not auto-send it.");
+      } else {
+        setSessionNotice(null);
+        window.prompt("Copy this rendered snippet and paste it manually", command);
+      }
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Snippet could not be copied: ${String(error)}`);
@@ -2186,9 +2194,13 @@ function App() {
     if (!IS_TAURI) return;
     try {
       const json = await invoke<string>("settings_export");
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(json);
-      else window.prompt("Copy this secret-free MobaRust settings export", json);
-      setSessionNotice("Secret-free settings copied. Credentials and session definitions are not included.");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+        setSessionNotice("Secret-free settings copied. Credentials and session definitions are not included.");
+      } else {
+        setSessionNotice(null);
+        window.prompt("Copy this secret-free MobaRust settings export", json);
+      }
       setConnectionError(null);
     } catch (error) {
       setConnectionError(`Settings export failed: ${String(error)}`);
@@ -3145,9 +3157,13 @@ function App() {
 
   const copyRemotePath = useCallback(async (entry: RemoteEntry) => {
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(entry.path);
-      else window.prompt("Copy remote path", entry.path);
-      setSessionNotice(`Copied remote path ${entry.path}.`);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(entry.path);
+        setSessionNotice(`Copied remote path ${entry.path}.`);
+      } else {
+        setSessionNotice(null);
+        window.prompt("Copy remote path", entry.path);
+      }
     } catch (error) {
       setConnectionError(`Remote path could not be copied: ${String(error)}`);
     }
