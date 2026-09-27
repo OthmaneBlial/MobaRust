@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { remoteSessionCloseError, remoteSessionStateError } from "../src/terminal-session-close.ts";
+import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "../src/terminal-session-close.ts";
 
 assert.equal(remoteSessionCloseError("ssh", "closed"), null);
 assert.equal(remoteSessionCloseError("serial", "closed by application"), null);
@@ -25,6 +25,7 @@ assert.equal(
   "SSH reconnecting: [31mhost unreachable [0m",
 );
 assert.equal(remoteSessionStateError("local", "failed", "unexpected"), null);
+assert.equal(sanitizeTerminalErrorDetail("\u001b[31mhost unreachable\u001b[0m"), "[31mhost unreachable [0m");
 assert.equal(
   remoteSessionStateError("serial", "failed", "x".repeat(300)),
   `SERIAL failed: ${"x".repeat(237)}...`,

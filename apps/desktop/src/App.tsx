@@ -23,7 +23,7 @@ import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
-import { remoteSessionCloseError, remoteSessionStateError } from "./terminal-session-close";
+import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
@@ -911,7 +911,8 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           unlistenX11 = await listen<SshX11Event>("ssh://x11", (event) => {
             if (event.payload.terminalId !== terminalIdRef.current) return;
             if (event.payload.state === "failed") {
-              terminal.writeln(`\r\n\x1b[38;5;203mX11 forwarding stopped: ${event.payload.error ?? "display unavailable"}\x1b[0m`);
+              const error = sanitizeTerminalErrorDetail(event.payload.error) ?? "display unavailable";
+              terminal.writeln(`\r\n\x1b[38;5;203mX11 forwarding stopped: ${error}\x1b[0m`);
             }
           });
         }
