@@ -1,5 +1,22 @@
 export type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
 
+function textMatchPattern(query: string, matchCase: boolean): RegExp {
+  const literal = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(literal, matchCase ? "gu" : "giu");
+}
+
+export function countTextMatches(value: string, query: string, matchCase: boolean): number {
+  if (!query) return 0;
+  const pattern = textMatchPattern(query, matchCase);
+  let count = 0;
+  while (pattern.exec(value)) count += 1;
+  return count;
+}
+
+export function replaceTextMatches(value: string, query: string, replacement: string, matchCase: boolean): string {
+  return query ? value.replace(textMatchPattern(query, matchCase), () => replacement) : value;
+}
+
 export function remoteEditorLanguage(path: string): RemoteEditorLanguage {
   const lower = path.toLowerCase();
   if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";

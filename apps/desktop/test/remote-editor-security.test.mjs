@@ -35,7 +35,7 @@ import {
   remoteDesktopSizeChanged,
   vncKeysymForText,
 } from "../src/remote-desktop-input.ts";
-import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, replaceTextMatches } from "../src/remote-editor.ts";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
 import { remoteChildPath, remoteParentPath } from "../src/remote-path.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
@@ -83,6 +83,10 @@ assert.equal(highlightRemoteCode("42", "json"), '<span class="remote-editor-toke
 assert.equal(remoteEditorLanguage("/tmp/settings.json"), "json");
 assert.equal(remoteEditorLanguage("/tmp/SETTINGS.INI"), "ini");
 assert.equal(remoteEditorLanguage("/tmp/profile"), "shell");
+assert.equal(countTextMatches("İx.x", "x", false), 2);
+assert.equal(replaceTextMatches("İx.x", "x", "$&", false), "İ$&.$&");
+assert.equal(replaceTextMatches("İx.x", ".", "!", false), "İx!x");
+assert.equal(replaceTextMatches("A a", "a", "b", true), "A b");
 assert.deepEqual(REMOTE_MONITOR_REFRESH_INTERVALS, [15, 30, 60]);
 assert.equal(isRemoteMonitorRefreshInterval(15), true);
 assert.equal(isRemoteMonitorRefreshInterval(60), true);

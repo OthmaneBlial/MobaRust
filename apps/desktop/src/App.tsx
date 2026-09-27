@@ -9,7 +9,7 @@ import {
   experimentalDesktopTargetError,
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
-import { highlightRemoteCode, remoteEditorLanguage } from "./remote-editor";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, replaceTextMatches } from "./remote-editor";
 import {
   parseRemoteDesktopProfile,
   remoteDesktopCanResize,
@@ -4250,34 +4250,6 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
     </div>
     <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + recovery copy</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
-}
-
-function countTextMatches(value: string, query: string, matchCase: boolean): number {
-  if (!query) return 0;
-  const source = matchCase ? value : value.toLocaleLowerCase();
-  const needle = matchCase ? query : query.toLocaleLowerCase();
-  let count = 0;
-  let offset = 0;
-  while ((offset = source.indexOf(needle, offset)) !== -1) {
-    count += 1;
-    offset += Math.max(needle.length, 1);
-  }
-  return count;
-}
-
-function replaceTextMatches(value: string, query: string, replacement: string, matchCase: boolean): string {
-  if (!query) return value;
-  if (matchCase) return value.split(query).join(replacement);
-  const lowerValue = value.toLocaleLowerCase();
-  const lowerQuery = query.toLocaleLowerCase();
-  let result = "";
-  let offset = 0;
-  let match;
-  while ((match = lowerValue.indexOf(lowerQuery, offset)) !== -1) {
-    result += value.slice(offset, match) + replacement;
-    offset = match + query.length;
-  }
-  return offset === 0 ? value : result + value.slice(offset);
 }
 
 function TransferManagerView({ transfers, onCancelTransfer, onRetryTransfer }: { transfers: SshTransferEvent[]; onCancelTransfer: (transferId: string) => void; onRetryTransfer: (transfer: SshTransferEvent) => void }) {
