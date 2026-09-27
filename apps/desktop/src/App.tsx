@@ -27,6 +27,7 @@ import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalError
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
+import { remoteChildPath, remoteParentPath } from "./remote-path";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import desktopPackage from "../package.json";
 import {
@@ -2951,7 +2952,7 @@ function App() {
         return;
       }
       const fallbackName = localPath.split(/[\\/]/).pop() || "upload.bin";
-      const defaultRemotePath = remotePath === "." ? `./${fallbackName}` : `${remotePath.replace(/\/$/, "")}/${fallbackName}`;
+      const defaultRemotePath = remoteChildPath(remotePath, fallbackName);
       const destination = window.prompt("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
       const overwrite = window.confirm("Allow replacing an existing remote file?");
@@ -3033,7 +3034,7 @@ function App() {
 
   const createRemoteDirectory = useCallback(async () => {
     if (!remoteSessionId) return;
-    const defaultPath = remotePath === "." ? "./new-folder" : `${remotePath.replace(/\/$/, "")}/new-folder`;
+    const defaultPath = remoteChildPath(remotePath, "new-folder");
     const path = window.prompt("Remote folder path", defaultPath);
     if (!path?.trim()) return;
     try {
@@ -3049,8 +3050,7 @@ function App() {
     if (!remoteSessionId) return;
     const nextName = window.prompt("New remote name or path", entry.name);
     if (!nextName?.trim()) return;
-    const parent = entry.path.split("/").slice(0, -1).join("/") || ".";
-    const target = nextName.includes("/") ? nextName : `${parent}/${nextName}`;
+    const target = nextName.includes("/") ? nextName : remoteChildPath(remoteParentPath(entry.path), nextName);
     try {
       await invoke("ssh_rename_remote", { terminalId: remoteSessionId, from: entry.path, to: target });
       setConnectionError(null);
@@ -4131,7 +4131,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
   const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
   const [sort, setSort] = useState<RemoteFileSort>("name");
   const [showHidden, setShowHidden] = useState(true);
-  const parentPath = path === "." || path === "/" ? path : path.split("/").slice(0, -1).join("/") || ".";
+  const parentPath = remoteParentPath(path);
   const visibleEntries = entries
     .filter((entry) => showHidden || !entry.name.startsWith("."))
     .slice()

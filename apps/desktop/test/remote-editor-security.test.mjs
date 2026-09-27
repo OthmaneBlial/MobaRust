@@ -37,6 +37,7 @@ import {
 } from "../src/remote-desktop-input.ts";
 import { highlightRemoteCode, remoteEditorLanguage } from "../src/remote-editor.ts";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
+import { remoteChildPath, remoteParentPath } from "../src/remote-path.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
 import {
   preserveRemoteDesktopError,
@@ -87,6 +88,15 @@ assert.equal(isRemoteMonitorRefreshInterval(15), true);
 assert.equal(isRemoteMonitorRefreshInterval(60), true);
 assert.equal(isRemoteMonitorRefreshInterval(5), false);
 assert.equal(isRemoteMonitorRefreshInterval(61), false);
+assert.equal(remoteParentPath("/"), "/");
+assert.equal(remoteParentPath("/file"), "/");
+assert.equal(remoteParentPath("/tmp/"), "/");
+assert.equal(remoteParentPath("/tmp/file "), "/tmp");
+assert.equal(remoteParentPath("./file"), ".");
+assert.equal(remoteParentPath("file"), ".");
+assert.equal(remoteChildPath("/", "renamed "), "/renamed ");
+assert.equal(remoteChildPath(".", "renamed"), "./renamed");
+assert.equal(remoteChildPath("/tmp/", "renamed"), "/tmp/renamed");
 assert.equal(isCurrentSessionRequest(3, 3, "ssh-current", "ssh-current"), true);
 assert.equal(isCurrentSessionRequest(2, 3, "ssh-current", "ssh-current"), false);
 assert.equal(isCurrentSessionRequest(3, 3, "ssh-old", "ssh-current"), false);
