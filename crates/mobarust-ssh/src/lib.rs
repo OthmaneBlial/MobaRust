@@ -1875,6 +1875,28 @@ fn ensure_sftp_directory_capacity(entry_count: usize) -> Result<(), SshError> {
     }
 }
 
+fn sftp_entry_path(parent: &str, name: &str) -> Result<String, SshError> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().any(char::is_control)
+    {
+        return Err(SshError::Sftp(
+            "SFTP directory contained an invalid filename".into(),
+        ));
+    }
+
+    Ok(if parent.is_empty() {
+        name.to_owned()
+    } else if parent.ends_with('/') {
+        format!("{parent}{name}")
+    } else {
+        format!("{parent}/{name}")
+    })
+}
+
 fn validate_sftp_directory_batch(entry_count: usize) -> Result<(), SshError> {
     if entry_count == 0 {
         Err(SshError::SftpProtocol)
@@ -2201,12 +2223,12 @@ impl SftpConnection {
                         }
                         let metadata = file.attrs;
                         let file_type = metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK);
-                        let entry_path = if path.is_empty() {
-                            file.filename.clone()
-                        } else if path.ends_with('/') {
-                            format!("{path}{}", file.filename)
-                        } else {
-                            format!("{path}/{}", file.filename)
+                        let entry_path = match sftp_entry_path(&path, &file.filename) {
+                            Ok(path) => path,
+                            Err(error) => {
+                                result = Err(error);
+                                break;
+                            }
                         };
                         entries.push(RemoteEntry {
                             name: file.filename,
@@ -3371,6 +3393,32 @@ mod tests {
             ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES),
             Err(SshError::SftpDirectoryTooLarge)
         ));
+    }
+
+    #[test]
+    fn sftp_entry_paths_reject_unsafe_remote_names() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../private",
+            "nested/file",
+            "nested\\file",
+            "line\nbreak",
+            "nul\0byte",
+        ] {
+            assert!(sftp_entry_path("/srv", name).is_err(), "accepted {name:?}");
+        }
+
+        assert_eq!(
+            sftp_entry_path("/srv", "file.txt").unwrap(),
+            "/srv/file.txt"
+        );
+        assert_eq!(
+            sftp_entry_path("/srv/", "café.txt").unwrap(),
+            "/srv/café.txt"
+        );
+        assert_eq!(sftp_entry_path("", "file.txt").unwrap(), "file.txt");
     }
 
     #[test]
