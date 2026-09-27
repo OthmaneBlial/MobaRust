@@ -19,7 +19,7 @@ import {
 } from "../src/session-environment.ts";
 import { createTerminalHttpLinkProvider, findTerminalHttpUrls } from "../src/terminal-links.ts";
 import { isMultilineTerminalPaste, shouldConfirmTerminalPaste } from "../src/terminal-paste.ts";
-import { settleTerminalWrites } from "../src/terminal-input.ts";
+import { prepareTerminalPaste, settleTerminalWrites } from "../src/terminal-input.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
 import { isCurrentSessionRequest } from "../src/session-request.ts";
 import { terminalFontSizeAfterZoom } from "../src/terminal-zoom.ts";
@@ -64,6 +64,8 @@ assert.equal(isMultilineTerminalPaste("first\u2029second"), true);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", true), true);
 assert.equal(shouldConfirmTerminalPaste("single line", true), false);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", false), false);
+assert.equal(prepareTerminalPaste("first\r\nsecond\nthird", false), "first\rsecond\rthird");
+assert.equal(prepareTerminalPaste("first\nsecond", true), "\x1b[200~first\rsecond\x1b[201~");
 {
   let finishPending;
   let settled = false;

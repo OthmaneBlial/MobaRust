@@ -21,7 +21,7 @@ import {
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
-import { settleTerminalWrites } from "./terminal-input";
+import { prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
@@ -272,6 +272,7 @@ type TerminalViewportProps = {
   onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
   onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
   onInput: (workspaceId: string, terminalId: string, data: string) => void;
+  onBroadcastPaste: (workspaceId: string, data: string) => boolean;
   onTerminalReady: (workspaceId: string, terminal: Terminal, searchAddon: SearchAddon) => void;
   onTerminalDisposed: (workspaceId: string) => void;
   onSearchResults: (workspaceId: string, resultIndex: number, resultCount: number) => void;
@@ -763,7 +764,7 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
+function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onBroadcastPaste, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -862,13 +863,13 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     });
 
     const onPaste = (event: ClipboardEvent) => {
-      const data = event.clipboardData?.getData("text/plain") ?? "";
-      if (!shouldConfirmTerminalPaste(data, confirmMultilinePasteRef.current)) return;
+      const data = event.clipboardData?.getData("text/plain");
+      if (data === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      const accepted = window.confirm("This paste contains multiple lines. The receiving shell may execute them. Send to the terminal?");
+      const accepted = !shouldConfirmTerminalPaste(data, confirmMultilinePasteRef.current) || window.confirm("This paste contains multiple lines. The receiving shell may execute them. Send to the terminal?");
       // Keep xterm's line-ending normalization and bracketed-paste handling.
-      if (accepted) terminal.paste(data);
+      if (accepted && !onBroadcastPaste(workspaceId, data)) terminal.paste(data);
     };
     host.addEventListener("paste", onPaste, true);
 
@@ -1011,7 +1012,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       onTerminalDisposed(workspaceId);
       terminal.dispose();
     };
-  }, [instanceKey, localTarget, onBell, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, localTarget, onBell, onBroadcastPaste, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} role="group" aria-label={remoteProtocol ? `${remoteProtocol.toUpperCase()} terminal` : "Local terminal"} />;
 }
@@ -1801,6 +1802,28 @@ function App() {
     recordTerminalInput(workspaceId, data);
     void settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)))
       .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`));
+  }, [recordTerminalInput, writeTerminalInput]);
+
+  const handleBroadcastPaste = useCallback((workspaceId: string, data: string) => {
+    if (!IS_TAURI || !broadcastEnabledRef.current) return false;
+    const targetIds = [...new Set(broadcastTargetIdsRef.current)];
+    const targets = targetIds.map((targetId) => ({
+      workspaceId: targetId,
+      nativeId: nativeTerminalIdsRef.current.get(targetId),
+      terminal: terminalInstancesRef.current.get(targetId)?.terminal,
+    }));
+    if (targets.length === 0 || targets.some((target) => !target.nativeId || !target.terminal)) {
+      setConnectionError("Paste was not sent: every selected terminal must be ready.");
+      return true;
+    }
+    const source = terminalInstancesRef.current.get(workspaceId)?.terminal;
+    if (source) recordTerminalInput(workspaceId, prepareTerminalPaste(data, source.modes.bracketedPasteMode && source.options.ignoreBracketedPasteMode !== true));
+    void settleTerminalWrites(targets.map((target) => writeTerminalInput(
+      target.workspaceId,
+      target.nativeId!,
+      prepareTerminalPaste(data, target.terminal!.modes.bracketedPasteMode && target.terminal!.options.ignoreBracketedPasteMode !== true),
+    ))).catch((error) => setConnectionError(`Terminal paste failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`));
+    return true;
   }, [recordTerminalInput, writeTerminalInput]);
 
   const findTerminalMatch = useCallback((direction: "next" | "previous", query = terminalSearchQuery) => {
@@ -3794,8 +3817,8 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
-  }, [colorTheme, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onBroadcastPaste={handleBroadcastPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
+  }, [colorTheme, handleBroadcastPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${colorTheme}`}>

@@ -28,6 +28,8 @@ out. `Esc` disables broadcast immediately.
 Once writes start, delivery cannot be atomic across terminals. The UI waits
 for all write responses and warns that other targets may have received input
 if one fails; operators must check targets before retrying.
+Pastes are normalized and bracketed separately for each selected terminal's
+negotiated paste mode, so a mode enabled in one tab is not assumed in another.
 
 The frontend receives opaque native terminal identifiers only for routing
 typed input. It never receives or stores credential material. No arbitrary
