@@ -375,7 +375,7 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
                 .env("MOBARUST_RDP_FIXTURE_CA", &ca_certificate)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
                 .expect("start the locally built RDP helper");
@@ -639,7 +639,7 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
                 .env("MOBARUST_RDP_FIXTURE_CA", &ca_certificate)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
                 .expect("start the locally built RDP helper");
@@ -890,7 +890,7 @@ async fn real_helper_reports_rejected_credentials_from_real_loopback_server() {
                 .env("MOBARUST_RDP_FIXTURE_CA", &ca_certificate)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
                 .expect("start the locally built RDP helper");

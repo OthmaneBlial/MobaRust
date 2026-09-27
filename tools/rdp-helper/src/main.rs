@@ -483,6 +483,13 @@ async fn run_rdp_attempt<W: AsyncWrite + Unpin>(
                                 policy.reconnecting,
                             ));
                         }
+                        #[cfg(feature = "local-rdp-fixture")]
+                        if matches!(
+                            error.kind(),
+                            ironrdp_connector::ConnectorErrorKind::Custom
+                        ) {
+                            eprintln!("local RDP fixture connection failure: {error:?}");
+                        }
                         if policy.reconnecting {
                             stop_client(&input_tx, &mut client_task).await;
                             return Ok(lost_outcome(
