@@ -24,6 +24,7 @@ import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { parseTunnelPort } from "./tunnel-port";
 import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
@@ -3164,17 +3165,17 @@ function App() {
     if (!remoteSessionId) return;
     const targetHost = window.prompt("Remote target host", "127.0.0.1");
     if (!targetHost?.trim()) return;
-    const targetPortValue = window.prompt("Remote target port", "5432");
-    const targetPort = Number(targetPortValue);
-    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+    const targetPort = parseTunnelPort(window.prompt("Remote target port", "5432"), false);
+    if (targetPort === undefined) return;
+    if (targetPort === null) {
       setConnectionError("Target port must be an integer between 1 and 65535.");
       return;
     }
     const bindHost = window.prompt("Local bind host", "127.0.0.1");
     if (!bindHost?.trim()) return;
-    const bindPortValue = window.prompt("Local bind port (0 chooses a free port)", "0");
-    const bindPort = Number(bindPortValue);
-    if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
+    const bindPort = parseTunnelPort(window.prompt("Local bind port (0 chooses a free port)", "0"), true);
+    if (bindPort === undefined) return;
+    if (bindPort === null) {
       setConnectionError("Local bind port must be an integer between 0 and 65535.");
       return;
     }
@@ -3194,17 +3195,17 @@ function App() {
     if (!remoteSessionId) return;
     const bindHost = window.prompt("Remote bind host (on the SSH server)", "127.0.0.1");
     if (!bindHost?.trim()) return;
-    const bindPortValue = window.prompt("Remote bind port (0 chooses a free port)", "0");
-    const bindPort = Number(bindPortValue);
-    if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
+    const bindPort = parseTunnelPort(window.prompt("Remote bind port (0 chooses a free port)", "0"), true);
+    if (bindPort === undefined) return;
+    if (bindPort === null) {
       setConnectionError("Remote bind port must be an integer between 0 and 65535.");
       return;
     }
     const targetHost = window.prompt("Local target host (from this computer)", "127.0.0.1");
     if (!targetHost?.trim()) return;
-    const targetPortValue = window.prompt("Local target port", "3000");
-    const targetPort = Number(targetPortValue);
-    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+    const targetPort = parseTunnelPort(window.prompt("Local target port", "3000"), false);
+    if (targetPort === undefined) return;
+    if (targetPort === null) {
       setConnectionError("Local target port must be an integer between 1 and 65535.");
       return;
     }
@@ -3224,9 +3225,9 @@ function App() {
     if (!remoteSessionId) return;
     const bindHost = window.prompt("SOCKS5 bind host", "127.0.0.1");
     if (!bindHost?.trim()) return;
-    const bindPortValue = window.prompt("SOCKS5 local bind port (0 chooses a free port)", "0");
-    const bindPort = Number(bindPortValue);
-    if (!Number.isInteger(bindPort) || bindPort < 0 || bindPort > 65535) {
+    const bindPort = parseTunnelPort(window.prompt("SOCKS5 local bind port (0 chooses a free port)", "0"), true);
+    if (bindPort === undefined) return;
+    if (bindPort === null) {
       setConnectionError("SOCKS bind port must be an integer between 0 and 65535.");
       return;
     }
