@@ -880,12 +880,8 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
           if (event.payload.terminalId !== terminalIdRef.current) return;
           const error = remoteSessionCloseError(remoteProtocol, event.payload.reason);
-          if (error) {
-            terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
-            onStatusChange(workspaceId, "error");
-          } else {
-            onStatusChange(workspaceId, "closed");
-          }
+          if (error) terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
+          onStatusChange(workspaceId, "closed");
         });
         if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
