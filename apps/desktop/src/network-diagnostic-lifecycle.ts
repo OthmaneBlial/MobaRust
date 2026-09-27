@@ -4,6 +4,7 @@ export type NetworkDiagnosticRun = {
   finishedId: string | null;
   ignoredId: string | null;
   starting: boolean;
+  cancelRequested: boolean;
 };
 
 export function beginNetworkDiagnostic(run: NetworkDiagnosticRun): { generation: number; cancelId: string | null } | null {
@@ -13,6 +14,7 @@ export function beginNetworkDiagnostic(run: NetworkDiagnosticRun): { generation:
   run.currentId = null;
   run.finishedId = null;
   run.starting = true;
+  run.cancelRequested = false;
   run.generation += 1;
   return { generation: run.generation, cancelId };
 }
@@ -23,6 +25,7 @@ export function acceptNetworkDiagnosticEvent(run: NetworkDiagnosticRun, id: stri
   if (finished) {
     run.finishedId = id;
     run.starting = false;
+    run.cancelRequested = false;
   }
   return true;
 }
@@ -39,5 +42,17 @@ export function failNetworkDiagnosticStart(run: NetworkDiagnosticRun, generation
   if (generation !== run.generation) return false;
   run.starting = false;
   run.currentId = null;
+  run.cancelRequested = false;
   return true;
+}
+
+export function requestNetworkDiagnosticCancel(run: NetworkDiagnosticRun): string | null {
+  if (!run.currentId && run.starting) run.cancelRequested = true;
+  return run.currentId;
+}
+
+export function takePendingNetworkDiagnosticCancel(run: NetworkDiagnosticRun): string | null {
+  if (!run.cancelRequested || !run.currentId) return null;
+  run.cancelRequested = false;
+  return run.currentId;
 }

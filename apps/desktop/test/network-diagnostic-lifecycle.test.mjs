@@ -4,9 +4,11 @@ import {
   acceptNetworkDiagnosticResponse,
   beginNetworkDiagnostic,
   failNetworkDiagnosticStart,
+  requestNetworkDiagnosticCancel,
+  takePendingNetworkDiagnosticCancel,
 } from "../src/network-diagnostic-lifecycle.ts";
 
-const run = { generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false };
+const run = { generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false };
 const first = beginNetworkDiagnostic(run);
 assert.equal(first?.generation, 1);
 assert.equal(beginNetworkDiagnostic(run), null, "a second start must wait for the first operation ID");
@@ -26,3 +28,23 @@ assert.equal(acceptNetworkDiagnosticEvent(run, "traceroute", false), false, "pro
 const third = beginNetworkDiagnostic(run);
 assert.equal(failNetworkDiagnosticStart(run, third.generation), true);
 assert.equal(run.starting, false);
+
+const eventFirst = { generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false };
+const eventStart = beginNetworkDiagnostic(eventFirst);
+assert.equal(requestNetworkDiagnosticCancel(eventFirst), null);
+assert.equal(acceptNetworkDiagnosticEvent(eventFirst, "event-first", false), true);
+assert.equal(takePendingNetworkDiagnosticCancel(eventFirst), "event-first", "cancel must run when the event reveals the ID");
+assert.equal(takePendingNetworkDiagnosticCancel(eventFirst), null, "cancel must only be sent once");
+assert.equal(acceptNetworkDiagnosticResponse(eventFirst, eventStart.generation, "event-first"), true);
+
+const responseFirst = { generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false };
+const responseStart = beginNetworkDiagnostic(responseFirst);
+assert.equal(requestNetworkDiagnosticCancel(responseFirst), null);
+assert.equal(acceptNetworkDiagnosticResponse(responseFirst, responseStart.generation, "response-first"), true);
+assert.equal(takePendingNetworkDiagnosticCancel(responseFirst), "response-first", "cancel must run when the response reveals the ID");
+
+const alreadyFinished = { generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false };
+beginNetworkDiagnostic(alreadyFinished);
+requestNetworkDiagnosticCancel(alreadyFinished);
+acceptNetworkDiagnosticEvent(alreadyFinished, "already-finished", true);
+assert.equal(takePendingNetworkDiagnosticCancel(alreadyFinished), null, "a finished operation needs no cancel");

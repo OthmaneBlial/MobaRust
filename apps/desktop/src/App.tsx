@@ -46,7 +46,7 @@ import {
   type MacroRecordingState,
 } from "./macro-recording";
 import { isCurrentSessionRequest } from "./session-request";
-import { acceptNetworkDiagnosticEvent, acceptNetworkDiagnosticResponse, beginNetworkDiagnostic, failNetworkDiagnosticStart, type NetworkDiagnosticRun } from "./network-diagnostic-lifecycle";
+import { acceptNetworkDiagnosticEvent, acceptNetworkDiagnosticResponse, beginNetworkDiagnostic, failNetworkDiagnosticStart, requestNetworkDiagnosticCancel, takePendingNetworkDiagnosticCancel, type NetworkDiagnosticRun } from "./network-diagnostic-lifecycle";
 import {
   Activity,
   ArrowDownToLine,
@@ -1513,7 +1513,7 @@ function App() {
   const [networkScanTotal, setNetworkScanTotal] = useState(0);
   const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
   const networkScanIdRef = useRef<string | null>(null);
-  const networkDiagnosticRunRef = useRef<NetworkDiagnosticRun>({ generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false });
+  const networkDiagnosticRunRef = useRef<NetworkDiagnosticRun>({ generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false });
   const nativeTerminalIdsRef = useRef(new Map<string, string>());
   const terminalInstancesRef = useRef(new Map<string, { terminal: Terminal; searchAddon: SearchAddon }>());
   const selectedTerminalIdRef = useRef("");
@@ -3322,6 +3322,14 @@ function App() {
     }
   }, [networkHost, networkPort, networkTimeout]);
 
+  const cancelNetworkDiagnosticId = useCallback(async (operationId: string) => {
+    try {
+      await invoke("network_diagnostic_cancel", { operationId });
+    } catch (error) {
+      setNetworkError(`Diagnostic cancellation failed: ${String(error)}`);
+    }
+  }, []);
+
   const startNetworkPing = useCallback(async () => {
     const host = networkHost.trim();
     const timeoutMs = Number(networkTimeout);
@@ -3351,14 +3359,17 @@ function App() {
     setNetworkError(null);
     try {
       const response = await invoke<{ operationId: string }>("network_ping_start", { request: { host, timeoutMs } });
-      acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId);
+      if (acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId)) {
+        const cancelId = takePendingNetworkDiagnosticCancel(run);
+        if (cancelId) void cancelNetworkDiagnosticId(cancelId);
+      }
     } catch (error) {
       if (failNetworkDiagnosticStart(run, pending.generation)) {
         setNetworkDiagnosticStatus("failed");
         setNetworkError(String(error));
       }
     }
-  }, [networkHost, networkTimeout]);
+  }, [cancelNetworkDiagnosticId, networkHost, networkTimeout]);
 
   const startNetworkTraceroute = useCallback(async () => {
     const host = networkHost.trim();
@@ -3390,24 +3401,23 @@ function App() {
     setNetworkError(null);
     try {
       const response = await invoke<{ operationId: string }>("network_traceroute_start", { request: { host, timeoutMs, maxHops } });
-      acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId);
+      if (acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId)) {
+        const cancelId = takePendingNetworkDiagnosticCancel(run);
+        if (cancelId) void cancelNetworkDiagnosticId(cancelId);
+      }
     } catch (error) {
       if (failNetworkDiagnosticStart(run, pending.generation)) {
         setNetworkDiagnosticStatus("failed");
         setNetworkError(String(error));
       }
     }
-  }, [networkHost, networkTimeout, networkTraceMaxHops]);
+  }, [cancelNetworkDiagnosticId, networkHost, networkTimeout, networkTraceMaxHops]);
 
   const cancelNetworkDiagnostic = useCallback(async () => {
-    const operationId = networkDiagnosticRunRef.current.currentId;
-    if (!operationId || !IS_TAURI) return;
-    try {
-      await invoke("network_diagnostic_cancel", { operationId });
-    } catch (error) {
-      setNetworkError(`Diagnostic cancellation failed: ${String(error)}`);
-    }
-  }, []);
+    if (!IS_TAURI) return;
+    const operationId = requestNetworkDiagnosticCancel(networkDiagnosticRunRef.current);
+    if (operationId) await cancelNetworkDiagnosticId(operationId);
+  }, [cancelNetworkDiagnosticId]);
 
   const startNetworkScan = useCallback(async () => {
     const host = networkHost.trim();
@@ -3553,6 +3563,10 @@ function App() {
     void listen<NetworkDiagnosticEvent>("network://diagnostic", (event) => {
       const payload = event.payload;
       if (!acceptNetworkDiagnosticEvent(networkDiagnosticRunRef.current, payload.operationId, payload.state !== "running")) return;
+      if (payload.state === "running") {
+        const cancelId = takePendingNetworkDiagnosticCancel(networkDiagnosticRunRef.current);
+        if (cancelId) void cancelNetworkDiagnosticId(cancelId);
+      }
       setNetworkDiagnosticKind(payload.kind);
       setNetworkDiagnosticStatus(payload.state);
       if (payload.ping) setNetworkPingResult(payload.ping);
@@ -3572,7 +3586,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [cancelNetworkDiagnosticId]);
 
   useEffect(() => {
     refreshSavedSessions();
