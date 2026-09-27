@@ -831,6 +831,7 @@ fn session_save_ssh(
     payload: SaveSshSessionRequest,
 ) -> Result<SessionRecord, String> {
     let SaveSshSessionRequest { name, request } = payload;
+    ssh::validate_ssh_connection_policy(&request).map_err(|error| error.to_string())?;
     if let Some(x11) = &request.x11 {
         mobarust_ssh::X11ForwardingOptions::parse(&x11.display, x11.single_connection)
             .map_err(|error| format!("invalid X11 configuration: {error}"))?;

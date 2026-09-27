@@ -3,6 +3,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const MAX_SERVER_ALIVE_INTERVAL_SECONDS: u64 = 86_400;
+pub const MAX_SSH_JUMP_HOSTS: usize = 8;
 pub const DEFAULT_VNC_QUALITY: &str = "balanced";
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED: bool = true;
 pub const DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS: u8 = 3;

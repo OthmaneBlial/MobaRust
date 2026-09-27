@@ -26,6 +26,10 @@ Quick Connect profiles retain non-secret hop descriptors. OpenSSH imports keep
 `ProxyJump` aliases, and the renderer resolves them only against the imported
 secret-free catalog before creating the typed hop requests.
 
+Connection requests allow up to eight jump hosts. Oversized OpenSSH entries
+are reported as skipped while other entries import normally. Existing saved
+profiles remain readable; an oversized chain cannot start a connection.
+
 ## Safety and lifecycle
 
 Jump tests start an ephemeral `sshd` in a temporary directory, generate

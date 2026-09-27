@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mobarust_core::{
     AppSettings, AuditEvent, AuditEventKind, AuthMethod, MAX_SERVER_ALIVE_INTERVAL_SECONDS,
-    MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
+    MAX_SSH_JUMP_HOSTS, MacroRecord, Protocol, SessionId, SessionRecord, SnippetRecord,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -925,6 +925,10 @@ impl SessionStore {
                 .filter(|value| !value.is_empty() && *value != "none")
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
+            if jump_hosts.len() > MAX_SSH_JUMP_HOSTS {
+                skipped_hosts.push(format!("{alias} (too many ProxyJump hosts)"));
+                continue;
+            }
             let notes = options
                 .get("serveraliveinterval")
                 .map(|interval| format!("Imported from OpenSSH; ServerAliveInterval={interval}"));
@@ -2136,6 +2140,36 @@ mod tests {
         assert!(report.imported.is_empty());
         assert_eq!(report.skipped_hosts, vec!["broken (invalid Port)"]);
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn oversized_proxyjump_skips_only_that_host() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        let hops = (0..=MAX_SSH_JUMP_HOSTS)
+            .map(|index| format!("hop{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            &path,
+            format!("Host oversized\n  ProxyJump {hops}\nHost valid\n  HostName valid.example\n"),
+        )
+        .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let report = store.import_openssh_config(&path).unwrap();
+        assert_eq!(
+            report.skipped_hosts,
+            vec!["oversized (too many ProxyJump hosts)"]
+        );
+        assert_eq!(report.imported.len(), 1);
+        assert_eq!(report.imported[0].name, "valid");
+        assert_eq!(SessionStore::open(store.path()).unwrap().list().len(), 1);
+
+        let mut existing = remote_session();
+        existing.jump_hosts = vec!["legacy-hop".into(); MAX_SSH_JUMP_HOSTS + 1];
+        store.save(existing).unwrap();
+        assert_eq!(SessionStore::open(store.path()).unwrap().list().len(), 2);
     }
 
     #[test]

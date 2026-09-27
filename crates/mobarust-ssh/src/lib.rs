@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use encoding_rs::WINDOWS_1252;
-use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState};
+use mobarust_core::{ConnectionEvent, ConnectionLifecycle, ConnectionState, MAX_SSH_JUMP_HOSTS};
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{
@@ -54,6 +54,8 @@ pub enum HostKeyPolicy {
 pub enum SshError {
     #[error("SSH host and username are required")]
     InvalidOptions,
+    #[error("SSH jump chain cannot exceed 8 hosts")]
+    TooManyJumpHosts,
     #[error("SSH host key rejected; observed fingerprint: {fingerprint}")]
     HostKeyRejected { fingerprint: String },
     #[error("SSH authentication was rejected")]
@@ -959,6 +961,9 @@ impl SshConnection {
         options: SshConnectOptions,
         mut jumps: Vec<SshJumpOptions>,
     ) -> Result<Self, SshError> {
+        if jumps.len() > MAX_SSH_JUMP_HOSTS {
+            return Err(SshError::TooManyJumpHosts);
+        }
         validate_options(&options)?;
         let Some(first) = jumps.first() else {
             return Self::connect(options).await;
@@ -3222,6 +3227,27 @@ mod tests {
             Some(Duration::from_secs(30))
         );
         assert_eq!(parts.config.keepalive_max, 3);
+    }
+
+    #[tokio::test]
+    async fn oversized_jump_chain_fails_before_any_connection() {
+        let options = || SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 22,
+            host_key_policy: HostKeyPolicy::RejectUnknown,
+            timeout: Duration::from_secs(1),
+            keepalive_interval: None,
+            credentials: SshCredentials::agent("fixture-user"),
+            x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
+        };
+        let jumps = (0..=MAX_SSH_JUMP_HOSTS).map(|_| options()).collect();
+        assert!(matches!(
+            SshConnection::connect_with_jump_chain(options(), jumps).await,
+            Err(SshError::TooManyJumpHosts)
+        ));
     }
 
     #[test]

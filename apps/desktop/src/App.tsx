@@ -2639,7 +2639,7 @@ function App() {
     }
     const request = requestFromSavedSession(session, savedSessions);
     if (!request) {
-      setConnectionError("This saved session uses an authentication method that is not available yet.");
+      setConnectionError("This SSH profile has incomplete authentication or an unresolved, cyclic, or oversized jump chain (maximum 8 hosts).");
       return;
     }
     void connectSsh(request, false);
@@ -4043,8 +4043,11 @@ function findSavedJumpSession(catalog: SavedSession[], alias: string): SavedSess
   return catalog.find((candidate) => candidate.hostname === host && (!port || candidate.port === port));
 }
 
-function requestFromSavedSession(session: SavedSession, catalog: SavedSession[], visited = new Set<string>()): SshConnectRequest | null {
+const MAX_SSH_JUMP_HOSTS = 8;
+
+function requestFromSavedSession(session: SavedSession, catalog: SavedSession[], visited = new Set<string>(), remainingHops = MAX_SSH_JUMP_HOSTS): SshConnectRequest | null {
   if (session.protocol !== "SSH" || visited.has(session.id)) return null;
+  if ((session.jump_host_profiles?.length ?? 0) > remainingHops || (!session.jump_host_profiles?.length && session.jump_hosts.length > remainingHops)) return null;
   const username = session.username?.trim();
   if (!username || session.port === 0) return null;
   const auth = requestFromSavedAuth(session.auth);
@@ -4072,10 +4075,12 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
     jumpHosts = directJumpHosts as SshJumpHostRequest[];
   } else {
     for (const alias of session.jump_hosts) {
+      if (jumpHosts.length >= remainingHops) return null;
       const jumpSession = findSavedJumpSession(catalog, alias);
       if (!jumpSession) return null;
-      const jumpRequest = requestFromSavedSession(jumpSession, catalog, nextVisited);
+      const jumpRequest = requestFromSavedSession(jumpSession, catalog, nextVisited, remainingHops - jumpHosts.length - 1);
       if (!jumpRequest) return null;
+      if (jumpHosts.length + (jumpRequest.jumpHosts?.length ?? 0) >= remainingHops) return null;
       jumpHosts.push(...(jumpRequest.jumpHosts ?? []));
       jumpHosts.push({
         host: jumpRequest.host,

@@ -1,6 +1,6 @@
 use mobarust_core::{
-    MAX_SERVER_ALIVE_INTERVAL_SECONDS, TerminalInputError, TransferEvent, TransferLifecycle,
-    TransferState, Utf8OutputDecoder, validate_terminal_input,
+    MAX_SERVER_ALIVE_INTERVAL_SECONDS, MAX_SSH_JUMP_HOSTS, TerminalInputError, TransferEvent,
+    TransferLifecycle, TransferState, Utf8OutputDecoder, validate_terminal_input,
 };
 use mobarust_ssh::{
     HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
@@ -79,7 +79,14 @@ fn default_ssh_connect_timeout_ms() -> u64 {
     DEFAULT_SSH_CONNECT_TIMEOUT_MS
 }
 
-fn validate_ssh_connection_policy(request: &SshConnectRequest) -> Result<(), SshManagerError> {
+pub(crate) fn validate_ssh_connection_policy(
+    request: &SshConnectRequest,
+) -> Result<(), SshManagerError> {
+    if request.jump_hosts.len() > MAX_SSH_JUMP_HOSTS {
+        return Err(SshManagerError::InvalidRequest(
+            "SSH jump chain cannot exceed 8 hosts".into(),
+        ));
+    }
     if request.reconnect_attempts > 10 {
         return Err(SshManagerError::InvalidRequest(
             "reconnect attempts must be between 0 and 10".into(),
@@ -3626,10 +3633,10 @@ fn validate_tunnel_host(value: &str, field: &str) -> Result<(), SshManagerError>
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshConnectRequest, SshManager,
-        SshManagerError, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol,
-        add_transfer_size, commit_local_file, local_part_path, local_transfer_name,
-        next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
+        MAX_SERVER_ALIVE_INTERVAL_SECONDS, MAX_SSH_JUMP_HOSTS, ReconnectOutcome, SshConnectRequest,
+        SshManager, SshManagerError, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL,
+        TransferProtocol, add_transfer_size, commit_local_file, local_part_path,
+        local_transfer_name, next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
         remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
         transfer_metrics, validate_local_file_path, validate_remote_directory_path,
         validate_remote_file_path, validate_remote_mutation_path, validate_ssh_connection_policy,
@@ -4103,6 +4110,19 @@ mod tests {
         request.reconnect_attempts = 0;
         request.connect_timeout_ms = 60_001;
         assert!(validate_ssh_connection_policy(&request).is_err());
+        request.connect_timeout_ms = 100;
+        request.jump_hosts = (0..=MAX_SSH_JUMP_HOSTS)
+            .map(|_| {
+                serde_json::from_value(serde_json::json!({
+                    "host": "127.0.0.1", "port": 22, "username": "fixture",
+                    "auth": { "method": "agent" }
+                }))
+                .unwrap()
+            })
+            .collect();
+        assert!(validate_ssh_connection_policy(&request).is_err());
+        request.jump_hosts.pop();
+        assert!(validate_ssh_connection_policy(&request).is_ok());
     }
 
     #[tokio::test]
