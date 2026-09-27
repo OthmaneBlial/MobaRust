@@ -46,6 +46,7 @@ import {
   type MacroRecordingState,
 } from "./macro-recording";
 import { isCurrentSessionRequest } from "./session-request";
+import { acceptNetworkDiagnosticEvent, acceptNetworkDiagnosticResponse, beginNetworkDiagnostic, failNetworkDiagnosticStart, type NetworkDiagnosticRun } from "./network-diagnostic-lifecycle";
 import {
   Activity,
   ArrowDownToLine,
@@ -1494,7 +1495,6 @@ function App() {
   const [networkResult, setNetworkResult] = useState<TcpCheckResult | null>(null);
   const [networkFingerprint, setNetworkFingerprint] = useState<SshHostKeyInspection | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
-  const [networkDiagnosticId, setNetworkDiagnosticId] = useState<string | null>(null);
   const [networkDiagnosticKind, setNetworkDiagnosticKind] = useState<"ping" | "traceroute" | null>(null);
   const [networkDiagnosticStatus, setNetworkDiagnosticStatus] = useState<"idle" | "running" | "completed" | "cancelled" | "failed">("idle");
   const [networkPingResult, setNetworkPingResult] = useState<PingResult | null>(null);
@@ -1513,7 +1513,7 @@ function App() {
   const [networkScanTotal, setNetworkScanTotal] = useState(0);
   const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
   const networkScanIdRef = useRef<string | null>(null);
-  const networkDiagnosticIdRef = useRef<string | null>(null);
+  const networkDiagnosticRunRef = useRef<NetworkDiagnosticRun>({ generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false });
   const nativeTerminalIdsRef = useRef(new Map<string, string>());
   const terminalInstancesRef = useRef(new Map<string, { terminal: Terminal; searchAddon: SearchAddon }>());
   const selectedTerminalIdRef = useRef("");
@@ -3340,20 +3340,23 @@ function App() {
       setNetworkDiagnosticStatus("failed");
       return;
     }
-    if (networkDiagnosticIdRef.current) await invoke("network_diagnostic_cancel", { operationId: networkDiagnosticIdRef.current }).catch(() => undefined);
+    const run = networkDiagnosticRunRef.current;
+    const pending = beginNetworkDiagnostic(run);
+    if (!pending) return;
+    if (pending.cancelId) await invoke("network_diagnostic_cancel", { operationId: pending.cancelId }).catch(() => undefined);
+    if (run.generation !== pending.generation) return;
     setNetworkDiagnosticKind("ping");
     setNetworkDiagnosticStatus("running");
     setNetworkPingResult(null);
     setNetworkError(null);
     try {
       const response = await invoke<{ operationId: string }>("network_ping_start", { request: { host, timeoutMs } });
-      networkDiagnosticIdRef.current = response.operationId;
-      setNetworkDiagnosticId(response.operationId);
+      acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId);
     } catch (error) {
-      networkDiagnosticIdRef.current = null;
-      setNetworkDiagnosticId(null);
-      setNetworkDiagnosticStatus("failed");
-      setNetworkError(String(error));
+      if (failNetworkDiagnosticStart(run, pending.generation)) {
+        setNetworkDiagnosticStatus("failed");
+        setNetworkError(String(error));
+      }
     }
   }, [networkHost, networkTimeout]);
 
@@ -3376,32 +3379,35 @@ function App() {
       setNetworkDiagnosticStatus("failed");
       return;
     }
-    if (networkDiagnosticIdRef.current) await invoke("network_diagnostic_cancel", { operationId: networkDiagnosticIdRef.current }).catch(() => undefined);
+    const run = networkDiagnosticRunRef.current;
+    const pending = beginNetworkDiagnostic(run);
+    if (!pending) return;
+    if (pending.cancelId) await invoke("network_diagnostic_cancel", { operationId: pending.cancelId }).catch(() => undefined);
+    if (run.generation !== pending.generation) return;
     setNetworkDiagnosticKind("traceroute");
     setNetworkDiagnosticStatus("running");
     setNetworkTracerouteResult(null);
     setNetworkError(null);
     try {
       const response = await invoke<{ operationId: string }>("network_traceroute_start", { request: { host, timeoutMs, maxHops } });
-      networkDiagnosticIdRef.current = response.operationId;
-      setNetworkDiagnosticId(response.operationId);
+      acceptNetworkDiagnosticResponse(run, pending.generation, response.operationId);
     } catch (error) {
-      networkDiagnosticIdRef.current = null;
-      setNetworkDiagnosticId(null);
-      setNetworkDiagnosticStatus("failed");
-      setNetworkError(String(error));
+      if (failNetworkDiagnosticStart(run, pending.generation)) {
+        setNetworkDiagnosticStatus("failed");
+        setNetworkError(String(error));
+      }
     }
   }, [networkHost, networkTimeout, networkTraceMaxHops]);
 
   const cancelNetworkDiagnostic = useCallback(async () => {
-    const operationId = networkDiagnosticIdRef.current ?? networkDiagnosticId;
+    const operationId = networkDiagnosticRunRef.current.currentId;
     if (!operationId || !IS_TAURI) return;
     try {
       await invoke("network_diagnostic_cancel", { operationId });
     } catch (error) {
       setNetworkError(`Diagnostic cancellation failed: ${String(error)}`);
     }
-  }, [networkDiagnosticId]);
+  }, []);
 
   const startNetworkScan = useCallback(async () => {
     const host = networkHost.trim();
@@ -3546,18 +3552,13 @@ function App() {
     let unlisten: UnlistenFn | undefined;
     void listen<NetworkDiagnosticEvent>("network://diagnostic", (event) => {
       const payload = event.payload;
-      if (networkDiagnosticIdRef.current && payload.operationId !== networkDiagnosticIdRef.current) return;
-      if (!networkDiagnosticIdRef.current) {
-        networkDiagnosticIdRef.current = payload.operationId;
-        setNetworkDiagnosticId(payload.operationId);
-      }
+      if (!acceptNetworkDiagnosticEvent(networkDiagnosticRunRef.current, payload.operationId, payload.state !== "running")) return;
       setNetworkDiagnosticKind(payload.kind);
       setNetworkDiagnosticStatus(payload.state);
       if (payload.ping) setNetworkPingResult(payload.ping);
       if (payload.traceroute) setNetworkTracerouteResult(payload.traceroute);
       if (payload.state === "failed") setNetworkError(payload.error ?? "Network diagnostic failed.");
       if (payload.state === "cancelled") setNetworkError(null);
-      if (["completed", "cancelled", "failed"].includes(payload.state)) networkDiagnosticIdRef.current = null;
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
