@@ -1875,6 +1875,14 @@ fn ensure_sftp_directory_capacity(entry_count: usize) -> Result<(), SshError> {
     }
 }
 
+fn validate_sftp_directory_batch(entry_count: usize) -> Result<(), SshError> {
+    if entry_count == 0 {
+        Err(SshError::SftpProtocol)
+    } else {
+        Ok(())
+    }
+}
+
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     credentials: SshCredentials,
@@ -2179,6 +2187,10 @@ impl SftpConnection {
         loop {
             match session.readdir(directory.handle.as_str()).await {
                 Ok(batch) => {
+                    if let Err(error) = validate_sftp_directory_batch(batch.files.len()) {
+                        result = Err(error);
+                        break;
+                    }
                     for file in batch.files {
                         if file.filename == "." || file.filename == ".." {
                             continue;
@@ -3359,6 +3371,15 @@ mod tests {
             ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES),
             Err(SshError::SftpDirectoryTooLarge)
         ));
+    }
+
+    #[test]
+    fn empty_sftp_directory_batches_fail_instead_of_spinning() {
+        assert!(matches!(
+            validate_sftp_directory_batch(0),
+            Err(SshError::SftpProtocol)
+        ));
+        assert!(validate_sftp_directory_batch(1).is_ok());
     }
 
     #[test]
