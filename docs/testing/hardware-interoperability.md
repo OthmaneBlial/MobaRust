@@ -77,6 +77,14 @@ downloaded again and their SHA-256 files passed. The workflow stayed disabled.
 This does not establish GUI behavior, clean installation, or Intel hardware
 interoperability.
 
+On 2026-09-27, v0.1.14 source passed `cargo xtask check`, including local
+RDP/VNC loopback fixtures and fuzz-target compilation. Locally built ARM64 and
+x64 DMGs passed `hdiutil verify`; their mounted apps passed package layout and
+ad hoc signature checks. `lipo` confirmed the app and VNC helper architectures,
+and both packaged executables returned `MobaRust 0.1.14` for `--version`.
+The collected DMGs passed their SHA-256 files. No GUI or Intel hardware session
+was exercised in this run.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
