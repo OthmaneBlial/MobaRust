@@ -665,8 +665,15 @@ mod tests {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("clone test reader");
         let mut writer = pair.master.take_writer().expect("take test writer");
-        writer.write_all(b"hello\n").expect("write test input");
+        writer
+            .write_all(if cfg!(target_os = "windows") {
+                b"hello\r"
+            } else {
+                b"hello\n"
+            })
+            .expect("write test input");
         writer.flush().expect("flush test input");
+        drop(writer);
 
         let mut output = String::new();
         reader
@@ -865,8 +872,9 @@ mod tests {
         {
             let mut command = CommandBuilder::new("cmd.exe");
             command.args([
+                "/V:ON",
                 "/C",
-                "echo MOBARUST_PTY_OK && set /p line= && echo. && echo INPUT:%line%",
+                "echo MOBARUST_PTY_OK && set /p line= && echo. && echo INPUT:!line!",
             ]);
             command
         }
