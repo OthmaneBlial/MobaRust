@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const MAX_READ_BYTES: usize = 64 * 1024;
+const MAX_DEVICE_PATH_BYTES: usize = 4096;
 
 #[derive(Debug, Error)]
 pub enum SerialError {
@@ -173,7 +174,8 @@ impl SerialOptions {
     }
 
     pub fn validate(&self) -> Result<(), SerialError> {
-        if self.device.trim().is_empty()
+        if self.device.len() > MAX_DEVICE_PATH_BYTES
+            || self.device.trim().is_empty()
             || self.device.contains('\0')
             || Path::new(&self.device)
                 .to_str()
@@ -569,6 +571,15 @@ mod tests {
         ));
         options.device = "/temporary/fixture-device".into();
         options.baud_rate = 0;
+        assert!(matches!(
+            options.validate(),
+            Err(SerialError::InvalidOptions)
+        ));
+    }
+
+    #[test]
+    fn oversized_device_path_is_rejected_during_validation() {
+        let options = SerialOptions::new("d".repeat(MAX_DEVICE_PATH_BYTES + 1), 115_200);
         assert!(matches!(
             options.validate(),
             Err(SerialError::InvalidOptions)
