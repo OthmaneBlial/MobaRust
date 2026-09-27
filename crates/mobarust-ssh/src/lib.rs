@@ -978,7 +978,11 @@ impl SshConnection {
     ) -> Result<Self, SshError> {
         validate_options(&options)?;
         let stream = upstream
-            .open_direct_tcpip(options.host.clone(), u32::from(options.port))
+            .open_direct_tcpip_with_timeout(
+                options.host.clone(),
+                u32::from(options.port),
+                options.timeout,
+            )
             .await?;
         let ConnectionParts {
             observed_fingerprint,
@@ -1407,13 +1411,23 @@ impl SshConnection {
         target_host: impl Into<String>,
         target_port: u32,
     ) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        self.open_direct_tcpip_with_timeout(target_host, target_port, Duration::from_secs(12))
+            .await
+    }
+
+    async fn open_direct_tcpip_with_timeout(
+        &self,
+        target_host: impl Into<String>,
+        target_port: u32,
+        timeout: Duration,
+    ) -> Result<russh::ChannelStream<client::Msg>, SshError> {
         if target_port == 0 {
             return Err(SshError::InvalidOptions);
         }
         let target_host = target_host.into();
         validate_forward_host(&target_host)?;
         let channel = tokio::time::timeout(
-            self.connect_timeout,
+            timeout,
             self.handle
                 .channel_open_direct_tcpip(target_host, target_port, "127.0.0.1", 0),
         )
