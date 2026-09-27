@@ -36,6 +36,7 @@ const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
 const MAX_QUEUED_X11_CHANNELS: usize = 8;
 pub const MAX_FORWARD_HOST_BYTES: usize = 255;
+const MAX_SFTP_DIRECTORY_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -107,6 +108,8 @@ pub enum SshError {
     SftpProtocol,
     #[error("SFTP server limit was reached")]
     SftpLimit,
+    #[error("SFTP directory exceeds the 10,000 entry limit")]
+    SftpDirectoryTooLarge,
     #[error("SFTP I/O failed")]
     SftpIo,
     #[error("remote file changed since it was opened")]
@@ -1231,7 +1234,11 @@ impl SshConnection {
         .await
         .map_err(|_| SshError::Timeout)??;
         session.set_timeout(12);
-        Ok(SftpConnection { session })
+        Ok(SftpConnection {
+            session,
+            handle: self.handle.clone(),
+            listing_session: AsyncMutex::new(None),
+        })
     }
 
     pub async fn scp_upload<R>(
@@ -1860,6 +1867,14 @@ fn map_sftp_io_error(error: io::Error) -> SshError {
     }
 }
 
+fn ensure_sftp_directory_capacity(entry_count: usize) -> Result<(), SshError> {
+    if entry_count >= MAX_SFTP_DIRECTORY_ENTRIES {
+        Err(SshError::SftpDirectoryTooLarge)
+    } else {
+        Ok(())
+    }
+}
+
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     credentials: SshCredentials,
@@ -2071,6 +2086,8 @@ pub struct SshShellWriter {
 /// a multi-gigabyte file is never accumulated in application memory.
 pub struct SftpConnection {
     session: russh_sftp::client::SftpSession,
+    handle: Arc<client::Handle<ClientHandler>>,
+    listing_session: AsyncMutex<Option<russh_sftp::client::RawSftpSession>>,
 }
 
 pub const MAX_REMOTE_EDITOR_BYTES: usize = 4 * 1024 * 1024;
@@ -2125,32 +2142,100 @@ impl SftpConnection {
     }
 
     pub async fn read_dir(&self, path: impl Into<String>) -> Result<Vec<RemoteEntry>, SshError> {
-        let entries = self.session.read_dir(path).await.map_err(map_sftp_error)?;
-        Ok(entries
-            .map(|entry| {
-                let metadata = entry.metadata();
-                let file_type = metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK);
-                let modified_unix_seconds = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_secs());
-                RemoteEntry {
-                    name: entry.file_name(),
-                    path: entry.path(),
-                    size: metadata.len(),
-                    is_directory: file_type == Some(SFTP_DIRECTORY_TYPE),
-                    is_regular: file_type == Some(SFTP_REGULAR_TYPE),
-                    is_symlink: file_type == Some(SFTP_SYMLINK_TYPE),
-                    modified_unix_seconds,
-                    uid: metadata.uid,
-                    owner: metadata.user,
-                    gid: metadata.gid,
-                    group: metadata.group,
-                    permissions: metadata.permissions,
-                }
+        use russh_sftp::{client::error::Error, protocol::StatusCode};
+
+        let path = path.into();
+        let mut listing_session = self.listing_session.lock().await;
+        if listing_session.is_none() {
+            let raw_session = tokio::time::timeout(Duration::from_secs(12), async {
+                let channel = self
+                    .handle
+                    .channel_open_session()
+                    .await
+                    .map_err(SshError::Channel)?;
+                channel
+                    .request_subsystem(true, "sftp")
+                    .await
+                    .map_err(SshError::Channel)?;
+                let session = russh_sftp::client::RawSftpSession::new(channel.into_stream());
+                session.set_timeout(12);
+                session.init().await.map_err(map_sftp_error)?;
+                Ok::<_, SshError>(session)
             })
-            .collect())
+            .await
+            .map_err(|_| SshError::Timeout)??;
+            *listing_session = Some(raw_session);
+        }
+
+        let session = listing_session
+            .as_ref()
+            .expect("listing session initialized");
+        let directory = session
+            .opendir(path.clone())
+            .await
+            .map_err(map_sftp_error)?;
+        let mut entries = Vec::new();
+        let mut result = Ok(());
+        loop {
+            match session.readdir(directory.handle.as_str()).await {
+                Ok(batch) => {
+                    for file in batch.files {
+                        if file.filename == "." || file.filename == ".." {
+                            continue;
+                        }
+                        if let Err(error) = ensure_sftp_directory_capacity(entries.len()) {
+                            result = Err(error);
+                            break;
+                        }
+                        let metadata = file.attrs;
+                        let file_type = metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK);
+                        let entry_path = if path.is_empty() {
+                            file.filename.clone()
+                        } else if path.ends_with('/') {
+                            format!("{path}{}", file.filename)
+                        } else {
+                            format!("{path}/{}", file.filename)
+                        };
+                        entries.push(RemoteEntry {
+                            name: file.filename,
+                            path: entry_path,
+                            size: metadata.size.unwrap_or_default(),
+                            is_directory: file_type == Some(SFTP_DIRECTORY_TYPE),
+                            is_regular: file_type == Some(SFTP_REGULAR_TYPE),
+                            is_symlink: file_type == Some(SFTP_SYMLINK_TYPE),
+                            modified_unix_seconds: metadata.mtime.map(u64::from),
+                            uid: metadata.uid,
+                            owner: metadata.user,
+                            gid: metadata.gid,
+                            group: metadata.group,
+                            permissions: metadata.permissions,
+                        });
+                    }
+                    if result.is_err() {
+                        break;
+                    }
+                }
+                Err(Error::Status(status)) if status.status_code == StatusCode::Eof => break,
+                Err(error) => {
+                    result = Err(map_sftp_error(error));
+                    break;
+                }
+            }
+        }
+        let close_result = session
+            .close(directory.handle)
+            .await
+            .map_err(map_sftp_error);
+        match result {
+            Err(error) => {
+                let _ = close_result;
+                return Err(error);
+            }
+            Ok(()) => {
+                close_result?;
+            }
+        }
+        Ok(entries)
     }
 
     pub async fn file_info(&self, path: impl Into<String>) -> Result<(u64, bool), SshError> {
@@ -2711,6 +2796,9 @@ impl SftpConnection {
     }
 
     pub async fn close(&self) -> Result<(), SshError> {
+        if let Some(session) = self.listing_session.lock().await.take() {
+            session.close_session().map_err(map_sftp_error)?;
+        }
         self.session.close().await.map_err(map_sftp_error)
     }
 }
@@ -3261,6 +3349,15 @@ mod tests {
         assert!(matches!(
             map_sftp_io_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
             SshError::SftpConnectionLost
+        ));
+    }
+
+    #[test]
+    fn sftp_directory_limit_fails_before_adding_an_extra_entry() {
+        assert!(ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES - 1).is_ok());
+        assert!(matches!(
+            ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES),
+            Err(SshError::SftpDirectoryTooLarge)
         ));
     }
 
