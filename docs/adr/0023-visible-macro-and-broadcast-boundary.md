@@ -25,6 +25,9 @@ high-signal warning banner remains above the terminal and every keystroke is
 sent only to the selected native terminal identifiers. If any selected target
 is not ready, the whole input event is rejected rather than partially fanned
 out. `Esc` disables broadcast immediately.
+Once writes start, delivery cannot be atomic across terminals. The UI waits
+for all write responses and warns that other targets may have received input
+if one fails; operators must check targets before retrying.
 
 The frontend receives opaque native terminal identifiers only for routing
 typed input. It never receives or stores credential material. No arbitrary

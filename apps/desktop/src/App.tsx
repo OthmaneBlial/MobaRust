@@ -21,6 +21,7 @@ import {
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
+import { settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
@@ -1798,9 +1799,8 @@ function App() {
       return;
     }
     recordTerminalInput(workspaceId, data);
-    void Promise.all(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)))
-      .then(() => setConnectionError(null))
-      .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}`));
+    void settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)))
+      .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`));
   }, [recordTerminalInput, writeTerminalInput]);
 
   const findTerminalMatch = useCallback((direction: "next" | "previous", query = terminalSearchQuery) => {
@@ -2665,7 +2665,7 @@ function App() {
     if (targets.length === 0 || unavailable.length > 0) {
       throw new Error("one or more selected terminals are not ready");
     }
-    await Promise.all(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)));
+    await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId!, data)));
   }, [writeTerminalInput]);
 
   const runMacro = useCallback(async (record: MacroRecord, targetIds: string[]) => {
@@ -2764,13 +2764,13 @@ function App() {
       macroRunRef.current = null;
       setMacroRun(null);
       if (macroCancelRef.current || String(error).includes("cancelled")) {
-        setSessionNotice(`Macro “${record.title}” cancelled before completion.`);
+        setSessionNotice(`Macro “${record.title}” cancelled before completion. Earlier actions may have run; check the targets before retrying.`);
         setConnectionError(null);
       } else if (String(error).includes("approval declined")) {
         setSessionNotice(`Macro “${record.title}” stopped before the next unapproved action.`);
         setConnectionError(null);
       } else {
-        setConnectionError(`Macro “${record.title}” stopped: ${String(error)}`);
+        setConnectionError(`Macro “${record.title}” stopped: ${String(error)}. Earlier actions or other targets may have received input; check before retrying.`);
       }
     }
   }, [connectSavedSession, savedSessions, writeToExplicitTargets]);

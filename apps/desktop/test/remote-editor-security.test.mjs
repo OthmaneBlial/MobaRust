@@ -19,6 +19,7 @@ import {
 } from "../src/session-environment.ts";
 import { createTerminalHttpLinkProvider, findTerminalHttpUrls } from "../src/terminal-links.ts";
 import { isMultilineTerminalPaste, shouldConfirmTerminalPaste } from "../src/terminal-paste.ts";
+import { settleTerminalWrites } from "../src/terminal-input.ts";
 import { MAX_TERMINAL_TITLE_LENGTH, sanitizeTerminalTitle } from "../src/terminal-title.ts";
 import { isCurrentSessionRequest } from "../src/session-request.ts";
 import { terminalFontSizeAfterZoom } from "../src/terminal-zoom.ts";
@@ -63,6 +64,19 @@ assert.equal(isMultilineTerminalPaste("first\u2029second"), true);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", true), true);
 assert.equal(shouldConfirmTerminalPaste("single line", true), false);
 assert.equal(shouldConfirmTerminalPaste("first\nsecond", false), false);
+{
+  let finishPending;
+  let settled = false;
+  const pending = new Promise((resolve) => { finishPending = resolve; });
+  const result = settleTerminalWrites([Promise.reject(new Error("disconnected")), pending])
+    .catch((error) => { settled = true; assert.equal(error.message, "disconnected"); });
+  await Promise.resolve();
+  assert.equal(settled, false, "a failed broadcast must await other writes");
+  finishPending();
+  await result;
+  assert.equal(settled, true);
+  await settleTerminalWrites([Promise.resolve(), Promise.resolve()]);
+}
 assert.equal(vncKeysymForText("\u0001"), null);
 
 const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>&lt;already-encoded&gt;';
