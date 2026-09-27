@@ -1488,7 +1488,7 @@ function App() {
   const remoteSessionIdRef = useRef<string | null>(null);
   const [networkHost, setNetworkHost] = useState("");
   const [networkPort, setNetworkPort] = useState("22");
-  const [networkTimeout, setNetworkTimeout] = useState("1500");
+  const [networkTimeout, setNetworkTimeout] = useState(() => String(settings.network.diagnosticTimeoutMs));
   const [networkStatus, setNetworkStatus] = useState<"idle" | "running" | "ready" | "error">("idle");
   const [networkAddresses, setNetworkAddresses] = useState<string[]>([]);
   const [networkResult, setNetworkResult] = useState<TcpCheckResult | null>(null);
@@ -1504,7 +1504,11 @@ function App() {
   const [networkScanStatus, setNetworkScanStatus] = useState<"idle" | "running" | "completed" | "cancelled" | "failed">("idle");
   const [networkScanStart, setNetworkScanStart] = useState("1");
   const [networkScanEnd, setNetworkScanEnd] = useState("1024");
-  const [networkScanConcurrency, setNetworkScanConcurrency] = useState("32");
+  const [networkScanConcurrency, setNetworkScanConcurrency] = useState(() => String(settings.network.scanConcurrency));
+  useEffect(() => {
+    setNetworkTimeout(String(settings.network.diagnosticTimeoutMs));
+    setNetworkScanConcurrency(String(settings.network.scanConcurrency));
+  }, [settings.network.diagnosticTimeoutMs, settings.network.scanConcurrency]);
   const [networkScanScanned, setNetworkScanScanned] = useState(0);
   const [networkScanTotal, setNetworkScanTotal] = useState(0);
   const [networkScanResults, setNetworkScanResults] = useState<TcpCheckResult[]>([]);
