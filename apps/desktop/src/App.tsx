@@ -23,6 +23,7 @@ import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { remoteSessionCloseError } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
@@ -877,7 +878,14 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           if (event.payload.terminalId === terminalIdRef.current) terminal.write(event.payload.data);
         });
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
-          if (event.payload.terminalId === terminalIdRef.current) onStatusChange(workspaceId, "closed");
+          if (event.payload.terminalId !== terminalIdRef.current) return;
+          const error = remoteSessionCloseError(remoteProtocol, event.payload.reason);
+          if (error) {
+            terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
+            onStatusChange(workspaceId, "error");
+          } else {
+            onStatusChange(workspaceId, "closed");
+          }
         });
         if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {

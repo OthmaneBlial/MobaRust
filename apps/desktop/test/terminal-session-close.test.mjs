@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { remoteSessionCloseError } from "../src/terminal-session-close.ts";
+
+assert.equal(remoteSessionCloseError("ssh", "closed"), null);
+assert.equal(remoteSessionCloseError("serial", "closed by application"), null);
+assert.equal(remoteSessionCloseError(null, "connection failed"), null);
+assert.equal(
+  remoteSessionCloseError("telnet", "\nremote connection lost\t"),
+  "TELNET session closed: remote connection lost",
+);
+assert.equal(
+  remoteSessionCloseError("ssh", "\u001b[31mhost unreachable\u001b[0m"),
+  "SSH session closed: [31mhost unreachable [0m",
+);
+assert.equal(
+  remoteSessionCloseError("ssh", "x".repeat(300)),
+  `SSH session closed: ${"x".repeat(237)}...`,
+);
