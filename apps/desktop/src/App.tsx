@@ -865,8 +865,9 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       if (!shouldConfirmTerminalPaste(data, confirmMultilinePasteRef.current)) return;
       event.preventDefault();
       event.stopPropagation();
-      const accepted = window.confirm("This paste contains multiple lines. Send it to the terminal? Nothing will be executed automatically by MobaRust.");
-      if (accepted) sendTerminalInput(data);
+      const accepted = window.confirm("This paste contains multiple lines. The receiving shell may execute them. Send to the terminal?");
+      // Keep xterm's line-ending normalization and bracketed-paste handling.
+      if (accepted) terminal.paste(data);
     };
     host.addEventListener("paste", onPaste, true);
 
