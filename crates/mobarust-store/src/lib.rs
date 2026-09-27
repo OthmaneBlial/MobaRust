@@ -267,7 +267,11 @@ pub struct AuditStore {
 impl AuditStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let events = if path.exists() {
+        let exists = local_store_path_exists(&path).map_err(|source| StoreError::AuditRead {
+            path: path.clone(),
+            source,
+        })?;
+        let events = if exists {
             let bytes = read_local_store_file(&path).map_err(|source| StoreError::AuditRead {
                 path: path.clone(),
                 source,
@@ -385,7 +389,11 @@ impl AuditStore {
 impl MacroStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let macros = if path.exists() {
+        let exists = local_store_path_exists(&path).map_err(|source| StoreError::MacroWrite {
+            path: path.clone(),
+            source,
+        })?;
+        let macros = if exists {
             let bytes = read_local_store_file(&path).map_err(|source| StoreError::MacroWrite {
                 path: path.clone(),
                 source,
@@ -487,7 +495,11 @@ impl MacroStore {
 impl SnippetStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let snippets = if path.exists() {
+        let exists = local_store_path_exists(&path).map_err(|source| StoreError::SnippetWrite {
+            path: path.clone(),
+            source,
+        })?;
+        let snippets = if exists {
             let bytes =
                 read_local_store_file(&path).map_err(|source| StoreError::SnippetWrite {
                     path: path.clone(),
@@ -590,7 +602,12 @@ impl SnippetStore {
 impl SettingsStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let settings = if path.exists() {
+        let exists =
+            local_store_path_exists(&path).map_err(|source| StoreError::SettingsWrite {
+                path: path.clone(),
+                source,
+            })?;
+        let settings = if exists {
             let bytes =
                 read_local_store_file(&path).map_err(|source| StoreError::SettingsWrite {
                     path: path.clone(),
@@ -718,7 +735,11 @@ impl SettingsStore {
 impl SessionStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let sessions = if path.exists() {
+        let exists = local_store_path_exists(&path).map_err(|source| StoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let sessions = if exists {
             let bytes = read_local_store_file(&path).map_err(|source| StoreError::Read {
                 path: path.clone(),
                 source,
@@ -1214,6 +1235,15 @@ fn read_openssh_config(path: &Path) -> Result<String, StoreError> {
     Ok(contents)
 }
 
+/// A broken symlink is an existing unsafe path, not a missing store.
+fn local_store_path_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// Read a persisted application store through a bounded, regular-file handle.
 /// Store files contain no secrets, but a hostile local file must not be able to
 /// force an allocation proportional to an arbitrary reported file size.
@@ -1333,6 +1363,34 @@ mod tests {
         RdpGatewayProfile, RemoteDesktopProfile, SessionRecord, SnippetRecord, TelnetProfile,
     };
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_store_symlinks_are_rejected_without_replacing_them() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let missing = directory.path().join("missing.json");
+        for name in ["sessions", "settings", "snippets", "macros", "audit"] {
+            let path = directory.path().join(format!("{name}.json"));
+            symlink(&missing, &path).unwrap();
+            let rejected = match name {
+                "sessions" => SessionStore::open(&path).is_err(),
+                "settings" => SettingsStore::open(&path).is_err(),
+                "snippets" => SnippetStore::open(&path).is_err(),
+                "macros" => MacroStore::open(&path).is_err(),
+                "audit" => AuditStore::open(&path).is_err(),
+                _ => unreachable!(),
+            };
+            assert!(rejected, "{name} store accepted a broken symlink");
+            assert!(
+                fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+    }
 
     #[test]
     fn persistence_errors_redact_paths_and_os_details_from_display() {
