@@ -1335,7 +1335,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
   return <div className="remote-desktop-viewport" ref={hostRef} aria-label={`${request.protocol.toUpperCase()} remote desktop`}>
     <canvas ref={canvasRef} className="remote-desktop-canvas" tabIndex={0} onKeyDown={(event) => sendKey(event, true)} onKeyUp={(event) => sendKey(event, false)} onPointerDown={capturePointer} onPointerUp={releasePointer} onPointerCancel={releasePointer} onPointerMove={(event) => event.buttons > 0 && sendPointer(event, true)} onWheel={sendWheel} onPaste={paste} onContextMenu={(event) => event.preventDefault()} />
-    {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying into this Mac.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button><button type="button" className="outline-button" onClick={dismissRemoteClipboard}>Dismiss</button></div>}
+    {remoteClipboard !== null && <div className="remote-desktop-clipboard" role="status" aria-live="polite"><div><strong>Remote clipboard received</strong><small>Review it before copying to this computer.</small></div><button type="button" className="outline-button" onClick={() => void copyRemoteClipboard()}><Copy size={13} />{clipboardCopied ? "Copied" : "Copy text"}</button><button type="button" className="outline-button" onClick={dismissRemoteClipboard}>Dismiss</button></div>}
     {error && <div className="remote-desktop-reconnect" role="alert"><div><strong>Remote desktop unavailable</strong><small>{error}</small></div><button type="button" className="outline-button" onClick={() => setConnectAttempt((attempt) => attempt + 1)}><RefreshCw size={13} />Reconnect</button></div>}
     {fullscreenError && <div className="remote-desktop-notice" role="status" aria-live="polite">{fullscreenError}</div>}
     <button type="button" className="remote-desktop-fullscreen" aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => void toggleFullscreen()}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
@@ -3200,7 +3200,7 @@ function App() {
       setConnectionError("Remote bind port must be an integer between 0 and 65535.");
       return;
     }
-    const targetHost = window.prompt("Local target host (from this Mac)", "127.0.0.1");
+    const targetHost = window.prompt("Local target host (from this computer)", "127.0.0.1");
     if (!targetHost?.trim()) return;
     const targetPortValue = window.prompt("Local target port", "3000");
     const targetPort = Number(targetPortValue);
