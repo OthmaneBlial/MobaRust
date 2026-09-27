@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::io::{Read, Write};
 use std::time::Duration;
 
