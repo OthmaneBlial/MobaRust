@@ -18,12 +18,13 @@ and parses it natively. It recognizes:
   target and each saved jump hop; `0` or an invalid/out-of-range value
   disables application of the setting and remains visible in the import note.
 
-Wildcard aliases, negated patterns, malformed ports, and unsupported
-directives are not silently converted into a profile. The report contains
-skipped hosts and distinct unsupported directive names. `Host *` is treated as
-a defaults block; exact aliases receive the first value found for each option,
-matching the important precedence rule without claiming full OpenSSH parser
-compatibility.
+Wildcard aliases, negated patterns, malformed ports, invalid session fields,
+and unsupported directives are not silently converted into a profile. One
+invalid host does not prevent valid neighbors from importing. The report
+contains skipped hosts and distinct unsupported directive names. `Host *` is
+treated as a defaults block; exact aliases receive the first value found for
+each option, matching the important precedence rule without claiming full
+OpenSSH parser compatibility.
 
 Imported profiles are persisted in the existing versioned session store.
 Existing SSH profiles with the same alias are reported as skipped so a repeat

@@ -945,7 +945,7 @@ impl SessionStore {
                 .get("serveraliveinterval")
                 .and_then(|interval| interval.parse::<u64>().ok())
                 .filter(|seconds| *seconds > 0 && *seconds <= MAX_SERVER_ALIVE_INTERVAL_SECONDS);
-            imported.push(SessionRecord {
+            let session = SessionRecord {
                 id: SessionId::new(),
                 name: alias.clone(),
                 protocol: Protocol::Ssh,
@@ -974,11 +974,12 @@ impl SessionStore {
                 serial_profile: None,
                 telnet_profile: None,
                 remote_desktop_profile: None,
-            });
-        }
-
-        for session in &imported {
-            session.validate()?;
+            };
+            if let Err(error) = session.validate() {
+                skipped_hosts.push(format!("{alias} ({error})"));
+                continue;
+            }
+            imported.push(session);
         }
         if !imported.is_empty() {
             let previous = self.sessions.clone();
@@ -2218,6 +2219,28 @@ mod tests {
         assert!(report.imported.is_empty());
         assert_eq!(report.skipped_hosts, vec!["broken (invalid Port)"]);
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn invalid_openssh_profile_does_not_discard_valid_neighbors() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("config");
+        fs::write(
+            &path,
+            "Host broken\n  IdentityFile \"/tmp/bad\0key\"\nHost valid\n  HostName valid.example\n",
+        )
+        .unwrap();
+
+        let mut store = SessionStore::open(directory.path().join("sessions.json")).unwrap();
+        let report = store.import_openssh_config(&path).unwrap();
+
+        assert_eq!(
+            report.skipped_hosts,
+            vec!["broken (saved private-key reference is invalid)"]
+        );
+        assert_eq!(report.imported.len(), 1);
+        assert_eq!(report.imported[0].name, "valid");
+        assert_eq!(SessionStore::open(store.path()).unwrap().list().len(), 1);
     }
 
     #[test]
