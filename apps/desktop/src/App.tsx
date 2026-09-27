@@ -838,7 +838,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
 
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(host);
-    requestAnimationFrame(fit);
+    const initialFitFrame = window.requestAnimationFrame(fit);
 
     const sendTerminalInput = (data: string) => {
       const terminalId = terminalIdRef.current;
@@ -989,6 +989,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       terminalLinks.dispose();
       host.removeEventListener("paste", onPaste, true);
       resizeObserver.disconnect();
+      window.cancelAnimationFrame(initialFitFrame);
       releaseListeners();
       const terminalId = terminalIdRef.current;
       onNativeTerminalId(workspaceId, null);
