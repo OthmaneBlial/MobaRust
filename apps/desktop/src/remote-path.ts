@@ -1,6 +1,10 @@
 export function remoteParentPath(path: string): string {
-  if (path === "." || path === "/") return path;
   const withoutTrailingSlashes = path.replace(/\/+$/, "") || "/";
+  if (withoutTrailingSlashes === ".") return "..";
+  if (withoutTrailingSlashes === "/") return "/";
+  if (withoutTrailingSlashes === ".." || (!withoutTrailingSlashes.startsWith("/") && withoutTrailingSlashes.endsWith("/.."))) {
+    return `${withoutTrailingSlashes}/..`;
+  }
   const separator = withoutTrailingSlashes.lastIndexOf("/");
   return separator < 0 ? "." : separator === 0 ? "/" : withoutTrailingSlashes.slice(0, separator);
 }
