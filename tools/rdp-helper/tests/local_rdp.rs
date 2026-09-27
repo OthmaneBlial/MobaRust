@@ -157,24 +157,18 @@ fn create_fixture_identity(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let certificate = directory.join("server-cert.pem");
     let private_key = directory.join("server-key.pem");
     let csr = directory.join("server.csr");
+    let ca_config = directory.join("fixture-ca.cnf");
     let extensions = directory.join("server-ext.cnf");
+    std::fs::write(
+        &ca_config,
+        "[req]\nprompt = no\ndistinguished_name = fixture_dn\nx509_extensions = fixture_ca\n\n[fixture_dn]\nCN = MobaRust local RDP fixture CA\n\n[fixture_ca]\nbasicConstraints = critical, CA:TRUE\nkeyUsage = critical, keyCertSign, cRLSign\n",
+    )
+    .expect("write local RDP fixture CA configuration");
     let generated_ca = std::process::Command::new("openssl")
-        .args([
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-subj",
-            "/CN=MobaRust local RDP fixture CA",
-            "-addext",
-            "basicConstraints=critical,CA:TRUE",
-            "-addext",
-            "keyUsage=critical,keyCertSign,cRLSign",
-            "-days",
-            "1",
-            "-keyout",
-        ])
+        .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes"])
+        .arg("-config")
+        .arg(&ca_config)
+        .args(["-days", "1", "-keyout"])
         .arg(&ca_private_key)
         .arg("-out")
         .arg(&ca_certificate)
@@ -184,26 +178,6 @@ fn create_fixture_identity(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
         generated_ca.status.success(),
         "openssl could not create the local RDP fixture CA"
     );
-    let openssl_version = std::process::Command::new("openssl")
-        .arg("version")
-        .output()
-        .expect("openssl is required for the local RDP fixture");
-    let ca_details = std::process::Command::new("openssl")
-        .args(["x509", "-in"])
-        .arg(&ca_certificate)
-        .args(["-noout", "-text"])
-        .output()
-        .expect("openssl is required for the local RDP fixture");
-    assert!(
-        openssl_version.status.success() && ca_details.status.success(),
-        "openssl could not inspect the local RDP fixture CA"
-    );
-    eprintln!(
-        "local RDP fixture OpenSSL: {}\nCA certificate:\n{}",
-        String::from_utf8_lossy(&openssl_version.stdout).trim(),
-        String::from_utf8_lossy(&ca_details.stdout)
-    );
-
     let generated_request = std::process::Command::new("openssl")
         .args([
             "req",
