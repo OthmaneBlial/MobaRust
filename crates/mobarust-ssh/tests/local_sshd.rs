@@ -121,7 +121,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         let remote_path = fixture
             .directory
             .path()
-            .join(format!("mobarust-sftp-{}", std::process::id()))
+            .join(format!("mobarust-sftp-{} ", std::process::id()))
             .to_string_lossy()
             .into_owned();
         let uploaded = sftp
