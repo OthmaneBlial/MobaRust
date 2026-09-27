@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 const MIN_TIMEOUT_MS: u64 = 50;
 const MAX_TIMEOUT_MS: u64 = 60_000;
+const MAX_CONCURRENT_OPERATIONS: usize = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -90,6 +91,8 @@ pub enum NetworkManagerError {
     MissingScan(String),
     #[error("network scan manager lock poisoned")]
     LockPoisoned,
+    #[error("the concurrent network operation limit has been reached")]
+    OperationLimit,
     #[error(
         "network scan timeout must be between {MIN_TIMEOUT_MS} and {MAX_TIMEOUT_MS} milliseconds"
     )]
@@ -124,10 +127,7 @@ impl NetworkManager {
         let total = usize::from(options.end_port - options.start_port) + 1;
         let scan_id = Uuid::new_v4().to_string();
         let (cancel_sender, mut cancellation) = watch::channel(false);
-        self.scans
-            .lock()
-            .map_err(|_| NetworkManagerError::LockPoisoned)?
-            .insert(scan_id.clone(), cancel_sender);
+        register_operation(&self.scans, scan_id.clone(), cancel_sender)?;
 
         emit_scan_event(
             &app,
@@ -238,10 +238,7 @@ impl NetworkManager {
         options.validate()?;
         let operation_id = Uuid::new_v4().to_string();
         let (cancel_sender, mut cancellation) = watch::channel(false);
-        self.diagnostics
-            .lock()
-            .map_err(|_| NetworkManagerError::LockPoisoned)?
-            .insert(operation_id.clone(), cancel_sender);
+        register_operation(&self.diagnostics, operation_id.clone(), cancel_sender)?;
         emit_diagnostic_event(
             &app,
             NetworkDiagnosticEvent {
@@ -311,10 +308,7 @@ impl NetworkManager {
         options.validate()?;
         let operation_id = Uuid::new_v4().to_string();
         let (cancel_sender, mut cancellation) = watch::channel(false);
-        self.diagnostics
-            .lock()
-            .map_err(|_| NetworkManagerError::LockPoisoned)?
-            .insert(operation_id.clone(), cancel_sender);
+        register_operation(&self.diagnostics, operation_id.clone(), cancel_sender)?;
         emit_diagnostic_event(
             &app,
             NetworkDiagnosticEvent {
@@ -398,6 +392,21 @@ impl NetworkManager {
     }
 }
 
+fn register_operation(
+    operations: &Mutex<HashMap<String, watch::Sender<bool>>>,
+    operation_id: String,
+    cancel_sender: watch::Sender<bool>,
+) -> Result<(), NetworkManagerError> {
+    let mut operations = operations
+        .lock()
+        .map_err(|_| NetworkManagerError::LockPoisoned)?;
+    if operations.len() >= MAX_CONCURRENT_OPERATIONS {
+        return Err(NetworkManagerError::OperationLimit);
+    }
+    operations.insert(operation_id, cancel_sender);
+    Ok(())
+}
+
 fn emit_scan_event(app: &AppHandle, event: NetworkScanEvent) {
     let _ = app.emit("network://scan", event);
 }
@@ -411,4 +420,32 @@ fn validated_timeout(timeout_ms: u64) -> Result<Duration, NetworkManagerError> {
         return Err(NetworkManagerError::InvalidTimeout);
     }
     Ok(Duration::from_millis(timeout_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CONCURRENT_OPERATIONS, NetworkManagerError, register_operation};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::watch;
+
+    #[test]
+    fn network_operation_registry_enforces_its_concurrency_limit() {
+        let operations = Mutex::new(HashMap::new());
+        let mut receivers = Vec::new();
+
+        for index in 0..MAX_CONCURRENT_OPERATIONS {
+            let (sender, receiver) = watch::channel(false);
+            receivers.push(receiver);
+            register_operation(&operations, index.to_string(), sender).unwrap();
+        }
+
+        let (sender, receiver) = watch::channel(false);
+        receivers.push(receiver);
+        assert!(matches!(
+            register_operation(&operations, "overflow".into(), sender),
+            Err(NetworkManagerError::OperationLimit)
+        ));
+        assert_eq!(operations.lock().unwrap().len(), MAX_CONCURRENT_OPERATIONS);
+    }
 }
