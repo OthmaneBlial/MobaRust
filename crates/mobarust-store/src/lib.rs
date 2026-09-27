@@ -1106,17 +1106,66 @@ fn strip_openssh_comment(line: &str) -> &str {
 fn effective_options(blocks: &[OpenSshHostBlock], alias: &str) -> BTreeMap<String, String> {
     let mut options = BTreeMap::new();
     for block in blocks {
-        if block
-            .patterns
-            .iter()
-            .any(|pattern| pattern == "*" || pattern == alias)
-        {
+        let mut matched = false;
+        let mut excluded = false;
+        for pattern in &block.patterns {
+            let (negated, pattern) = pattern
+                .strip_prefix('!')
+                .map_or((false, pattern.as_str()), |pattern| (true, pattern));
+            if host_pattern_matches(pattern, alias) {
+                if negated {
+                    excluded = true;
+                    break;
+                }
+                matched = true;
+            }
+        }
+        if matched && !excluded {
             for (key, value) in &block.options {
                 options.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
     }
     options
+}
+
+fn host_pattern_matches(pattern: &str, host: &str) -> bool {
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let host = host.chars().collect::<Vec<_>>();
+    let (mut pattern_index, mut host_index) = (0, 0);
+    let mut star_index = None;
+    let mut star_match_index = 0;
+
+    while host_index < host.len() {
+        match pattern.get(pattern_index) {
+            Some('*') => {
+                star_index = Some(pattern_index);
+                pattern_index += 1;
+                star_match_index = host_index;
+            }
+            Some('?') => {
+                pattern_index += 1;
+                host_index += 1;
+            }
+            Some(character) if *character == host[host_index] => {
+                pattern_index += 1;
+                host_index += 1;
+            }
+            _ => match star_index {
+                Some(index) if star_match_index < host.len() => {
+                    star_match_index += 1;
+                    host_index = star_match_index;
+                    pattern_index = index + 1;
+                }
+                _ => return false,
+            },
+        }
+    }
+
+    while pattern.get(pattern_index) == Some(&'*') {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 fn read_openssh_config(path: &Path) -> Result<String, StoreError> {
@@ -1971,6 +2020,25 @@ mod tests {
         let second_report = store.import_openssh_config(&path).unwrap();
         assert_eq!(second_report.imported.len(), 3);
         assert_eq!(store.list().len(), 3);
+    }
+
+    #[test]
+    fn openssh_host_patterns_apply_wildcards_and_negated_exceptions() {
+        let (blocks, _) =
+            super::parse_openssh_config("Host * !prod-*\n  User shared\nHost app-?\n  Port 2222\n");
+
+        let production = super::effective_options(&blocks, "prod-1");
+        assert!(!production.contains_key("user"));
+
+        let ordinary = super::effective_options(&blocks, "staging");
+        assert_eq!(ordinary.get("user").map(String::as_str), Some("shared"));
+
+        let single_character = super::effective_options(&blocks, "app-x");
+        assert_eq!(
+            single_character.get("port").map(String::as_str),
+            Some("2222")
+        );
+        assert!(!super::effective_options(&blocks, "app-xy").contains_key("port"));
     }
 
     #[test]
