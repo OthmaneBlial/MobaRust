@@ -3156,7 +3156,7 @@ async fn collect_local_files(
                     "recursive transfer exceeds the {MAX_RECURSIVE_ENTRIES} entry limit"
                 )));
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = local_transfer_name(entry.file_name())?;
             validate_transfer_component(&name)?;
             let file_type = entry.file_type().await.map_err(SshError::LocalIo)?;
             let local_path = entry.path();
@@ -3289,6 +3289,11 @@ fn validate_transfer_component(component: &str) -> Result<(), SshError> {
         ));
     }
     Ok(())
+}
+
+fn local_transfer_name(name: std::ffi::OsString) -> Result<String, SshError> {
+    name.into_string()
+        .map_err(|_| SshError::Sftp("recursive upload requires UTF-8 local file names".into()))
 }
 
 fn remote_child_path(parent: &str, name: &str) -> String {
@@ -3553,9 +3558,9 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, ReconnectOutcome, SshManager, SshManagerError,
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, commit_local_file,
-        local_part_path, reconnect_with_backoff, remote_child_path, remove_partial_download,
-        server_alive_interval_duration, should_emit_transfer_progress, transfer_metrics,
-        validate_transfer_component, validate_tunnel_host,
+        local_part_path, local_transfer_name, reconnect_with_backoff, remote_child_path,
+        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
+        transfer_metrics, validate_transfer_component, validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3763,6 +3768,21 @@ mod tests {
             );
         }
         assert!(validate_transfer_component("safe-name.txt").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_upload_rejects_non_utf8_local_file_names() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let error = local_transfer_name(std::ffi::OsString::from_vec(vec![0xff]))
+            .expect_err("non-UTF-8 file names must be rejected");
+        assert!(matches!(error, mobarust_ssh::SshError::Sftp(_)));
+        assert_eq!(error.to_string(), "SFTP operation failed");
+        assert_eq!(
+            local_transfer_name(std::ffi::OsString::from("café.txt")).unwrap(),
+            "café.txt"
+        );
     }
 
     #[test]
