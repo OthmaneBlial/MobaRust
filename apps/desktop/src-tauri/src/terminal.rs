@@ -689,30 +689,6 @@ mod tests {
             }
         });
 
-        #[cfg(target_os = "windows")]
-        {
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            while !output.contains("> ") {
-                match output_rx
-                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                {
-                    Ok(Ok(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
-                    Ok(Err(error)) => panic!("{error}; captured PTY output: {output:?}"),
-                    Err(_) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        panic!("timed out waiting for PowerShell prompt; captured: {output:?}");
-                    }
-                }
-            }
-            writer
-                .write_all(
-                    b"Write-Output ('MOBARUST_' + 'PTY_OK'); $line = [Console]::ReadLine(); Write-Output ('INPUT:' + $line); exit 0\r",
-                )
-                .expect("write PTY fixture command");
-            writer.flush().expect("flush PTY fixture command");
-        }
-
         #[cfg(not(target_os = "windows"))]
         {
             writer.write_all(b"hello\n").expect("write test input");
@@ -722,12 +698,25 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         #[cfg(target_os = "windows")]
         let mut sent_input = false;
+        #[cfg(target_os = "windows")]
+        let mut cursor_queries_replied = 0;
         while !output.contains("INPUT:hello") {
             #[cfg(target_os = "windows")]
-            if output.contains("MOBARUST_PTY_OK") && !sent_input {
-                writer.write_all(b"hello\r").expect("write test input");
-                writer.flush().expect("flush test input");
-                sent_input = true;
+            {
+                // PowerShell asks its host for cursor position before running the command.
+                let queries = output.match_indices("\u{1b}[6n").count();
+                while cursor_queries_replied < queries {
+                    writer
+                        .write_all(b"\x1b[1;1R")
+                        .expect("reply to PTY cursor query");
+                    writer.flush().expect("flush PTY cursor reply");
+                    cursor_queries_replied += 1;
+                }
+                if output.contains("MOBARUST_PTY_OK") && !sent_input {
+                    writer.write_all(b"hello\r").expect("write test input");
+                    writer.flush().expect("flush test input");
+                    sent_input = true;
+                }
             }
             match output_rx
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
@@ -946,7 +935,12 @@ mod tests {
         #[cfg(target_os = "windows")]
         {
             let mut command = CommandBuilder::new("powershell.exe");
-            command.args(["-NoLogo", "-NoProfile"]);
+            command.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Write-Output 'MOBARUST_PTY_OK'; $line = [Console]::ReadLine(); Write-Output ('INPUT:' + $line); exit 0",
+            ]);
             command
         }
 
