@@ -1,85 +1,71 @@
 # MobaRust
 
-### Keep the remote workday in one native workspace.
+### SSH, files, terminals, and tunnels in one native workspace.
 
-Open SSH sessions, move files over SFTP/SCP, run local terminals, and manage tunnels alongside each connection. MobaRust is a free, open-source Rust and Tauri desktop app for developers, sysadmins, DevOps teams, and homelabs.
+MobaRust is a free, open-source MobaXterm alternative for people who work across remote machines. Connect over SSH, move files with SFTP/SCP, and keep local shells, port forwards, and diagnostics beside your sessions. Built with Rust and Tauri; no cloud account required.
 
-[![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases)
+[![GitHub stars](https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&logo=github)](https://github.com/OthmaneBlial/MobaRust/stargazers) [![Preview release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE)
 
-[**Download v0.1.12 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
+[Download v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Documentation](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
 
-MobaRust is an independent MobaXterm alternative, not a feature-for-feature clone. SSH and SFTP are the focus; experimental protocols and platform gaps are stated plainly. No cloud account required. MobaRust is not affiliated with Mobatek.
+Independent project. Not affiliated with Mobatek or MobaXterm.
 
-<p align="center">
-  <a href="https://othmaneblial.github.io/MobaRust/#demo"><img src="site/media/mobarust-demo-preview.gif" alt="MobaRust desktop walkthrough: local terminal, split panes, SSH setup, snippets, and theme switching" width="800" /></a>
-</p>
+[![MobaRust desktop workspace preview](site/media/mobarust-demo-preview.gif)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12)
 
-The 62-second capture was recorded in MobaRust 0.1.11 on macOS with an isolated demo profile and a loopback API. Example SSH details are not used to connect. [Watch the full-resolution video with chapters and captions](https://othmaneblial.github.io/MobaRust/#demo).
+## Get started
 
-## Get the desktop preview
+Download an installer, open MobaRust, and start with a local terminal or an SSH session. On the first SSH connection, inspect and verify the host-key fingerprint before trusting the server.
 
-The v0.1.12 preview provides native installers for Windows x64, macOS Apple Silicon and Intel, and Linux x64. No Rust, Node.js, or source checkout needed.
-
-| Platform | Installer | Install |
+| Platform | Download | Notes |
 | --- | --- | --- |
-| Windows x64 | [.exe installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | Run setup. WebView2 is installed if needed. |
-| macOS Apple Silicon | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-macos-arm64.dmg) | Open the image and move MobaRust to Applications. |
-| macOS Intel | [.dmg](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-macos-x64.dmg) | Open the image and move MobaRust to Applications. |
-| Ubuntu / Debian x64 | [.deb](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | sudo apt install ./MobaRust-0.1.12-linux-x64.deb |
-| Other Linux x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | Make executable and open. WebKitGTK 4.1 and FUSE may be required. |
+| Windows x64 | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | WebView2 is installed if needed. |
+| macOS Apple Silicon | [DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-macos-arm64.dmg) | Move MobaRust to Applications. |
+| macOS Intel | [DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-macos-x64.dmg) | Move MobaRust to Applications. |
+| Ubuntu / Debian x64 | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | `sudo apt install ./MobaRust-0.1.12-linux-x64.deb` |
+| Other Linux x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | WebKitGTK 4.1 and FUSE may be required. |
 
-This is an **unsigned preview**. Windows may show SmartScreen. macOS may block first launch because the app is not Developer ID signed or notarized; see [preview installation notes](docs/release/preview-notes.md). Checksums detect damaged downloads; they do not prove publisher identity.
+[All release files and SHA-256 checksums](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [v0.1.12 release notes](docs/release/preview-notes.md)
 
-Use the releases page for per-platform SHA-256 files and checksum commands. Download installers there, not GitHub's autogenerated source archives.
+These are unsigned preview builds. Windows may show SmartScreen; macOS is not Developer ID signed or notarized. Checksums detect download corruption, not publisher identity. See the [installation notes](docs/release/preview-notes.md).
 
-## What you can do
+## One workspace for the whole session
 
-| Workflow | MobaRust today |
+| Workflow | What MobaRust includes |
 | --- | --- |
-| **Connect** | SSH with host-key verification, agent/password/key-reference auth, PTY resize, cancellation, keepalives, and bounded reconnect. |
-| **Work with files** | SFTP browser, SCP compatibility, streaming and recursive transfers, progress, cancellation, explicit overwrite, and permission preservation. |
-| **Keep context** | Saved sessions, folders, tags, favorites, recents, fast search, OpenSSH config import, and secret-free profile export. |
-| **Operate safely** | Local terminals, split panes, tunnels, SOCKS5, reviewed snippets, cancellable macros, explicit multi-exec targets, diagnostics, and optional monitoring. |
-| **Use legacy links** | Telnet is labeled unencrypted. Serial connection settings, refresh, and device-loss handling are available; hardware coverage remains open. |
+| **Connect** | Interactive SSH, explicit host-key verification, vault-backed password/key and SSH-agent authentication, saved sessions, jump hosts, reconnect, and terminal resize. |
+| **Move files** | SFTP file browsing and management; SCP and SFTP transfers with progress, cancellation, recursive operations, and safe commits. |
+| **Keep context** | Local and remote terminals, tabs, split panes, folders, tags, favorites, recents, search, OpenSSH config import, and secret-free profile export. |
+| **Reach services** | Local and remote port forwarding, SOCKS5 tunnels, bounded network diagnostics, and optional SSH monitoring. |
+| **Work deliberately** | Reviewed snippets, cancellable macros, explicit broadcast targets, remote text editing, and an optional local audit history. |
+| **Use legacy links** | Telnet and serial connection workflows are available; Telnet is unencrypted and serial hardware coverage is still being built. |
 
-The app is local-first: create local sessions without a cloud account. React renders the workspace; Rust owns networking, PTYs, filesystem operations, persistence, process lifecycle, cancellation, and credential access behind typed Tauri commands.
+## Security is part of the workflow
 
-### What's new in v0.1.12
+- Rust owns network sessions, local processes, filesystem work, persistence, and credential access.
+- Session profiles store credential references, not passwords or private-key contents.
+- SSH host keys must be explicitly verified; an unknown server is never silently trusted.
+- Multiline terminal paste asks before sending text to a shell.
+- Imports, exports, snippets, macros, and diagnostics have explicit boundaries.
 
-- SFTP rejects unsafe, lossy, and ambiguous filenames before they become transfer paths.
-- Missing remote file sizes remain unknown in listings and transfer progress.
-- Network diagnostics distinguish closed ports, timeouts, and other failures.
-- Closing a terminal cancels its pending initial resize frame.
+Read the [threat model](docs/security/threat-model.md) and [safe local testing policy](docs/security/safe-testing.md).
 
-See the complete [v0.1.12 preview notes](docs/release/preview-notes.md) and [current release evidence](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12).
+## Preview status
 
-## Built around clear boundaries
+MobaRust focuses on SSH, SFTP/SCP, terminals, and tunnels. Some protocol and platform work is still experimental:
 
-- SSH host verification stays explicit; unknown hosts are not silently trusted.
-- Session profiles store credential references, not password or private-key contents.
-- Secrets are resolved inside native code and excluded from ordinary logs and process arguments.
-- Multiline terminal paste is confirmed before it can reach a shell.
-- Broadcast actions require explicit targets and keep a visible stop path.
-- Network work uses operation-specific bounds, cancellation, and cleanup.
-- Tests use disposable state and loopback fixtures; they do not read personal SSH files or contact real hosts.
+- **RDP:** experimental; the RDP helper is not included in these installers.
+- **VNC:** experimental; remote TCP is unencrypted and requires explicit opt-in.
+- **Platform evidence:** real-world Windows/Linux hardware coverage, signing, and notarized installation are not complete.
 
-Read the [threat model](docs/security/threat-model.md) and [safe testing policy](docs/security/safe-testing.md).
+See the [roadmap](ROADMAP.md) for shipped work and open evidence gaps. If you find a bug, [open an issue](https://github.com/OthmaneBlial/MobaRust/issues) with your OS, architecture, and reproduction steps. Never attach credentials, private keys, host inventories, or unredacted logs.
 
-## What is still experimental
-
-RDP and VNC remain experimental. The RDP helper is excluded from installers. VNC remote TCP is unencrypted and requires explicit opt-in and confirmation. Real-world interoperability and Windows/Linux hardware evidence remain open. The preview installers are unsigned; clean-install and production-signing checks are not complete.
-
-The project does not claim to replace every MobaXterm feature. See the [roadmap](ROADMAP.md) and [platform evidence matrix](docs/testing/hardware-interoperability.md) for current gaps.
-
-## Build from source
+## Build and check locally
 
 ### Requirements
 
-- Rust stable (1.88 or newer)
+- Rust stable 1.88 or newer
 - Node.js 22 and pnpm
 - Tauri prerequisites for your operating system
-
-Clone the project and run these commands in your terminal, in order:
 
 ```bash
 git clone https://github.com/OthmaneBlial/MobaRust.git
@@ -89,9 +75,9 @@ cargo xtask check
 cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-The local checks use isolated home directories, disposable fixtures, and loopback networking. They do not need your personal SSH files, Keychain, GitHub keys, SSH agent, real hosts, or attached hardware.
+`cargo xtask check` runs the local validation suite. Tests use isolated state and disposable fixtures; they do not need your personal SSH files, Keychain, GitHub keys, SSH agent, real hosts, or attached hardware.
 
-Useful focused checks:
+Focused checks:
 
 ```bash
 cargo xtask package-check
@@ -101,8 +87,8 @@ cargo xtask license-check
 cargo xtask pre-push-check
 ```
 
-## Contribute
+## Help MobaRust reach more operators
 
-Report reproducible issues with your OS, architecture, and steps. Never attach credentials, private keys, host inventories, or unredacted connection logs. Focused protocol fixtures, platform evidence, documentation, and code contributions are welcome.
+If MobaRust makes remote work easier, [give the repository a star](https://github.com/OthmaneBlial/MobaRust/stargazers). It helps other developers and operators discover the project. Bug reports, careful testing, and contributions are welcome.
 
-MobaRust is licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).
