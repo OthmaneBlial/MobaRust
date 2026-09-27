@@ -222,6 +222,11 @@ button:not(:disabled) { cursor: pointer; }
 .tunnel-row-copy .tunnel-error { color: var(--coral); white-space: normal; overflow-wrap: anywhere; }
 .tunnel-view-note { padding: 11px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 9px; line-height: 1.45; }
 .workspace-notice { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding: 9px 12px; border: 1px solid rgba(155, 196, 138, .25); background: rgba(155, 196, 138, .06); color: var(--mint); font-family: var(--mono); font-size: 9px; }
+.workspace-notice-review { align-items: flex-start; border-color: rgba(232, 180, 92, .32); color: var(--amber); }
+.workspace-notice-review > div { min-width: 0; }
+.workspace-notice-review details { margin-top: 6px; }
+.workspace-notice-review summary { cursor: pointer; }
+.workspace-notice-review ul { max-height: 160px; margin: 6px 0; padding-left: 18px; overflow: auto; overflow-wrap: anywhere; }
 .session-folder-group { margin-top: 2px; }
 .nested-folder { padding-left: 17px; color: var(--faint); font-size: 9px; font-weight: 600; }
 .nested-folder svg { color: var(--amber); }

@@ -470,6 +470,8 @@ type SessionImportReport = {
   skipped: string[];
 };
 
+type SessionNotice = string | { message: string; details: string[]; total: number };
+
 type SnippetRecord = {
   id: string;
   title: string;
@@ -1457,7 +1459,7 @@ function App() {
   const [portableVaultStatus, setPortableVaultStatus] = useState<PortableVaultStatus | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<SessionNotice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -2471,7 +2473,13 @@ function App() {
         report.skippedHosts.length > 0 ? `${report.skippedHosts.length} skipped` : "",
         report.unsupportedDirectives.length > 0 ? `${report.unsupportedDirectives.length} unsupported directive${report.unsupportedDirectives.length === 1 ? "" : "s"}` : "",
       ].filter(Boolean);
-      setSessionNotice(`Imported ${report.imported.length} OpenSSH profile${report.imported.length === 1 ? "" : "s"}${warnings.length > 0 ? ` · ${warnings.join(" · ")}` : ""}.`);
+      const message = `Imported ${report.imported.length} OpenSSH profile${report.imported.length === 1 ? "" : "s"}${warnings.length > 0 ? ` · ${warnings.join(" · ")}` : ""}.`;
+      const total = report.skippedHosts.length + report.unsupportedDirectives.length;
+      const details = [
+        ...report.skippedHosts.slice(0, 20).map((host) => `Skipped: ${host}`),
+        ...report.unsupportedDirectives.slice(0, Math.max(0, 20 - report.skippedHosts.length)).map((directive) => `Unsupported directive: ${directive}`),
+      ];
+      setSessionNotice(total > 0 ? { message, details, total } : message);
     } catch (error) {
       setSessionNotice(null);
       setConnectionError(String(error));
@@ -2501,7 +2509,8 @@ function App() {
     try {
       const report = await invoke<SessionImportReport>("session_import", { payload: { json } });
       refreshSavedSessions();
-      setSessionNotice(`Imported ${report.importedCount} session${report.importedCount === 1 ? "" : "s"}${report.skipped.length > 0 ? ` · ${report.skipped.length} skipped` : ""}.`);
+      const message = `Imported ${report.importedCount} session${report.importedCount === 1 ? "" : "s"}${report.skipped.length > 0 ? ` · ${report.skipped.length} skipped` : ""}.`;
+      setSessionNotice(report.skipped.length > 0 ? { message, details: report.skipped.slice(0, 20), total: report.skipped.length } : message);
     } catch (error) {
       setConnectionError(`Session import failed: ${String(error)}`);
     }
@@ -3921,7 +3930,12 @@ function App() {
             </div>
           </div>
           {connectionError && !quickConnectOpen && activeView !== "files" && <div className="connect-error workspace-error" role="alert"><span>{connectionError}</span><button type="button" className="outline-button" aria-label="Dismiss error" onClick={() => setConnectionError(null)}>Dismiss</button></div>}
-          {sessionNotice && <div className="workspace-notice" role="status"><CheckCircle2 size={14} /><span>{sessionNotice}</span></div>}
+          {sessionNotice && <div className={`workspace-notice${typeof sessionNotice === "string" ? "" : " workspace-notice-review"}`} role="status">
+            {typeof sessionNotice === "string" ? <CheckCircle2 size={14} /> : <CircleHelp size={14} />}
+            <div><span>{typeof sessionNotice === "string" ? sessionNotice : sessionNotice.message}</span>
+              {typeof sessionNotice !== "string" && <details><summary>Review import details ({sessionNotice.total})</summary><ul>{sessionNotice.details.map((detail, index) => <li key={`${index}:${detail}`}>{detail}</li>)}</ul>{sessionNotice.total > sessionNotice.details.length && <span>Showing first {sessionNotice.details.length} of {sessionNotice.total} details.</span>}</details>}
+            </div>
+          </div>}
 
           <div className="workspace-grid" id="workspace-view-panel" role="tabpanel" aria-labelledby={`workspace-tab-${activeView}`} tabIndex={0}>
             <div className="main-column">
