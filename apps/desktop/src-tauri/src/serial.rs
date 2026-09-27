@@ -8,13 +8,17 @@ use mobarust_serial::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
+// ponytail: one enumeration worker; raise only after validating driver concurrency on each OS.
+const SERIAL_ENUMERATION_WORKERS: usize = 1;
+const SERIAL_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -85,6 +89,10 @@ pub enum SerialManagerError {
     MissingSession(String),
     #[error("serial session command queue is closed")]
     Closed,
+    #[error("serial device enumeration is already in progress")]
+    EnumerationInProgress,
+    #[error("serial device enumeration timed out")]
+    EnumerationTimeout,
     #[error("invalid serial request: {0}")]
     InvalidRequest(String),
     #[error(transparent)]
@@ -93,18 +101,31 @@ pub enum SerialManagerError {
     Input(#[from] TerminalInputError),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SerialManager {
     sessions: Arc<Mutex<HashMap<String, SerialSessionStateData>>>,
+    enumeration_slots: Arc<Semaphore>,
+}
+
+impl Default for SerialManager {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::default(),
+            enumeration_slots: Arc::new(Semaphore::new(SERIAL_ENUMERATION_WORKERS)),
+        }
+    }
 }
 
 impl SerialManager {
-    pub async fn list_devices() -> Result<Vec<mobarust_serial::SerialDeviceInfo>, SerialManagerError>
-    {
-        tokio::task::spawn_blocking(mobarust_serial::enumerate_devices)
-            .await
-            .map_err(|_| SerialManagerError::Transport(mobarust_serial::SerialError::Worker))?
-            .map_err(SerialManagerError::Transport)
+    pub async fn list_devices(
+        &self,
+    ) -> Result<Vec<mobarust_serial::SerialDeviceInfo>, SerialManagerError> {
+        enumerate_with_worker_slot(
+            Arc::clone(&self.enumeration_slots),
+            SERIAL_ENUMERATION_TIMEOUT,
+            mobarust_serial::enumerate_devices,
+        )
+        .await
     }
 
     pub async fn connect(
@@ -248,6 +269,30 @@ impl SerialManager {
     }
 }
 
+async fn enumerate_with_worker_slot<F>(
+    slots: Arc<Semaphore>,
+    timeout: Duration,
+    enumerate: F,
+) -> Result<Vec<mobarust_serial::SerialDeviceInfo>, SerialManagerError>
+where
+    F: FnOnce() -> Result<Vec<mobarust_serial::SerialDeviceInfo>, mobarust_serial::SerialError>
+        + Send
+        + 'static,
+{
+    let slot = slots
+        .try_acquire_owned()
+        .map_err(|_| SerialManagerError::EnumerationInProgress)?;
+    let worker = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        enumerate()
+    });
+    tokio::time::timeout(timeout, worker)
+        .await
+        .map_err(|_| SerialManagerError::EnumerationTimeout)?
+        .map_err(|_| SerialManagerError::Transport(mobarust_serial::SerialError::Worker))?
+        .map_err(SerialManagerError::Transport)
+}
+
 async fn run_serial_session(
     manager: SerialManager,
     app: AppHandle,
@@ -342,7 +387,10 @@ async fn run_serial_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{SerialManager, SerialManagerError};
+    use super::{SerialManager, SerialManagerError, enumerate_with_worker_slot};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    use tokio::sync::{Semaphore, oneshot};
 
     #[tokio::test]
     async fn oversized_serial_write_is_rejected_before_session_lookup() {
@@ -355,5 +403,51 @@ mod tests {
             error,
             SerialManagerError::Input(mobarust_core::TerminalInputError::TooLarge)
         ));
+    }
+
+    #[tokio::test]
+    async fn timed_out_device_enumeration_keeps_its_worker_slot_until_exit() {
+        let slots = Arc::new(Semaphore::new(1));
+        let (started_sender, started_receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let worker = tokio::spawn(enumerate_with_worker_slot(
+            Arc::clone(&slots),
+            Duration::from_millis(100),
+            move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(Vec::new())
+            },
+        ));
+
+        started_receiver
+            .await
+            .expect("enumeration worker must start");
+        assert!(matches!(
+            worker.await.expect("enumeration task must finish"),
+            Err(SerialManagerError::EnumerationTimeout)
+        ));
+        assert!(matches!(
+            enumerate_with_worker_slot(Arc::clone(&slots), Duration::from_secs(1), || {
+                Ok(Vec::new())
+            })
+            .await,
+            Err(SerialManagerError::EnumerationInProgress)
+        ));
+
+        release_sender
+            .send(())
+            .expect("blocked enumeration worker must be released");
+        let slot = tokio::time::timeout(Duration::from_secs(1), Arc::clone(&slots).acquire_owned())
+            .await
+            .expect("worker slot must return after enumeration exits")
+            .expect("enumeration semaphore must remain open");
+        drop(slot);
+
+        assert!(
+            enumerate_with_worker_slot(slots, Duration::from_secs(1), || Ok(Vec::new()))
+                .await
+                .is_ok()
+        );
     }
 }

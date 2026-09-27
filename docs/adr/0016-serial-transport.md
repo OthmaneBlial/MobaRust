@@ -28,8 +28,10 @@ The configuration explicitly models:
 The `serialport` dependency is used as the cross-platform driver abstraction
 with default system-enumeration features disabled. A device is opened only
 after an explicit native connection request. Device enumeration is a separate,
-read-only command invoked only by the visible Refresh action. Tests never
-enumerate or open real devices, `/dev` paths, USB adapters, or the user's
+read-only command invoked only by the visible Refresh action. It has a ten-second
+deadline and one native worker slot. A timed-out blocking worker keeps that slot
+until it exits, so repeated refreshes cannot accumulate detached workers. Tests
+never enumerate or open real devices, `/dev` paths, USB adapters, or the user's
 hardware. Saved serial profiles contain only the device path and line
 parameters; they contain no secret material.
 
@@ -65,12 +67,12 @@ user-facing error text.
 ## Verification
 
 Unit tests cover all serial parameters, line-ending framing, invalid paths and
-baud rates, device-loss classification, and cancellation lifecycle behavior.
-The Unix integration fixture now creates a disposable pseudo-terminal inside
-the test process and verifies real serialport reads, writes, and device-loss
-classification. It never enumerates the host's ports or opens a physical
-adapter. This proves only Unix pseudo-terminal behavior; it is not hardware
-interoperability evidence.
+baud rates, device-loss classification, cancellation lifecycle behavior, and
+bounded device enumeration after a timeout. The Unix integration fixture now
+creates a disposable pseudo-terminal inside the test process and verifies real
+serialport reads, writes, and device-loss classification. It never enumerates
+the host's ports or opens a physical adapter. This proves only Unix
+pseudo-terminal behavior; it is not hardware interoperability evidence.
 
 ## Follow-ups
 

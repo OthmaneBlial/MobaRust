@@ -1628,8 +1628,11 @@ async fn serial_connect(
 }
 
 #[tauri::command]
-async fn serial_list_devices() -> Result<Vec<mobarust_serial::SerialDeviceInfo>, String> {
-    SerialManager::list_devices()
+async fn serial_list_devices(
+    manager: State<'_, SerialManager>,
+) -> Result<Vec<mobarust_serial::SerialDeviceInfo>, String> {
+    manager
+        .list_devices()
         .await
         .map_err(|error| error.to_string())
 }
