@@ -184,6 +184,25 @@ fn create_fixture_identity(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
         generated_ca.status.success(),
         "openssl could not create the local RDP fixture CA"
     );
+    let openssl_version = std::process::Command::new("openssl")
+        .arg("version")
+        .output()
+        .expect("openssl is required for the local RDP fixture");
+    let ca_details = std::process::Command::new("openssl")
+        .args(["x509", "-in"])
+        .arg(&ca_certificate)
+        .args(["-noout", "-text"])
+        .output()
+        .expect("openssl is required for the local RDP fixture");
+    assert!(
+        openssl_version.status.success() && ca_details.status.success(),
+        "openssl could not inspect the local RDP fixture CA"
+    );
+    eprintln!(
+        "local RDP fixture OpenSSL: {}\nCA certificate:\n{}",
+        String::from_utf8_lossy(&openssl_version.stdout).trim(),
+        String::from_utf8_lossy(&ca_details.stdout)
+    );
 
     let generated_request = std::process::Command::new("openssl")
         .args([
