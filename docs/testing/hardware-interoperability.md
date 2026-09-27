@@ -53,6 +53,14 @@ completed without a listing error. The focused real-PTY loopback test passed.
 The GUI run did not verify sustained shell input, file transfer, or a remote
 host. The app and server were stopped, and generated SSH keys were removed.
 
+On 2026-09-27, source `a6c1b47` also passed `cargo xtask package-check` and
+`cargo xtask portable-check` on macOS ARM64. The unsigned app bundle, bundled
+VNC helper, portable archive, and SHA-256 manifests passed their local checks.
+The archive SHA-256 was
+`352f0378a3f1724e2d1ec1589cf6f30c91a82537a4c5a885de48b3bdcbcaa8fd`.
+The startup probe exercised only `mobarust --version`; this run did not open a
+GUI or add interoperability evidence.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
