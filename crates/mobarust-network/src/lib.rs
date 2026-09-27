@@ -488,7 +488,14 @@ fn bounded_trace_lines(bytes: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(bytes)
         .lines()
         .take(MAX_TRACE_LINES)
-        .map(|line| line.chars().take(MAX_TRACE_LINE_BYTES).collect())
+        .map(|line| {
+            line.char_indices()
+                .take_while(|(index, character)| {
+                    index + character.len_utf8() <= MAX_TRACE_LINE_BYTES
+                })
+                .map(|(_, character)| character)
+                .collect()
+        })
         .collect()
 }
 
@@ -745,5 +752,14 @@ mod tests {
         assert_eq!(output.len(), 2);
         assert_eq!(output[0].len(), MAX_TRACE_LINE_BYTES);
         assert_eq!(output[1], "second");
+
+        let unicode = "é".repeat(MAX_TRACE_LINE_BYTES);
+        let output = bounded_trace_lines(unicode.as_bytes());
+        assert_eq!(output[0].len(), MAX_TRACE_LINE_BYTES);
+        assert_eq!(output[0].chars().count(), MAX_TRACE_LINE_BYTES / 2);
+
+        let boundary = format!("{}é", "x".repeat(MAX_TRACE_LINE_BYTES - 1));
+        let output = bounded_trace_lines(boundary.as_bytes());
+        assert_eq!(output[0].len(), MAX_TRACE_LINE_BYTES - 1);
     }
 }
