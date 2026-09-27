@@ -30,6 +30,7 @@ import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
 import { remoteChildPath, remoteParentPath } from "./remote-path";
+import { quoteRemotePromptPath } from "./remote-prompt";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import desktopPackage from "../package.json";
 import {
@@ -3070,7 +3071,7 @@ function App() {
     }
     const remotePath = transfer.direction === "download" ? transfer.source : transfer.destination;
     const localPath = transfer.direction === "download" ? transfer.destination : transfer.source;
-    const overwrite = window.confirm(`Retry this transfer and allow replacing the destination?\n\n${remotePath}`);
+    const overwrite = window.confirm(`Retry this transfer and allow replacing the destination?\n\n${quoteRemotePromptPath(remotePath)}`);
     if (!overwrite) return;
     const command = transfer.direction === "download" ? "ssh_download" : "ssh_upload";
     try {
@@ -3107,7 +3108,7 @@ function App() {
 
   const renameRemote = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
-    const nextName = window.prompt("New remote name or path", entry.name);
+    const nextName = window.prompt(`New remote name or path for ${quoteRemotePromptPath(entry.path)}`, entry.name);
     if (!nextName?.trim()) return;
     const target = nextName.includes("/") ? nextName : remoteChildPath(remoteParentPath(entry.path), nextName);
     try {
@@ -3120,7 +3121,7 @@ function App() {
   }, [loadRemoteDirectory, remotePath, remoteSessionId]);
 
   const deleteRemote = useCallback(async (entry: RemoteEntry) => {
-    if (!remoteSessionId || !window.confirm(`Delete remote ${entry.isDirectory ? "directory" : "file"} “${entry.name}”?`)) return;
+    if (!remoteSessionId || !window.confirm(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`)) return;
     try {
       await invoke("ssh_delete_remote", { terminalId: remoteSessionId, path: entry.path });
       setConnectionError(null);
@@ -3133,14 +3134,14 @@ function App() {
   const setRemotePermissions = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
     const current = entry.permissions == null ? "644" : (entry.permissions & 0o7777).toString(8).padStart(3, "0");
-    const value = window.prompt(`Set POSIX mode for ${entry.name} (octal 0000–7777)`, current);
+    const value = window.prompt(`Set POSIX mode for ${quoteRemotePromptPath(entry.path)} (octal 0000–7777)`, current);
     if (value === null) return;
     const normalized = value.trim();
     if (!/^[0-7]{3,4}$/.test(normalized)) {
       setConnectionError("Permissions must be an octal mode with 3 or 4 digits, for example 640.");
       return;
     }
-    if (!window.confirm(`Apply mode ${normalized} to ${entry.path}?`)) return;
+    if (!window.confirm(`Apply mode ${normalized} to ${quoteRemotePromptPath(entry.path)}?`)) return;
     try {
       await invoke("ssh_set_remote_permissions", {
         terminalId: remoteSessionId,

@@ -39,6 +39,7 @@ import {
 import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, replaceTextMatches } from "../src/remote-editor.ts";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
 import { remoteChildPath, remoteParentPath } from "../src/remote-path.ts";
+import { quoteRemotePromptPath } from "../src/remote-prompt.ts";
 import { MAX_DROPPED_UPLOADS, normalizeDroppedUploadPaths } from "../src/transfer-input.ts";
 import {
   preserveRemoteDesktopError,
@@ -484,3 +485,6 @@ assert.equal(sanitizeTerminalTitle("\u0000\u001b[31mremote\u001b[0m"), "[31mremo
 assert.equal(sanitizeTerminalTitle("build\u202eexe.txt\u2069\u0085"), "buildexe.txt");
 assert.equal(sanitizeTerminalTitle("terminal 👩‍💻 جاهز"), "terminal 👩‍💻 جاهز");
 assert.equal(sanitizeTerminalTitle("x".repeat(MAX_TERMINAL_TITLE_LENGTH + 20)).length, MAX_TERMINAL_TITLE_LENGTH);
+assert.equal(quoteRemotePromptPath("/srv/report.txt"), '"/srv/report.txt"');
+assert.equal(quoteRemotePromptPath("/srv/pay\u202ereport.txt\n"), '"/srv/pay\\u{202e}report.txt\\n"');
+assert.equal(quoteRemotePromptPath("/srv/a\u2028b\u007f"), '"/srv/a\\u{2028}b\\u{7f}"');
