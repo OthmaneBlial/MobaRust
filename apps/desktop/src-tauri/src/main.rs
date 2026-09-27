@@ -465,7 +465,7 @@ fn session_import_openssh(
     let path = payload
         .path
         .filter(|path| !path.trim().is_empty())
-        .map(|path| expand_user_path(path.trim()))
+        .map(|path| expand_user_path(&path))
         .ok_or_else(|| {
             "an explicit OpenSSH config path is required; MobaRust never reads ~/.ssh/config automatically".to_owned()
         })?;

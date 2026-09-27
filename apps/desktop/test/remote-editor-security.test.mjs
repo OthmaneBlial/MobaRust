@@ -332,8 +332,8 @@ assert.throws(() => parseSessionEnvironment("TERM=bad\u0000value"), /invalid or 
 assert.throws(() => parseSessionEnvironment("TERM"), /NAME=value/);
 
 assert.deepEqual(
-  normalizeDroppedUploadPaths([" /tmp/a ", "", "/tmp/a", "/tmp/b"]),
-  ["/tmp/a", "/tmp/b"],
+  normalizeDroppedUploadPaths(["/tmp/a ", "", "   ", "/tmp/a", "/tmp/a ", "/tmp/b"]),
+  ["/tmp/a ", "/tmp/a", "/tmp/b"],
 );
 assert.equal(
   normalizeDroppedUploadPaths(Array.from({ length: MAX_DROPPED_UPLOADS + 4 }, (_, index) => `/tmp/${index}`)).length,

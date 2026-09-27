@@ -8,8 +8,7 @@ export const MAX_DROPPED_UPLOADS = 16;
 export function normalizeDroppedUploadPaths(paths: string[]): string[] {
   const unique = new Set<string>();
   for (const path of paths) {
-    const normalized = path.trim();
-    if (normalized) unique.add(normalized);
+    if (path.trim()) unique.add(path);
     if (unique.size >= MAX_DROPPED_UPLOADS) break;
   }
   return [...unique];

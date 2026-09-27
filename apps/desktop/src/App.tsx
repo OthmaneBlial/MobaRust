@@ -2449,7 +2449,7 @@ function App() {
     if (requestedPath === null || !requestedPath.trim()) return;
     try {
       const report = await invoke<OpenSshImportReport>("session_import_openssh", {
-        payload: { path: requestedPath.trim() },
+        payload: { path: requestedPath },
       });
       refreshSavedSessions();
       const warnings = [
@@ -2918,7 +2918,7 @@ function App() {
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
-        request: { remotePath: entry.path, localPath: localPath.trim(), protocol, overwrite, recursive: entry.isDirectory },
+        request: { remotePath: entry.path, localPath, protocol, overwrite, recursive: entry.isDirectory },
       });
       setConnectionError(null);
     } catch (error) {
@@ -2943,7 +2943,7 @@ function App() {
     }
     if (paths.length === 0 && !IS_TAURI) {
       const localPath = window.prompt("Local file or directory to upload", "");
-      paths = localPath?.trim() ? [localPath.trim()] : [];
+      paths = localPath?.trim() ? [localPath] : [];
     }
     for (const localPath of paths) {
       if (remoteSessionIdRef.current !== remoteSessionId) {
@@ -2960,7 +2960,7 @@ function App() {
       try {
         await invoke("ssh_upload", {
           terminalId: remoteSessionId,
-          request: { remotePath: destination.trim(), localPath, protocol, overwrite: true, recursive: protocol === "sftp" },
+          request: { remotePath: destination, localPath, protocol, overwrite: true, recursive: protocol === "sftp" },
         });
         setConnectionError(null);
       } catch (error) {
@@ -3037,7 +3037,7 @@ function App() {
     const path = window.prompt("Remote folder path", defaultPath);
     if (!path?.trim()) return;
     try {
-      await invoke("ssh_create_remote_directory", { terminalId: remoteSessionId, path: path.trim() });
+      await invoke("ssh_create_remote_directory", { terminalId: remoteSessionId, path });
       setConnectionError(null);
       await loadRemoteDirectory(remotePath);
     } catch (error) {
@@ -3050,7 +3050,7 @@ function App() {
     const nextName = window.prompt("New remote name or path", entry.name);
     if (!nextName?.trim()) return;
     const parent = entry.path.split("/").slice(0, -1).join("/") || ".";
-    const target = nextName.trim().includes("/") ? nextName.trim() : `${parent}/${nextName.trim()}`;
+    const target = nextName.includes("/") ? nextName : `${parent}/${nextName}`;
     try {
       await invoke("ssh_rename_remote", { terminalId: remoteSessionId, from: entry.path, to: target });
       setConnectionError(null);
@@ -4222,12 +4222,12 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
 
   const saveAs = async () => {
     const target = window.prompt("Remote target path", document.path);
-    if (!target?.trim() || target.trim() === document.path) return;
+    if (!target?.trim() || target === document.path) return;
     const overwrite = window.confirm("If the remote target already exists, allow replacing it atomically? Cancel to create only.");
     setBusy(true);
     setError(null);
     try {
-      await onSaveAs(target.trim(), content, encoding, overwrite);
+      await onSaveAs(target, content, encoding, overwrite);
     } catch (saveError) {
       setError(String(saveError));
     } finally {

@@ -3239,8 +3239,7 @@ async fn ensure_remote_directory(
     sftp: &mobarust_ssh::SftpConnection,
     path: &str,
 ) -> Result<(), SshError> {
-    let path = path.trim();
-    if path.is_empty() || path == "." || path == "/" {
+    if path.trim().is_empty() || path == "." || path == "/" {
         return Ok(());
     }
     let absolute = path.starts_with('/');
@@ -3348,8 +3347,7 @@ async fn download_destination_exists(
 }
 
 fn validate_remote_file_path(path: &str) -> Result<String, SshManagerError> {
-    let path = path.trim();
-    if path.is_empty() || path == "." || path == "/" || path.contains('\0') {
+    if path.trim().is_empty() || path == "." || path == "/" || path.contains('\0') {
         return Err(SshManagerError::InvalidRequest(
             "remote file path must identify a non-root path".into(),
         ));
@@ -3358,8 +3356,7 @@ fn validate_remote_file_path(path: &str) -> Result<String, SshManagerError> {
 }
 
 fn validate_remote_directory_path(path: &str) -> Result<String, SshManagerError> {
-    let path = path.trim();
-    if path.is_empty() || path.contains('\0') {
+    if path.trim().is_empty() || path.contains('\0') {
         return Err(SshManagerError::InvalidRequest(
             "remote directory path cannot be empty or contain NUL".into(),
         ));
@@ -3566,8 +3563,9 @@ mod tests {
         SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL, TransferProtocol, add_transfer_size,
         commit_local_file, local_part_path, local_transfer_name, reconnect_with_backoff,
         remote_child_path, remove_partial_download, server_alive_interval_duration,
-        should_emit_transfer_progress, transfer_metrics, validate_transfer_component,
-        validate_tunnel_host,
+        should_emit_transfer_progress, transfer_metrics, validate_local_file_path,
+        validate_remote_directory_path, validate_remote_file_path, validate_remote_mutation_path,
+        validate_transfer_component, validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3578,6 +3576,29 @@ mod tests {
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
     use tokio::sync::{oneshot, watch};
+
+    #[test]
+    fn file_paths_preserve_significant_whitespace() {
+        assert_eq!(
+            validate_remote_file_path("/srv/report ").unwrap(),
+            "/srv/report "
+        );
+        assert_eq!(
+            validate_remote_directory_path("/srv/project ").unwrap(),
+            "/srv/project "
+        );
+        assert_eq!(
+            validate_remote_mutation_path("/srv/report ").unwrap(),
+            "/srv/report "
+        );
+        assert_eq!(
+            validate_local_file_path("/tmp/report ").unwrap(),
+            std::path::PathBuf::from("/tmp/report ")
+        );
+        assert!(validate_remote_file_path("   ").is_err());
+        assert!(validate_remote_file_path("/").is_err());
+        assert!(validate_remote_mutation_path("/").is_err());
+    }
 
     #[test]
     fn server_alive_interval_maps_to_a_bounded_native_duration() {
