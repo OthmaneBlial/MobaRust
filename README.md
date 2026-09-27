@@ -4,13 +4,13 @@
 
 MobaRust is a free, open-source MobaXterm alternative for people who work across remote machines. Connect over SSH, move files with SFTP/SCP, and keep local shells, port forwards, and diagnostics beside your sessions. Built with Rust and Tauri; no cloud account required.
 
-[![GitHub stars](https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&logo=github)](https://github.com/OthmaneBlial/MobaRust/stargazers) [![Preview release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.14) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/OthmaneBlial/MobaRust?style=flat-square&logo=github)](https://github.com/OthmaneBlial/MobaRust/stargazers) [![Preview release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.15) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE)
 
-[Download v0.1.14 for Mac](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.14) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Documentation](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
+[Download v0.1.15 for Mac](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.15) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Documentation](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
 
 Independent project. Not affiliated with Mobatek or MobaXterm.
 
-[![MobaRust desktop workspace preview](site/media/mobarust-demo-preview.gif)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.14)
+[![MobaRust desktop workspace preview](site/media/mobarust-demo-preview.gif)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.15)
 
 ## Get started
 
@@ -19,14 +19,14 @@ Download an installer, open MobaRust, and start with a local terminal or an SSH 
 | Platform | Download | Notes |
 | --- | --- | --- |
 | Windows x64 | [Installer v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | Previous preview; WebView2 is installed if needed. |
-| macOS Apple Silicon | [DMG v0.1.14](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.14/MobaRust-0.1.14-macos-arm64.dmg) | Move MobaRust to Applications. |
-| macOS Intel | [DMG v0.1.14](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.14/MobaRust-0.1.14-macos-x64.dmg) | Move MobaRust to Applications. |
+| macOS Apple Silicon | [DMG v0.1.15](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.15/MobaRust-0.1.15-macos-arm64.dmg) | Move MobaRust to Applications. |
+| macOS Intel | [DMG v0.1.15](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.15/MobaRust-0.1.15-macos-x64.dmg) | Move MobaRust to Applications. |
 | Ubuntu / Debian x64 | [DEB v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | Previous preview; `sudo apt install ./MobaRust-0.1.12-linux-x64.deb` |
 | Other Linux x64 | [AppImage v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | Previous preview; WebKitGTK 4.1 and FUSE may be required. |
 
-[Mac release files and SHA-256 checksums](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.14) · [v0.1.14 release notes](docs/release/v0.1.14.md) · [Windows/Linux v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12)
+[Mac release files and SHA-256 checksums](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.15) · [v0.1.15 release notes](docs/release/v0.1.15.md) · [Windows/Linux v0.1.12](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12)
 
-These are preview builds without publisher signing. Windows may show SmartScreen; macOS is not Developer ID signed or notarized. Checksums detect download corruption, not publisher identity. See the [Mac release notes](docs/release/v0.1.14.md) or [v0.1.12 installation notes](docs/release/preview-notes.md).
+These are preview builds without publisher signing. Windows may show SmartScreen; macOS is not Developer ID signed or notarized. Checksums detect download corruption, not publisher identity. See the [Mac release notes](docs/release/v0.1.15.md) or [v0.1.12 installation notes](docs/release/preview-notes.md).
 
 ## One workspace for the whole session
 

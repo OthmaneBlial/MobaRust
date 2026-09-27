@@ -85,6 +85,13 @@ and both packaged executables returned `MobaRust 0.1.14` for `--version`.
 The collected DMGs passed their SHA-256 files. No GUI or Intel hardware session
 was exercised in this run.
 
+On 2026-09-27, v0.1.15 source passed `cargo xtask check`, including RDP/VNC
+loopback fixtures. Locally built ARM64 and x64 DMGs passed `hdiutil verify`;
+their mounted apps passed package layout and ad hoc signature checks. `lipo`
+confirmed each app and VNC helper architecture, and both packaged executables
+returned `MobaRust 0.1.15` for `--version`. The collected DMGs passed their
+SHA-256 files. No GUI or Intel hardware session was exercised in this run.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
