@@ -14,7 +14,12 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    name: check (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, windows-latest, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -34,5 +39,6 @@ jobs:
             tools/rdp-helper -> target
             tools/vnc-helper -> target
       - name: Linux desktop prerequisites
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: cargo xtask check
