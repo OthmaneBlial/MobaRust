@@ -15,7 +15,9 @@ credential references only. SSH host-trust selection (known-hosts path or
 operator-pinned fingerprint) is also persisted as non-secret connection
 metadata, so reconnecting a saved profile does not silently change its trust
 policy. Unknown top-level fields and corrupt JSON are reported instead of
-being replaced or silently discarded.
+being replaced or silently discarded. Importing an exported catalog adds new
+session IDs; existing IDs are reported as skipped so a stale export cannot
+overwrite local edits or host trust.
 
 The same private temporary-file writer is used for the separate settings,
 snippet, macro, and bounded audit JSON stores. This is a local file-permission

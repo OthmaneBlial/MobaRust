@@ -824,9 +824,9 @@ impl SessionStore {
         .map_err(StoreError::Encode)
     }
 
-    /// Merges a previously exported secret-free catalog. A session ID is the
-    /// stable merge key; malformed or unknown-schema input fails before the
-    /// current store is changed.
+    /// Adds new sessions from a previously exported secret-free catalog.
+    /// Existing IDs are kept unchanged; malformed or unknown-schema input
+    /// fails before the current store is changed.
     pub fn import_json(&mut self, json: &str) -> Result<SessionImportReport, StoreError> {
         if json.len() > MAX_IMPORT_JSON_BYTES {
             return Err(StoreError::SessionImportTooLarge);
@@ -852,12 +852,12 @@ impl SessionStore {
                 skipped.push(format!("{}: {error}", session.name));
                 continue;
             }
-            imported_count += 1;
-            if let Some(existing) = self.sessions.iter_mut().find(|item| item.id == session.id) {
-                *existing = session;
-            } else {
-                self.sessions.push(session);
+            if self.sessions.iter().any(|item| item.id == session.id) {
+                skipped.push(format!("{}: session ID already exists", session.name));
+                continue;
             }
+            imported_count += 1;
+            self.sessions.push(session);
             changed = true;
         }
         if changed && let Err(error) = self.persist() {
@@ -1791,6 +1791,7 @@ mod tests {
         assert_eq!(store.list(), std::slice::from_ref(&original));
 
         let mut imported = original.clone();
+        imported.id = SessionId::new();
         imported.name = "Imported but not durable".into();
         let payload = serde_json::json!({
             "schema_version": 1,
@@ -1844,9 +1845,19 @@ mod tests {
         assert!(report.skipped.is_empty());
         assert_eq!(target.list().len(), 1);
 
+        let mut edited = target.list()[0].clone();
+        edited.favorite = true;
+        edited.auth = AuthMethod::Agent;
+        edited.known_hosts_path = Some("/fixture/known_hosts".into());
+        target.save(edited.clone()).unwrap();
         let second = target.import_json(&exported).unwrap();
-        assert_eq!(second.imported_count, 1);
+        assert_eq!(second.imported_count, 0);
+        assert_eq!(
+            second.skipped,
+            vec!["Production bastion: session ID already exists"]
+        );
         assert_eq!(target.list().len(), 1);
+        assert_eq!(SessionStore::open(&target_path).unwrap().list(), &[edited]);
     }
 
     #[test]

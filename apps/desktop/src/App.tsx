@@ -2496,7 +2496,7 @@ function App() {
 
   const importSessions = useCallback(async () => {
     if (!IS_TAURI) return;
-    const json = window.prompt("Paste a secret-free MobaRust session export JSON");
+    const json = window.prompt("Paste a secret-free MobaRust session export JSON. Existing session IDs stay unchanged.");
     if (!json?.trim()) return;
     try {
       const report = await invoke<SessionImportReport>("session_import", { payload: { json } });
