@@ -29,8 +29,9 @@ Imported profiles are persisted in the existing versioned session store and
 are idempotent by protocol and alias. A repeated import updates the existing
 profile while preserving its session ID. `IdentityFile` remains a path
 reference and passwords are never read from the config or stored. Profiles
-with `ProxyJump` are retained for migration visibility but the current UI
-blocks reconnect with an explicit message until jump-host transport exists.
+with `ProxyJump` reconnect when each alias resolves to a saved SSH profile.
+An explicit `user@host:port` entry overrides the saved hop username and port.
+Unresolved aliases remain visible but cannot start a connection.
 
 ## Rationale
 

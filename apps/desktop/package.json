@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test:unit": "node --experimental-strip-types test/remote-editor-security.test.mjs && node --experimental-strip-types test/macro-recording.test.mjs && node --experimental-strip-types test/terminal-session-close.test.mjs && node --experimental-strip-types test/network-diagnostic-lifecycle.test.mjs",
+    "test:unit": "node --experimental-strip-types test/remote-editor-security.test.mjs && node --experimental-strip-types test/macro-recording.test.mjs && node --experimental-strip-types test/terminal-session-close.test.mjs && node --experimental-strip-types test/network-diagnostic-lifecycle.test.mjs && node --experimental-strip-types test/saved-jump-alias.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

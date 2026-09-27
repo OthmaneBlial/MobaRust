@@ -46,6 +46,7 @@ import {
   type MacroRecordingState,
 } from "./macro-recording";
 import { isCurrentSessionRequest } from "./session-request";
+import { resolveSavedJumpAlias } from "./saved-jump-alias";
 import { acceptNetworkDiagnosticEvent, acceptNetworkDiagnosticResponse, beginNetworkDiagnostic, failNetworkDiagnosticStart, requestNetworkDiagnosticCancel, takePendingNetworkDiagnosticCancel, type NetworkDiagnosticRun } from "./network-diagnostic-lifecycle";
 import {
   Activity,
@@ -4031,18 +4032,6 @@ function requestFromSavedAuth(auth: SavedAuth): SshConnectRequest["auth"] | null
   return null;
 }
 
-function findSavedJumpSession(catalog: SavedSession[], alias: string): SavedSession | undefined {
-  const trimmed = alias.trim();
-  const direct = catalog.find((candidate) => candidate.id === trimmed || candidate.name === trimmed);
-  if (direct) return direct;
-  const userless = trimmed.includes("@") ? trimmed.slice(trimmed.lastIndexOf("@") + 1) : trimmed;
-  const bracketedHost = userless.startsWith("[") ? userless.match(/^\[([^\]]+)\](?::(\d+))?$/) : null;
-  const host = bracketedHost?.[1] ?? userless.replace(/:(\d+)$/, "");
-  const portText = bracketedHost?.[2] ?? userless.match(/:(\d+)$/)?.[1];
-  const port = portText ? Number(portText) : undefined;
-  return catalog.find((candidate) => candidate.hostname === host && (!port || candidate.port === port));
-}
-
 const MAX_SSH_JUMP_HOSTS = 8;
 
 function requestFromSavedSession(session: SavedSession, catalog: SavedSession[], visited = new Set<string>(), remainingHops = MAX_SSH_JUMP_HOSTS): SshConnectRequest | null {
@@ -4076,16 +4065,16 @@ function requestFromSavedSession(session: SavedSession, catalog: SavedSession[],
   } else {
     for (const alias of session.jump_hosts) {
       if (jumpHosts.length >= remainingHops) return null;
-      const jumpSession = findSavedJumpSession(catalog, alias);
-      if (!jumpSession) return null;
-      const jumpRequest = requestFromSavedSession(jumpSession, catalog, nextVisited, remainingHops - jumpHosts.length - 1);
+      const resolved = resolveSavedJumpAlias(catalog, alias);
+      if (!resolved) return null;
+      const jumpRequest = requestFromSavedSession(resolved.session, catalog, nextVisited, remainingHops - jumpHosts.length - 1);
       if (!jumpRequest) return null;
       if (jumpHosts.length + (jumpRequest.jumpHosts?.length ?? 0) >= remainingHops) return null;
       jumpHosts.push(...(jumpRequest.jumpHosts ?? []));
       jumpHosts.push({
         host: jumpRequest.host,
-        port: jumpRequest.port,
-        username: jumpRequest.username,
+        port: resolved.port ?? jumpRequest.port,
+        username: resolved.username ?? jumpRequest.username,
         auth: jumpRequest.auth,
         knownHostsPath: jumpRequest.knownHostsPath,
         pinnedFingerprint: jumpRequest.pinnedFingerprint,
