@@ -53,6 +53,12 @@ layout with `cargo xtask verify-platform-layout`, and its signature with
 `cargo xtask verify-macos-signature`. Cross-building on Apple Silicon does not
 prove clean installation or GUI behavior on an Intel Mac.
 
+`tools/release-assets.mjs collect` accepts the bundle directory as its fourth
+argument and an output directory as its fifth. Use an empty, version-specific
+output directory for local releases. The collector refuses an output directory
+containing installers from another version, preserving those files for review
+instead of mixing them into a new upload.
+
 `cargo xtask package-check` builds an unsigned current-platform debug app
 bundle and verifies that the Tauri resource step completes. The bundle
 configuration includes the versioned MobaRust mark from

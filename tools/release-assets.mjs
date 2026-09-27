@@ -26,7 +26,11 @@ if (process.argv[2] === 'check-version') {
     const arch = platform === 'macos-arm64' ? 'aarch64' : 'x64';
     if (basename(files[0]) !== `MobaRust_${config.version}_${arch}.dmg`) throw new Error(`Wrong macOS installer architecture for ${platform}`);
   }
-  const out = 'target/release-assets';
+  const out = process.argv[5] ?? 'target/release-assets';
+  if (existsSync(out)) {
+    const stale = readdirSync(out).find(name => name.startsWith('MobaRust-') && !name.startsWith(`MobaRust-${config.version}-`));
+    if (stale) throw new Error(`Release output contains a different version: ${stale}`);
+  }
   mkdirSync(out, { recursive: true });
   const checksums = files.map(path => {
     const name = `MobaRust-${config.version}-${platform}${extensions.find(ext => path.endsWith(ext))}`;
