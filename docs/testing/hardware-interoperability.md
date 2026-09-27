@@ -68,6 +68,15 @@ helper, checksums, and portable archive were verified. The archive SHA-256 was
 The packaged executable returned `MobaRust 0.1.12` on its CLI startup probe.
 This run did not open the GUI or test a packaged SSH connection.
 
+On 2026-09-27, tag `v0.1.13` produced locally built macOS ARM64 and x64 DMGs.
+Both disk images passed `hdiutil verify`; the mounted apps passed package layout
+and ad hoc signature checks. `lipo` confirmed that each app executable and VNC
+helper matched its labeled architecture, and each packaged executable returned
+`MobaRust 0.1.13` for `--version`. The four uploaded release assets were
+downloaded again and their SHA-256 files passed. The workflow stayed disabled.
+This does not establish GUI behavior, clean installation, or Intel hardware
+interoperability.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
