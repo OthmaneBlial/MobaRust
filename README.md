@@ -6,7 +6,7 @@ Open SSH sessions, move files over SFTP/SCP, run local terminals, and manage tun
 
 [![Quality](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml) [![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square)](https://github.com/OthmaneBlial/MobaRust/releases)
 
-[**Download v0.1.10 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.10) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
+[**Download v0.1.10 preview**](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.10) · [Project site](https://othmaneblial.github.io/MobaRust/) · [Watch the real desktop demo](https://othmaneblial.github.io/MobaRust/#demo) · [Read the docs](https://othmaneblial.github.io/MobaRust/docs.html) · [Roadmap](ROADMAP.md)
 
 MobaRust is an independent MobaXterm alternative, not a feature-for-feature clone. SSH and SFTP are the focus; experimental protocols and platform gaps are stated plainly. No cloud account required. MobaRust is not affiliated with Mobatek.
 
