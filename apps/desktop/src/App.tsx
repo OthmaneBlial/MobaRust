@@ -2955,13 +2955,12 @@ function App() {
       const defaultRemotePath = remoteChildPath(remotePath, fallbackName);
       const destination = window.prompt("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
-      const overwrite = window.confirm("Allow replacing an existing remote file?");
-      if (!overwrite) continue;
+      const overwrite = window.confirm("Replace existing remote files? OK: allow replacement. Cancel: upload only if the destination does not exist.");
       if (remoteSessionIdRef.current !== remoteSessionId) return;
       try {
         await invoke("ssh_upload", {
           terminalId: remoteSessionId,
-          request: { remotePath: destination, localPath, protocol, overwrite: true, recursive: protocol === "sftp" },
+          request: { remotePath: destination, localPath, protocol, overwrite, recursive: protocol === "sftp" },
         });
         setConnectionError(null);
       } catch (error) {
