@@ -641,6 +641,24 @@ mod tests {
 
     #[test]
     fn native_pty_supports_resize_input_output_and_exit() {
+        assert_native_pty_round_trip(fixture_command());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cmd_round_trips_input_and_exits_through_conpty() {
+        let mut command = CommandBuilder::new("cmd.exe");
+        command.args([
+            "/D",
+            "/Q",
+            "/V:ON",
+            "/C",
+            "echo MOBARUST_PTY_OK & set /p line= & echo INPUT:!line! & exit /b 0",
+        ]);
+        assert_native_pty_round_trip(command);
+    }
+
+    fn assert_native_pty_round_trip(command: CommandBuilder) {
         let system = portable_pty::native_pty_system();
         let pair = system
             .openpty(PtySize {
@@ -660,7 +678,6 @@ mod tests {
             })
             .expect("resize test pty");
 
-        let command = fixture_command();
         let mut child = pair.slave.spawn_command(command).expect("spawn test shell");
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("clone test reader");
@@ -764,9 +781,10 @@ mod tests {
     fn explicit_unix_shells_round_trip_through_a_native_pty_when_installed() {
         for shell in [LocalShell::Bash, LocalShell::Zsh, LocalShell::Fish] {
             let executable = shell_command(shell).expect("Unix shell should be supported");
-            if !executable_is_available(&executable) {
+            let Some(version) = executable_version(&executable) else {
+                eprintln!("skipping native PTY shell fixture: {executable} is unavailable");
                 continue;
-            }
+            };
 
             let system = portable_pty::native_pty_system();
             let pair = system
@@ -796,12 +814,14 @@ mod tests {
             reader
                 .read_to_string(&mut output)
                 .expect("read explicit shell output");
-            child.wait().expect("wait for explicit Unix shell");
+            let status = child.wait().expect("wait for explicit Unix shell");
 
+            assert!(status.success(), "{executable} must exit successfully");
             assert!(
                 output.contains("MOBARUST_EXPLICIT_SHELL_OK"),
                 "{executable} did not round-trip through the PTY"
             );
+            eprintln!("native PTY passed: {executable}; {version}");
         }
     }
 
@@ -971,7 +991,7 @@ mod tests {
         #[cfg(target_os = "windows")]
         {
             let mut command = CommandBuilder::new("cmd.exe");
-            command.args(["/C", "ping 127.0.0.1 -n 30 > nul"]);
+            command.args(["/D", "/C", "ping 127.0.0.1 -n 30 > nul"]);
             command
         }
 
@@ -984,11 +1004,20 @@ mod tests {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn executable_is_available(executable: &str) -> bool {
-        std::process::Command::new(executable)
+    fn executable_version(executable: &str) -> Option<String> {
+        let output = std::process::Command::new(executable)
             .arg("--version")
             .output()
-            .is_ok_and(|output| output.status.success())
+            .ok()?;
+        output.status.success().then(|| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("version unavailable")
+                .chars()
+                .take(200)
+                .collect()
+        })
     }
 
     #[test]
