@@ -1,26 +1,39 @@
 WEBVTT
 
 00:00.000 --> 00:03.000
-MobaRust. A real desktop walkthrough, light mode first.
+MobaRust: servers, shells and files in one native workspace.
 
-00:03.000 --> 00:08.000
-Run commands in a native local terminal.
+00:03.000 --> 00:13.000
+Run a real local shell command and reach a disposable loopback HTTP service.
 
-00:08.000 --> 00:16.000
-This curl request reaches an isolated loopback demo API.
+00:13.000 --> 00:23.000
+Keep independent tasks side by side in two terminal panes.
 
-00:16.000 --> 00:26.000
-Split the terminal to keep two independent shells side by side.
+00:23.000 --> 00:33.000
+This authenticated SSH connection uses generated keys and explicit host trust.
+Remote commands return real output from the disposable server.
 
-00:26.000 --> 00:37.000
-Quick Connect parses an example SSH URI into connection fields.
-No SSH connection is made in this demonstration.
+00:33.000 --> 00:47.000
+Browse remote SFTP files and edit a generated configuration in the app.
+The editor checks remote changes before saving.
 
-00:37.000 --> 00:49.000
-Prepare a reusable command snippet and review it before execution.
+00:47.000 --> 00:52.000
+The SFTP download completed. Its bytes match the generated source file.
+The absolute local destination path is obscured.
 
-00:49.000 --> 00:58.000
-Switch to dark mode in one click. The terminal changes with the workspace.
+00:52.000 --> 01:02.000
+Create a local SSH forward with explicit bind and target fields.
+Loopback is the default; port zero selects a free listener port.
 
-00:58.000 --> 01:02.000
-Download the desktop preview for Mac, Windows, and Linux.
+01:02.000 --> 01:12.000
+This curl request passes through the SSH tunnel to the loopback HTTP service.
+
+01:12.000 --> 01:22.000
+Save a snippet, supply its variable and review the rendered command.
+Nothing runs automatically.
+
+01:22.000 --> 01:30.000
+Switch between dark and light themes. Terminal colors follow the workspace.
+
+01:30.000 --> 01:34.000
+Mac 0.1.17 preview; Windows/Linux 0.1.12. No publisher signing.

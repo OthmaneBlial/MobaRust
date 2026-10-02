@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
+  <title id="title">MobaRust — your remote workstation</title>
+  <desc id="desc">A dark green and copper banner for the open-source Rust desktop application. Connect servers, work in terminals, move files, and manage tunnels.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#27382e" stroke-width="1"/></pattern>
+    <linearGradient id="fade" x2="1" y2="1"><stop stop-color="#1c2c23"/><stop offset="1" stop-color="#0e1813"/></linearGradient>
+  </defs>
+  <rect width="1600" height="520" rx="24" fill="url(#fade)"/>
+  <rect x="940" width="660" height="520" fill="url(#grid)" opacity=".65"/>
+  <path d="M0 498H1600" stroke="#eaa570" stroke-width="4"/>
+  <g font-family="'Avenir Next', 'Trebuchet MS', sans-serif">
+    <circle cx="77" cy="75" r="6" fill="#d2e2aa"/>
+    <text x="99" y="82" fill="#d2e2aa" font-size="23" letter-spacing="4">OPEN SOURCE / REMOTE WORKSTATION</text>
+    <text x="64" y="223" fill="#f7f2e8" font-size="134" font-weight="700" letter-spacing="-6">MobaRust<tspan fill="#eaa570">.</tspan></text>
+    <text x="70" y="296" fill="#e3dccb" font-family="Georgia, serif" font-size="43">Servers, shells &amp; files.</text>
+    <text x="70" y="346" fill="#e3dccb" font-family="Georgia, serif" font-size="43">One place to work.</text>
+    <text x="72" y="436" fill="#a7baaa" font-size="24" letter-spacing="2">RUST + TAURI</text>
+    <text x="318" y="436" fill="#6f8374" font-size="24">/</text>
+    <text x="350" y="436" fill="#a7baaa" font-size="24">Free. Local. Yours.</text>
+  </g>
+  <g stroke="#d2e2aa" fill="none" stroke-width="2">
+    <path d="M1090 272H1236V146H1390M1236 272H1390M1236 272V398H1390" opacity=".6"/>
+    <circle cx="1090" cy="272" r="68" fill="#16261d"/>
+    <path d="m1061 252 21 20-21 20m33 0h27" stroke="#eaa570" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="1236" cy="272" r="5" fill="#d2e2aa" stroke="none"/>
+  </g>
+  <g font-family="'Avenir Next', 'Trebuchet MS', sans-serif" font-size="23" font-weight="600">
+    <rect x="1290" y="110" width="230" height="72" rx="12" fill="#213327" stroke="#506547"/>
+    <text x="1320" y="155" fill="#d2e2aa">01 / SSH</text>
+    <rect x="1290" y="236" width="230" height="72" rx="12" fill="#263024" stroke="#677151"/>
+    <text x="1320" y="281" fill="#e5e8c7">02 / FILES</text>
+    <rect x="1290" y="362" width="230" height="72" rx="12" fill="#33291f" stroke="#82623f"/>
+    <text x="1320" y="407" fill="#eaa570">03 / TUNNELS</text>
+  </g>
+</svg>

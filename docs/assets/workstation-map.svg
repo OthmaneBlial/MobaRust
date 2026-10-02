@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="320" viewBox="0 0 1600 320" role="img" aria-labelledby="title desc">
+  <title id="title">A workstation for the whole remote workflow</title>
+  <desc id="desc">Connect with verified SSH trust, work in terminal tabs and split panes, move files with SFTP and SCP, and reach services through SSH tunnels.</desc>
+  <rect width="1600" height="320" rx="20" fill="#111d16"/>
+  <path d="M60 275H1540" stroke="#374c3b"/>
+  <g font-family="'Avenir Next', 'Trebuchet MS', sans-serif">
+    <g transform="translate(60 40)">
+      <text y="30" fill="#eaa570" font-size="22" letter-spacing="3">01 / CONNECT</text>
+      <text y="92" fill="#f5f0e5" font-size="38" font-weight="600">Know your host.</text>
+      <text y="143" fill="#b9c8b8" font-size="26">SSH keys · agent · jump hosts</text>
+      <text y="187" fill="#8fa18d" font-size="23">Explicit fingerprints and trust</text>
+    </g>
+    <g transform="translate(450 40)">
+      <text y="30" fill="#d2e2aa" font-size="22" letter-spacing="3">02 / WORK</text>
+      <text y="92" fill="#f5f0e5" font-size="38" font-weight="600">Keep your context.</text>
+      <text y="143" fill="#b9c8b8" font-size="26">Tabs · splits · saved sessions</text>
+      <text y="187" fill="#8fa18d" font-size="23">Local and remote terminals</text>
+    </g>
+    <g transform="translate(840 40)">
+      <text y="30" fill="#d2e2aa" font-size="22" letter-spacing="3">03 / MOVE</text>
+      <text y="92" fill="#f5f0e5" font-size="38" font-weight="600">Bring your files.</text>
+      <text y="143" fill="#b9c8b8" font-size="26">SFTP · SCP · remote editing</text>
+      <text y="187" fill="#8fa18d" font-size="23">Progress and cancellation</text>
+    </g>
+    <g transform="translate(1230 40)">
+      <text y="30" fill="#eaa570" font-size="22" letter-spacing="3">04 / REACH</text>
+      <text y="92" fill="#f5f0e5" font-size="38" font-weight="600">Open a route.</text>
+      <text y="143" fill="#b9c8b8" font-size="26">Local · remote · SOCKS5</text>
+      <text y="187" fill="#8fa18d" font-size="23">SSH tunnels and diagnostics</text>
+    </g>
+    <text x="60" y="302" fill="#81977f" font-size="18" letter-spacing="2">ONE DESKTOP WORKSPACE / NO CLOUD ACCOUNT REQUIRED</text>
+  </g>
+</svg>

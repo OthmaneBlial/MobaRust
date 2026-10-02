@@ -8,18 +8,18 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.16; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.17; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.16.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.17.md).
 
 ## Completed in the current improvement cycle
 
-These changes are in source; no new installer release has been published for them.
+These changes are included in the v0.1.17 Mac preview. Windows/Linux installers remain v0.1.12.
 
 - [x] Keep established quiet SSH sessions alive beyond their setup deadline.
 - [x] Preserve exit status sent after channel EOF, so normal shell exit does not become a reconnect.
@@ -34,6 +34,8 @@ These changes are in source; no new installer release has been published for the
 - [x] Fix release-asset tests launched from a different working directory and include them in the local suite.
 - [x] Add contributor/security/architecture guides and GitHub report/PR templates.
 - [x] Refresh advisory records and publish a benchmark receipt with hardware, samples, and observed CPU load.
+- [x] Replace native tunnel browser prompts with an integrated form; verify invalid-port rejection, all three modes and listener cleanup on macOS ARM64.
+- [x] Build and check both v0.1.17 Mac DMGs and record the real native workflows.
 
 The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
@@ -72,7 +74,7 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [ ] Validate release notes and artifact names against the actual uploaded binaries.
+- [x] Validate v0.1.17 Mac notes, versions, architectures and artifact names; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
@@ -81,10 +83,11 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, cancellation, and progress under realistic workloads.
+- [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.
 - [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
-- [ ] Record a new native demo of a disposable SSH connection, file transfer, and tunnel, with real evidence and redacted fixture data.
+- [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.
 
-**Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The current demo's v0.1.11 provenance stays explicit until replaced.
+**Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The [v0.1.17 demo provenance](docs/release/desktop-demo.md) and [native lab receipt](docs/testing/native-workflow.md) record the tested scope. Broader failure recovery remains open.
 
 ## Experimental work and beta gates
 
