@@ -1430,6 +1430,7 @@ fn check() -> Result<(), String> {
     run("pnpm", ["run", "check"], Some("apps/desktop"))?;
     run("pnpm", ["run", "lint"], Some("apps/desktop"))?;
     run("pnpm", ["run", "build"], Some("apps/desktop"))?;
+    run("node", ["--test", "tools/release-assets.test.mjs"], None)?;
     check_rdp_helper()?;
     if cfg!(target_os = "macos") {
         check_rdp_fixture()?;

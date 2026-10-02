@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const script = resolve('tools/release-assets.mjs');
+const script = fileURLToPath(new URL('./release-assets.mjs', import.meta.url));
 function fixture(run) {
   const cwd = mkdtempSync(join(tmpdir(), 'mobarust-release-test-'));
   const put = (name, content) => {
