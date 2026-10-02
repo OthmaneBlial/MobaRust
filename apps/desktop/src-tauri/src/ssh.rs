@@ -26,6 +26,8 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
+const QUEUED_COMMAND_CANCELLED: &str =
+    "SSH session changed or closed before this queued action ran; retry explicitly";
 const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
 const PENDING_OUTPUT_CHUNKS: usize = 32;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -727,8 +729,9 @@ impl SshManager {
             .get(terminal_id)
             .map(|state| state.close.clone())
             .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        let signalled = close.send(true);
         self.cancel_for_terminal(terminal_id);
-        close.send(true).map_err(|_| SshManagerError::Closed)
+        signalled.map_err(|_| SshManagerError::Closed)
     }
 
     pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SshManagerError> {
@@ -956,16 +959,17 @@ impl SshManager {
             .port();
         let tunnel_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = watch::channel(false);
-        self.tunnels
-            .lock()
-            .map_err(|_| SshManagerError::Closed)?
-            .insert(
+        {
+            let mut tunnels = self.tunnels.lock().map_err(|_| SshManagerError::Closed)?;
+            self.ensure_current_sender(&terminal_id, &sender)?;
+            tunnels.insert(
                 tunnel_id.clone(),
                 TunnelControl {
                     terminal_id: terminal_id.clone(),
                     cancel,
                 },
             );
+        }
         self.emit_tunnel(
             &app,
             SshTunnelEvent {
@@ -994,8 +998,12 @@ impl SshManager {
                 cancel: cancel_receiver,
             },
         };
-        if sender.send(command).await.is_err() {
-            self.finish_tunnel(&tunnel_id);
+        if let Err(error) = sender.send(command).await {
+            self.reject_queued_command(
+                error.0,
+                |event| self.emit_transfer(&app, event),
+                |event| self.emit_tunnel(&app, event),
+            );
             return Err(SshManagerError::Closed);
         }
         Ok(SshTunnelResponse {
@@ -1029,16 +1037,17 @@ impl SshManager {
             .port();
         let tunnel_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = watch::channel(false);
-        self.tunnels
-            .lock()
-            .map_err(|_| SshManagerError::Closed)?
-            .insert(
+        {
+            let mut tunnels = self.tunnels.lock().map_err(|_| SshManagerError::Closed)?;
+            self.ensure_current_sender(&terminal_id, &sender)?;
+            tunnels.insert(
                 tunnel_id.clone(),
                 TunnelControl {
                     terminal_id: terminal_id.clone(),
                     cancel,
                 },
             );
+        }
         let job = DynamicForwardJob {
             tunnel_id: tunnel_id.clone(),
             terminal_id: terminal_id.clone(),
@@ -1048,12 +1057,12 @@ impl SshManager {
             cancel: cancel_receiver,
         };
         self.emit_tunnel(&app, job.event(TunnelState::Listening, 0, 0, None));
-        if sender
-            .send(SshCommand::StartDynamicForward { job })
-            .await
-            .is_err()
-        {
-            self.finish_tunnel(&tunnel_id);
+        if let Err(error) = sender.send(SshCommand::StartDynamicForward { job }).await {
+            self.reject_queued_command(
+                error.0,
+                |event| self.emit_transfer(&app, event),
+                |event| self.emit_tunnel(&app, event),
+            );
             return Err(SshManagerError::Closed);
         }
         Ok(SshTunnelResponse {
@@ -1107,6 +1116,11 @@ impl SshManager {
                     return Err(SshManagerError::Closed);
                 }
             };
+            if let Err(error) = self.ensure_current_sender(&terminal_id, &sender) {
+                drop(tunnels);
+                self.finish_tunnel(&tunnel_id);
+                return Err(error);
+            }
             tunnels.insert(
                 tunnel_id.clone(),
                 TunnelControl {
@@ -1206,11 +1220,9 @@ impl SshManager {
 
         {
             let mut controls = self.transfers.lock().map_err(|_| SshManagerError::Closed)?;
-            // Quit sets the flag before cancelling this registry. A caller that
-            // obtained its command sender earlier must not register after that sweep.
-            if *self.shutdown.borrow() {
-                return Err(SshManagerError::Closed);
-            }
+            // Serialize late registration with the cancellation sweep. A caller
+            // holding an old sender must not add controls after Close or loss.
+            self.ensure_current_sender(&terminal_id, &sender)?;
             controls.insert(
                 transfer_id.clone(),
                 TransferControl {
@@ -1226,8 +1238,12 @@ impl SshManager {
             job,
             cancel: cancel_receiver,
         };
-        if sender.send(command).await.is_err() {
-            self.finish_transfer(&transfer_id);
+        if let Err(error) = sender.send(command).await {
+            self.reject_queued_command(
+                error.0,
+                |event| self.emit_transfer(&app, event),
+                |event| self.emit_tunnel(&app, event),
+            );
             return Err(SshManagerError::Closed);
         }
 
@@ -1252,12 +1268,123 @@ impl SshManager {
         if *self.shutdown.borrow() {
             return Err(SshManagerError::Closed);
         }
-        self.sessions
-            .lock()
-            .map_err(|_| SshManagerError::Closed)?
+        let sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+        let state = sessions
             .get(terminal_id)
-            .map(|state| state.sender.clone())
-            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        if *state.close.borrow() || state.sender.is_closed() {
+            return Err(SshManagerError::Closed);
+        }
+        Ok(state.sender.clone())
+    }
+
+    fn ensure_current_sender(
+        &self,
+        terminal_id: &str,
+        sender: &mpsc::Sender<SshCommand>,
+    ) -> Result<(), SshManagerError> {
+        if self.sender(terminal_id)?.same_channel(sender) {
+            Ok(())
+        } else {
+            Err(SshManagerError::Closed)
+        }
+    }
+
+    fn reopen_command_queue(
+        &self,
+        terminal_id: &str,
+    ) -> Result<mpsc::Receiver<SshCommand>, SshManagerError> {
+        let mut sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+        let state = sessions
+            .get_mut(terminal_id)
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        if *self.shutdown.borrow() || *state.close.borrow() || !state.sender.is_closed() {
+            return Err(SshManagerError::Closed);
+        }
+        let (sender, commands) = mpsc::channel(COMMAND_CAPACITY);
+        state.sender = sender;
+        Ok(commands)
+    }
+
+    async fn retire_command_queue(
+        &self,
+        terminal_id: &str,
+        commands: &mut mpsc::Receiver<SshCommand>,
+        mut transfer_event: impl FnMut(SshTransferEvent),
+        mut tunnel_event: impl FnMut(SshTunnelEvent),
+    ) -> usize {
+        commands.close();
+        self.cancel_for_terminal(terminal_id);
+        let mut discarded = 0;
+        // recv, rather than try_recv, also settles permits acquired just before
+        // close. Old senders can never feed the replacement connection's queue.
+        while let Some(command) = commands.recv().await {
+            self.reject_queued_command(command, &mut transfer_event, &mut tunnel_event);
+            discarded += 1;
+        }
+        discarded
+    }
+
+    fn reject_queued_command(
+        &self,
+        command: SshCommand,
+        transfer_event: impl FnOnce(SshTransferEvent),
+        tunnel_event: impl FnOnce(SshTunnelEvent),
+    ) {
+        match command {
+            SshCommand::Write(_) | SshCommand::Resize { .. } => {}
+            SshCommand::ListDirectory { reply, .. } => {
+                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+            }
+            SshCommand::OpenTextFile { reply, .. }
+            | SshCommand::SaveTextFile { reply, .. }
+            | SshCommand::SaveTextFileAs { reply, .. } => {
+                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+            }
+            SshCommand::CollectMonitor { reply } => {
+                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+            }
+            SshCommand::FileOperation { reply, .. } => {
+                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+            }
+            SshCommand::StartTransfer { job, .. } => {
+                self.finish_transfer(&job.transfer_id);
+                transfer_event(job.event(
+                    0,
+                    None,
+                    TransferState::Cancelled,
+                    Some(QUEUED_COMMAND_CANCELLED.into()),
+                ));
+            }
+            SshCommand::StartLocalForward { job } => {
+                self.finish_tunnel(&job.tunnel_id);
+                tunnel_event(job.event(
+                    TunnelState::Stopped,
+                    0,
+                    0,
+                    Some(QUEUED_COMMAND_CANCELLED.into()),
+                ));
+            }
+            SshCommand::StartDynamicForward { job } => {
+                self.finish_tunnel(&job.tunnel_id);
+                tunnel_event(job.event(
+                    TunnelState::Stopped,
+                    0,
+                    0,
+                    Some(QUEUED_COMMAND_CANCELLED.into()),
+                ));
+            }
+            SshCommand::StartRemoteForward { job, reply } => {
+                self.finish_tunnel(&job.tunnel_id);
+                tunnel_event(job.event(
+                    TunnelState::Stopped,
+                    0,
+                    0,
+                    Some(QUEUED_COMMAND_CANCELLED.into()),
+                ));
+                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+            }
+        }
     }
 
     fn emit_output(&self, app: &AppHandle, terminal_id: &str, bytes: &[u8]) {
@@ -1669,10 +1796,21 @@ async fn run_remote_session(
             &mut transfers,
         )
         .await;
+        let discarded = manager
+            .retire_command_queue(
+                &terminal_id,
+                &mut commands,
+                |event| manager.emit_transfer(&app, event),
+                |event| manager.emit_tunnel(&app, event),
+            )
+            .await;
         manager
             .finish_session_transfers(&terminal_id, &mut transfers)
             .await;
         manager.finish_output(&app, &terminal_id);
+        if discarded > 0 {
+            manager.emit_output(&app, &terminal_id, b"\r\nMobaRust: queued SSH actions were cancelled because the session changed or closed. Retry explicitly.\r\n");
+        }
         match shell_result {
             ShellRunResult::Closed => break 'session,
             ShellRunResult::Lost(error) => {
@@ -1733,6 +1871,13 @@ async fn run_remote_session(
                         value: (new_connection, (new_reader, new_writer)),
                         attempt,
                     } => {
+                        commands = match manager.reopen_command_queue(&terminal_id) {
+                            Ok(commands) => commands,
+                            Err(_) => {
+                                let _ = new_connection.disconnect().await;
+                                break 'session;
+                            }
+                        };
                         connection = Arc::new(new_connection);
                         reader = new_reader;
                         writer = new_writer;
@@ -1899,7 +2044,7 @@ async fn run_shell_once(
     transfers: &mut JoinSet<()>,
 ) -> ShellRunResult {
     loop {
-        if *close.borrow() {
+        if *close.borrow() || *manager.shutdown.borrow() {
             let _ = writer.close().await;
             return ShellRunResult::Closed;
         }
@@ -1916,6 +2061,15 @@ async fn run_shell_once(
                 }
             }
             command = commands.recv() => {
+                if *close.borrow() || *manager.shutdown.borrow() {
+                    if let Some(command) = command {
+                        manager.reject_queued_command(command,
+                            |event| manager.emit_transfer(app, event),
+                            |event| manager.emit_tunnel(app, event));
+                    }
+                    let _ = writer.close().await;
+                    return ShellRunResult::Closed;
+                }
                 match command {
                     Some(SshCommand::Write(data)) => {
                         if let Err(error) = writer.write(&data).await {
@@ -4058,6 +4212,292 @@ mod tests {
         assert!(commit_local_file(&temporary, &destination, true, &mut cancel).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"target remains unchanged");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    fn queue_test_session(
+        manager: &SshManager,
+        id: &str,
+    ) -> tokio::sync::mpsc::Receiver<super::SshCommand> {
+        let (sender, commands) = tokio::sync::mpsc::channel(super::COMMAND_CAPACITY);
+        manager.sessions.lock().unwrap().insert(
+            id.into(),
+            super::SessionState {
+                sender,
+                close: watch::channel(false).0,
+                finished: watch::channel(false).1,
+                attached: false,
+                pending_output: Vec::new(),
+                output_decoder: mobarust_core::Utf8OutputDecoder::default(),
+            },
+        );
+        commands
+    }
+
+    #[test]
+    fn command_sender_refuses_close_before_worker_removal() {
+        let manager = SshManager::default();
+        let _commands = queue_test_session(&manager, "closing");
+        assert!(manager.sender("closing").is_ok());
+        manager
+            .sessions
+            .lock()
+            .unwrap()
+            .get("closing")
+            .unwrap()
+            .close
+            .send_replace(true);
+        assert!(matches!(
+            manager.sender("closing"),
+            Err(SshManagerError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn retired_queue_settles_old_permits_and_does_not_replay_input() {
+        use super::{QUEUED_COMMAND_CANCELLED, SshCommand, SshFileOperation};
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let manager = SshManager::default();
+        let mut commands = queue_test_session(&manager, "same-terminal");
+        let old = manager.sender("same-terminal").unwrap();
+        assert!(manager.reopen_command_queue("same-terminal").is_err());
+        assert!(
+            old.try_send(SshCommand::Write(b"do-not-replay\n".to_vec()))
+                .is_ok()
+        );
+        let permit = old.clone().reserve_owned().await.unwrap();
+        let (reply, response) = oneshot::channel();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut retire = Box::pin(manager.retire_command_queue(
+                "same-terminal",
+                &mut commands,
+                |_| panic!("no transfer was queued"),
+                |_| panic!("no tunnel was queued"),
+            ));
+            poll_fn(|cx| {
+                assert!(retire.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            assert!(old.is_closed());
+            assert!(manager.sender("same-terminal").is_err());
+            // A permit already obtained before loss can still enqueue. The drain
+            // must settle it, not stop when try_recv temporarily sees an empty queue.
+            permit.send(SshCommand::FileOperation {
+                operation: SshFileOperation::Delete {
+                    path: "do-not-delete".into(),
+                },
+                reply,
+            });
+            assert_eq!(retire.await, 2);
+            assert_eq!(
+                response.await.unwrap().unwrap_err(),
+                QUEUED_COMMAND_CANCELLED
+            );
+            let mut fresh = manager.reopen_command_queue("same-terminal").unwrap();
+            assert!(
+                manager
+                    .ensure_current_sender("same-terminal", &old)
+                    .is_err()
+            );
+            assert!(
+                old.send(SshCommand::Write(b"late-old-input".to_vec()))
+                    .await
+                    .is_err()
+            );
+            assert!(fresh.try_recv().is_err());
+            manager
+                .write("same-terminal", "fresh-input".into())
+                .await
+                .unwrap();
+            match fresh.recv().await.unwrap() {
+                SshCommand::Write(bytes) => assert_eq!(bytes, b"fresh-input"),
+                _ => panic!("replacement queue received the wrong action"),
+            }
+            manager
+                .sessions
+                .lock()
+                .unwrap()
+                .get("same-terminal")
+                .unwrap()
+                .close
+                .send_replace(true);
+            assert!(manager.reopen_command_queue("same-terminal").is_err());
+        })
+        .await
+        .expect("queue retirement deadline");
+    }
+
+    #[tokio::test]
+    async fn retired_queue_reports_cancelled_jobs_and_releases_loopback_listeners() {
+        use super::{
+            DynamicForwardJob, LocalForwardJob, QUEUED_COMMAND_CANCELLED, RemoteForwardJob,
+            SshCommand, TransferControl, TransferDirection, TransferJob, TunnelControl,
+            TunnelState,
+        };
+        use mobarust_core::TransferState;
+        use tokio::net::TcpListener;
+
+        let manager = SshManager::default();
+        let mut commands = queue_test_session(&manager, "closing");
+        let sender = manager.sender("closing").unwrap();
+        let (cancel, cancellation) = oneshot::channel();
+        manager.transfers.lock().unwrap().insert(
+            "queued-file".into(),
+            TransferControl {
+                terminal_id: "closing".into(),
+                cancel,
+            },
+        );
+        let job = TransferJob {
+            transfer_id: "queued-file".into(),
+            terminal_id: "closing".into(),
+            direction: TransferDirection::Upload,
+            protocol: TransferProtocol::Sftp,
+            remote_path: "never-uploaded".into(),
+            local_path: "never-opened".into(),
+            overwrite: false,
+            recursive: false,
+            source: "never-opened".into(),
+            destination: "never-uploaded".into(),
+            created_at: Instant::now(),
+        };
+        assert!(
+            sender
+                .try_send(SshCommand::StartTransfer {
+                    job,
+                    cancel: cancellation
+                })
+                .is_ok()
+        );
+        let mut ports = Vec::new();
+        for (id, dynamic) in [("queued-local", false), ("queued-socks", true)] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            ports.push(port);
+            let (cancel, cancellation) = watch::channel(false);
+            manager.tunnels.lock().unwrap().insert(
+                id.into(),
+                TunnelControl {
+                    terminal_id: "closing".into(),
+                    cancel,
+                },
+            );
+            let command = if dynamic {
+                SshCommand::StartDynamicForward {
+                    job: DynamicForwardJob {
+                        tunnel_id: id.into(),
+                        terminal_id: "closing".into(),
+                        bind_host: "127.0.0.1".into(),
+                        bind_port: port,
+                        listener,
+                        cancel: cancellation,
+                    },
+                }
+            } else {
+                SshCommand::StartLocalForward {
+                    job: LocalForwardJob {
+                        tunnel_id: id.into(),
+                        terminal_id: "closing".into(),
+                        bind_host: "127.0.0.1".into(),
+                        bind_port: port,
+                        target_host: "127.0.0.1".into(),
+                        target_port: 1,
+                        listener,
+                        cancel: cancellation,
+                    },
+                }
+            };
+            assert!(sender.try_send(command).is_ok());
+        }
+        let (cancel, cancellation) = watch::channel(false);
+        manager.tunnels.lock().unwrap().insert(
+            "queued-remote".into(),
+            TunnelControl {
+                terminal_id: "closing".into(),
+                cancel,
+            },
+        );
+        manager
+            .remote_forwards
+            .lock()
+            .unwrap()
+            .insert("closing".into(), "queued-remote".into());
+        let (reply, remote_response) = oneshot::channel();
+        assert!(
+            sender
+                .try_send(SshCommand::StartRemoteForward {
+                    job: RemoteForwardJob {
+                        tunnel_id: "queued-remote".into(),
+                        terminal_id: "closing".into(),
+                        bind_host: "127.0.0.1".into(),
+                        bind_port: 0,
+                        target_host: "127.0.0.1".into(),
+                        target_port: 1,
+                        cancel: cancellation,
+                    },
+                    reply,
+                })
+                .is_ok()
+        );
+        let (reply, editor_response) = oneshot::channel();
+        assert!(
+            sender
+                .try_send(SshCommand::SaveTextFileAs {
+                    path: "never-saved".into(),
+                    content: "never-sent-content".into(),
+                    encoding: mobarust_ssh::RemoteTextEncoding::Utf8,
+                    overwrite: true,
+                    reply,
+                })
+                .is_ok()
+        );
+        let mut transfers = Vec::new();
+        let mut tunnels = Vec::new();
+        let count = tokio::time::timeout(
+            Duration::from_secs(2),
+            manager.retire_command_queue(
+                "closing",
+                &mut commands,
+                |event| transfers.push(event),
+                |event| tunnels.push(event),
+            ),
+        )
+        .await
+        .expect("queued jobs cleanup deadline");
+        assert_eq!(count, 5);
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].transfer_id, "queued-file");
+        assert_eq!(transfers[0].state, TransferState::Cancelled);
+        assert_eq!(transfers[0].bytes_transferred, 0);
+        assert_eq!(
+            transfers[0].error.as_deref(),
+            Some(QUEUED_COMMAND_CANCELLED)
+        );
+        assert_eq!(tunnels.len(), 3);
+        assert!(
+            tunnels
+                .iter()
+                .all(|event| matches!(event.state, TunnelState::Stopped))
+        );
+        assert_eq!(
+            remote_response.await.unwrap().unwrap_err(),
+            QUEUED_COMMAND_CANCELLED
+        );
+        assert_eq!(
+            editor_response.await.unwrap().unwrap_err(),
+            QUEUED_COMMAND_CANCELLED
+        );
+        assert!(manager.transfers.lock().unwrap().is_empty());
+        assert!(manager.tunnels.lock().unwrap().is_empty());
+        assert!(manager.remote_forwards.lock().unwrap().is_empty());
+        for port in ports {
+            let listener = TcpListener::bind(("127.0.0.1", port))
+                .await
+                .expect("discarded queued listener was released");
+            drop(listener);
+        }
     }
 
     #[tokio::test]

@@ -87,7 +87,9 @@ also passed.
 
 This verifies single-file SFTP Cancel, download Retry, and active-upload SSH-tab
 closure on macOS ARM64. The application-exit cases below add Mac menu Quit and
-window-close evidence. Queued-command closure races, recursive/multi-file GUI recovery, native SCP, interrupted network
+window-close evidence. [Queue retirement regressions](queued-ssh-commands.md)
+cover the native queue/control cutoff; GUI queue-race acceptance, recursive/multi-file
+recovery, native SCP, interrupted network
 cleanup, larger workloads and Windows/Linux behavior remain open. A lost transport
 can still prevent remote cleanup; the explicit cleanup error remains necessary.
 Metadata/cleanup retain their request timeouts. There is no immediate-cancellation

@@ -65,6 +65,7 @@ The SSH lab reports **41 unit tests and 12 integration test cases**. IPv6 and re
 - [x] Honor cancellation queued after copying and before final promotion on all six transfer paths; verify local original/part preservation and six real-SFTP promotion cases, including cancellation during metadata. [Checks and limits](docs/testing/transfer-cancellation.md).
 - [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [x] Defer normal app exit until SSH sessions drain; reject new work during shutdown and route macOS menu Quit through cleanup. Verify native menu Quit during a 32 MiB SFTP upload and window close during download, preserving originals and removing parts on macOS ARM64. [Receipt and remaining exit gates](docs/testing/transfer-lifecycle.md#application-shutdown-correction--2026-10-02).
+- [x] Retire native SSH command queues on loss/closure, cancel queued file/tunnel actions visibly, and give a reconnected shell a fresh queue under the same terminal ID. Verify close refusal, late permits, no input replay, fresh delivery and loopback listener release with deterministic regressions; GUI loss/race acceptance remains pending. [Checks and limits](docs/testing/queued-ssh-commands.md).
 - [ ] Include these post-tag corrections in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
 
 ## Next, in priority order

@@ -22,7 +22,14 @@ reconnect without waiting for the full retry schedule. Dropping a cancelled
 attempt releases the in-flight transport future; the final cleanup still emits
 the normal disconnected state.
 
-On success the worker replaces its shell reader/writer and emits `connected`.
+The old command receiver is closed and drained before cleanup or reconnect.
+Queued actions are cancelled explicitly, and old sender clones cannot submit work
+to the new generation. New work is refused during cleanup/backoff. A successful
+reconnect publishes a fresh bounded command queue under the same terminal ID,
+replaces the shell reader/writer, and emits `connected`. Queued input and mutations
+are not replayed; already-dispatched operations may still finish on the old
+transport. [Queue regressions and limits](../testing/queued-ssh-commands.md).
+
 Successful reconnects that each lose their shell within 30 seconds also
 consume the configured budget. A shell that stays open for at least 30 seconds
 resets this short-lived-shell count. This prevents an accepted transport
