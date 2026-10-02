@@ -84,7 +84,7 @@ pub enum SshError {
     UnsupportedKeyAlgorithm(String),
     #[error("SSH private key exceeds the 4 MiB safety limit")]
     PrivateKeyTooLarge,
-    #[error("SSH known_hosts check failed")]
+    #[error("SSH known_hosts could not be checked; verify the selected trust file")]
     KnownHosts(#[source] russh::keys::Error),
     #[error("SSH transport failed")]
     Transport(#[source] russh::Error),
@@ -601,8 +601,12 @@ impl client::Handler for ClientHandler {
         match &self.policy {
             HostKeyPolicy::PinnedFingerprint(expected) => Ok(expected == &fingerprint),
             HostKeyPolicy::KnownHosts(path) => {
-                russh::keys::check_known_hosts_path(&self.host, self.port, &public_key, path)
-                    .map_err(anyhow::Error::from)
+                match russh::keys::check_known_hosts_path(&self.host, self.port, &public_key, path)
+                {
+                    Ok(trusted) => Ok(trusted),
+                    Err(russh::keys::Error::KeyChanged { .. }) => Ok(false),
+                    Err(error) => Err(anyhow::Error::new(SshError::KnownHosts(error))),
+                }
             }
             HostKeyPolicy::RejectUnknown => Ok(false),
         }
@@ -1809,7 +1813,11 @@ fn map_connect_result(
         Err(_) => Err(SshError::Timeout),
         Ok(Ok(handle)) => Ok(handle),
         Ok(Err(error)) => {
-            if let Some(fingerprint) = lock_observed_fingerprint(&observed_fingerprint).clone() {
+            if matches!(
+                error.downcast_ref::<russh::Error>(),
+                Some(russh::Error::UnknownKey)
+            ) && let Some(fingerprint) = lock_observed_fingerprint(&observed_fingerprint).clone()
+            {
                 return Err(SshError::HostKeyRejected { fingerprint });
             }
             Err(map_connect_error(error))
@@ -1825,6 +1833,10 @@ fn lock_lifecycle(lifecycle: &Mutex<ConnectionLifecycle>) -> MutexGuard<'_, Conn
 }
 
 fn map_connect_error(error: anyhow::Error) -> SshError {
+    let error = match error.downcast::<SshError>() {
+        Ok(error) => return error,
+        Err(error) => error,
+    };
     if let Some(error) = error.downcast_ref::<std::io::Error>() {
         return map_io_connect_error(error);
     }
@@ -3148,6 +3160,44 @@ mod tests {
             .map_while(shell_message_output)
             .collect();
         assert_eq!(output, [SshOutput::Control, SshOutput::ExitStatus(23)]);
+    }
+
+    #[test]
+    fn observed_host_key_does_not_turn_a_transport_failure_into_a_trust_rejection() {
+        let observation = Arc::new(Mutex::new(Some("SHA256:fixture".to_owned())));
+        let result = map_connect_result(
+            Ok(Err(anyhow::Error::new(russh::Error::Disconnect))),
+            observation,
+        );
+        assert!(matches!(result, Err(SshError::ConnectionFailed)));
+    }
+
+    #[test]
+    fn handshake_errors_distinguish_key_rejection_from_invalid_trust_files() {
+        let observation = || Arc::new(Mutex::new(Some("SHA256:fixture".to_owned())));
+        let rejected = map_connect_result(
+            Ok(Err(anyhow::Error::new(russh::Error::UnknownKey))),
+            observation(),
+        );
+        assert!(
+            matches!(rejected, Err(SshError::HostKeyRejected { fingerprint }) if fingerprint == "SHA256:fixture")
+        );
+
+        let invalid_file = map_connect_result(
+            Ok(Err(anyhow::Error::new(SshError::KnownHosts(
+                russh::keys::Error::IO(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "fixture-trust-path-must-not-leak",
+                )),
+            )))),
+            observation(),
+        );
+        let error = match invalid_file {
+            Err(SshError::KnownHosts(error)) => SshError::KnownHosts(error),
+            _ => panic!("invalid trust file must not become a host-key approval prompt"),
+        };
+        assert!(!error.to_string().contains("fixture-trust-path"));
+        assert!(error.to_string().contains("verify the selected trust file"));
     }
 
     #[test]

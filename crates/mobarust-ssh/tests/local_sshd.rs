@@ -255,6 +255,13 @@ fn distinct_jump_hosts_verify_every_key_and_reach_the_target() {
             format!("[127.0.0.1]:{} {key}", target.port)
         );
 
+        let mut invalid_trust = target.options();
+        invalid_trust.host_key_policy = HostKeyPolicy::KnownHosts(target.directory.path().into());
+        assert!(matches!(
+            SshConnection::connect(invalid_trust).await,
+            Err(SshError::KnownHosts(_))
+        ));
+
         let connection = SshConnection::connect_with_jump_chain(
             target.options(),
             vec![first.options(), second.options()],
