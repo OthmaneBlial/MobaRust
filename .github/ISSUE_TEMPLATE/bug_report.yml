@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible problem using disposable, non-production targets.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, use the private report link instead.
+        Never attach credentials, keys, profile exports, real server inventories, terminal transcripts, or unredacted logs.
+  - type: input
+    id: environment
+    attributes:
+      label: App version, OS, and architecture
+      placeholder: v0.1.16, macOS, Apple Silicon
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use a local shell or disposable fixture. Include the affected workflow and relevant non-secret settings.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+      description: Include a sanitized error message if useful.
+    validations:
+      required: true

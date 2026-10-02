@@ -90,6 +90,8 @@ cargo xtask pre-push-check
 
 The [OpenSSH lab guide](docs/testing/ssh-lab.md) lists prerequisites, test
 coverage, and limits for the disposable local servers and two-hop topology.
+For development setup and contribution boundaries, see
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [architecture overview](docs/architecture.md).
 
 ## Help MobaRust reach more operators
 

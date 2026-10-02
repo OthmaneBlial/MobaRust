@@ -1,0 +1,17 @@
+name: Workflow improvement
+description: Explain a concrete operator workflow MobaRust should improve.
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow and current limitation
+      description: Describe who needs this and how the current behavior gets in the way. Use synthetic examples without real targets or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired behavior and acceptance criteria
+      description: Include platform/protocol requirements and a practical way to verify the result.
+    validations:
+      required: true

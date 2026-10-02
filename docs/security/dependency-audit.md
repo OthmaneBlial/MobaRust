@@ -1,5 +1,15 @@
 # Dependency audit record
 
+## Source recheck — 2026-10-02
+
+With RustSec refreshed to 1,280 advisories (database commit
+`117edb3bed98e9be112f277b7615eea3252e7c43`), the workspace still reports no
+vulnerability and seven warnings (six unmaintained crates and the transitive
+GTK3/glib unsoundness advisory). The VNC helper reports no vulnerability or
+warning. The RDP helper still reports `rsa 0.10.0-rc.18` /
+`RUSTSEC-2023-0071` and two unmaintained crates; it remains excluded from normal
+bundles. These read-only checks did not modify any dependency lockfile.
+
 ## Desktop preview recheck — 2026-09-26
 
 The refreshed RustSec database contains 1,271 advisories (last updated

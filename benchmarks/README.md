@@ -35,6 +35,9 @@ until they have reproducible evidence.
 
 ## Recorded local snapshot
 
+The [2026-10-02 receipt](2026-10-02-local.md) includes exact CPU, RAM, OS,
+compiler, command, raw output, and the concurrent-load limitation.
+
 The following snapshot was recorded on 2026-08-31 with `cargo xtask benchmark`
 on a macOS ARM64 host (`environment.parallelism=8`, release harness,
 `iterations=5`). It is a reproducible reference point for the synthetic
