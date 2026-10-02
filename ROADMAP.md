@@ -37,7 +37,7 @@ These changes are included in the v0.1.17 Mac preview. Windows/Linux installers 
 - [x] Replace native tunnel browser prompts with an integrated form; verify invalid-port rejection, all three modes and listener cleanup on macOS ARM64.
 - [x] Build and check both v0.1.17 Mac DMGs and record the real native workflows.
 
-The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
+The SSH lab reports **41 unit tests and 12 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
 ### Included in the v0.1.18 Mac preview
 
@@ -62,7 +62,8 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 
 - [x] Preserve the SSH error state after final disconnected/closed events; distinguish normal shell exit, and replace stale LIVE/active-transport labels with the selected terminal's actual state.
 - [x] Verify native macOS ARM64 two-attempt exhaustion, explicit profile recovery and Quit releasing an active SSH session plus local PTY. [Receipt and limits](docs/testing/ssh-reconnect.md).
-- [ ] Include this post-tag correction in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
+- [x] Honor cancellation queued after copying and before final promotion on all six transfer paths; verify local original/part preservation and six real-SFTP promotion cases, including cancellation during metadata. [Checks and limits](docs/testing/transfer-cancellation.md).
+- [ ] Include these post-tag corrections in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
 
 ## Next, in priority order
 
@@ -109,7 +110,7 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 ### 5. Polish daily terminal and file workflows
 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
-- [ ] Validate multi-file/recursive transfers, collision decisions, cancellation, and progress under realistic workloads.
+- [ ] Validate multi-file/recursive transfers, collision decisions, native Cancel/retry, shutdown during transfer and progress under realistic workloads. The [pre-promotion cancellation checks](docs/testing/transfer-cancellation.md) do not close this GUI gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.
 - [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
 - [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.

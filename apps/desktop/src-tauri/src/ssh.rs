@@ -2628,7 +2628,7 @@ where
             "download destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
+    if let Err(error) = commit_local_file(&temporary, destination, overwrite, cancel) {
         remove_partial_download_path(&temporary).await?;
         return Err(error);
     }
@@ -2701,7 +2701,7 @@ where
         ));
     }
     let promotion = sftp
-        .promote_uploaded_file(&temporary, remote_path, overwrite)
+        .promote_uploaded_file_with_cancel(&temporary, remote_path, overwrite, cancel)
         .await;
     let _ = sftp.close().await;
     promotion?;
@@ -2797,7 +2797,7 @@ where
             "download destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
+    if let Err(error) = commit_local_file(&temporary, destination, overwrite, cancel) {
         let cleanup = remove_partial_download_path(&temporary).await;
         let _ = sftp.close().await;
         cleanup?;
@@ -2887,7 +2887,7 @@ where
         ));
     }
     let promotion = sftp
-        .promote_uploaded_file(&temporary, remote_path, overwrite)
+        .promote_uploaded_file_with_cancel(&temporary, remote_path, overwrite, cancel)
         .await;
     let _ = sftp.close().await;
     promotion?;
@@ -3140,7 +3140,7 @@ where
             "download destination appeared during transfer".into(),
         ));
     }
-    if let Err(error) = commit_local_file(&temporary, destination, overwrite) {
+    if let Err(error) = commit_local_file(&temporary, destination, overwrite, progress.cancel) {
         remove_partial_download_path(&temporary).await?;
         return Err(error);
     }
@@ -3304,7 +3304,7 @@ where
             "upload destination appeared during transfer".into(),
         ));
     }
-    sftp.promote_uploaded_file(&temporary, remote_path, overwrite)
+    sftp.promote_uploaded_file_with_cancel(&temporary, remote_path, overwrite, progress.cancel)
         .await?;
     Ok(copied)
 }
@@ -3493,7 +3493,13 @@ fn commit_local_file(
     temporary: &Path,
     destination: &Path,
     overwrite: bool,
+    cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), SshError> {
+    // The copy and fsync may have finished before a queued cancellation arrived.
+    // Do not replace the destination when cancellation preceded this commit.
+    if !matches!(cancel.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
+        return Err(SshError::Cancelled);
+    }
     match std::fs::symlink_metadata(destination) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(SshError::Sftp(
@@ -3637,10 +3643,10 @@ mod tests {
         SshManager, SshManagerError, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL,
         TransferProtocol, add_transfer_size, commit_local_file, local_part_path,
         next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
-        remove_partial_download, server_alive_interval_duration, should_emit_transfer_progress,
-        transfer_metrics, validate_local_file_path, validate_remote_directory_path,
-        validate_remote_file_path, validate_remote_mutation_path, validate_ssh_connection_policy,
-        validate_transfer_component, validate_tunnel_host,
+        remove_partial_download, remove_partial_download_path, server_alive_interval_duration,
+        should_emit_transfer_progress, transfer_metrics, validate_local_file_path,
+        validate_remote_directory_path, validate_remote_file_path, validate_remote_mutation_path,
+        validate_ssh_connection_policy, validate_transfer_component, validate_tunnel_host,
     };
     #[cfg(unix)]
     use super::{
@@ -3907,13 +3913,14 @@ mod tests {
 
     #[test]
     fn local_download_commit_replaces_only_after_a_complete_temporary_file_exists() {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
         let directory = tempdir().unwrap();
         let destination = directory.path().join("download.txt");
         let temporary = directory.path().join(".download.txt.mobarust.part");
         fs::write(&destination, b"old complete file").unwrap();
         fs::write(&temporary, b"new complete file").unwrap();
 
-        commit_local_file(&temporary, &destination, true).unwrap();
+        commit_local_file(&temporary, &destination, true, &mut cancel).unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), b"new complete file");
         assert!(!temporary.exists());
@@ -3921,25 +3928,27 @@ mod tests {
 
     #[test]
     fn local_download_commit_refuses_existing_destination_without_overwrite() {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
         let directory = tempdir().unwrap();
         let destination = directory.path().join("download.txt");
         let temporary = directory.path().join(".download.txt.mobarust.part");
         fs::write(&destination, b"original").unwrap();
         fs::write(&temporary, b"replacement").unwrap();
 
-        assert!(commit_local_file(&temporary, &destination, false).is_err());
+        assert!(commit_local_file(&temporary, &destination, false, &mut cancel).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"original");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
     }
 
     #[test]
     fn local_download_commit_without_overwrite_promotes_complete_file() {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
         let directory = tempdir().unwrap();
         let destination = directory.path().join("download.txt");
         let temporary = directory.path().join(".download.txt.mobarust.part");
         fs::write(&temporary, b"complete file").unwrap();
 
-        commit_local_file(&temporary, &destination, false).unwrap();
+        commit_local_file(&temporary, &destination, false, &mut cancel).unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), b"complete file");
         assert!(!temporary.exists());
@@ -3948,6 +3957,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn local_download_commit_refuses_symlink_destination_without_touching_target() {
+        let (_cancel_sender, mut cancel) = oneshot::channel();
         use std::os::unix::fs::symlink;
 
         let directory = tempdir().unwrap();
@@ -3958,9 +3968,41 @@ mod tests {
         symlink(&target, &destination).unwrap();
         fs::write(&temporary, b"replacement").unwrap();
 
-        assert!(commit_local_file(&temporary, &destination, true).is_err());
+        assert!(commit_local_file(&temporary, &destination, true, &mut cancel).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"target remains unchanged");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    #[tokio::test]
+    async fn cancelled_local_commit_preserves_destination_and_cleans_complete_part() {
+        for overwrite in [false, true] {
+            for send_cancel in [false, true] {
+                let directory = tempdir().unwrap();
+                let destination = directory.path().join("download.txt");
+                let temporary = directory.path().join(".download.txt.mobarust.part");
+                if overwrite {
+                    fs::write(&destination, b"original").unwrap();
+                }
+                fs::write(&temporary, b"complete replacement").unwrap();
+                let (sender, mut cancel) = oneshot::channel();
+                if send_cancel {
+                    sender.send(()).unwrap();
+                } else {
+                    drop(sender);
+                }
+                assert!(matches!(
+                    commit_local_file(&temporary, &destination, overwrite, &mut cancel),
+                    Err(mobarust_ssh::SshError::Cancelled)
+                ));
+                if overwrite {
+                    assert_eq!(fs::read(&destination).unwrap(), b"original");
+                } else {
+                    assert!(!destination.exists());
+                }
+                remove_partial_download_path(&temporary).await.unwrap();
+                assert!(!temporary.exists());
+            }
+        }
     }
 
     #[test]

@@ -2710,12 +2710,44 @@ impl SftpConnection {
         destination: &str,
         overwrite: bool,
     ) -> Result<(), SshError> {
+        self.promote_uploaded_file_inner(temporary, destination, overwrite, None)
+            .await
+    }
+
+    /// Honor cancellation before promotion starts, including while fetching
+    /// metadata. Once the first rename starts, finish promotion or rollback.
+    pub async fn promote_uploaded_file_with_cancel(
+        &self,
+        temporary: &str,
+        destination: &str,
+        overwrite: bool,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<(), SshError> {
+        self.promote_uploaded_file_inner(temporary, destination, overwrite, Some(cancel))
+            .await
+    }
+
+    async fn promote_uploaded_file_inner(
+        &self,
+        temporary: &str,
+        destination: &str,
+        overwrite: bool,
+        mut cancel: Option<&mut oneshot::Receiver<()>>,
+    ) -> Result<(), SshError> {
         if temporary == destination {
             return Err(SshError::Sftp(
                 "upload temporary path must differ from its destination".into(),
             ));
         }
         let result = async {
+            if cancel.as_mut().is_some_and(|receiver| {
+                !matches!(
+                    receiver.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                )
+            }) {
+                return Err(SshError::Cancelled);
+            }
             if !overwrite && self.try_exists(destination).await? {
                 return Err(SshError::Sftp(
                     "upload destination already exists; enable overwrite explicitly".into(),
@@ -2733,6 +2765,14 @@ impl SftpConnection {
                     self.set_permissions(temporary, permissions & 0o7777)
                         .await?;
                 }
+            }
+            if cancel.as_mut().is_some_and(|receiver| {
+                !matches!(
+                    receiver.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                )
+            }) {
+                return Err(SshError::Cancelled);
             }
             let initial_error = match self.rename(temporary, destination).await {
                 Ok(()) => return Ok(()),

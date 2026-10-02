@@ -556,6 +556,99 @@ fn idle_shell_survives_the_connection_timeout_without_keepalives() {
 }
 
 #[test]
+fn cancelled_upload_promotion_preserves_original_and_removes_complete_part() {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start loopback SSH fixture");
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let destination = fixture.directory.path().join("promotion-original.txt");
+        let temporary = fixture.directory.path().join("promotion-complete.part");
+        let remote = destination.to_string_lossy();
+        let part = temporary.to_string_lossy();
+
+        for timing in ["before", "metadata", "sender_closed"] {
+            for overwrite in [false, true] {
+                if overwrite {
+                    fs::write(&destination, b"original bytes").unwrap();
+                } else if destination.exists() {
+                    fs::remove_file(&destination).unwrap();
+                }
+                sftp.upload_from(&b"replacement bytes"[..], part.as_ref())
+                    .await
+                    .unwrap();
+                let (sender, mut cancel) = oneshot::channel();
+                let mut sender = Some(sender);
+                if timing == "before" {
+                    sender.take().unwrap().send(()).unwrap();
+                }
+                if timing == "sender_closed" {
+                    drop(sender.take());
+                }
+                let mut promotion = Box::pin(sftp.promote_uploaded_file_with_cancel(
+                    &part,
+                    &remote,
+                    overwrite,
+                    &mut cancel,
+                ));
+                if timing == "metadata" {
+                    // Poll once into the real SFTP metadata request, then cancel.
+                    // The second guard must run before the first destination rename.
+                    poll_fn(|cx| {
+                        assert!(promotion.as_mut().poll(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
+                    sender.take().unwrap().send(()).unwrap();
+                }
+                let result = tokio::time::timeout(Duration::from_secs(5), promotion)
+                    .await
+                    .expect("cancelled promotion deadline");
+                assert!(
+                    matches!(result, Err(SshError::Cancelled)),
+                    "{timing}: {result:?}"
+                );
+                if overwrite {
+                    assert_eq!(fs::read(&destination).unwrap(), b"original bytes");
+                } else {
+                    assert!(!destination.exists());
+                }
+                assert!(
+                    !temporary.exists(),
+                    "cancelled complete part must be removed"
+                );
+                assert!(
+                    !fs::read_dir(fixture.directory.path())
+                        .unwrap()
+                        .any(|entry| {
+                            entry
+                                .unwrap()
+                                .file_name()
+                                .to_string_lossy()
+                                .contains("mobarust-upload-backup-")
+                        })
+                );
+            }
+        }
+        // Invalid same-path input must never make cancellation delete the original.
+        let (sender, mut cancel) = oneshot::channel();
+        sender.send(()).unwrap();
+        assert!(
+            sftp.promote_uploaded_file_with_cancel(&remote, &remote, true, &mut cancel)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"original bytes");
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
     runtime.block_on(async {
