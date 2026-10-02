@@ -191,6 +191,97 @@ write, including after per-action approval. Cancellation is checked again after
 approval; opening a saved session awaits its startup-command approval. File
 delete and chmod also recheck the active SSH session after confirmation.
 
+## Remote file connection generations
+
+Checking only the active SSH ID is insufficient: automatic reconnect retains
+that ID. On the `520748c` native baseline, a folder-path dialog left open across
+a controlled relay interruption created its folder after reconnection and
+acceptance. The disposable `stale-before-fix` directory reproduced the gap.
+
+File actions now reuse the macro/paste lifecycle binding. Upload/download,
+transfer retry, mkdir, rename, delete and chmod pin the original workspace,
+native ID and connection generation before a picker or approval. Before native
+dispatch they require that exact binding to remain connected. Existing active
+session guards still apply to file-browser actions. A changed binding stops the
+action with a notice asking the operator to reopen it.
+
+The remote editor retains the binding captured before reading its document,
+including across successful saves. Save and Save as refuse writes after that
+connection changes, even if the path dialog or overwrite confirmation remained
+open. Content revision checks remain a separate backend protection.
+
+The rebuilt macOS ARM64 app after `520748c` verified real relay interruptions,
+each followed by a new transport and a new authenticated connection-success
+audit event:
+
+- Pending mkdir, rename, delete and chmod approvals were refused. The new
+  paths remained absent; the protected original retained its name, bytes and
+  mode `0644`. A freshly reopened mkdir created its Unicode directory.
+- Pending upload destination, download overwrite and transfer-retry approvals
+  were refused. No stale upload/download target was created, and retry did
+  not replace the original target.
+- Create only upload on an existing target failed without changing its bytes.
+  A new explicit retry/replacement completed with byte-identical source data
+  (35 bytes). A fresh Create only download matched its source (38 bytes).
+- Editor Save as approval across reconnect and a subsequent ordinary Save
+  both refused writing, retained the dirty draft and displayed an inline
+  reopening instruction. The original file stayed unchanged and the new path
+  remained absent. After reopening, Save and then Save as both wrote the exact
+  expected bytes on the unchanged connection.
+- Native upload/download picker cancellation and upload overwrite Cancel
+  queued no transfers. Dirty-editor Escape preserved the draft; explicit
+  discard closed the editor without changing remote bytes.
+
+Frontend tests, TypeScript, ESLint, production frontend build and the locked
+native app build passed. The full local `cargo xtask check` reached the VNC
+fixtures but did **not** pass: the initial run had six failures, a serial
+targeted rerun had five, and a full `RUST_TEST_THREADS=1` rerun after the app
+build had the same five. They reported missing framebuffer events or an
+unexpected reconnect while waiting for a resize diagnostic. VNC source was
+unchanged in this correction; the cause remains under investigation. Do not
+attribute these failures solely to contention or describe this candidate's
+global check as green. These observations do not establish other OS WebViews,
+recursive transfers or cancellation of an already running transfer.
+
+### Repeat the remote-file reconnect check
+
+1. Use a separate portable app, generated keys/trust, loopback SSH and an owned
+   TCP relay. Prepare a fresh marker path and a file with known original bytes.
+2. Open New folder and enter the marker path, leaving Continue pending. Shut
+   down only the relay's established sockets, keeping its listener available.
+   Wait for both a new accepted transport and an app connection-success event.
+3. Accept the old path. Assert that the marker is absent and a connection-change
+   notice appears. Reopen the action and verify a fresh approval succeeds.
+4. Repeat across upload destination, download overwrite, delete confirmation
+   and editor Save as. Assert no new transfer/file or changed original bytes.
+5. Exercise an unchanged connection with explicit upload/download Create only,
+   existing-target collision and Replace choices; compare exact file bytes.
+
+For the filenames used in this receipt, the final filesystem regression check
+is runnable with the standard library after completing the native actions:
+
+```python
+from pathlib import Path
+import stat
+
+home = Path("<fixture-home>")
+remote = home / "workshop"
+for name in ("stale-after-fix", "stale-upload.txt", "stale-rename.txt", "stale-editor.txt"):
+    assert not (remote / name).exists(), name
+assert not (home / "stale-download.csv").exists()
+original = remote / "delete-proof.txt"
+assert original.read_bytes() == b"keep this remote file\n"
+assert stat.S_IMODE(original.stat().st_mode) == 0o644
+assert (remote / "collision-upload.txt").read_bytes() == (home / "upload-fixture.txt").read_bytes()
+assert (home / "fresh-download.csv").read_bytes() == (remote / "report.csv").read_bytes()
+assert (remote / "fresh-editor.txt").read_bytes() == (remote / "app.conf").read_bytes()
+```
+
+These are checks for connection changes observed before native dispatch. They
+do not roll back a job already dispatched or establish atomic transactions over
+a disconnect occurring after dispatch. Keep in-flight transfer cancellation
+and recovery checks separate.
+
 ## Remaining native acceptance gate
 
 Use a separate portable app and disposable generated fixtures, as in

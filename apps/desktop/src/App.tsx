@@ -1488,7 +1488,7 @@ function App() {
   const [remotePath, setRemotePath] = useState(".");
   const [remoteEntries, setRemoteEntries] = useState<RemoteEntry[]>([]);
   const [remoteListingSessionId, setRemoteListingSessionId] = useState<string | null>(null);
-  const [editingRemoteFile, setEditingRemoteFile] = useState<{ sessionId: string; document: RemoteTextDocument } | null>(null);
+  const [editingRemoteFile, setEditingRemoteFile] = useState<{ sessionId: string; document: RemoteTextDocument; stillConnected: () => boolean } | null>(null);
   const [sftpStatus, setSftpStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [localDropActive, setLocalDropActive] = useState(false);
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
@@ -2924,9 +2924,22 @@ function App() {
     }
   }, [remoteProtocol, remoteSessionId]);
 
+  const pinRemoteFileConnection = useCallback((sessionId: string) => {
+    // Native SSH IDs survive reconnect; pin the generation before any file approval.
+    const workspace = terminalTabsRef.current.find((terminal) => terminal.remoteProtocol === "ssh" && terminal.remoteSessionId === sessionId);
+    const binding = workspace ? pinMacroTargets([workspace.id], nativeTerminalIdsRef.current, terminalGenerationsRef.current) : null;
+    return () => {
+      if (binding && macroTargetsStillBound(binding, nativeTerminalIdsRef.current, terminalGenerationsRef.current) && binding.every(({ workspaceId, nativeId }) => nativeId === sessionId && terminalAuditStateRef.current.get(workspaceId) === "connected")) return true;
+      setSessionNotice("File action stopped because its SSH connection changed or closed. Reopen the file or action after reconnecting.");
+      return false;
+    };
+  }, []);
+
   const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId || !entry.isRegular) return;
     const sessionId = remoteSessionId;
+    const stillConnected = pinRemoteFileConnection(sessionId);
+    if (!stillConnected()) return;
     const requestId = ++remoteFileOpenRequestRef.current;
     try {
       const document = await invoke<RemoteTextDocument>("ssh_open_remote_text_file", {
@@ -2938,8 +2951,8 @@ function App() {
         remoteFileOpenRequestRef.current,
         sessionId,
         remoteSessionIdRef.current,
-      )) return;
-      setEditingRemoteFile({ sessionId, document });
+      ) || !stillConnected()) return;
+      setEditingRemoteFile({ sessionId, document, stillConnected });
       setConnectionError(null);
     } catch (error) {
       if (!isCurrentSessionRequest(
@@ -2950,10 +2963,11 @@ function App() {
       )) return;
       setConnectionError(`Remote file could not be opened: ${String(error)}`);
     }
-  }, [remoteSessionId]);
+  }, [pinRemoteFileConnection, remoteSessionId]);
 
   const saveRemoteTextFile = useCallback(async (content: string, encoding: RemoteTextDocument["encoding"]) => {
     if (!editingRemoteFile) return;
+    if (!editingRemoteFile.stillConnected()) throw new Error("The SSH connection changed or closed. Reopen the file before saving.");
     const sessionId = editingRemoteFile.sessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file", {
       terminalId: sessionId,
@@ -2962,7 +2976,7 @@ function App() {
       content,
       encoding,
     });
-    setEditingRemoteFile((current) => current === editingRemoteFile ? { sessionId, document: saved } : current);
+    setEditingRemoteFile((current) => current === editingRemoteFile ? { ...current, document: saved } : current);
     setSessionNotice(`Saved ${saved.path}. Remote changes were checked before temporary-file promotion.`);
     if (remoteSessionIdRef.current === sessionId) {
       setConnectionError(null);
@@ -2972,6 +2986,7 @@ function App() {
 
   const saveRemoteTextFileAs = useCallback(async (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => {
     if (!editingRemoteFile) return;
+    if (!editingRemoteFile.stillConnected()) throw new Error("The SSH connection changed or closed. Reopen the file before saving.");
     const sessionId = editingRemoteFile.sessionId;
     const saved = await invoke<RemoteTextDocument>("ssh_save_remote_text_file_as", {
       terminalId: sessionId,
@@ -2980,7 +2995,7 @@ function App() {
       encoding,
       overwrite,
     });
-    setEditingRemoteFile((current) => current === editingRemoteFile ? { sessionId, document: saved } : current);
+    setEditingRemoteFile((current) => current === editingRemoteFile ? { ...current, document: saved } : current);
     setSessionNotice(`Saved a new remote file at ${saved.path}.`);
     if (remoteSessionIdRef.current === sessionId) {
       setConnectionError(null);
@@ -2990,6 +3005,8 @@ function App() {
 
   const startDownload = useCallback(async (entry: RemoteEntry, protocol: TransferProtocol) => {
     if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected()) return;
     let localPath: string | null = null;
     if (IS_TAURI) {
       try {
@@ -3004,13 +3021,13 @@ function App() {
     } else {
       localPath = await promptText(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
     }
-    if (!localPath?.trim()) return;
+    if (!localPath?.trim() || !stillConnected()) return;
     if (remoteSessionIdRef.current !== remoteSessionId) {
       setSessionNotice("Download setup stopped because the active SSH session changed.");
       return;
     }
     const overwrite = await chooseOverwrite(entry.isDirectory ? "Choose how existing files inside this directory should be handled." : "Choose how an existing local destination should be handled.");
-    if (overwrite === null || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (overwrite === null || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
@@ -3020,10 +3037,12 @@ function App() {
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, [remoteSessionId]);
+  }, [pinRemoteFileConnection, remoteSessionId]);
 
   const startUpload = useCallback(async (protocol: TransferProtocol, pickerKind: LocalUploadPickerKind = "files", droppedPaths: string[] = []) => {
     if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected()) return;
     if (remoteListingSessionId !== remoteSessionId || sftpStatus !== "ready") {
       setConnectionError("Wait for remote files to load before uploading.");
       return;
@@ -3042,6 +3061,7 @@ function App() {
       paths = localPath?.trim() ? [localPath] : [];
     }
     for (const localPath of paths) {
+      if (!stillConnected()) return;
       if (remoteSessionIdRef.current !== remoteSessionId) {
         setSessionNotice("Upload setup stopped because the active SSH session changed.");
         return;
@@ -3050,8 +3070,9 @@ function App() {
       const defaultRemotePath = remoteChildPath(remotePath, fallbackName);
       const destination = await promptText("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
+      if (!stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
       const overwrite = await chooseOverwrite("Choose how existing remote files should be handled. Create only refuses replacement.");
-      if (overwrite === null || remoteSessionIdRef.current !== remoteSessionId) return;
+      if (overwrite === null || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
       try {
         await invoke("ssh_upload", {
           terminalId: remoteSessionId,
@@ -3062,7 +3083,7 @@ function App() {
         setConnectionError(String(error));
       }
     }
-  }, [remoteListingSessionId, remotePath, remoteSessionId, sftpStatus]);
+  }, [pinRemoteFileConnection, remoteListingSessionId, remotePath, remoteSessionId, sftpStatus]);
 
   useEffect(() => {
     if (!IS_TAURI || activeView !== "files" || !remoteSessionId || remoteProtocol !== "ssh") {
@@ -3103,10 +3124,12 @@ function App() {
       setConnectionError("Transfer retry requires the desktop runtime.");
       return;
     }
+    const stillConnected = pinRemoteFileConnection(transfer.terminalId);
+    if (!stillConnected()) return;
     const remotePath = transfer.direction === "download" ? transfer.source : transfer.destination;
     const localPath = transfer.direction === "download" ? transfer.destination : transfer.source;
     const overwrite = await confirmAction(`Retry this transfer and allow replacing the destination?\n\n${quoteRemotePromptPath(remotePath)}`);
-    if (!overwrite) return;
+    if (!overwrite || !stillConnected()) return;
     const command = transfer.direction === "download" ? "ssh_download" : "ssh_upload";
     try {
       await invoke(command, {
@@ -3124,13 +3147,15 @@ function App() {
     } catch (error) {
       setConnectionError(`Transfer retry failed: ${String(error)}`);
     }
-  }, []);
+  }, [pinRemoteFileConnection]);
 
   const createRemoteDirectory = useCallback(async () => {
     if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected()) return;
     const defaultPath = remoteChildPath(remotePath, "new-folder");
     const path = await promptText("Remote folder path", defaultPath);
-    if (!path?.trim() || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (!path?.trim() || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_create_remote_directory", { terminalId: remoteSessionId, path });
       setConnectionError(null);
@@ -3138,12 +3163,14 @@ function App() {
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+  }, [loadRemoteDirectory, pinRemoteFileConnection, remotePath, remoteSessionId]);
 
   const renameRemote = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected()) return;
     const nextName = await promptText(`New remote name or path for ${quoteRemotePromptPath(entry.path)}`, entry.name);
-    if (!nextName?.trim() || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (!nextName?.trim() || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     const target = nextName.includes("/") ? nextName : remoteChildPath(remoteParentPath(entry.path), nextName);
     try {
       await invoke("ssh_rename_remote", { terminalId: remoteSessionId, from: entry.path, to: target });
@@ -3152,10 +3179,12 @@ function App() {
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+  }, [loadRemoteDirectory, pinRemoteFileConnection, remotePath, remoteSessionId]);
 
   const deleteRemote = useCallback(async (entry: RemoteEntry) => {
-    if (!remoteSessionId || !await confirmAction(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`) || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected() || !await confirmAction(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`) || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_delete_remote", { terminalId: remoteSessionId, path: entry.path });
       setConnectionError(null);
@@ -3163,19 +3192,21 @@ function App() {
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+  }, [loadRemoteDirectory, pinRemoteFileConnection, remotePath, remoteSessionId]);
 
   const setRemotePermissions = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
+    const stillConnected = pinRemoteFileConnection(remoteSessionId);
+    if (!stillConnected()) return;
     const current = entry.permissions == null ? "644" : (entry.permissions & 0o7777).toString(8).padStart(3, "0");
     const value = await promptText(`Set POSIX mode for ${quoteRemotePromptPath(entry.path)} (octal 0000–7777)`, current);
-    if (value === null || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (value === null || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     const normalized = value.trim();
     if (!/^[0-7]{3,4}$/.test(normalized)) {
       setConnectionError("Permissions must be an octal mode with 3 or 4 digits, for example 640.");
       return;
     }
-    if (!await confirmAction(`Apply mode ${normalized} to ${quoteRemotePromptPath(entry.path)}?`) || remoteSessionIdRef.current !== remoteSessionId) return;
+    if (!await confirmAction(`Apply mode ${normalized} to ${quoteRemotePromptPath(entry.path)}?`) || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_set_remote_permissions", {
         terminalId: remoteSessionId,
@@ -3188,7 +3219,7 @@ function App() {
     } catch (error) {
       setConnectionError(String(error));
     }
-  }, [loadRemoteDirectory, remotePath, remoteSessionId]);
+  }, [loadRemoteDirectory, pinRemoteFileConnection, remotePath, remoteSessionId]);
 
   const copyRemotePath = useCallback(async (entry: RemoteEntry) => {
     try {
