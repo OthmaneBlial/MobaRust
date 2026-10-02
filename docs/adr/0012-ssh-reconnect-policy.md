@@ -38,7 +38,10 @@ The retry policy stores hostnames, ports, auth references, and host-trust
 configuration only; it does not cache plaintext passwords or private-key
 material. The configured connect timeout (100–60,000 ms; default 12,000 ms)
 applies to the target and each jump host, including shell and jump-channel
-establishment. Cancellation is cooperative first: it
+establishment. It is not an inactivity limit: an established SSH connection,
+shell, file browser, or tunnel can remain quiet longer than the setup deadline.
+Optional keepalives retain the native bounded missed-response policy.
+Cancellation is cooperative first: it
 drops the active delay or transport future, then lets the session worker perform
 bounded protocol cleanup.
 
@@ -48,5 +51,7 @@ The lifecycle model tests the lost-connection/reconnect transition. Native
 worker policy tests inject three consecutive failures, a success after a
 failure, and cancellation during an in-flight attempt without opening a socket.
 The local `sshd` fixture verifies that a fresh PTY can be established through
-the same native transport and jump-channel implementation. Desktop TypeScript
+the same native transport and jump-channel implementation. An idle-connection
+regression completes SFTP traffic, waits beyond a two-second setup deadline
+without keepalives, and then verifies actual shell execution. Desktop TypeScript
 and native lint/build checks cover the state-event integration.

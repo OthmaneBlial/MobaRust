@@ -15,6 +15,54 @@ use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::oneshot;
 
 #[test]
+fn idle_shell_survives_the_connection_timeout_without_keepalives() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let mut options = fixture.options();
+        options.timeout = Duration::from_secs(2);
+        let connection = SshConnection::connect(options)
+            .await
+            .expect("connect fixture");
+        let sftp = connection.open_sftp().await.expect("open SFTP before idle");
+        sftp.read_dir(fixture.directory.path().to_string_lossy().into_owned())
+            .await
+            .expect("finish initial channel traffic");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let shell = connection
+            .open_shell(80, 24)
+            .await
+            .expect("open shell after idle");
+        let (mut reader, writer) = shell.split();
+        writer
+            .write(b"printf 'MOBARUST_%s\\n' 'IDLE_OK'; exit\n")
+            .await
+            .expect("write after idle period");
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(message) = reader.next_output().await {
+                match message.expect("read resumed shell") {
+                    SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => output.extend(bytes),
+                    SshOutput::ExitStatus(status) => {
+                        assert_eq!(status, 0);
+                        break;
+                    }
+                    SshOutput::Control => {}
+                }
+            }
+        })
+        .await
+        .expect("resumed shell deadline");
+        // The marker is assembled by printf, so terminal echo cannot pass this assertion.
+        assert!(String::from_utf8_lossy(&output).contains("MOBARUST_IDLE_OK"));
+        sftp.close().await.expect("close idle SFTP");
+        connection.disconnect().await.expect("disconnect fixture");
+    });
+}
+
+#[test]
 fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
     runtime.block_on(async {
@@ -976,6 +1024,25 @@ struct LocalSshd {
 }
 
 impl LocalSshd {
+    fn options(&self) -> SshConnectOptions {
+        SshConnectOptions {
+            host: "127.0.0.1".into(),
+            port: self.port,
+            host_key_policy: HostKeyPolicy::KnownHosts(self.known_hosts.clone()),
+            timeout: Duration::from_secs(5),
+            keepalive_interval: None,
+            credentials: SshCredentials::private_key(
+                self.username.clone(),
+                self.client_key.clone(),
+                None::<String>,
+            ),
+            x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: None,
+        }
+    }
+
     fn start() -> Result<Self, Box<dyn std::error::Error>> {
         Self::start_internal(false)
     }

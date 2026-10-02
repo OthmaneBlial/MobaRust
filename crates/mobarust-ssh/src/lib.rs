@@ -1743,7 +1743,6 @@ fn connection_parts(options: &SshConnectOptions) -> ConnectionParts {
         options.port,
         options.host_key_policy.clone(),
         false,
-        options.timeout,
         options.keepalive_interval,
         options.x11.is_some(),
     )
@@ -1758,7 +1757,6 @@ fn inspection_connection_parts(options: &SshFingerprintOptions) -> ConnectionPar
         // policy, where it could be misused for an authenticated session.
         HostKeyPolicy::PinnedFingerprint(String::new()),
         true,
-        options.timeout,
         None,
         false,
     )
@@ -1769,7 +1767,6 @@ fn connection_parts_for(
     port: u16,
     policy: HostKeyPolicy,
     inspection_only: bool,
-    timeout: Duration,
     keepalive_interval: Option<Duration>,
     x11_enabled: bool,
 ) -> ConnectionParts {
@@ -1787,7 +1784,8 @@ fn connection_parts_for(
         x11_enabled,
     };
     let config = Arc::new(client::Config {
-        inactivity_timeout: Some(timeout),
+        // Setup deadlines are enforced around connect/auth/channel operations;
+        // quiet established sessions must survive those deadlines.
         keepalive_interval,
         ..Default::default()
     });
@@ -3227,6 +3225,7 @@ mod tests {
             Some(Duration::from_secs(30))
         );
         assert_eq!(parts.config.keepalive_max, 3);
+        assert_eq!(parts.config.inactivity_timeout, None);
     }
 
     #[tokio::test]
