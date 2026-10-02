@@ -44,7 +44,9 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [x] Replace the remaining 19 browser text prompts with a shared modal input, multiline JSON and read-only copy fields; retain cancellation and session ownership guards.
 - [x] Replace all 20 browser confirmations with modal approval and explicit Cancel / Create only / Replace choices; pin paste and macro destinations across reconnects, including unchanged SSH IDs.
 - [x] Verify native macOS ARM64 input and approval for Unicode mkdir/rename, permission validation, Save as collision policies and local multiline paste in a disposable lab.
-- [ ] Finish native upload/download, JSON import, broadcast and per-action macro acceptance, including connection loss while awaiting approval. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
+- [x] Verify native paste and per-action macro refusal across real loopback SSH reconnects, exact selected-target broadcast delivery, emergency shortcuts, session JSON import and startup-command approval on macOS ARM64.
+- [x] Handle emergency stops before terminal/modal event propagation; clear stale import errors after a successful retry.
+- [ ] Finish native transfer cancellation/collision choices, settings JSON import, editor discard and cross-platform dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
 
 ## Next, in priority order
 
@@ -70,7 +72,8 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 
 ### 3. Expand the OpenSSH interoperability lab
 
-- [ ] Exercise the desktop automatic reconnect loop and retry budget against a restarting server; transport interruption and explicit fresh-connection recovery are now covered.
+- [x] Observe desktop automatic reconnect after a controlled loopback transport interruption and refuse approvals from the previous connection generation.
+- [ ] Exercise retry exhaustion and recovery against a restarting server; successful short transport interruptions do not establish the retry-budget gate.
 - [ ] Add password and keyboard-interactive/PAM/MFA cases using dedicated disposable accounts or servers.
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.

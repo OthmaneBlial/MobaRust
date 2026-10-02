@@ -70,8 +70,8 @@ function openDialogue(message: string, initialValue: string | undefined, options
     }
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
     dialog.addEventListener("close", cancel);
-    // Keep application shortcuts out of the input; Escape remains available
-    // to the application's emergency broadcast-disable handler.
+    // Keep ordinary application shortcuts out of the input. Emergency keys
+    // are handled in window capture; Escape still cancels the dialog normally.
     dialog.addEventListener("keydown", (event) => { if (event.key !== "Escape") event.stopPropagation(); });
     window.addEventListener("pagehide", cancel);
     try {

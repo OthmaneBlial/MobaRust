@@ -2553,6 +2553,7 @@ function App() {
         ...report.unsupportedDirectives.slice(0, Math.max(0, 20 - report.skippedHosts.length)).map((directive) => `Unsupported directive: ${directive}`),
       ];
       setSessionNotice(total > 0 ? { message, details, total } : message);
+      setConnectionError(null);
     } catch (error) {
       setSessionNotice(null);
       setConnectionError(String(error));
@@ -2584,6 +2585,7 @@ function App() {
       refreshSavedSessions();
       const message = `Imported ${report.importedCount} session${report.importedCount === 1 ? "" : "s"}${report.skipped.length > 0 ? ` · ${report.skipped.length} skipped` : ""}.`;
       setSessionNotice(report.skipped.length > 0 ? { message, details: report.skipped.slice(0, 20), total: report.skipped.length } : message);
+      setConnectionError(null);
     } catch (error) {
       setConnectionError(`Session import failed: ${String(error)}`);
     }
@@ -3694,20 +3696,33 @@ function App() {
   }, [recordAudit]);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const emergencyDisable = event.key === "Escape" || matchesShortcut(event, settings.keyboard.emergencyBroadcastDisable);
-      if (emergencyDisable) {
-        if (terminalSearchOpen) closeTerminalSearch();
-        setPaletteOpen(false);
-        if (macroRun) cancelMacro();
-        if (macroRecording) stopMacroRecording();
-        if (broadcastEnabled) {
-          setBroadcastEnabled(false);
-          setBroadcastOpen(false);
-          setSessionNotice("Broadcast mode disabled. No further input will fan out.");
-        }
-        if (event.key === "Escape") return;
+    // Capture emergency keys before xterm and modal inputs stop propagation.
+    const isEmergency = (event: KeyboardEvent) => event.key === "Escape" || matchesShortcut(event, settings.keyboard.emergencyBroadcastDisable);
+    const onEmergencyKeyDown = (event: KeyboardEvent) => {
+      if (!isEmergency(event)) return;
+      const activeExecution = broadcastEnabledRef.current || macroRunRef.current || macroRecordingRef.current;
+      if (terminalSearchOpen) closeTerminalSearch();
+      setPaletteOpen(false);
+      if (macroRunRef.current) {
+        macroCancelRef.current = true;
+        cancelMacro();
       }
+      if (macroRecordingRef.current) stopMacroRecording();
+      if (broadcastEnabledRef.current) {
+        broadcastEnabledRef.current = false;
+        setBroadcastEnabled(false);
+        setBroadcastOpen(false);
+        setSessionNotice("Broadcast mode disabled. No further input will fan out.");
+      }
+      if (activeExecution) {
+        // Escape must retain the browser's default modal cancellation. With no
+        // active execution, let it reach the local shell/editor normally.
+        if (event.key !== "Escape") event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isEmergency(event)) return;
       if (editingRemoteFile) {
         if (matchesShortcut(event, settings.keyboard.closeTab)) event.preventDefault();
         return;
@@ -3780,8 +3795,12 @@ function App() {
         setTerminalSearchOpen(true);
       }
     };
+    window.addEventListener("keydown", onEmergencyKeyDown, true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onEmergencyKeyDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {

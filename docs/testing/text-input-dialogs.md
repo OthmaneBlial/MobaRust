@@ -81,8 +81,96 @@ was used. Through the actual application UI:
 The computer-use clipboard operation reported a timeout while the native paste
 dialogue was open; the UI had received the paste. The test inspected the pending
 dialogue and its result without repeating a potentially approved action. These
-observations do not establish Windows/Linux WebView compatibility or complete
-native broadcast/macro coverage.
+observations do not establish Windows/Linux WebView compatibility.
+
+### Follow-up native acceptance and emergency-key repair
+
+A second isolated portable app used the `d941ced` baseline, then a production
+build with the emergency-key/import-error fixes after `7862f18`. A disposable
+TCP relay interrupted only the generated loopback SSH connection; its listener
+remained available. The actual app automatically reconnected, corroborated by
+new relay connections and successful-connection audit events. No personal
+keys, agents, configuration or servers were used.
+
+- Paste approval stayed open across a real reconnect. Continue refused the
+  stale approval; a subsequent Enter did not create its marker file.
+- A two-action macro approved its first action and cancelled its second.
+  Only the first marker contained the expected bytes.
+- Reconnect while either the initial macro approval or a per-action approval
+  was pending refused execution. Neither marker was created. The backend's
+  reconnect loop retains the native SSH ID; its generation changes invalidate
+  the frontend approval.
+- Cancelled and malformed multiline session JSON imports preserved all four
+  original profile IDs. A valid import added exactly one profile. A subsequent
+  malformed import followed by a valid empty import retained all five profiles
+  and cleared the old error, displaying only the successful import notice.
+- A local startup command created no tab or marker after Escape. Explicit
+  Continue opened its local terminal and created the exact `startup` marker.
+- A native upload picker, Unicode destination and Create only choice completed
+  a 33-byte SFTP upload whose contents matched the source byte for byte.
+- With three ready terminals and only two selected, an approved paste from
+  the unselected third terminal, followed by Enter, appended exactly two
+  distinct shell PIDs to the marker. The source did not receive the command.
+
+The original bubbling key handler failed to stop broadcast with Escape while
+xterm had focus, or with a custom emergency shortcut while a modal was open.
+The shared emergency handler now runs in window capture, synchronously
+invalidates active broadcast/macro execution, and leaves ordinary shortcuts
+in the bubbling handler. The rebuilt native app verified:
+
+- Escape from a focused terminal disabled broadcast.
+- Configured `Mod+Shift+X` during paste approval disabled broadcast. Continue
+  then refused the pending paste; its marker remained absent after Enter.
+- Escape during paste approval both cancelled the dialog and disabled
+  broadcast; its marker remained absent.
+- With broadcast/macros inactive, a raw one-byte SSH stdin probe still
+  received Escape as `0x1b`.
+
+The full local `cargo xtask check` and locked macOS ARM64 app build passed with
+these runtime fixes. The fixture app, SSH/HTTP servers and relay were stopped
+after acceptance. These checks do not establish server-restart recovery,
+retry exhaustion, all transfer policies or other operating systems.
+
+### Repeatable native emergency regression check
+
+Use the disposable portable setup in [the native runbook](native-workflow.md).
+Choose a custom emergency shortcut distinct from the other configured keys,
+for example `Mod+Shift+X`. Use a fresh absolute path inside the fixture HOME
+for each marker; never a personal or production path.
+
+1. Open three ready local/loopback SSH terminals. Select exactly two for
+   broadcast and focus the unselected third terminal.
+2. Paste `echo $$ >> "<fixture-home>/broadcast-pids.txt"` followed by a newline.
+   Explicitly approve, then press Enter. Assert exactly two distinct numeric
+   lines in the marker. Press Escape and verify the broadcast banner disappears.
+3. Re-enable broadcast and paste a multiline marker command. While approval
+   is open, press the custom emergency shortcut, then Continue and Enter.
+   Assert that the marker is absent and broadcast is disabled.
+4. Repeat with a fresh marker and Escape instead of the custom shortcut.
+   Assert that the modal closes, broadcast is disabled and the marker is absent.
+5. With broadcast/macros inactive, run a raw one-byte stdin probe and press
+   Escape. Assert that the received byte is `0x1b`.
+
+For steps 3–4, use `printf marker > "<fixture-home>/paste-emergency.txt"`
+(then `paste-escape.txt`) with a trailing newline. The step 5 probe is:
+
+```bash
+python3 -c 'import sys,tty,termios; a=termios.tcgetattr(0); tty.setraw(0); b=sys.stdin.read(1); termios.tcsetattr(0,1,a); open("<fixture-home>/escape-byte.txt","w").write(repr(b))'
+```
+
+Check disposable marker contents without relying solely on UI notices:
+
+```python
+from pathlib import Path
+
+home = Path("<fixture-home>")  # replace with the owned disposable directory
+pids = (home / "broadcast-pids.txt").read_text().splitlines()
+assert len(pids) == 2 and all(pid.isdigit() for pid in pids)
+assert len(set(pids)) == 2
+assert not (home / "paste-emergency.txt").exists()
+assert not (home / "paste-escape.txt").exists()
+assert (home / "escape-byte.txt").read_text() == repr("\x1b")
+```
 
 ## Approval and connection ownership
 
@@ -109,13 +197,12 @@ Use a separate portable app and disposable generated fixtures, as in
 [the native runbook](native-workflow.md). Still verify:
 
 - Upload/download picker → destination → all overwrite choices, including Cancel.
-- Malformed/valid multiline settings and session JSON imports; cancellation must
+- Malformed/valid multiline settings JSON imports; cancellation must
   leave persisted state unchanged.
-- Native broadcast destination changes and emergency Escape during paste approval.
-- Per-action macro cancellation and connection loss/reconnect while approval is
-  pending, including an SSH reconnect retaining the same native ID.
-- Remote dirty-editor discard, credential deletion and local startup-command
-  approval, then focus return and light/dark rendering across supported WebViews.
+- Native broadcast destination changes while approval is open, macro emergency
+  stops, and retry exhaustion/server restart while approval is pending.
+- Remote dirty-editor discard and credential deletion, then focus return and
+  light/dark rendering across supported WebViews.
 
 Stop the SSH session while a path dialogue is open and verify no file action is
 performed after acceptance. These remaining workflows are not marked complete
