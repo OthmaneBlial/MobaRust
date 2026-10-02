@@ -10,15 +10,15 @@ SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • r
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
-**[⬇️ Download](#-pick-your-platform)** · **[🎬 Watch the app](#-see-the-real-app)** · **[🌐 Website](https://othmaneblial.github.io/MobaRust/)** · **[🧭 Roadmap](ROADMAP.md)** · **[📖 Docs](https://othmaneblial.github.io/MobaRust/docs.html)** · **[🤝 Contribute](CONTRIBUTING.md)**
+**[⬇️ Download](#download)** · **[🎬 Watch the app](#demo)** · **[🌐 Website](https://othmaneblial.github.io/MobaRust/)** · **[🧭 Roadmap](ROADMAP.md)** · **[📖 Docs](https://othmaneblial.github.io/MobaRust/docs.html)** · **[🤝 Contribute](CONTRIBUTING.md)**
 
 </div>
+
+<a id="demo"></a>
 
 ## 🎬 See the real app
 
 https://github.com/user-attachments/assets/616b444e-6b8a-411e-8075-bac4f58d9d88
-
-
 
 **From a shell to a working remote workspace.** A real macOS ARM64 application recording: independent terminal panes, an authenticated SSH session, SFTP browsing and editing, a completed file download, an HTTP request through an SSH tunnel, reusable snippets, and light/dark themes.
 
@@ -84,6 +84,8 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 </td>
 </tr>
 </table>
+
+<a id="download"></a>
 
 ## ⬇️ Pick your platform
 
