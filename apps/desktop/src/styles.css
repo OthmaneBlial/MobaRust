@@ -441,3 +441,7 @@ button:not(:disabled) { cursor: pointer; }
 .text-prompt-label :is(input, textarea) { width: 100%; padding: 10px; border: 1px solid var(--line-strong); outline: 0; color: var(--text); background: var(--bg); font-family: var(--mono); font-size: 12px; resize: vertical; }
 .text-prompt-label :is(input, textarea):focus { border-color: var(--amber); }
 .text-prompt button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+.machine-state-starting, .machine-state-reconnecting { color: var(--amber); }
+.machine-state-error { color: var(--coral); }
+.machine-state-closed { color: var(--faint); }

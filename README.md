@@ -119,7 +119,7 @@ Both Mac DMGs include these changes. Windows/Linux remain v0.1.12. The walkthrou
 
 | Area | Verified so far | Next acceptance gate |
 | --- | --- | --- |
-| ✅ **SSH reliability** | Disposable OpenSSH lab covers keys, jumps, agent, IPv6 and recovery; ARM64 GUI reconnect refused stale approvals. | Retry exhaustion/recovery, password/PAM/MFA and sustained large transfers. |
+| ✅ **SSH reliability** | Disposable OpenSSH lab covers keys, jumps, agent, IPv6 and recovery; ARM64 GUI reconnect refused stale approvals; two-attempt exhaustion and explicit recovery checked on `main`. | Wider retry/restart cases, password/PAM/MFA and sustained large transfers. [Receipt](docs/testing/ssh-reconnect.md). |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
 | 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.18 Mac preview. | In-flight transfer cancellation/recovery, retry exhaustion and Windows/Linux dialogues. [Evidence](docs/testing/text-input-dialogs.md). |

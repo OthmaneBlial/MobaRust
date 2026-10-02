@@ -25,3 +25,14 @@ export function remoteSessionCloseError(
   if (!isRemoteProtocol(protocol) || !detail || detail === "closed" || detail === "closed by application") return null;
   return `${protocol.toUpperCase()} session closed: ${detail}`;
 }
+
+// SSH removes the exhausted session before emitting disconnected/closed.
+// Keep its failure visible; Telnet/serial manage resumable failures separately.
+export function remoteSessionCloseStatus(
+  protocol: string | null,
+  reason: string | null | undefined,
+): "closed" | "error" {
+  return protocol === "ssh" && remoteSessionCloseError(protocol, reason ?? undefined)
+    ? "error"
+    : "closed";
+}

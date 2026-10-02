@@ -58,6 +58,12 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [x] Observe native macOS menu Quit exiting successfully and releasing an active local zsh PTY in the isolated debug app. The v0.1.18 ARM64 release copy additionally released its active VNC helper; active SSH/transfer shutdown remains separate.
 - [ ] Finish in-flight native transfer cancellation/collision recovery, cross-platform editor discard and dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Mac v0.1.18 includes these source changes; Windows/Linux v0.1.12 does not.
 
+### After v0.1.18, on main
+
+- [x] Preserve the SSH error state after final disconnected/closed events; distinguish normal shell exit, and replace stale LIVE/active-transport labels with the selected terminal's actual state.
+- [x] Verify native macOS ARM64 two-attempt exhaustion, explicit profile recovery and Quit releasing an active SSH session plus local PTY. [Receipt and limits](docs/testing/ssh-reconnect.md).
+- [ ] Include this post-tag correction in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
+
 ## Next, in priority order
 
 ### 1. Maintain the native validation baseline locally
@@ -83,7 +89,8 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 ### 3. Expand the OpenSSH interoperability lab
 
 - [x] Observe desktop automatic reconnect after a controlled loopback transport interruption and refuse approvals from the previous connection generation.
-- [ ] Exercise retry exhaustion and recovery against a restarting server; successful short transport interruptions do not establish the retry-budget gate.
+- [x] Observe two-attempt native SSH retry exhaustion against a rejecting loopback relay, explicit fresh-profile recovery, normal `exit` and active SSH/local-shell cleanup on macOS ARM64. [Receipt](docs/testing/ssh-reconnect.md).
+- [ ] Exercise zero/maximum GUI budgets, repeatedly flapping short-lived shells and recovery across a real daemon restart; the two-attempt relay check does not establish those cases.
 - [ ] Add password and keyboard-interactive/PAM/MFA cases using dedicated disposable accounts or servers.
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.

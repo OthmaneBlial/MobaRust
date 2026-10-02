@@ -33,7 +33,7 @@ or server is a pending result, not a reason to probe the local machine.
 | Area | Safe evidence available now | What it does not prove |
 | --- | --- | --- |
 | Native PTY | macOS ARM64 local evidence; Ubuntu x64, macOS ARM64, and Windows x64 CI exercise resize, input/output, exit, and child cleanup | Full shell/version coverage, WSL, real clipboard/window-manager behavior |
-| SSH / SFTP / tunnels | Local/CI SSH fixtures plus the [native ARM64 workflow receipt](native-workflow.md): terminal input/output, SFTP editing/save and download, local/remote/SOCKS5 HTTP round trips and listener cleanup | Internet-host interoperability, sustained GUI use, automatic reconnect, or the operator's SSH configuration |
+| SSH / SFTP / tunnels | Local/CI SSH fixtures plus the [native ARM64 workflow receipt](native-workflow.md): terminal input/output, SFTP editing/save and download, local/remote/SOCKS5 HTTP round trips and listener cleanup | Internet-host interoperability, sustained GUI use, wider retry/authentication cases, or the operator's SSH configuration |
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
 | VNC | Isolated helper controls local RFB fixtures, including password auth and reconnect | Mature-engine selection, encrypted transport, and cross-platform packaging |
@@ -159,6 +159,14 @@ workflows stayed disabled. Intel CLI startup used Rosetta; no Intel GUI or
 clean-install result is claimed.
 Fullscreen entry was observed in release accessibility state, while complete
 fullscreen input/exit acceptance remains the separate ARM64 debug receipt.
+
+After v0.1.18, the [native SSH retry receipt](ssh-reconnect.md) observed two
+failed reconnect attempts, explicit fresh-profile recovery, accurate final
+error/closed presentation, normal shell exit and Quit releasing an active SSH
+session plus local PTY in isolated ARM64 debug copies. Both fixture listeners
+were verified loopback-only, stopped, and their ports closed. This post-tag
+correction is not included in the unchanged public v0.1.18 DMGs. Wider retry
+budgets, actual daemon-restart GUI recovery and other platforms remain pending.
 
 ## Required matrix
 

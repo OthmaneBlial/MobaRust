@@ -27,7 +27,7 @@ import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { parseTunnelPort } from "./tunnel-port";
 import { chooseOverwrite, confirmAction, promptText } from "./text-prompt";
-import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
+import { remoteSessionCloseError, remoteSessionCloseStatus, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "./remote-monitor";
@@ -912,7 +912,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           } else if (state === "failed") {
             reportStateError("failed", error);
             onStatusChange(workspaceId, "error");
-          } else if (state === "disconnected") onStatusChange(workspaceId, "closed");
+          } else if (state === "disconnected") onStatusChange(workspaceId, remoteSessionCloseStatus(remoteProtocol, error));
         };
         const outputEvent = remoteProtocol === "ssh" ? "ssh://output" : remoteProtocol === "telnet" ? "telnet://output" : remoteProtocol === "serial" ? "serial://output" : "terminal://output";
         const closedEvent = remoteProtocol === "ssh" ? "ssh://closed" : remoteProtocol === "telnet" ? "telnet://closed" : remoteProtocol === "serial" ? "serial://closed" : "terminal://closed";
@@ -923,7 +923,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           if (event.payload.terminalId !== terminalIdRef.current) return;
           const error = remoteSessionCloseError(remoteProtocol, event.payload.reason);
           if (error && !hasReportedRemoteError) terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
-          onStatusChange(workspaceId, "closed");
+          onStatusChange(workspaceId, remoteSessionCloseStatus(remoteProtocol, event.payload.reason));
         });
         if (remoteProtocol === "ssh") {
           unlistenState = await listen<SshSessionEvent>("ssh://state", (event) => {
@@ -4007,7 +4007,7 @@ function App() {
           <div className="workspace-grid" id="workspace-view-panel" role="tabpanel" aria-labelledby={`workspace-tab-${activeView}`} tabIndex={0}>
             <div className="main-column">
               <div className="context-strip">
-                <div className="context-title"><span className="status-pulse" /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
+                <div className="context-title"><span className={`terminal-tab-dot terminal-tab-dot-${terminalStatus}`} /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
                 <div className="context-metrics">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? <><span><LayoutDashboard size={13} /> framebuffer</span><span><ArrowUpFromLine size={13} /> native input</span><span><ShieldCheck size={13} /> helper isolated</span></> : <><span><TerminalIcon size={13} /> PTY</span><span><ArrowUpFromLine size={13} /> bidirectional</span><span><Radio size={13} /> 32 KB batches</span></>}</div>
               </div>
 
@@ -4072,11 +4072,11 @@ function App() {
                 <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
                 <div><div className="machine-name">{remoteHost ?? "This Mac"}</div><div className="machine-detail">{remoteHost ? (remoteProtocol === "telnet" ? "Telnet · unencrypted" : remoteProtocol === "serial" ? "Serial · device" : remoteProtocol === "rdp" ? "RDP · isolated helper" : remoteProtocol === "vnc" ? "VNC · isolated helper" : "SSH · verified transport") : "Apple Silicon · local"}</div></div>
-                <span className="machine-live">LIVE</span>
+                <span className={`machine-live machine-state-${terminalStatus}`}>{terminalStatus === "connected" ? "LIVE" : terminalStatus.toUpperCase()}</span>
               </div>
               <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Surface" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "remote desktop" : remoteHost ? "remote shell" : "zsh"} /><Metric label="Renderer" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA framebuffer" : "xterm-256color"} /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
               <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">Use tabs and split panes to keep work in view. Files and SSH tunnels follow the active SSH session.</p></div>
-              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteProtocol === "telnet" ? "Telnet transport active" : remoteProtocol === "serial" ? "Serial transport active" : remoteProtocol === "rdp" ? "RDP helper active" : remoteProtocol === "vnc" ? "VNC helper active" : remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteProtocol === "telnet" ? "This legacy terminal is unencrypted; use SSH for protected administration." : remoteProtocol === "serial" ? "Serial traffic depends on the connected hardware; MobaRust does not add encryption." : remoteProtocol === "rdp" ? "The remote desktop is isolated behind the native helper boundary; certificate and gateway options remain explicit." : remoteProtocol === "vnc" ? "The VNC framebuffer and input stay in the native helper boundary; legacy VNC transport is not SSH-level encryption." : remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
+              <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteHost && terminalStatus !== "connected" ? `${remoteProtocol?.toUpperCase()} ${terminalStatus}` : remoteProtocol === "telnet" ? "Telnet transport active" : remoteProtocol === "serial" ? "Serial transport active" : remoteProtocol === "rdp" ? "RDP helper active" : remoteProtocol === "vnc" ? "VNC helper active" : remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteHost && terminalStatus !== "connected" ? "Transport is not connected. Reopen the saved session or use Quick connect to try again." : remoteProtocol === "telnet" ? "This legacy terminal is unencrypted; use SSH for protected administration." : remoteProtocol === "serial" ? "Serial traffic depends on the connected hardware; MobaRust does not add encryption." : remoteProtocol === "rdp" ? "The remote desktop is isolated behind the native helper boundary; certificate and gateway options remain explicit." : remoteProtocol === "vnc" ? "The VNC framebuffer and input stay in the native helper boundary; legacy VNC transport is not SSH-level encryption." : remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
             </aside>
           </div>
 

@@ -79,3 +79,12 @@ Record the OS/architecture, OpenSSH version, Git commit, exact command, result,
 and skipped optional fixtures when adding platform evidence. Use the
 [hardware/interoperability matrix](hardware-interoperability.md) for external
 servers and real-device checks.
+
+## Separate native desktop retry receipt
+
+The Rust restart fixture above does not drive the GUI. A separate isolated
+macOS ARM64 app/loopback relay check observed a two-attempt budget exhaust,
+explicit saved-profile recovery, accurate error/closed labels, and native Quit
+releasing an active SSH session plus its local PTY. See the [native receipt and
+remaining gates](ssh-reconnect.md). Zero/maximum GUI budgets, flapping shells,
+actual daemon-restart GUI recovery and other platforms remain open.

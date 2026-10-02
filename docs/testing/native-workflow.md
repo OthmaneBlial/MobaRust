@@ -72,3 +72,13 @@ actual HOME/ZDOTDIR was verified before and after automation selected it.
 [Detailed receipt and remaining limits](text-input-dialogs.md#settings-error-visibility-and-normal-shutdown--2026-10-02).
 This is local-shell shutdown evidence; active SSH, remote-desktop helpers and
 in-flight transfer shutdown still require their own native checks.
+
+## Post-v0.1.18 SSH shutdown and retry-budget check
+
+The [native SSH retry receipt](ssh-reconnect.md) adds macOS ARM64 debug evidence:
+a two-attempt budget exhausted against a rejecting loopback relay, explicit
+profile recovery executed a fixture shell command, and native menu Quit released
+an active SSH session/remote shell plus the local zsh PTY. The rebuilt candidate
+also distinguished ERROR from normal CLOSED and removed stale LIVE/active
+labels. This correction is on `main` after v0.1.18; published DMGs are unchanged.
+In-flight transfer shutdown and other platforms remain separate gates.
