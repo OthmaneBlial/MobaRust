@@ -1,6 +1,6 @@
 # Dependency audit record
 
-## v0.1.19 candidate recheck — 2026-10-02
+## v0.1.19 release recheck — 2026-10-02
 
 `cargo audit --json` refreshed RustSec before release preparation. The database
 remains at commit `117edb3bed98e9be112f277b7615eea3252e7c43`, with 1,280
@@ -18,8 +18,8 @@ The workspace uses a [repository-local russh 0.63.3 copy](../../vendor/russh/MOB
 so its packet reader can process peer disconnects while an interactive response
 is pending. The root dependency still disables RSA. Archive provenance,
 production-source omissions and the narrow indexed-parser marker allowance
-are documented with the patch. This source change is after v0.1.18; the
-published downloads remain unchanged. A new `cargo audit --no-fetch --json` check of this lockfile against the cached
+are documented with the patch. This source change was added after v0.1.18 and is included in the v0.1.19
+Mac preview. A new `cargo audit --no-fetch --json` check of this lockfile against the cached
 1,280-advisory database reports zero vulnerabilities and the same two warnings:
 `proc-macro-error` unmaintained and `glib` unsoundness. No advisory was suppressed.
 This version/database check does not audit the local patch implementation.

@@ -1,7 +1,7 @@
 # MobaRust v0.1.12 — Desktop Preview
 
 These are the historical v0.1.12 notes, still relevant to the Windows/Linux
-downloads. For current Mac installers, use the [v0.1.18 preview](v0.1.18.md).
+downloads. For current Mac installers, use the [v0.1.19 preview](v0.1.19.md).
 
 This patch release hardens SFTP filenames and metadata, improves network diagnostic results, and closes a terminal resize callback during teardown.
 

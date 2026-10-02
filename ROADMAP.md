@@ -8,14 +8,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.18; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.19; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.18.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.19.md).
 
 ## Completed in the current improvement cycle
 
@@ -58,7 +58,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [x] Observe native macOS menu Quit exiting successfully and releasing an active local zsh PTY in the isolated debug app. The v0.1.18 ARM64 release copy additionally released its active VNC helper; active SSH/transfer shutdown remains separate.
 - [ ] Finish in-flight native transfer cancellation/collision recovery, cross-platform editor discard and dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Mac v0.1.18 includes these source changes; Windows/Linux v0.1.12 does not.
 
-### After v0.1.18, on main
+### Included in the v0.1.19 Mac preview, after v0.1.18
 
 - [x] Preserve the SSH error state after final disconnected/closed events; distinguish normal shell exit, and replace stale LIVE/active-transport labels with the selected terminal's actual state.
 - [x] Verify native macOS ARM64 two-attempt exhaustion, explicit profile recovery and Quit releasing an active SSH session plus local PTY. [Receipt and limits](docs/testing/ssh-reconnect.md).
@@ -66,7 +66,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [x] Defer normal app exit until SSH sessions drain; reject new work during shutdown and route macOS menu Quit through cleanup. Verify native menu Quit during a 32 MiB SFTP upload and window close during download, preserving originals and removing parts on macOS ARM64. [Receipt and remaining exit gates](docs/testing/transfer-lifecycle.md#application-shutdown-correction--2026-10-02).
 - [x] Retire native SSH command queues on loss/closure, cancel queued file/tunnel actions visibly, and give a reconnected shell a fresh queue under the same terminal ID. Verify close refusal, late permits, no input replay, fresh delivery and loopback listener release with deterministic regressions; GUI loss/race acceptance remains pending. [Checks and limits](docs/testing/queued-ssh-commands.md).
-- [ ] Include these post-tag corrections in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
+- [ ] Align these corrections across the installer cohort: both checked v0.1.19 Mac DMGs include them; Windows/Linux remain v0.1.12. Published v0.1.18 DMGs remain unchanged.
 
 ## Next, in priority order
 
@@ -97,7 +97,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [ ] Exercise zero/maximum GUI budgets, repeatedly flapping short-lived shells and recovery across a real daemon restart; the two-attempt relay check does not establish those cases.
 - [x] Verify password and static-response keyboard-interactive acceptance/rejection over real SSH packets, unsafe prompt refusal, trust-before-authentication and timeout/cancellation socket cleanup using a memory-only loopback Rust server on macOS ARM64. [Coverage and limits](docs/testing/ssh-lab.md#portable-authentication-wire-fixture).
 - [x] Implement a separate ask-each-challenge mode in quick connect, saved profiles, jump hops and reconnect; verify distinct password/OTP success, wrong-OTP/trust rejection, cancellation and unanswered-responder drop at every endpoint of a two-bastion chain over SSH packets, bounded responder refusal, one-shot native answer ownership and dialogue abort/secret-field clearing. [Source checks and limits](docs/testing/ssh-lab.md#ask-each-challenge-on-main).
-- [ ] Finish native authentication acceptance: Mac debug saved-profile/Quick connect password/OTP success, wrong-OTP refusal, masked prompt focus, Escape cancellation, keyboard focus return, two-minute expiry, secret-free profile saving, reconnect recovery/cancellation and Quit during a pending reconnect prompt were observed in the disposable Rust lab. Two-bastion prompt routing, second-hop cancellation, target trust-before-prompt, distinct factors at all three endpoints and Quit releasing the active chain were also observed. Terminal focus now follows successful saved/Quick-connect login and selected-session reconnect, while a background reconnect preserved local input focus. Concurrent prompt ownership, Windows/Linux and OpenSSH password/PAM interoperability remain separate gates. [Receipts and limits](docs/testing/ssh-lab.md#ssh-terminal-focus-after-loginreconnect--2026-10-02).
+- [ ] Finish native authentication acceptance: Mac debug saved-profile/Quick connect password/OTP success, wrong-OTP refusal, masked prompt focus, Escape cancellation, keyboard focus return, two-minute expiry, secret-free profile saving, reconnect recovery/cancellation and Quit during a pending reconnect prompt were observed in the disposable Rust lab. Two-bastion prompt routing, second-hop cancellation, target trust-before-prompt, distinct factors at all three endpoints and Quit releasing the active chain were also observed. Terminal focus now follows successful saved/Quick-connect login and selected-session reconnect, while a background reconnect preserved local input focus. The v0.1.19 ARM64 release copy additionally verified direct password/OTP login, host-key rejection before prompting, Escape cancellation, reconnect focus/input and active-session Quit. Concurrent native prompt ownership, release-copy Quick connect/two-bastion checks, Windows/Linux and OpenSSH password/PAM interoperability remain separate gates. [Receipts and limits](docs/testing/ssh-lab.md#ssh-terminal-focus-after-loginreconnect--2026-10-02).
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.
 
@@ -107,7 +107,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.18 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.19 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.

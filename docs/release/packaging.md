@@ -3,7 +3,7 @@
 ## Downloadable previews
 
 The v0.1.12 preview has Windows x64 NSIS, Linux x64 Debian/AppImage, and macOS
-ARM64/x64 DMG packages. The newer [v0.1.18 preview](v0.1.18.md) updates only
+ARM64/x64 DMG packages. The newer [v0.1.19 preview](v0.1.19.md) updates only
 the two Mac DMGs using local builds. The release workflow is disabled; new
 builds and checks run locally. A release tag must match the Cargo, frontend,
 and Tauri versions.
@@ -47,8 +47,9 @@ CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false pnpm tauri build --bundles dmg --confi
 CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false MOBARUST_PACKAGE_TARGET=x86_64-apple-darwin pnpm tauri build --target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
 ```
 
-These process-local variables select headless DMG assembly and skip the
-bundler's Finder styling script. They do not enable or run GitHub Actions.
+These process-local variables select headless DMG assembly and skip
+[Tauri's Finder styling script](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs).
+They do not enable or run GitHub Actions.
 Run the two builds sequentially because helper staging is shared.
 
 The Intel DMG is under `target/x86_64-apple-darwin/release/bundle/dmg/`.
@@ -205,12 +206,12 @@ replacement for signed distribution or operating-system protection.
 
 | Target | Helper build | Package evidence | Signing evidence |
 | --- | --- | --- | --- |
-| Windows x64 | v0.1.12 native-runner build exists; v0.1.18 native build pending | v0.1.12 preview installer available; clean install pending | Owner certificate pending |
-| Linux x64 | v0.1.12 native-runner build exists; v0.1.18 native build pending | v0.1.12 DEB/AppImage available; distro checks pending | Signing policy pending |
-| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.18 DMG passed layout, integrity and CLI checks; isolated ARM64 release-copy GUI receipt recorded, clean install pending | Developer ID/notarization pending |
+| Windows x64 | v0.1.12 native-runner build exists; v0.1.19 native build pending | v0.1.12 preview installer available; clean install pending | Owner certificate pending |
+| Linux x64 | v0.1.12 native-runner build exists; v0.1.19 native build pending | v0.1.12 DEB/AppImage available; distro checks pending | Signing policy pending |
+| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.19 DMG passed layout, integrity and CLI checks; isolated ARM64 release-copy SSH receipt recorded, clean install pending | Developer ID/notarization pending |
 | Windows ARM64 | Cross-build/toolchain required | Pending | Pending |
 | Linux ARM64 | Cross-build/toolchain required | Pending | Pending |
-| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.18 DMG passed layout, integrity and CLI checks; Intel GUI pending | Developer ID/notarization pending |
+| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.19 DMG passed layout, integrity and CLI checks; Intel GUI pending | Developer ID/notarization pending |
 
 Packaging is not a claim that RDP/VNC interoperability is complete. Real
 server tests, platform-specific input/clipboard/display behavior, dependency
