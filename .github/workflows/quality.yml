@@ -3,7 +3,9 @@ name: Quality
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', '.github/ISSUE_TEMPLATE/**']
   pull_request:
+    paths-ignore: ['**/*.md', '.github/ISSUE_TEMPLATE/**']
   workflow_dispatch:
 
 permissions:
