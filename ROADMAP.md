@@ -101,6 +101,11 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.
 
+Main after v0.1.19 queues competing SSH challenges instead of cancelling the
+second login. Production-handler regressions cover request ownership, queued
+expiry, cancellation, overflow, page shutdown and IPC failure; frontend and Mac
+debug packaging checks passed. [Native overlap acceptance remains pending](docs/testing/ssh-lab.md#concurrent-authentication-queue-follow-up--2026-10-02).
+
 **Done when:** each added case has success, rejection/failure, bounded cancellation, and cleanup checks, runnable through the existing lab command. No personal accounts, agents, or production hosts are test prerequisites.
 
 ### 4. Align and verify the next preview release

@@ -112,22 +112,27 @@ instead of waiting for its 120-second deadline; the real-wire regression failed
 before this correction and passed afterward. The packet reader now handles
 answers through its ordinary message loop, with one pending challenge per
 connection. At most 32 native challenge waiters can exist simultaneously.
-Concurrent UI dialogues fail closed rather than replacing an active prompt.
+On main after v0.1.19, SSH challenges share one active dialogue and at most
+31 queued challenges across IPC channels. A queued closure or expiry removes
+that challenge immediately; page shutdown aborts active and queued challenges.
+Queue time counts toward the unchanged 120-second authentication deadline.
+Ordinary file/approval dialogues still refuse overlap rather than queueing
+potentially stale decisions. An SSH challenge arriving during an ordinary
+dialogue is cancelled without replacing it.
 
 The production per-channel handler in `ssh-authentication.ts` is exercised by
-the shared DOM-boundary test. Two independently owned handlers check that a
-competing challenge sends cancellation only for its own request ID, preserving
-the first connection's password/OTP dialogue and responses. Closing the other
-connection's request or a completed request leaves the active dialogue alone;
-closing its current request clears the field without sending a late response.
-An ordinary editor-path prompt also survives a competing SSH challenge. Fresh
-authentication works after cancellation, with answers bound to the new ID.
-A deliberate wrong-request cancellation mutation failed this regression.
+the shared DOM-boundary test. Independently owned channels check password/OTP
+completion before the next connection's labelled prompt opens, with responses
+bound to their own request IDs. Other checks cover active cancellation,
+queued expiry, late closure, middle-waiter removal before a third channel,
+overflow refusal/capacity recovery, page shutdown, ordinary-dialogue ownership
+and sanitized IPC failure followed by the next challenge. Aborted inputs are
+cleared and retired requests cannot send late answers. The queue regression
+failed against the previous fail-closed handler and passed after the fix.
+Frontend unit tests, type checking, lint/build and the rebuilt Mac debug
+`cargo xtask package-check` passed. No dependency or native IPC payload changed.
 These are production-handler/DOM-boundary checks, not native simultaneous-window
 acceptance or a whole-process secret zeroization guarantee.
-After isolating the unchanged handler from `App.tsx`, frontend unit tests,
-type checking, lint/build and the rebuilt Mac debug `cargo xtask package-check`
-passed. No dependency or native IPC payload changed.
 
 Two native broker regressions cover bounded/one-shot answers, expired waiter
 cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
@@ -136,8 +141,38 @@ cancellation and clearing the input; these are not native keyboard/focus proof.
 The native receipts below cover saved profiles, Quick connect, controlled
 reconnects and two-bastion prompt routing on Mac debug. Concurrent prompt
 ownership, broader reconnect cases and OpenSSH/PAM interoperability remain
-separate gates. This mode is
-post-v0.1.18 source work; the published installers do not contain it.
+separate gates. The ask-each-challenge mode is included in the v0.1.19 Mac
+previews; Windows/Linux remain v0.1.12. The concurrent frontend queue is
+post-v0.1.19 source work and is not in the published installers.
+
+### Concurrent authentication queue follow-up — 2026-10-02
+
+The queue change on top of `42c8a75` passed the frontend checks and native
+package check above. An isolated, unsigned debug app copy retained the built
+main executable's exact bytes, with a separate application ID and disposable
+HOME/portable data. Two independently generated Rust authentication fixtures
+and two disposable relays listened only on `127.0.0.1`. Fixture metadata
+directories/files were verified as `0700`/`0600`; no personal SSH files, agents,
+accounts, Keychain credentials or system SSH service were used.
+
+Both saved profiles completed their distinct masked password/OTP logins in the
+native app. With the second session selected, dropping the first relay opened
+the first session's focused, masked reconnect password field. After entering
+that generated password, the second relay was dropped. Native window
+observation then failed with `cgWindowNotFound`; process/socket checks showed
+the owned app and both reconnect transports still alive. The overlap outcome,
+terminal echo/focus and normal Quit were not observed, so native concurrent
+acceptance remains pending. The observation failure does not establish a
+cause in MobaRust.
+
+Both five-minute Rust fixture tests completed normally. The executable-matched
+app and both relays were stopped with SIGTERM; the recorded app, local shell,
+server and relay PIDs were absent, all four loopback ports could be rebound,
+and the transient fixture/relay response metadata was removed. A fresh isolated
+app attempt also failed native window observation before any fixture listeners
+started; its owned app and shell were stopped and verified absent. This cleanup
+receipt establishes owned-process/listener release, not graceful native Quit
+or a scan proving response absence throughout the app's persisted data.
 
 ### Native password/OTP check — 2026-10-02
 
