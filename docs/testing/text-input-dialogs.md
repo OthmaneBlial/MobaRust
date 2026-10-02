@@ -1,7 +1,9 @@
 # Text-input dialogue checks — 2026-10-02
 
-This change is on `main` after v0.1.17. Published v0.1.17 installers do not
-contain it yet. The integrated tunnel form in that release is separate.
+These changes follow v0.1.17 and are included in the v0.1.18 Mac preview.
+Windows/Linux installers remain v0.1.12. The detailed native observations below
+used isolated ARM64 debug copies; the [v0.1.18 release-copy recheck](remote-desktop-renderer.md#v0118-release-bundle-recheck)
+adds settings rejection/focus and PTY/VNC-helper shutdown evidence.
 
 All 19 former `window.prompt` callers now use the shared HTML `dialog` helper:
 profile naming, explicit OpenSSH config paths, settings/session JSON imports,
@@ -247,7 +249,8 @@ Subsequent VNC work identified the fixture deadline failure and restored the
 ordinary local global check. The later binary-frame correction also passed
 that check with Full-HD VNC fixtures; see the [codec receipt](../../benchmarks/2026-10-02-framebuffer-ipc.md).
 These later results supersede the validation blocker above without expanding
-the native file-dialogue acceptance scope or changing published installers.
+the native file-dialogue acceptance scope. Mac packaging was subsequently
+updated in v0.1.18; Windows/Linux installers remain older.
 
 ### Repeat the remote-file reconnect check
 

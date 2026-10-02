@@ -146,14 +146,17 @@ workflows remained disabled; no tag CI run occurred. Intel CLI startup ran
 through Rosetta on ARM64, not on Intel hardware. Signing, notarization and
 clean-install gates remain open.
 
-On 2026-10-02, the v0.1.18 source passed the full local suite. Locally built
+On 2026-10-02, v0.1.18 at tag commit `b0ae2c3` passed the full local suite. Locally built
 ARM64/x64 DMGs passed disk-image verification, read-only layout, strict ad hoc
 signature, matching app/helper architectures, CLI version and SHA-256 manifests.
 The [ARM64 release-copy receipt](remote-desktop-renderer.md#v0118-release-bundle-recheck)
 records Full-HD rendering, keyboard input before/after reconnect, focused
 settings errors with unchanged persistence, and native Quit releasing an active
 zsh PTY and VNC helper. All fixture listeners were loopback-only and stopped.
-Intel CLI startup used Rosetta; no Intel GUI or clean-install result is claimed.
+All four published assets were downloaded again and matched local files byte
+for byte; both downloaded SHA-256 manifests passed. Quality and installer
+workflows stayed disabled. Intel CLI startup used Rosetta; no Intel GUI or
+clean-install result is claimed.
 Fullscreen entry was observed in release accessibility state, while complete
 fullscreen input/exit acceptance remains the separate ARM64 debug receipt.
 

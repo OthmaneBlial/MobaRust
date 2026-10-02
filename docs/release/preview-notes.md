@@ -1,5 +1,8 @@
 # MobaRust v0.1.12 — Desktop Preview
 
+These are the historical v0.1.12 notes, still relevant to the Windows/Linux
+downloads. For current Mac installers, use the [v0.1.18 preview](v0.1.18.md).
+
 This patch release hardens SFTP filenames and metadata, improves network diagnostic results, and closes a terminal resize callback during teardown.
 
 ## What's new
@@ -31,6 +34,6 @@ These unsigned installers may trigger operating-system security prompts. Windows
 
 Start with a local terminal, or add an SSH host, username, and authentication method. Verify the host-key fingerprint before accepting a first connection. SSH, SFTP/SCP, saved sessions, and tunnels are the main use cases. RDP is experimental and its helper is excluded from these packages. VNC is experimental; remote TCP is unencrypted and requires explicit opt-in.
 
-The release workflow builds installers on native GitHub runners and checks version, asset names, checksums, and binary startup. A successful build is not evidence of full GUI clean-install behavior or real-server interoperability across all platforms. This preview is not a production-readiness claim.
+The v0.1.12 release workflow built installers on native GitHub runners and checked version, asset names, checksums, and binary startup. Quality and installer workflows are now disabled by request; newer Mac previews are built and checked locally. A successful build is not evidence of full GUI clean-install behavior or real-server interoperability across all platforms. This preview is not a production-readiness claim.
 
 Report issues with your OS, architecture, and reproduction steps at <https://github.com/OthmaneBlial/MobaRust/issues>. Do not include credentials or private host details.

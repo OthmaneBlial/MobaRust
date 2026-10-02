@@ -6,7 +6,7 @@
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.17-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.17)
+[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.18-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.18)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
@@ -91,26 +91,27 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 
 | Platform | Download | Available version |
 | --- | --- | --- |
-| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.17/MobaRust-0.1.17-macos-arm64.dmg) | **0.1.17** |
-| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.17/MobaRust-0.1.17-macos-x64.dmg) | **0.1.17** |
+| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.18/MobaRust-0.1.18-macos-arm64.dmg) | **0.1.18** |
+| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.18/MobaRust-0.1.18-macos-x64.dmg) | **0.1.18** |
 | 🪟 **Windows · x64** | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
 | 🐧 **Ubuntu / Debian · x64** | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
 | 🐧 **Other Linux · x64** | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
 
 **Preview distribution:** no publisher signing; macOS is ad hoc signed and not notarized. Windows/Linux installers are older and do not include the latest `main` changes. RDP is excluded from normal installers.
 
-[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.17) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
+[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.18) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
 
 On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install ./MobaRust-0.1.12-linux-x64.deb`. AppImage prerequisites vary by distribution. Checksums verify downloaded bytes; they do not establish publisher identity.
 
-## 🚀 What's new — 0.1.17
+## 🚀 What's new — 0.1.18
 
-- **Quieter, steadier SSH:** established idle sessions no longer inherit the connection setup deadline; exit status arriving after EOF is preserved.
-- **Clearer connection failures:** host-trust rejection and network transport failures remain distinct.
-- **Native tunnel setup:** local, remote and SOCKS5 creation use an integrated form, with loopback defaults and port validation.
-- **More evidence:** disposable SSH interruption/restart coverage, a recorded three-platform quality baseline, and this real native walkthrough.
+- **Native app dialogues:** text entry, multiline JSON and file collision choices work inside the app, with clear cancellation.
+- **Reconnect-safe actions:** stale paste, macro and file approvals are refused when the SSH connection changes.
+- **Visible settings errors:** failed saves stay inside the form with keyboard focus; rejected preferences leave saved settings intact.
+- **Full-HD VNC progress:** bounded binary frames replace JSON pixels; native ARM64 rendering, input and reconnect were checked. VNC remains experimental.
+- **macOS runtime refresh:** Tauri 2.12.1 restores element fullscreen; Rust builds now require 1.90+.
 
-Windows build/icon and shell fixture corrections are in source. A new Windows installer still needs a native build and release check.
+Both Mac DMGs include these changes. Windows/Linux remain v0.1.12. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.18.md).
 
 ## 🧭 Progress, without invented percentages
 
@@ -118,11 +119,11 @@ Windows build/icon and shell fixture corrections are in source. A new Windows in
 
 | Area | Verified so far | Next acceptance gate |
 | --- | --- | --- |
-| ✅ **SSH reliability** | Disposable OpenSSH lab covers keys, jumps, agent, IPv6, interruption and fresh recovery. | Desktop automatic reconnect, password/PAM/MFA and sustained large transfers. |
+| ✅ **SSH reliability** | Disposable OpenSSH lab covers keys, jumps, agent, IPv6 and recovery; ARM64 GUI reconnect refused stale approvals. | Retry exhaustion/recovery, password/PAM/MFA and sustained large transfers. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
-| 🟡 **Native dialogues, on main** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. These changes follow v0.1.17. | In-flight transfer cancellation/recovery, retry exhaustion and Windows/Linux dialogues. [Evidence](docs/testing/text-input-dialogs.md). |
-| 🟡 **Distribution** | Mac ARM64/x64 0.1.17 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
+| 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.18 Mac preview. | In-flight transfer cancellation/recovery, retry exhaustion and Windows/Linux dialogues. [Evidence](docs/testing/text-input-dialogs.md). |
+| 🟡 **Distribution** | Mac ARM64/x64 0.1.18 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
 **Next priorities:** native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers → daily workflow polish.
