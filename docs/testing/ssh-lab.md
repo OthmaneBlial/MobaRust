@@ -139,9 +139,52 @@ Observed through the native app:
   timing or other OS-originated exit routes.
 
 This establishes these Mac debug workflows against the same-stack Rust fixture.
-It does not establish OpenSSH/PAM interoperability, Quick connect acceptance,
-jump-hop/reconnect dialogues, automatic terminal focus return, Windows/Linux
-acceptance or behavior of the published installers.
+It does not establish OpenSSH/PAM interoperability, jump-hop/reconnect dialogues,
+automatic terminal focus after login, Windows/Linux acceptance or behavior of
+the published installers. Quick connect and keyboard cancellation focus were
+checked separately below.
+
+### Native Quick connect and cancellation focus — 2026-10-02
+
+A fresh macOS ARM64 debug bundle built from `d3b4fb3` passed
+`cargo xtask package-check`. Its isolated app copy used disposable HOME/portable
+data and the five-minute Rust authentication lab described below. The generated
+Ed25519 server listened only on `127.0.0.1`; personal SSH files, agents, Keychain
+credentials and the system SSH service were not used.
+
+Observed through native keyboard/mouse actions:
+
+- Quick connect selected **Keyboard-interactive · ask each challenge**, with an
+  empty explicit known-hosts path. Submitting without a pin rejected the host
+  key and showed its observed fingerprint, without opening a password prompt.
+- After entering the fingerprint from the owned fixture metadata, a masked,
+  focused password prompt opened. Escape cancelled authentication, left Quick
+  connect open and showed the cancellation error.
+- With **Connect SSH** reached by Tab and activated by Enter, Escape from the
+  challenge restored focus to **Connect SSH**. Enter then retried successfully.
+  A separate keyboard-initiated saved-profile attempt restored focus to its
+  original profile button after Escape. Existing native HTML dialogue behavior
+  handled both cases; no custom focus restoration code was needed. A
+  mouse-initiated attempt returned focus to the HTML content, so this does not
+  claim button focus after mouse activation.
+- Correct, distinct generated password and OTP responses advanced through
+  separate masked fields, then opened the optional profile-name prompt. Saving
+  a new profile retained `keyboardInteractivePrompt`, the host/port and pin,
+  with no credential reference or response in its authentication definition.
+- The SSH terminal displayed the **no OS shell** fixture banner and, after a
+  terminal click, echoed the non-secret marker `QUICK_CONNECT_AUTH_OK`.
+  Automatic terminal focus after login was not established.
+- All three persisted profile/settings/audit JSON files were checked against
+  both generated responses; neither response appeared. Native application-menu
+  Quit exited with code 0. The owned app process was absent and the fixture had
+  only its listening socket, with no established SSH socket, before its deadline.
+- The lab completed normally after 300 seconds, removed its private metadata
+  and released its loopback port.
+
+These observations cover Mac debug Quick connect, saving its challenge-mode
+profile, trust-before-prompt and keyboard focus after challenge cancellation.
+Jump-hop/reconnect challenge ownership, OpenSSH/PAM interoperability, other
+platforms and updated published installers remain separate acceptance gates.
 
 For a manual native GUI check on Unix:
 
