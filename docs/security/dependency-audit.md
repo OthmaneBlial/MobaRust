@@ -1,5 +1,17 @@
 # Dependency audit record
 
+## Interactive SSH packet-reader patch — 2026-10-02
+
+The workspace uses a [repository-local russh 0.63.3 copy](../../vendor/russh/MOBARUST_PATCH.md)
+so its packet reader can process peer disconnects while an interactive response
+is pending. The root dependency still disables RSA. Archive provenance,
+production-source omissions and the narrow indexed-parser marker allowance
+are documented with the patch. This source change is after v0.1.18; the
+published downloads remain unchanged. A new `cargo audit --no-fetch --json` check of this lockfile against the cached
+1,280-advisory database reports zero vulnerabilities and the same two warnings:
+`proc-macro-error` unmaintained and `glib` unsoundness. No advisory was suppressed.
+This version/database check does not audit the local patch implementation.
+
 ## Tauri fullscreen update — 2026-10-02
 
 The workspace now uses Tauri 2.12.1 with matching frontend API/CLI 2.12.1,

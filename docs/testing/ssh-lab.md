@@ -44,7 +44,7 @@ The server has no inactivity timeout, so that cannot satisfy the client-socket
 cleanup assertion. Stalled authentication callbacks are explicitly released
 after timeout/cancellation to let the server observe closure.
 
-Five tests cover:
+Seven tests cover:
 
 - Password acceptance/rejection, connected lifecycle state, explicit disconnect
   and session/socket cleanup.
@@ -54,6 +54,10 @@ Five tests cover:
 - Host-key rejection before password or keyboard-interactive callbacks run.
 - Timeout and task cancellation after each authentication method has started,
   followed by session/socket cleanup.
+- Distinct generated password/OTP acceptance in one two-prompt round and two
+  separate rounds; wrong-OTP rejection and static-response rejection.
+- Interactive responder cancellation/drop/server disconnect, trust-before-callback, response
+  count/size rejection and a 17-round server refused after 16 responses.
 
 These are actual SSH handshakes and encrypted authentication packets, with the
 same Rust stack at both ends. They do not establish OpenSSH password/PAM/MFA
@@ -61,11 +65,97 @@ interoperability. The existing static keyboard-interactive credential repeats
 one secret for all non-echo prompts and rounds; distinct password-plus-OTP or
 user-selected responses are not supported by this path.
 
-Verified 2026-10-02 on macOS ARM64 with Rust 1.95.0 and `russh` 0.63.1:
-the focused command passed all five tests. `cargo xtask test-ssh` passed 41
-unit, five authentication-wire and 12 OpenSSH tests; the real Xvfb case reported
-a prerequisite skip, while loopback IPv6 executed.
+Verified 2026-10-02 on macOS ARM64 with Rust 1.95.0 and the
+[repository-local `russh` 0.63.3 patch](../../vendor/russh/MOBARUST_PATCH.md):
+the workspace suite passed all seven automated tests; the opt-in native fixture
+is ignored by default. The earlier static-response receipt
+had 41 unit, five wire and 12 OpenSSH tests, with loopback IPv6 executed and the
+real Xvfb case skipped for missing prerequisites.
 The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
+
+### Ask each challenge on main
+
+Quick connect and saved SSH profiles have a separate **Keyboard-interactive ·
+ask each challenge** option. It does not require or save a vault reference.
+Existing **vault response** profiles still repeat their one stored secret.
+The new mode also applies to saved jump hops and prompts again during reconnect.
+Cancelling a reconnect challenge stops that session's remaining retries.
+
+The native transport verifies each hop's host key before prompting. Each
+challenge includes that hop's configured address and username, followed by
+plain-text server-provided name/instructions and prompt text. The password
+field masks each response. Responses necessarily cross WebView IPC transiently;
+they are not saved in profiles, the vault, audit history or diagnostics. The
+dialogue clears its input on submission/cancellation, and the native owned
+responses use zeroizing buffers. JavaScript strings and third-party SSH packet
+buffers do not provide a whole-process zeroization guarantee.
+
+Both modes refuse echo prompts, more than eight prompts, more than 16 rounds,
+or challenge text fields above 4096 bytes. The ask mode additionally checks
+exact response count and a 16 KiB limit per response. Its total authentication
+deadline is 120 seconds; the configured connection timeout still bounds
+network/key-exchange setup. A one-shot request ID binds answers to that
+challenge. Completion, cancellation, timeout, session close and app shutdown
+retire the waiter; late/duplicate answers are refused and the dialogue is
+cancelled. SSH transport loss also drops an unanswered responder immediately,
+instead of waiting for its 120-second deadline; the real-wire regression failed
+before this correction and passed afterward. The packet reader now handles
+answers through its ordinary message loop, with one pending challenge per
+connection. At most 32 native challenge waiters can exist simultaneously.
+Concurrent UI dialogues fail closed rather than replacing an active prompt.
+
+Two native broker regressions cover bounded/one-shot answers, expired waiter
+cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
+DOM boundary checks cover password masking, plain-text server labels, abort
+cancellation and clearing the input; these are not native keyboard/focus proof.
+The remaining native GUI coverage, jump-hop/reconnect challenge acceptance
+and OpenSSH/PAM interoperability remain separate gates. This mode is post-v0.1.18
+source work; the published installers do not contain it.
+
+### Native password/OTP check — 2026-10-02
+
+On macOS ARM64, an isolated copy of the debug bundle used a disposable HOME,
+portable data directory and a pinned generated Ed25519 host key. The fixture
+listened only on `127.0.0.1`; its channel echoed input and explicitly announced
+that it provided no OS shell. No local account, personal SSH file, agent or
+Keychain credential was used.
+
+Observed through the native app:
+
+- A saved ask-each-challenge profile opened the password field with focus;
+  Enter advanced to a separately focused, masked OTP field.
+- Escape cancelled the password challenge and displayed the cancellation error.
+- A correct generated password followed by a wrong OTP was rejected, with no
+  new SSH terminal created.
+- Distinct correct password/OTP responses opened a connected SSH terminal.
+  After clicking the terminal, a non-secret input marker was echoed back.
+- A further unanswered password challenge closed with the timeout error when
+  checked 123 seconds after opening; the configured authentication limit is
+  120 seconds. The existing authenticated terminal remained connected.
+- The three persisted profile/settings/audit files contained neither generated
+  response. A fresh run authenticated again, then native menu Quit exited with
+  code 0 and released its local zsh child and SSH socket while the fixture's
+  loopback listener was still running. This does not establish Quit-shortcut
+  timing or other OS-originated exit routes.
+
+This establishes these Mac debug workflows against the same-stack Rust fixture.
+It does not establish OpenSSH/PAM interoperability, Quick connect acceptance,
+jump-hop/reconnect dialogues, automatic terminal focus return, Windows/Linux
+acceptance or behavior of the published installers.
+
+For a manual native GUI check on Unix:
+
+```bash
+cargo test --locked -p mobarust-ssh --test authentication native_authentication_lab -- --ignored --nocapture
+```
+
+This opt-in lab listens only on `127.0.0.1:0` for five minutes. The printed path
+points to private, generated fixture metadata under `target/authentication-native-lab`;
+no private key is serialized. It offers two password/OTP rounds and a bounded
+echo channel labelled **no OS shell**, with no SFTP or command execution. Use a
+disposable app HOME/data directory, and remove only its generated fixture
+metadata after stopping the owned test process. Never use the operator's SSH
+files, account password, agent or system SSH service.
 
 ## OpenSSH coverage
 

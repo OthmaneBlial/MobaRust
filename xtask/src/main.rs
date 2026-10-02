@@ -9,6 +9,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use sha2::{Digest, Sha256};
 
+const PRIVATE_KEY_MARKER_PATTERN: &str = "BEGIN ([A-Z0-9]+ )*PRIVATE KEY";
+
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let command = arguments.next().unwrap_or_else(|| "help".to_owned());
@@ -871,16 +873,23 @@ fn pre_push_check() -> Result<(), String> {
     let private_markers = git_output(&[
         "grep",
         "--cached",
+        "--null",
         "-I",
         "-n",
         "-E",
-        "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
+        PRIVATE_KEY_MARKER_PATTERN,
         "--",
     ])?;
     if private_markers.status.success() {
-        return Err("private-key marker found in the Git index; refusing push audit".into());
-    }
-    if private_markers.status.code() != Some(1) {
+        // The reviewed vendored parser contains PEM delimiter literals, not keys.
+        // Pin its complete indexed bytes; any other marker or edit fails closed.
+        let parser = git_output(&["show", ":vendor/russh/src/keys/format/mod.rs"])?;
+        if !parser.status.success()
+            || !reviewed_parser_markers(&private_markers.stdout, &parser.stdout)
+        {
+            return Err("private-key marker found in the Git index; refusing push audit".into());
+        }
+    } else if private_markers.status.code() != Some(1) {
         return Err(format!(
             "could not inspect the Git index for private-key markers: {}",
             private_markers.stderr.trim()
@@ -895,10 +904,23 @@ fn pre_push_check() -> Result<(), String> {
         ));
     }
     println!(
-        "pre-push audit passed: branch=main, base=ignored, private-key markers=none, commits={}",
+        "pre-push audit passed: branch=main, base=ignored, private-key markers=reviewed, commits={}",
         ahead.stdout.trim()
     );
     Ok(())
+}
+
+fn reviewed_parser_markers(markers: &str, parser: &str) -> bool {
+    !markers.is_empty()
+        && markers.lines().all(|line| {
+            line.split_once('\0')
+                .is_some_and(|(path, _)| path == "vendor/russh/src/keys/format/mod.rs")
+        })
+        && Sha256::digest(parser.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            == "7ca4a796a523df1063f0ea0bac1b6d869288dd100d041a6455f8bd7d73b15678"
 }
 
 /// Keep the license file recognizable by GitHub's license detector and by
@@ -1772,6 +1794,51 @@ fn create_sanitized_test_home() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_key_marker_scan_includes_encrypted_and_algorithm_headers() {
+        let root = create_sanitized_test_home().unwrap();
+        let fixture = root.join("marker-fixture.txt");
+        let labels = ["", "RSA ", "EC ", "OPENSSH ", "ENCRYPTED ", "DSA "];
+        let contents: String = labels
+            .iter()
+            .map(|label| format!("-----BEGIN {label}PRIVATE KEY-----\nnot-a-key\n"))
+            .collect();
+        fs::write(&fixture, contents).unwrap();
+        let result = git_output(&[
+            "-C",
+            root.to_str().unwrap(),
+            "grep",
+            "--no-index",
+            "-I",
+            "-n",
+            "-E",
+            PRIVATE_KEY_MARKER_PATTERN,
+            "--",
+            "marker-fixture.txt",
+        ]);
+        fs::remove_dir_all(root).unwrap();
+        let result = result.unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout.lines().count(), labels.len());
+    }
+
+    #[test]
+    fn private_key_marker_allowance_requires_exact_indexed_parser() {
+        let parser = include_str!("../../vendor/russh/src/keys/format/mod.rs");
+        let markers = "vendor/russh/src/keys/format/mod.rs\0 73:PEM delimiter";
+        assert!(reviewed_parser_markers(markers, parser));
+        assert!(!reviewed_parser_markers(markers, &format!("{parser}\n")));
+        assert!(!reviewed_parser_markers(
+            &format!("{markers}\nother.rs:1:key material"),
+            parser
+        ));
+        assert!(!reviewed_parser_markers("", parser));
+        assert!(!reviewed_parser_markers(
+            "vendor/russh/src/keys/format/mod.rs:other.rs\0 1:key material",
+            parser
+        ));
+    }
 
     #[test]
     fn installed_compiler_remains_usable_with_an_isolated_home() {

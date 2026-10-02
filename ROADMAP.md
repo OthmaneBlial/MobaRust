@@ -37,7 +37,7 @@ These changes are included in the v0.1.17 Mac preview. Windows/Linux installers 
 - [x] Replace native tunnel browser prompts with an integrated form; verify invalid-port rejection, all three modes and listener cleanup on macOS ARM64.
 - [x] Build and check both v0.1.17 Mac DMGs and record the real native workflows.
 
-The SSH lab reports **41 unit tests, five Rust authentication-wire tests and 12 OpenSSH integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
+The SSH lab has **42 unit tests, seven Rust authentication-wire tests and 12 OpenSSH integration test cases**, plus an opt-in native authentication fixture. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
 ### Included in the v0.1.18 Mac preview
 
@@ -96,7 +96,8 @@ The SSH lab reports **41 unit tests, five Rust authentication-wire tests and 12 
 - [x] Observe two-attempt native SSH retry exhaustion against a rejecting loopback relay, explicit fresh-profile recovery, normal `exit` and active SSH/local-shell cleanup on macOS ARM64. [Receipt](docs/testing/ssh-reconnect.md).
 - [ ] Exercise zero/maximum GUI budgets, repeatedly flapping short-lived shells and recovery across a real daemon restart; the two-attempt relay check does not establish those cases.
 - [x] Verify password and static-response keyboard-interactive acceptance/rejection over real SSH packets, unsafe prompt refusal, trust-before-authentication and timeout/cancellation socket cleanup using a memory-only loopback Rust server on macOS ARM64. [Coverage and limits](docs/testing/ssh-lab.md#portable-authentication-wire-fixture).
-- [ ] Add OpenSSH password/PAM interoperability and distinct password-plus-OTP MFA responses using dedicated disposable accounts or servers; the same-stack fixture does not establish these gates.
+- [x] Implement a separate ask-each-challenge mode in quick connect, saved profiles, jump hops and reconnect; verify distinct password/OTP success and wrong-OTP rejection over SSH packets, bounded responder refusal, one-shot native answer ownership and dialogue abort/secret-field clearing. [Source checks and limits](docs/testing/ssh-lab.md#ask-each-challenge-on-main).
+- [ ] Finish native authentication acceptance: Mac debug saved-profile password/OTP success, wrong-OTP refusal, masked prompt focus, Escape cancellation, two-minute expiry and native menu Quit cleanup were observed in the disposable Rust lab; Quick connect, focus return, jump-hop/reconnect ownership, Windows/Linux and OpenSSH password/PAM interoperability remain separate gates. [Receipt and limits](docs/testing/ssh-lab.md#native-passwordotp-check--2026-10-02).
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.
 

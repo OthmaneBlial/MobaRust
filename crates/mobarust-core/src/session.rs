@@ -58,6 +58,7 @@ pub enum AuthMethod {
         credential_ref: Option<String>,
     },
     Agent,
+    KeyboardInteractivePrompt,
     KeyboardInteractive {
         #[serde(rename = "credentialRef", alias = "credential_ref")]
         credential_ref: String,
@@ -560,7 +561,7 @@ pub fn validate_session_environment(
 fn validate_auth_method(auth: &AuthMethod) -> Result<(), SessionValidationError> {
     let has_control = |value: &str| value.chars().any(char::is_control);
     match auth {
-        AuthMethod::None | AuthMethod::Agent => {}
+        AuthMethod::None | AuthMethod::Agent | AuthMethod::KeyboardInteractivePrompt => {}
         AuthMethod::Password { credential_ref }
         | AuthMethod::KeyboardInteractive { credential_ref }
             if credential_ref.trim().is_empty() =>
@@ -815,6 +816,18 @@ mod tests {
             credential_ref: "ops-response".into(),
         };
         session.validate().unwrap();
+
+        session.auth = AuthMethod::KeyboardInteractivePrompt;
+        session.validate().unwrap();
+        let json = serde_json::to_value(&session).unwrap();
+        assert_eq!(
+            json["auth"],
+            serde_json::json!({ "kind": "keyboardInteractivePrompt" })
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionRecord>(json).unwrap().auth,
+            AuthMethod::KeyboardInteractivePrompt
+        );
 
         session.auth = AuthMethod::Password {
             credential_ref: "   ".into(),

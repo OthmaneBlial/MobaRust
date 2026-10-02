@@ -453,7 +453,8 @@ type SavedAuth =
   | { kind: "agent" }
   | { kind: "password"; credentialRef: string }
   | { kind: "privateKey"; keyRef: string; credentialRef?: string | null }
-  | { kind: "keyboardInteractive"; credentialRef: string };
+  | { kind: "keyboardInteractive"; credentialRef: string }
+  | { kind: "keyboardInteractivePrompt" };
 
 type SavedJumpHost = {
   host: string;
@@ -524,6 +525,7 @@ function normalizeMacroRecord(record: MacroRecord): MacroRecord {
 
 type SshAuthRequest =
   | { method: "agent" }
+  | { method: "keyboardInteractivePrompt" }
   | { method: "privateKey"; path: string; passphraseCredentialId?: string }
   | { method: "password"; credentialId: string }
   | { method: "keyboardInteractive"; credentialId: string };
@@ -564,6 +566,10 @@ type SshConnectResponse = {
   terminalId: string;
   host: string;
 };
+
+type SshAuthEvent =
+  | { event: "closed"; requestId: string }
+  | { event: "challenge"; requestId: string; host: string; port: number; username: string; name: string; instructions: string; prompts: string[] };
 
 type TelnetConnectRequest = {
   host: string;
@@ -2398,8 +2404,48 @@ function App() {
       return;
     }
     try {
+      const pendingAuthentication = new Map<string, AbortController>();
+      const authEvents = new Channel<SshAuthEvent>();
+      // Installed before IPC; this channel also owns this session's reconnect
+      // prompts. A closed request cannot deliver answers to another attempt.
+      authEvents.onmessage = (event) => {
+        if (event.event === "closed") {
+          pendingAuthentication.get(event.requestId)?.abort();
+          return;
+        }
+        const controller = new AbortController();
+        pendingAuthentication.set(event.requestId, controller);
+        void (async () => {
+          const responses: string[] = [];
+          try {
+            for (const prompt of event.prompts) {
+              const response = await promptText(
+                `SSH login: ${event.username}@${event.host}:${event.port}\nServer challenge: ${event.name}\n${event.instructions}\nServer prompt: ${prompt}`,
+                "", { secret: true, signal: controller.signal },
+              );
+              if (response === null) {
+                if (!controller.signal.aborted) await invoke("ssh_authentication_answer", { requestId: event.requestId, responses: null });
+                return;
+              }
+              responses.push(response);
+            }
+            if (!controller.signal.aborted) await invoke("ssh_authentication_answer", { requestId: event.requestId, responses });
+          } catch {
+            if (!controller.signal.aborted) {
+              setConnectionError("SSH authentication could not continue. Reconnect explicitly to try again.");
+              await invoke("ssh_authentication_answer", { requestId: event.requestId, responses: null }).catch(() => undefined);
+            }
+          } finally {
+            responses.fill("");
+            responses.length = 0;
+            pendingAuthentication.delete(event.requestId);
+            controller.abort();
+          }
+        })();
+      };
       const sshSettings = settingsRef.current.ssh;
       const response = await invoke<SshConnectResponse>("ssh_connect", {
+        authEvents,
         request: {
           ...request,
           reconnectAttempts: sshSettings.reconnectEnabled ? sshSettings.reconnectAttempts : 0,
@@ -3997,7 +4043,7 @@ function App() {
           </div>
 
           <div className="sidebar-footer">
-            <div className="security-note"><ShieldCheck size={15} /><span><strong>Secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
+            <div className="security-note"><ShieldCheck size={15} /><span><strong>Saved secrets stay native</strong><small>Vault boundary is Rust-owned</small></span></div>
             <button className={`nav-item ${activeView === "diagnostics" ? "active" : ""}`} onClick={() => setActiveView("diagnostics")}><Activity size={15} /> Network diagnostics</button>
             <button className="nav-item" onClick={() => setActiveView("tunnels")}><Network size={15} /> Tunnel manager <span className="nav-count">{activeTunnelCount}</span></button>
             <button className={`nav-item ${activeView === "monitor" ? "active" : ""}`} onClick={() => setActiveView("monitor")} disabled={!remoteSessionId || remoteProtocol !== "ssh"} title={remoteSessionId && remoteProtocol === "ssh" ? "Collect a one-shot SSH system snapshot" : "Open an SSH session first"}><Gauge size={15} /> Remote monitor</button>
@@ -4127,6 +4173,7 @@ function App() {
 
 function requestFromSavedAuth(auth: SavedAuth): SshConnectRequest["auth"] | null {
   if (auth.kind === "agent") return { method: "agent" };
+  if (auth.kind === "keyboardInteractivePrompt") return { method: "keyboardInteractivePrompt" };
   if (auth.kind === "password" && auth.credentialRef.trim()) {
     return { method: "password", credentialId: auth.credentialRef };
   }
@@ -4812,7 +4859,7 @@ function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, 
   };
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={close}><form className="credential-modal" role="dialog" aria-modal="true" aria-label="Credential vault" onMouseDown={(event) => event.stopPropagation()} onSubmit={save}>
-    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference. Secrets stay inside Rust and are never listed or returned to React.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={close}><X size={17} /></button></div>
+    <div className="session-editor-heading"><div><span className="eyebrow">NATIVE SECURITY</span><h2>Credential vault</h2><p>Save an opaque reference. Stored secrets remain in native storage and are never listed or returned to React.</p></div><button type="button" className="icon-button" aria-label="Close credential vault" onClick={close}><X size={17} /></button></div>
     <div className="credential-modal-body">
       <label>Credential reference<input required autoFocus value={credentialId} onChange={(event) => setCredentialId(event.target.value)} placeholder="prod-bastion-password" autoComplete="off" /><small>Letters, numbers, dots, dashes, and underscores only.</small></label>
       <label>Secret<input required type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Enter only for this explicit save" autoComplete="new-password" /><small>The field is cleared after the native operation. It is not persisted in app state.</small></label>
@@ -5017,7 +5064,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   const [allowInsecureVnc, setAllowInsecureVnc] = useState(session.remote_desktop_profile?.allow_insecure_vnc ?? false);
   const [desktopReconnectEnabled, setDesktopReconnectEnabled] = useState(session.remote_desktop_profile?.reconnect_enabled ?? true);
   const [desktopReconnectAttempts, setDesktopReconnectAttempts] = useState(String(session.remote_desktop_profile?.reconnect_attempts ?? 3));
-  const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive">(
+  const [authKind, setAuthKind] = useState<"agent" | "password" | "privateKey" | "keyboardInteractive" | "keyboardInteractivePrompt">(
     session.auth.kind === "none" ? "agent" : session.auth.kind,
   );
   const [credentialRef, setCredentialRef] = useState(
@@ -5062,7 +5109,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
         }
         auth = { kind: "privateKey", keyRef, credentialRef: credentialRef.trim() || null };
       } else {
-        auth = { kind: "agent" };
+        auth = { kind: authKind === "keyboardInteractivePrompt" ? "keyboardInteractivePrompt" : "agent" };
       }
     }
     let remoteDesktopProfile = session.remote_desktop_profile;
@@ -5105,8 +5152,8 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
 
   const endpoint = session.username ? `${session.username}@${session.hostname}:${session.port}` : `${session.hostname}:${session.port}`;
   const authLabel = isSsh
-    ? authKind === "agent" ? "SSH agent" : authKind === "password" ? "Vault credential reference" : authKind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference"
-    : session.auth.kind === "none" ? "No authentication" : session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference";
+    ? authKind === "keyboardInteractivePrompt" ? "Ask each SSH challenge" : authKind === "agent" ? "SSH agent" : authKind === "password" ? "Vault credential reference" : authKind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference"
+    : session.auth.kind === "keyboardInteractivePrompt" ? "Ask each SSH challenge" : session.auth.kind === "none" ? "No authentication" : session.auth.kind === "agent" ? "SSH agent" : session.auth.kind === "password" ? "Vault credential reference" : session.auth.kind === "keyboardInteractive" ? "Keyboard-interactive vault response" : "Private key reference";
 
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
@@ -5246,6 +5293,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
                 <option value="privateKey">Private key path</option>
                 <option value="password">Vault password reference</option>
                 <option value="keyboardInteractive">Keyboard-interactive vault response</option>
+                <option value="keyboardInteractivePrompt">Keyboard-interactive · ask each challenge</option>
               </select>
             </label>
             {authKind === "privateKey" && <label className="quick-connect-wide">
@@ -5412,7 +5460,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
   const [protocol, setProtocol] = useState<"ssh" | "telnet" | "serial" | DesktopProtocol>("ssh");
-  const [method, setMethod] = useState<"agent" | "privateKey" | "password" | "keyboardInteractive">("agent");
+  const [method, setMethod] = useState<"agent" | "privateKey" | "password" | "keyboardInteractive" | "keyboardInteractivePrompt">("agent");
   const [keyPath, setKeyPath] = useState("");
   const [passphraseCredentialId, setPassphraseCredentialId] = useState("");
   const [credentialId, setCredentialId] = useState("");
@@ -5553,7 +5601,9 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
       });
       return;
     }
-    const auth = method === "agent"
+    const auth = method === "keyboardInteractivePrompt"
+      ? { method: "keyboardInteractivePrompt" as const }
+      : method === "agent"
       ? { method: "agent" as const }
       : method === "privateKey"
         ? { method: "privateKey" as const, path: keyPath, passphraseCredentialId: passphraseCredentialId.trim() || undefined }
@@ -5726,11 +5776,12 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                   </label>
                   <label className="quick-connect-wide">
                     Authentication
-                    <select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password" | "keyboardInteractive")}>
+                    <select value={method} onChange={(event) => setMethod(event.target.value as "agent" | "privateKey" | "password" | "keyboardInteractive" | "keyboardInteractivePrompt")}>
                       <option value="agent">Local SSH agent</option>
                       <option value="privateKey">Private key path</option>
                       <option value="password">Existing vault credential reference</option>
                       <option value="keyboardInteractive">Keyboard-interactive · vault response</option>
+                      <option value="keyboardInteractivePrompt">Keyboard-interactive · ask each challenge</option>
                     </select>
                   </label>
                   {method === "privateKey" ? (
@@ -5755,7 +5806,7 @@ function QuickConnectDialog({ error, onClose, onConnectSsh, onConnectTelnet, onC
                   ) : (
                     <div className="quick-connect-wide quick-connect-hint">
                       <ShieldCheck size={14} />
-                      <span>The native SSH agent signs authentication; private key material stays with the agent.</span>
+                      <span>{method === "keyboardInteractivePrompt" ? "After host-key verification, enter each password or OTP separately. Responses are not saved. Login expires after two minutes; Cancel stops authentication." : "The native SSH agent signs authentication; private key material stays with the agent."}</span>
                     </div>
                   )}
                   <label className="quick-connect-wide">

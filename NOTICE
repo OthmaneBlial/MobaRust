@@ -3,3 +3,6 @@ Copyright 2026 Othmane Blial
 
 MobaRust is distributed under the Apache License, Version 2.0.
 The complete license text is available in the LICENSE file.
+
+Repository-local russh 0.63.3: Apache-2.0, Pierre-Étienne Meunier and contributors.
+Source and modifications: vendor/russh/MOBARUST_PATCH.md.

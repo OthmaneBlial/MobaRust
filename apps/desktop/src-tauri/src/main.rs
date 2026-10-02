@@ -428,7 +428,10 @@ fn validate_session_credential_references(session: &SessionRecord) -> Result<(),
                 credential_ref: Some(credential_ref),
                 ..
             } => vec![credential_ref.as_str()],
-            AuthMethod::None | AuthMethod::Agent | AuthMethod::PrivateKey { .. } => Vec::new(),
+            AuthMethod::None
+            | AuthMethod::Agent
+            | AuthMethod::KeyboardInteractivePrompt
+            | AuthMethod::PrivateKey { .. } => Vec::new(),
         };
         for reference in references {
             CredentialId::new(reference).map_err(|error| error.to_string())?;
@@ -864,6 +867,7 @@ fn session_save_ssh(
     } = request;
     let auth = match request_auth {
         SshAuthRequest::Agent => AuthMethod::Agent,
+        SshAuthRequest::KeyboardInteractivePrompt => AuthMethod::KeyboardInteractivePrompt,
         SshAuthRequest::Password { credential_id } if !credential_id.trim().is_empty() => {
             AuthMethod::Password {
                 credential_ref: credential_id,
@@ -911,6 +915,9 @@ fn session_save_ssh(
             .map(|jump| {
                 let auth = match jump.auth {
                     SshAuthRequest::Agent => Ok(AuthMethod::Agent),
+                    SshAuthRequest::KeyboardInteractivePrompt => {
+                        Ok(AuthMethod::KeyboardInteractivePrompt)
+                    }
                     SshAuthRequest::Password { credential_id }
                         if !credential_id.trim().is_empty() =>
                     {
@@ -1267,11 +1274,23 @@ async fn ssh_connect(
     manager: State<'_, SshManager>,
     vault: State<'_, CredentialResolver>,
     request: SshConnectRequest,
+    auth_events: tauri::ipc::Channel<ssh::SshAuthEvent>,
 ) -> Result<ssh::SshConnectResponse, String> {
     let vault: Arc<dyn CredentialLookup> = Arc::new(vault.inner().clone());
     manager
-        .connect(app, vault, request)
+        .connect(app, vault, request, auth_events)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ssh_authentication_answer(
+    manager: State<'_, SshManager>,
+    request_id: String,
+    responses: Option<Vec<String>>,
+) -> Result<(), String> {
+    manager
+        .answer_authentication(&request_id, responses)
         .map_err(|error| error.to_string())
 }
 
@@ -1952,6 +1971,7 @@ fn main() {
             remote_desktop_clipboard,
             remote_desktop_stop,
             ssh_connect,
+            ssh_authentication_answer,
             ssh_write,
             ssh_resize,
             ssh_close,

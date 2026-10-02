@@ -12,6 +12,7 @@ members = [
   "apps/desktop/src-tauri",
   "xtask",
 ]
+exclude = ["vendor/russh"]
 resolver = "2"
 
 [workspace.package]
@@ -32,7 +33,8 @@ encoding_rs = "0.8"
 libc = "0.2"
 # Keep RSA disabled until russh provides a fixed implementation for the
 # Marvin timing advisory (RUSTSEC-2023-0071). Ed25519/ECDSA remain enabled.
-russh = { version = "0.63.1", default-features = false, features = ["aws-lc-rs", "flate2"] }
+# Local packet-reader correction: vendor/russh/MOBARUST_PATCH.md.
+russh = { path = "vendor/russh", version = "0.63.3", default-features = false, features = ["aws-lc-rs", "flate2"] }
 russh-sftp = "2.4.0"
 serialport = { version = "4.7", default-features = false }
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }

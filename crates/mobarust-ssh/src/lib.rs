@@ -3,9 +3,11 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::future::Future;
 use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -32,6 +34,10 @@ use zeroize::Zeroizing;
 /// an unbounded number of response allocations. The static-response path repeats
 /// one secret; distinct password/OTP challenges need an interactive responder.
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
+const MAX_KEYBOARD_INTERACTIVE_ROUNDS: usize = 16;
+const MAX_KEYBOARD_INTERACTIVE_TEXT_BYTES: usize = 4096;
+pub const MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES: usize = 16 * 1024;
+const INTERACTIVE_AUTH_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
 const MAX_QUEUED_X11_CHANNELS: usize = 8;
@@ -66,6 +72,12 @@ pub enum SshError {
     KeyboardInteractiveEchoPrompt,
     #[error("SSH keyboard-interactive authentication requested too many prompts")]
     KeyboardInteractiveTooManyPrompts,
+    #[error("SSH keyboard-interactive challenge exceeded its safety limit")]
+    KeyboardInteractiveChallengeLimit,
+    #[error("SSH keyboard-interactive response count or size is invalid")]
+    KeyboardInteractiveInvalidResponses,
+    #[error("SSH authentication was cancelled")]
+    AuthenticationCancelled,
     #[error("SSH connection timed out")]
     Timeout,
     #[error("SSH connection lifecycle transition failed")]
@@ -377,6 +389,13 @@ impl Secret {
     fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl fmt::Debug for Secret {
@@ -384,6 +403,21 @@ impl fmt::Debug for Secret {
         formatter.write_str("<redacted>")
     }
 }
+
+/// Bounded, non-echo server text received only after host-key verification.
+/// Does not derive Debug, avoiding accidental server-text diagnostics.
+pub struct KeyboardInteractiveChallenge {
+    pub name: String,
+    pub instructions: String,
+    pub prompts: Vec<String>,
+}
+
+type InteractiveResponder = Box<
+    dyn FnMut(
+            KeyboardInteractiveChallenge,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Secret>, SshError>> + Send>>
+        + Send,
+>;
 
 pub enum SshCredentials {
     Password {
@@ -401,6 +435,10 @@ pub enum SshCredentials {
     KeyboardInteractive {
         username: String,
         response: Secret,
+    },
+    KeyboardInteractivePrompt {
+        username: String,
+        responder: InteractiveResponder,
     },
 }
 
@@ -473,12 +511,29 @@ impl SshCredentials {
         }
     }
 
+    /// Ask for distinct ephemeral responses; no response is persisted by this
+    /// transport. The complete authentication exchange has a 120-second bound.
+    pub fn keyboard_interactive_prompt<F, Fut>(
+        username: impl Into<String>,
+        mut responder: F,
+    ) -> Self
+    where
+        F: FnMut(KeyboardInteractiveChallenge) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Vec<Secret>, SshError>> + Send + 'static,
+    {
+        Self::KeyboardInteractivePrompt {
+            username: username.into(),
+            responder: Box::new(move |challenge| Box::pin(responder(challenge))),
+        }
+    }
+
     fn username(&self) -> &str {
         match self {
             Self::Password { username, .. }
             | Self::PrivateKey { username, .. }
             | Self::Agent { username }
-            | Self::KeyboardInteractive { username, .. } => username,
+            | Self::KeyboardInteractive { username, .. }
+            | Self::KeyboardInteractivePrompt { username, .. } => username,
         }
     }
 
@@ -488,6 +543,7 @@ impl SshCredentials {
             Self::PrivateKey { .. } => "private-key",
             Self::Agent { .. } => "agent",
             Self::KeyboardInteractive { .. } => "keyboard-interactive",
+            Self::KeyboardInteractivePrompt { .. } => "keyboard-interactive-prompt",
         }
     }
 }
@@ -1027,8 +1083,16 @@ impl SshConnection {
         let environment = options.environment.clone();
         let startup_directory = options.startup_directory.clone();
         let startup_command = options.startup_command.clone();
+        let authentication_timeout = if matches!(
+            options.credentials,
+            SshCredentials::KeyboardInteractivePrompt { .. }
+        ) {
+            INTERACTIVE_AUTH_TIMEOUT
+        } else {
+            options.timeout
+        };
         let authentication = tokio::time::timeout(
-            options.timeout,
+            authentication_timeout,
             authenticate(&mut handle, options.credentials),
         )
         .await
@@ -1964,8 +2028,12 @@ async fn authenticate(
         }
         SshCredentials::Agent { username } => authenticate_with_agent(handle, username).await,
         SshCredentials::KeyboardInteractive { username, response } => {
-            authenticate_keyboard_interactive(handle, username, response).await
+            authenticate_keyboard_interactive(handle, username, Some(response), None).await
         }
+        SshCredentials::KeyboardInteractivePrompt {
+            username,
+            responder,
+        } => authenticate_keyboard_interactive(handle, username, None, Some(responder)).await,
     }
 }
 
@@ -2013,13 +2081,15 @@ fn map_private_key_error(error: russh::keys::Error) -> SshError {
 async fn authenticate_keyboard_interactive(
     handle: &mut client::Handle<ClientHandler>,
     username: String,
-    response: Secret,
+    response: Option<Secret>,
+    mut responder: Option<InteractiveResponder>,
 ) -> Result<client::AuthResult, SshError> {
     let mut next = handle
         .authenticate_keyboard_interactive_start(username, None::<String>)
         .await
         .map_err(SshError::Transport)?;
 
+    let mut rounds = 0;
     loop {
         next = match next {
             client::KeyboardInteractiveAuthResponse::Success => {
@@ -2034,8 +2104,43 @@ async fn authenticate_keyboard_interactive(
                     partial_success,
                 });
             }
-            client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                let responses = keyboard_interactive_responses(&response, &prompts)?;
+            client::KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                rounds += 1;
+                validate_keyboard_interactive_challenge(&name, &instructions, &prompts, rounds)?;
+                let responses = if let Some(response) = &response {
+                    keyboard_interactive_responses(response, &prompts)?
+                } else {
+                    let count = prompts.len();
+                    let response_future = responder
+                        .as_mut()
+                        .ok_or(SshError::AuthenticationCancelled)?(
+                        KeyboardInteractiveChallenge {
+                            name,
+                            instructions,
+                            prompts: prompts.into_iter().map(|prompt| prompt.prompt).collect(),
+                        },
+                    );
+                    let responses = tokio::select! {
+                        biased;
+                        _ = &mut *handle => return Err(SshError::Transport(russh::Error::Disconnect)),
+                        result = response_future => result?,
+                    };
+                    if responses.len() != count
+                        || responses.iter().any(|response| {
+                            response.as_str().len() > MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES
+                        })
+                    {
+                        return Err(SshError::KeyboardInteractiveInvalidResponses);
+                    }
+                    responses
+                        .into_iter()
+                        .map(|response| response.as_str().to_owned())
+                        .collect()
+                };
                 handle
                     .authenticate_keyboard_interactive_respond(responses)
                     .await
@@ -2043,6 +2148,29 @@ async fn authenticate_keyboard_interactive(
             }
         };
     }
+}
+
+fn validate_keyboard_interactive_challenge(
+    name: &str,
+    instructions: &str,
+    prompts: &[client::Prompt],
+    rounds: usize,
+) -> Result<(), SshError> {
+    if prompts.len() > MAX_KEYBOARD_INTERACTIVE_PROMPTS {
+        return Err(SshError::KeyboardInteractiveTooManyPrompts);
+    }
+    if prompts.iter().any(|prompt| prompt.echo) {
+        return Err(SshError::KeyboardInteractiveEchoPrompt);
+    }
+    if rounds > MAX_KEYBOARD_INTERACTIVE_ROUNDS
+        || [name, instructions]
+            .into_iter()
+            .chain(prompts.iter().map(|prompt| prompt.prompt.as_str()))
+            .any(|text| text.len() > MAX_KEYBOARD_INTERACTIVE_TEXT_BYTES)
+    {
+        return Err(SshError::KeyboardInteractiveChallengeLimit);
+    }
+    Ok(())
 }
 
 fn keyboard_interactive_responses(
@@ -3187,6 +3315,33 @@ mod tests {
     use std::fs;
 
     const TEST_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAILagOJFgwaMNhBWQINinKOXmqS4Gh5NgxgriXwdOoINJ";
+
+    #[test]
+    fn keyboard_interactive_metadata_is_bounded_before_the_responder() {
+        let prompts = vec![client::Prompt {
+            prompt: "Password".into(),
+            echo: false,
+        }];
+        assert!(validate_keyboard_interactive_challenge("", "", &prompts, 16).is_ok());
+        for (name, instructions, prompt) in [
+            ("n".repeat(4097), String::new(), "Password".into()),
+            (String::new(), "i".repeat(4097), "Password".into()),
+            (String::new(), String::new(), "p".repeat(4097)),
+        ] {
+            assert!(matches!(
+                validate_keyboard_interactive_challenge(
+                    &name,
+                    &instructions,
+                    &[client::Prompt {
+                        prompt,
+                        echo: false
+                    }],
+                    1
+                ),
+                Err(SshError::KeyboardInteractiveChallengeLimit)
+            ));
+        }
+    }
 
     #[test]
     fn shell_eof_preserves_a_later_exit_status_until_channel_close() {

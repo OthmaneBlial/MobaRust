@@ -24,6 +24,9 @@ const DEADLINE: Duration = Duration::from_secs(10);
 #[derive(Clone, Copy)]
 enum Method {
     Password,
+    Distinct {
+        together: bool,
+    },
     Interactive {
         prompts: usize,
         echo: bool,
@@ -43,8 +46,10 @@ struct Observations {
 struct Handler {
     method: Method,
     expected: Zeroizing<String>,
+    otp: Zeroizing<String>,
     observations: Arc<Observations>,
     release: Option<oneshot::Receiver<()>>,
+    native_echo: bool,
 }
 
 impl Handler {
@@ -63,13 +68,65 @@ impl Handler {
         Auth::Partial {
             name: Cow::Borrowed("Disposable authentication fixture"),
             instructions: Cow::Borrowed(""),
-            prompts: Cow::Owned(vec![(Cow::Borrowed("Fixture response: "), echo); prompts]),
+            prompts: Cow::Owned(if let Method::Distinct { together } = self.method {
+                if together {
+                    vec![
+                        (Cow::Borrowed("Password: "), false),
+                        (Cow::Borrowed("OTP: "), false),
+                    ]
+                } else if self.observations.responses.load(Ordering::SeqCst) == 0 {
+                    vec![(Cow::Borrowed("Password: "), false)]
+                } else {
+                    vec![(Cow::Borrowed("OTP: "), false)]
+                }
+            } else {
+                vec![(Cow::Borrowed("Fixture response: "), echo); prompts]
+            }),
         }
     }
 }
 
 impl server::Handler for Handler {
     type Error = russh::Error;
+
+    async fn channel_open_session(
+        &mut self,
+        _channel: russh::Channel<server::Msg>,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.native_echo {
+            reply.accept().await;
+        }
+        Ok(())
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: russh::ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.native_echo {
+            session.channel_success(channel)?;
+            session.data(
+                channel,
+                b"Disposable SSH authentication echo fixture (no OS shell).\r\n".to_vec(),
+            )?;
+        }
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        channel: russh::ChannelId,
+        data: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.native_echo {
+            session.data(channel, data.to_vec())?;
+        }
+        Ok(())
+    }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         self.observations
@@ -94,13 +151,20 @@ impl server::Handler for Handler {
         _submethods: &str,
         response: Option<Response<'a>>,
     ) -> Result<Auth, Self::Error> {
-        let Method::Interactive {
-            prompts,
-            echo,
-            rounds,
-        } = self.method
-        else {
-            return Ok(Auth::reject());
+        let (prompts, echo, rounds) = match self.method {
+            Method::Interactive {
+                prompts,
+                echo,
+                rounds,
+            } => (prompts, echo, rounds),
+            Method::Distinct { together } => {
+                if together {
+                    (2, false, 1)
+                } else {
+                    (1, false, 2)
+                }
+            }
+            Method::Password => return Ok(Auth::reject()),
         };
         if user != "fixture" {
             return Ok(Auth::reject());
@@ -112,9 +176,16 @@ impl server::Handler for Handler {
         let round = self.observations.responses.fetch_add(1, Ordering::SeqCst) + 1;
         let responses: Vec<_> = response.collect();
         if responses.len() != prompts
-            || responses
-                .iter()
-                .any(|value| value.as_ref() != self.expected.as_bytes())
+            || responses.iter().enumerate().any(|(index, value)| {
+                let otp = matches!(self.method, Method::Distinct { together: true }) && index == 1
+                    || matches!(self.method, Method::Distinct { together: false }) && round == 2;
+                value.as_ref()
+                    != if otp {
+                        self.otp.as_bytes()
+                    } else {
+                        self.expected.as_bytes()
+                    }
+            })
         {
             return Ok(Auth::reject());
         }
@@ -137,9 +208,11 @@ struct Fixture {
     address: SocketAddr,
     fingerprint: String,
     secret: Zeroizing<String>,
+    otp: Zeroizing<String>,
     observations: Arc<Observations>,
     release: Option<oneshot::Sender<()>>,
     worker: JoinHandle<Result<(), russh::Error>>,
+    server_control: Option<oneshot::Receiver<server::Handle>>,
 }
 
 impl Fixture {
@@ -167,13 +240,17 @@ impl Fixture {
             ..Default::default()
         });
         let secret = Zeroizing::new(Uuid::new_v4().to_string());
+        let otp = Zeroizing::new(Uuid::new_v4().to_string());
         let observations = Arc::new(Observations::default());
         let (release, receiver) = oneshot::channel();
+        let (server_control, server_control_receiver) = oneshot::channel();
         let handler = Handler {
             method,
             expected: secret.clone(),
+            otp: otp.clone(),
             observations: observations.clone(),
             release: stall.then_some(receiver),
+            native_echo: false,
         };
         let worker = tokio::spawn(async move {
             let (stream, peer) = tokio::time::timeout(DEADLINE, listener.accept())
@@ -185,15 +262,18 @@ impl Fixture {
                 tokio::time::timeout(DEADLINE, server::run_stream(config, stream, handler))
                     .await
                     .expect("fixture handshake deadline")?;
+            let _ = server_control.send(session.handle());
             session.await
         });
         Self {
             address,
             fingerprint,
             secret,
+            otp,
             observations,
             release: stall.then_some(release),
             worker,
+            server_control: Some(server_control_receiver),
         }
     }
 
@@ -211,7 +291,7 @@ impl Fixture {
             keepalive_interval: None,
             credentials: match method {
                 Method::Password => SshCredentials::password_secret("fixture", secret),
-                Method::Interactive { .. } => {
+                Method::Interactive { .. } | Method::Distinct { .. } => {
                     SshCredentials::keyboard_interactive_secret("fixture", secret)
                 }
             },
@@ -246,6 +326,240 @@ impl Fixture {
             .await
             .expect("fixture listener must be released");
         drop(listener);
+    }
+}
+
+/// Explicit manual GUI lab: only loopback, generated credentials and a bounded
+/// echo channel. This is not an OpenSSH/PAM or remote OS-shell receipt.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "manual native desktop acceptance fixture; five-minute deadline"]
+async fn native_authentication_lab() {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target/authentication-native-lab");
+    std::fs::create_dir_all(&root).unwrap();
+    let directory = tempfile::tempdir_in(&root).unwrap();
+    let mut seed = Zeroizing::new([0; 32]);
+    seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+    seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "").unwrap();
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let password = Zeroizing::new(Uuid::new_v4().to_string());
+    let otp = Zeroizing::new(Uuid::new_v4().to_string());
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let metadata = format!(
+        "{{\"host\":\"127.0.0.1\",\"port\":{},\"fingerprint\":\"{}\",\"password\":\"{}\",\"otp\":\"{}\"}}",
+        address.port(),
+        fingerprint,
+        password.as_str(),
+        otp.as_str()
+    );
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(directory.path().join("fixture.json"))
+        .unwrap()
+        .write_all(metadata.as_bytes())
+        .unwrap();
+    eprintln!(
+        "Native authentication lab metadata: {}",
+        directory.path().join("fixture.json").display()
+    );
+    let config = Arc::new(server::Config {
+        keys: vec![key],
+        auth_rejection_time: Duration::ZERO,
+        inactivity_timeout: Some(Duration::from_secs(180)),
+        nodelay: true,
+        ..Default::default()
+    });
+    let mut sessions = tokio::task::JoinSet::new();
+    let lifetime = tokio::time::sleep(Duration::from_secs(300));
+    tokio::pin!(lifetime);
+    loop {
+        tokio::select! {
+            _ = &mut lifetime => break,
+            completed = sessions.join_next(), if !sessions.is_empty() => { let _ = completed.unwrap().unwrap(); },
+            peer = listener.accept() => {
+                let (stream, peer) = peer.unwrap();
+                assert!(peer.ip().is_loopback());
+                if sessions.len() >= 8 { drop(stream); continue; }
+                let handler = Handler { method: Method::Distinct { together: false }, expected: password.clone(), otp: otp.clone(), observations: Arc::new(Observations::default()), release: None, native_echo: true };
+                let config = config.clone();
+                sessions.spawn(async move { server::run_stream(config, stream, handler).await?.await });
+            }
+        }
+    }
+    sessions.abort_all();
+    while sessions.join_next().await.is_some() {}
+}
+
+#[tokio::test]
+async fn distinct_password_and_otp_work_in_one_or_multiple_rounds() {
+    for together in [true, false] {
+        let method = Method::Distinct { together };
+        // Receipt of the old behavior: one static secret cannot satisfy OTP.
+        let fixture = Fixture::start(method, false).await;
+        assert!(matches!(
+            SshConnection::connect(fixture.options(method, true)).await,
+            Err(SshError::AuthenticationRejected)
+        ));
+        fixture.finish().await;
+        for correct in [true, false] {
+            let fixture = Fixture::start(method, false).await;
+            let mut options = fixture.options(method, true);
+            let password = fixture.secret.clone();
+            let otp = if correct {
+                fixture.otp.clone()
+            } else {
+                Zeroizing::new(Uuid::new_v4().to_string())
+            };
+            options.credentials =
+                SshCredentials::keyboard_interactive_prompt("fixture", move |challenge| {
+                    let responses = challenge
+                        .prompts
+                        .iter()
+                        .map(|prompt| {
+                            Secret::from_zeroizing(if prompt == "OTP: " {
+                                otp.clone()
+                            } else {
+                                password.clone()
+                            })
+                        })
+                        .collect();
+                    async move { Ok(responses) }
+                });
+            let result = SshConnection::connect(options).await;
+            if correct {
+                let connection = result.expect("accept distinct generated factors");
+                assert_eq!(connection.state(), ConnectionState::Connected);
+                connection
+                    .disconnect()
+                    .await
+                    .expect("disconnect interactive client");
+                drop(connection);
+            } else {
+                assert!(matches!(result, Err(SshError::AuthenticationRejected)));
+            }
+            assert_eq!(
+                fixture.observations.authenticated.load(Ordering::SeqCst),
+                usize::from(correct)
+            );
+            fixture.finish().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn interactive_responder_is_bounded_and_cancelled_without_sending_secrets() {
+    for case in [
+        "echo",
+        "fanout",
+        "rounds",
+        "count",
+        "size",
+        "cancel",
+        "drop",
+        "trust",
+        "disconnect",
+    ] {
+        let method = Method::Interactive {
+            prompts: if case == "fanout" { 9 } else { 1 },
+            echo: case == "echo",
+            rounds: if case == "rounds" { 17 } else { 1 },
+        };
+        let mut fixture = Fixture::start(method, false).await;
+        let mut options = fixture.options(method, true);
+        let response = fixture.secret.clone();
+        let entered = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_callback = calls.clone();
+        let entered_for_callback = entered.clone();
+        options.credentials = SshCredentials::keyboard_interactive_prompt("fixture", move |_| {
+            calls_for_callback.fetch_add(1, Ordering::SeqCst);
+            entered_for_callback.notify_one();
+            let response = response.clone();
+            async move {
+                match case {
+                    "cancel" => Err(SshError::AuthenticationCancelled),
+                    "drop" | "disconnect" => std::future::pending().await,
+                    "count" => Ok(Vec::new()),
+                    "size" => Ok(vec![Secret::new(
+                        "s".repeat(mobarust_ssh::MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES + 1),
+                    )]),
+                    _ => Ok(vec![Secret::from_zeroizing(response)]),
+                }
+            }
+        });
+        if case == "trust" {
+            options.host_key_policy = HostKeyPolicy::RejectUnknown;
+        }
+        if case == "drop" || case == "disconnect" {
+            let mut attempt = tokio::spawn(SshConnection::connect(options));
+            tokio::time::timeout(DEADLINE, entered.notified())
+                .await
+                .expect("enter responder");
+            if case == "drop" {
+                attempt.abort();
+                assert!(
+                    attempt
+                        .await
+                        .err()
+                        .expect("cancel response wait")
+                        .is_cancelled()
+                );
+            } else {
+                fixture
+                    .server_control
+                    .take()
+                    .unwrap()
+                    .await
+                    .unwrap()
+                    .disconnect(russh::Disconnect::ByApplication, String::new(), "en".into())
+                    .await
+                    .unwrap();
+                let result = tokio::time::timeout(Duration::from_secs(1), &mut attempt)
+                    .await
+                    .expect(
+                        "server loss must retire a pending response without waiting 120 seconds",
+                    )
+                    .unwrap();
+                assert!(matches!(result, Err(SshError::Transport(_))));
+            }
+        } else {
+            let error = SshConnection::connect(options)
+                .await
+                .err()
+                .expect("refuse challenge or responses");
+            assert!(match case {
+                "echo" => matches!(error, SshError::KeyboardInteractiveEchoPrompt),
+                "fanout" => matches!(error, SshError::KeyboardInteractiveTooManyPrompts),
+                "rounds" => matches!(error, SshError::KeyboardInteractiveChallengeLimit),
+                "trust" => matches!(error, SshError::HostKeyRejected { .. }),
+                "cancel" => matches!(error, SshError::AuthenticationCancelled),
+                _ => matches!(error, SshError::KeyboardInteractiveInvalidResponses),
+            });
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            match case {
+                "echo" | "fanout" | "trust" => 0,
+                "rounds" => 16,
+                _ => 1,
+            }
+        );
+        assert_eq!(
+            fixture.observations.responses.load(Ordering::SeqCst),
+            if case == "rounds" { 16 } else { 0 }
+        );
+        fixture.finish().await;
     }
 }
 

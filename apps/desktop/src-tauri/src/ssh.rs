@@ -3,8 +3,9 @@ use mobarust_core::{
     TransferLifecycle, TransferState, Utf8OutputDecoder, validate_terminal_input,
 };
 use mobarust_ssh::{
-    HostKeyPolicy, Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection,
-    SshCredentials, SshError, SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
+    HostKeyPolicy, KeyboardInteractiveChallenge, MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES,
+    Secret as SshSecret, Socks5ReplyCode, SshConnectOptions, SshConnection, SshCredentials,
+    SshError, SshOutput, X11ForwardingOptions, negotiate_socks5, send_socks5_reply,
     validate_forward_host,
 };
 use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
@@ -13,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
@@ -151,6 +153,7 @@ pub struct SshJumpHostRequest {
 #[serde(tag = "method", rename_all = "camelCase", deny_unknown_fields)]
 pub enum SshAuthRequest {
     Agent,
+    KeyboardInteractivePrompt,
     Password {
         #[serde(rename = "credentialId", alias = "credential_id")]
         credential_id: String,
@@ -407,6 +410,7 @@ pub struct SshManager {
     remote_forwards: Arc<Mutex<HashMap<String, String>>>,
     transfer_slots: Arc<Semaphore>,
     shutdown: watch::Sender<bool>,
+    authentication: Arc<Mutex<HashMap<String, PendingAuthentication>>>,
 }
 
 impl Default for SshManager {
@@ -418,6 +422,7 @@ impl Default for SshManager {
             remote_forwards: Arc::new(Mutex::new(HashMap::new())),
             transfer_slots: Arc::new(Semaphore::new(3)),
             shutdown: watch::channel(false).0,
+            authentication: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -438,6 +443,113 @@ struct RemoteSessionContext {
     request: SshConnectRequest,
     vault: Arc<dyn CredentialLookup>,
     close: watch::Receiver<bool>,
+    auth_events: Channel<SshAuthEvent>,
+}
+
+#[derive(Serialize)]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SshAuthEvent {
+    Challenge {
+        request_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        name: String,
+        instructions: String,
+        prompts: Vec<String>,
+    },
+    Closed {
+        request_id: String,
+    },
+}
+
+struct PendingAuthentication {
+    reply: oneshot::Sender<Option<Vec<SshSecret>>>,
+    count: usize,
+    terminal_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct AuthPromptContext {
+    manager: SshManager,
+    events: Channel<SshAuthEvent>,
+    host: String,
+    port: u16,
+    username: String,
+    terminal_id: Option<String>,
+}
+
+struct AuthenticationGuard {
+    manager: SshManager,
+    events: Channel<SshAuthEvent>,
+    id: String,
+}
+
+impl Drop for AuthenticationGuard {
+    fn drop(&mut self) {
+        self.manager
+            .authentication
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.id);
+        let _ = self.events.send(SshAuthEvent::Closed {
+            request_id: self.id.clone(),
+        });
+    }
+}
+
+impl AuthPromptContext {
+    async fn ask(
+        &self,
+        challenge: KeyboardInteractiveChallenge,
+    ) -> Result<Vec<SshSecret>, SshError> {
+        let mut shutdown = self.manager.shutdown.subscribe();
+        let id = Uuid::new_v4().to_string();
+        let (reply, response) = oneshot::channel();
+        {
+            let mut pending = self
+                .manager
+                .authentication
+                .lock()
+                .map_err(|_| SshError::AuthenticationCancelled)?;
+            if *self.manager.shutdown.borrow() || pending.len() >= 32 {
+                return Err(SshError::AuthenticationCancelled);
+            }
+            pending.insert(
+                id.clone(),
+                PendingAuthentication {
+                    reply,
+                    count: challenge.prompts.len(),
+                    terminal_id: self.terminal_id.clone(),
+                },
+            );
+        }
+        let _guard = AuthenticationGuard {
+            manager: self.manager.clone(),
+            events: self.events.clone(),
+            id: id.clone(),
+        };
+        self.events
+            .send(SshAuthEvent::Challenge {
+                request_id: id,
+                host: self.host.clone(),
+                port: self.port,
+                username: self.username.clone(),
+                name: challenge.name,
+                instructions: challenge.instructions,
+                prompts: challenge.prompts,
+            })
+            .map_err(|_| SshError::AuthenticationCancelled)?;
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => Err(SshError::AuthenticationCancelled),
+            result = response => result.ok().flatten().ok_or(SshError::AuthenticationCancelled),
+        }
+    }
 }
 
 struct TransferControl {
@@ -600,6 +712,7 @@ impl SshManager {
         app: AppHandle,
         vault: Arc<dyn CredentialLookup>,
         request: SshConnectRequest,
+        auth_events: Channel<SshAuthEvent>,
     ) -> Result<SshConnectResponse, SshManagerError> {
         let mut shutdown = self.shutdown.subscribe();
         if *shutdown.borrow() {
@@ -610,7 +723,7 @@ impl SshManager {
         let connection = tokio::select! {
             biased;
             _ = shutdown.changed() => return Err(SshManagerError::Closed),
-            result = connect_transport(vault.as_ref(), &request) => result?,
+            result = connect_transport(vault.as_ref(), &request, self, &auth_events, None) => result?,
         };
         let connection = Arc::new(connection);
         let shell = tokio::select! {
@@ -660,6 +773,7 @@ impl SshManager {
             request,
             vault: reconnect_vault,
             close: close_receiver,
+            auth_events,
         };
         tauri::async_runtime::spawn(async move {
             run_remote_session(context, connection, reader, writer, receiver).await;
@@ -667,6 +781,60 @@ impl SshManager {
         });
 
         Ok(SshConnectResponse { terminal_id, host })
+    }
+
+    pub fn answer_authentication(
+        &self,
+        request_id: &str,
+        responses: Option<Vec<String>>,
+    ) -> Result<(), SshManagerError> {
+        let responses =
+            responses.map(|values| values.into_iter().map(SshSecret::new).collect::<Vec<_>>());
+        let entry = {
+            let mut pending = self
+                .authentication
+                .lock()
+                .map_err(|_| SshManagerError::Closed)?;
+            let entry = pending.get(request_id).ok_or(SshManagerError::Closed)?;
+            if entry.reply.is_closed() || *self.shutdown.borrow() {
+                return Err(SshManagerError::Closed);
+            }
+            if let Some(id) = &entry.terminal_id {
+                let sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+                if sessions.get(id).is_none_or(|state| *state.close.borrow()) {
+                    return Err(SshManagerError::Closed);
+                }
+            }
+            // Secret contents are intentionally absent from errors and logs.
+            if responses.as_ref().is_some_and(|values| {
+                values.len() != entry.count
+                    || values
+                        .iter()
+                        .any(|value| value.len() > MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES)
+            }) {
+                return Err(SshManagerError::InvalidRequest(
+                    "authentication response count or size is invalid".into(),
+                ));
+            }
+            pending.remove(request_id).ok_or(SshManagerError::Closed)?
+        };
+        if responses.is_none()
+            && let Some(id) = &entry.terminal_id
+        {
+            if let Some(state) = self
+                .sessions
+                .lock()
+                .map_err(|_| SshManagerError::Closed)?
+                .get(id)
+            {
+                let _ = state.close.send(true);
+            }
+            self.cancel_for_terminal(id);
+        }
+        entry
+            .reply
+            .send(responses)
+            .map_err(|_| SshManagerError::Closed)
     }
 
     pub async fn write(&self, terminal_id: &str, data: String) -> Result<(), SshManagerError> {
@@ -1526,6 +1694,9 @@ impl SshManager {
 async fn connect_transport(
     vault: &dyn CredentialLookup,
     request: &SshConnectRequest,
+    manager: &SshManager,
+    auth_events: &Channel<SshAuthEvent>,
+    terminal_id: Option<&str>,
 ) -> Result<SshConnection, SshManagerError> {
     mobarust_core::validate_session_environment(&request.environment)
         .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?;
@@ -1541,7 +1712,19 @@ async fn connect_transport(
         .map(|x11| X11ForwardingOptions::parse(&x11.display, x11.single_connection))
         .transpose()
         .map_err(|error| SshManagerError::InvalidRequest(format!("X11: {error}")))?;
-    let credentials = credentials_from_request(vault, request)?;
+    let prompt_context = |host: &str, port, username: &str| AuthPromptContext {
+        manager: manager.clone(),
+        events: auth_events.clone(),
+        host: host.to_owned(),
+        port,
+        username: username.to_owned(),
+        terminal_id: terminal_id.map(str::to_owned),
+    };
+    let credentials = credentials_from_auth(
+        vault,
+        &request.auth,
+        prompt_context(&request.host, request.port, &request.username),
+    )?;
     let host_key_policy = host_key_policy(request)?;
     let options = SshConnectOptions {
         host: request.host.clone(),
@@ -1557,7 +1740,11 @@ async fn connect_transport(
     };
     let mut jump_options = Vec::with_capacity(request.jump_hosts.len());
     for jump in &request.jump_hosts {
-        let credentials = credentials_from_jump_request(vault, jump)?;
+        let credentials = credentials_from_auth(
+            vault,
+            &jump.auth,
+            prompt_context(&jump.host, jump.port, &jump.username),
+        )?;
         let host_key_policy = host_key_policy_for(
             jump.known_hosts_path.clone(),
             jump.pinned_fingerprint.clone(),
@@ -1582,13 +1769,6 @@ async fn connect_transport(
     }
 }
 
-fn credentials_from_request(
-    vault: &dyn CredentialLookup,
-    request: &SshConnectRequest,
-) -> Result<SshCredentials, SshManagerError> {
-    credentials_from_auth(vault, &request.username, &request.auth)
-}
-
 fn server_alive_interval_duration(
     seconds: Option<u64>,
 ) -> Result<Option<Duration>, SshManagerError> {
@@ -1603,19 +1783,22 @@ fn server_alive_interval_duration(
     }
 }
 
-fn credentials_from_jump_request(
-    vault: &dyn CredentialLookup,
-    request: &SshJumpHostRequest,
-) -> Result<SshCredentials, SshManagerError> {
-    credentials_from_auth(vault, &request.username, &request.auth)
-}
-
 fn credentials_from_auth(
     vault: &dyn CredentialLookup,
-    username: &str,
     auth: &SshAuthRequest,
+    prompt: AuthPromptContext,
 ) -> Result<SshCredentials, SshManagerError> {
+    let username = prompt.username.as_str();
     match auth {
+        SshAuthRequest::KeyboardInteractivePrompt => {
+            Ok(SshCredentials::keyboard_interactive_prompt(
+                prompt.username.clone(),
+                move |challenge| {
+                    let prompt = prompt.clone();
+                    async move { prompt.ask(challenge).await }
+                },
+            ))
+        }
         SshAuthRequest::Agent => Ok(SshCredentials::agent(username)),
         SshAuthRequest::Password { credential_id } => {
             let id = CredentialId::new(credential_id.clone())?;
@@ -1776,6 +1959,7 @@ async fn run_remote_session(
         request,
         vault,
         mut close,
+        auth_events,
     } = context;
     let mut should_report_error = None;
     let mut connection_is_live = true;
@@ -1854,9 +2038,15 @@ async fn run_remote_session(
                         );
                     },
                     |_attempt| async {
-                        let new_connection = connect_transport(vault.as_ref(), &request)
-                            .await
-                            .map_err(|error| error.to_string())?;
+                        let new_connection = connect_transport(
+                            vault.as_ref(),
+                            &request,
+                            &manager,
+                            &auth_events,
+                            Some(&terminal_id),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
                         let shell = new_connection
                             .open_shell(request.cols, request.rows)
                             .await
@@ -4231,6 +4421,148 @@ mod tests {
             },
         );
         commands
+    }
+
+    fn authentication_test_context(
+        manager: &SshManager,
+    ) -> (
+        super::AuthPromptContext,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let context = super::AuthPromptContext {
+            manager: manager.clone(),
+            events: tauri::ipc::Channel::new(move |body| {
+                let _ = events.send(
+                    body.deserialize()
+                        .expect("authentication event must serialize"),
+                );
+                Ok(())
+            }),
+            host: "127.0.0.1".into(),
+            port: 22,
+            username: "fixture".into(),
+            terminal_id: None,
+        };
+        (context, receiver)
+    }
+
+    fn authentication_test_challenge() -> mobarust_ssh::KeyboardInteractiveChallenge {
+        mobarust_ssh::KeyboardInteractiveChallenge {
+            name: "Fixture".into(),
+            instructions: String::new(),
+            prompts: vec!["Password".into(), "OTP".into()],
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_answers_are_one_shot_bounded_and_expire_with_the_waiter() {
+        let manager = SshManager::default();
+        let (context, mut events) = authentication_test_context(&manager);
+        let attempt =
+            tokio::spawn(async move { context.ask(authentication_test_challenge()).await });
+        let challenge = events.recv().await.unwrap();
+        assert_eq!(challenge["host"], "127.0.0.1");
+        assert_eq!(challenge["username"], "fixture");
+        let id = challenge["requestId"].as_str().unwrap();
+        assert!(
+            manager
+                .answer_authentication(id, Some(vec!["one".into()]))
+                .is_err()
+        );
+        assert!(
+            manager
+                .answer_authentication(
+                    id,
+                    Some(vec![
+                        "s".repeat(mobarust_ssh::MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES + 1),
+                        "otp".into()
+                    ])
+                )
+                .is_err()
+        );
+        manager
+            .answer_authentication(id, Some(vec!["password".into(), "otp".into()]))
+            .unwrap();
+        let answers = attempt.await.unwrap().unwrap();
+        assert_eq!(
+            answers
+                .iter()
+                .map(mobarust_ssh::Secret::len)
+                .collect::<Vec<_>>(),
+            vec![8, 3]
+        );
+        assert_eq!(format!("{answers:?}"), "[<redacted>, <redacted>]");
+        assert_eq!(
+            events.recv().await.unwrap(),
+            serde_json::json!({"event":"closed", "requestId":id})
+        );
+        assert!(
+            manager
+                .answer_authentication(id, Some(vec!["late".into(), "late".into()]))
+                .is_err()
+        );
+        assert!(manager.authentication.lock().unwrap().is_empty());
+
+        let (context, mut events) = authentication_test_context(&manager);
+        let attempt =
+            tokio::spawn(async move { context.ask(authentication_test_challenge()).await });
+        let expired = events.recv().await.unwrap();
+        let expired_id = expired["requestId"].as_str().unwrap();
+        assert_ne!(expired_id, id);
+        attempt.abort();
+        assert!(attempt.await.unwrap_err().is_cancelled());
+        assert_eq!(events.recv().await.unwrap()["event"], "closed");
+        assert!(
+            manager
+                .answer_authentication(expired_id, Some(vec!["late".into(), "late".into()]))
+                .is_err()
+        );
+        assert!(manager.authentication.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn authentication_cancel_stops_reconnect_and_close_or_shutdown_refuses_answers() {
+        for action in ["cancel", "close", "shutdown"] {
+            let manager = SshManager::default();
+            let _commands = queue_test_session(&manager, "terminal");
+            let close = manager.sessions.lock().unwrap()["terminal"]
+                .close
+                .subscribe();
+            let (mut context, mut events) = authentication_test_context(&manager);
+            context.terminal_id = Some("terminal".into());
+            let attempt =
+                tokio::spawn(async move { context.ask(authentication_test_challenge()).await });
+            let challenge = events.recv().await.unwrap();
+            let id = challenge["requestId"].as_str().unwrap();
+            if action == "cancel" {
+                manager.answer_authentication(id, None).unwrap();
+                assert!(matches!(
+                    attempt.await.unwrap(),
+                    Err(mobarust_ssh::SshError::AuthenticationCancelled)
+                ));
+                assert!(*close.borrow(), "Cancel prevents further reconnect prompts");
+            } else {
+                if action == "close" {
+                    manager.close("terminal").await.unwrap();
+                    assert!(
+                        manager
+                            .answer_authentication(id, Some(vec!["late".into(), "late".into()]))
+                            .is_err()
+                    );
+                    attempt.abort();
+                    assert!(attempt.await.unwrap_err().is_cancelled());
+                } else {
+                    manager.shutdown().await;
+                    assert!(matches!(
+                        attempt.await.unwrap(),
+                        Err(mobarust_ssh::SshError::AuthenticationCancelled)
+                    ));
+                }
+            }
+            assert_eq!(events.recv().await.unwrap()["event"], "closed");
+            assert!(manager.authentication.lock().unwrap().is_empty());
+        }
     }
 
     #[test]
