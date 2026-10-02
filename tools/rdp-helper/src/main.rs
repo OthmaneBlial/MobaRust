@@ -27,9 +27,10 @@ use mobarust_remote_desktop::{
     DEFAULT_REMOTE_DESKTOP_RECONNECT_ATTEMPTS, DEFAULT_REMOTE_DESKTOP_RECONNECT_ENABLED,
     DesktopProtocol, DisplaySize, HelperCapabilities, HelperCommand, HelperCredential,
     HelperCredentialKind, HelperEvent, HelperProtocolError, HelperState, MAX_DOMAIN_BYTES,
-    MAX_FRAME_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES, MAX_USERNAME_BYTES,
-    ReconnectPolicy, decode_command_frame, decode_credential_frame, rdp_scancode_parts,
-    validate_gateway_endpoint, validate_rdp_color_depth, write_event_frame,
+    MAX_FRAME_BYTES, MAX_FRAMEBUFFER_BYTES, MAX_GATEWAY_ENDPOINT_BYTES, MAX_HOST_BYTES,
+    MAX_USERNAME_BYTES, ReconnectPolicy, WIRE_VERSION, decode_command_frame,
+    decode_credential_frame, rdp_scancode_parts, validate_gateway_endpoint,
+    validate_rdp_color_depth, write_event_frame,
 };
 use smallvec::SmallVec;
 use tokio::io::AsyncWrite;
@@ -113,7 +114,13 @@ async fn run_main() -> Result<(), Box<dyn Error>> {
     }
     let arguments = parse_arguments(env::args().skip(1))?;
     let mut stdout = tokio::io::stdout();
-    write_event_frame(&mut stdout, &HelperEvent::Hello { version: 1 }).await?;
+    write_event_frame(
+        &mut stdout,
+        &HelperEvent::Hello {
+            version: WIRE_VERSION,
+        },
+    )
+    .await?;
     write_state(&mut stdout, HelperState::Starting).await?;
     if let Some(error) = unsupported_option(&arguments) {
         send_error(&mut stdout, error).await?;
@@ -865,7 +872,7 @@ fn framebuffer_event(
         });
     }
     let expected_bytes = expected_pixels.saturating_mul(4);
-    if expected_bytes > MAX_FRAME_BYTES {
+    if expected_bytes > MAX_FRAMEBUFFER_BYTES {
         return Err(HelperProtocolError::FrameTooLarge {
             bytes: expected_bytes,
         });

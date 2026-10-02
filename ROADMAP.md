@@ -48,7 +48,8 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [x] Handle emergency stops before terminal/modal event propagation; clear stale import errors after a successful retry.
 - [x] Bind file actions and editor documents to their original SSH connection generation; verify native stale approval refusal for transfers/retry, mkdir, rename, delete, chmod and editor Save/Save as after real reconnects.
 - [x] Diagnose the VNC fixture disconnects as server input deadlines expiring during large JSON framebuffer processing; use a minimum-size resize canvas and retain the original deadlines and protocol assertions. All 17 parallel fixture cases and the ordinary local `cargo xtask check` passed. [Diagnosis and limits](docs/research/vnc.md#local-fixture-deadline-diagnosis--2026-10-02).
-- [ ] Measure large-frame helper IPC throughput and input responsiveness separately, including release builds; the smaller protocol fixture is not evidence of a production performance improvement.
+- [x] Measure native framebuffer encoding/decoding in debug and release; fix JSON expansion that rejected valid HD images, retain the 8 MiB limit with wire version 2, and exercise 1920×1080 through the real loopback VNC helper before input/clipboard checks. [Measurements and limits](benchmarks/2026-10-02-framebuffer-ipc.md).
+- [ ] Measure sustained native pipe/Tauri/rendering throughput and end-to-end input latency under large-frame workloads; codec timings and bounded fixture success do not establish GUI responsiveness. Rebuild matching version-2 app/helper cohorts before publishing installers.
 - [ ] Finish native transfer cancellation/collision choices, settings JSON import, editor discard and cross-platform dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
 
 ## Next, in priority order

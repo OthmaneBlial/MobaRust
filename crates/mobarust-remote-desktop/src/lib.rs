@@ -17,8 +17,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::time::timeout;
 use zeroize::Zeroizing;
 
-pub const WIRE_VERSION: u16 = 1;
+pub const WIRE_VERSION: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+const FRAMEBUFFER_MAGIC: &[u8; 4] = b"MRFB";
+const FRAMEBUFFER_HEADER_BYTES: usize = 10;
+pub const MAX_FRAMEBUFFER_BYTES: usize = MAX_FRAME_BYTES - FRAMEBUFFER_HEADER_BYTES;
 pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 pub const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 pub const MAX_CREDENTIAL_BYTES: usize = 1024 * 1024;
@@ -213,7 +216,7 @@ impl DisplaySize {
             .checked_mul(usize::from(self.height))
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or(HelperProtocolError::FrameTooLarge { bytes: usize::MAX })?;
-        if bytes > MAX_FRAME_BYTES {
+        if bytes > MAX_FRAMEBUFFER_BYTES {
             return Err(HelperProtocolError::FrameTooLarge { bytes });
         }
         Ok(())
@@ -756,7 +759,7 @@ impl HelperEvent {
                         actual: pixels.len(),
                     });
                 }
-                if pixels.len() > MAX_FRAME_BYTES {
+                if pixels.len() > MAX_FRAMEBUFFER_BYTES {
                     return Err(HelperProtocolError::FrameTooLarge {
                         bytes: pixels.len(),
                     });
@@ -985,6 +988,11 @@ fn encode_frame_zeroizing<T: Serialize>(
 /// process I/O remain outside this crate so the boundary can be tested without
 /// spawning a process or touching the host system.
 pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, HelperProtocolError> {
+    serde_json::from_slice(frame_body(frame)?)
+        .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))
+}
+
+fn frame_body(frame: &[u8]) -> Result<&[u8], HelperProtocolError> {
     if frame.len() < 4 {
         return Err(HelperProtocolError::TruncatedFrame {
             expected: 4,
@@ -1002,8 +1010,7 @@ pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, HelperProtoc
             actual: frame.len(),
         });
     }
-    serde_json::from_slice(&frame[4..])
-        .map_err(|error| HelperProtocolError::InvalidJson(error.to_string()))
+    Ok(&frame[4..])
 }
 
 pub fn encode_command_frame(
@@ -1125,6 +1132,22 @@ async fn write_frame_with_deadline<W: AsyncWrite + Unpin>(
 
 pub fn encode_event_frame(event: &HelperEvent) -> Result<Zeroizing<Vec<u8>>, HelperProtocolError> {
     event.validate()?;
+    if let HelperEvent::Framebuffer {
+        width,
+        height,
+        pixels,
+    } = event
+    {
+        let body_length = FRAMEBUFFER_HEADER_BYTES + pixels.len();
+        let mut frame = Zeroizing::new(Vec::with_capacity(4 + body_length));
+        frame.extend_from_slice(&(body_length as u32).to_be_bytes());
+        frame.extend_from_slice(FRAMEBUFFER_MAGIC);
+        frame.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+        frame.extend_from_slice(&width.to_be_bytes());
+        frame.extend_from_slice(&height.to_be_bytes());
+        frame.extend_from_slice(pixels);
+        return Ok(frame);
+    }
     encode_frame_zeroizing(&WireEnvelope {
         version: WIRE_VERSION,
         payload: event,
@@ -1132,6 +1155,37 @@ pub fn encode_event_frame(event: &HelperEvent) -> Result<Zeroizing<Vec<u8>>, Hel
 }
 
 pub fn decode_event_frame(frame: &[u8]) -> Result<HelperEvent, HelperProtocolError> {
+    let body = frame_body(frame)?;
+    if body.starts_with(FRAMEBUFFER_MAGIC) {
+        if body.len() < FRAMEBUFFER_HEADER_BYTES {
+            return Err(HelperProtocolError::TruncatedFrame {
+                expected: 4 + FRAMEBUFFER_HEADER_BYTES,
+                actual: frame.len(),
+            });
+        }
+        let version = u16::from_be_bytes([body[4], body[5]]);
+        if version != WIRE_VERSION {
+            return Err(HelperProtocolError::UnsupportedVersion(version));
+        }
+        let display = DisplaySize {
+            width: u16::from_be_bytes([body[6], body[7]]),
+            height: u16::from_be_bytes([body[8], body[9]]),
+        };
+        display.validate()?;
+        let pixels = &body[FRAMEBUFFER_HEADER_BYTES..];
+        let expected = usize::from(display.width) * usize::from(display.height) * 4;
+        if pixels.len() != expected {
+            return Err(HelperProtocolError::InvalidFramebuffer {
+                expected,
+                actual: pixels.len(),
+            });
+        }
+        return Ok(HelperEvent::Framebuffer {
+            width: display.width,
+            height: display.height,
+            pixels: pixels.to_vec(),
+        });
+    }
     let envelope: WireEnvelope<HelperEvent> = decode_frame(frame)?;
     if envelope.version != WIRE_VERSION {
         return Err(HelperProtocolError::UnsupportedVersion(envelope.version));
@@ -1752,6 +1806,86 @@ mod tests {
             decode_command_frame(&frame),
             Err(HelperProtocolError::UnsupportedVersion(version)) if version == WIRE_VERSION + 1
         ));
+    }
+
+    #[test]
+    fn full_hd_framebuffer_fits_the_wire_budget_and_round_trips_exactly() {
+        let event = HelperEvent::Framebuffer {
+            width: 1920,
+            height: 1080,
+            pixels: [0x23, 0x67, 0xab, 0xff]
+                .into_iter()
+                .cycle()
+                .take(1920 * 1080 * 4)
+                .collect(),
+        };
+        let frame = encode_event_frame(&event).unwrap();
+        assert!(frame.len() - 4 <= MAX_FRAME_BYTES);
+        assert_eq!(decode_event_frame(&frame).unwrap(), event);
+    }
+
+    #[test]
+    fn binary_framebuffer_rejects_bad_headers_lengths_and_pixel_counts() {
+        let event = HelperEvent::Framebuffer {
+            width: 320,
+            height: 200,
+            pixels: vec![0xff; 320 * 200 * 4],
+        };
+        let frame = encode_event_frame(&event).unwrap();
+        assert_eq!(frame.len(), 4 + FRAMEBUFFER_HEADER_BYTES + 320 * 200 * 4);
+        assert_eq!(&frame[4..8], FRAMEBUFFER_MAGIC);
+        assert!(decode_command_frame(&frame).is_err());
+        assert!(decode_credential_frame(&frame).is_err());
+        for length in 0..4 + FRAMEBUFFER_HEADER_BYTES {
+            let mut truncated = frame[..length].to_vec();
+            if length >= 4 {
+                truncated[..4].copy_from_slice(&((length - 4) as u32).to_be_bytes());
+            }
+            assert!(
+                decode_event_frame(&truncated).is_err(),
+                "header length={length}"
+            );
+        }
+        let mut invalid = frame.to_vec();
+        invalid[8..10].copy_from_slice(&(WIRE_VERSION - 1).to_be_bytes());
+        assert!(matches!(
+            decode_event_frame(&invalid),
+            Err(HelperProtocolError::UnsupportedVersion(1))
+        ));
+        invalid[8..10].copy_from_slice(&WIRE_VERSION.to_be_bytes());
+        invalid[10..12].copy_from_slice(&0_u16.to_be_bytes());
+        assert!(matches!(
+            decode_event_frame(&invalid),
+            Err(HelperProtocolError::InvalidDisplaySize { .. })
+        ));
+        invalid[10..12].copy_from_slice(&320_u16.to_be_bytes());
+        invalid.pop();
+        let body_length = (invalid.len() - 4) as u32;
+        invalid[..4].copy_from_slice(&body_length.to_be_bytes());
+        assert!(matches!(
+            decode_event_frame(&invalid),
+            Err(HelperProtocolError::InvalidFramebuffer { .. })
+        ));
+        invalid.extend_from_slice(&[0xff; 2]);
+        let body_length = (invalid.len() - 4) as u32;
+        invalid[..4].copy_from_slice(&body_length.to_be_bytes());
+        assert!(matches!(
+            decode_event_frame(&invalid),
+            Err(HelperProtocolError::InvalidFramebuffer { .. })
+        ));
+        invalid[..4].copy_from_slice(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes());
+        assert!(matches!(
+            decode_event_frame(&invalid),
+            Err(HelperProtocolError::FrameTooLarge { .. })
+        ));
+        assert!(
+            DisplaySize {
+                width: 2048,
+                height: 1024
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

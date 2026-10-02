@@ -243,6 +243,12 @@ attribute these failures solely to contention or describe this candidate's
 global check as green. These observations do not establish other OS WebViews,
 recursive transfers or cancellation of an already running transfer.
 
+Subsequent VNC work identified the fixture deadline failure and restored the
+ordinary local global check. The later binary-frame correction also passed
+that check with Full-HD VNC fixtures; see the [codec receipt](../../benchmarks/2026-10-02-framebuffer-ipc.md).
+These later results supersede the validation blocker above without expanding
+the native file-dialogue acceptance scope or changing published installers.
+
 ### Repeat the remote-file reconnect check
 
 1. Use a separate portable app, generated keys/trust, loopback SSH and an owned

@@ -67,11 +67,28 @@ messages before a process is started:
   accepted only after the helper reaches `Active`; `Stop` remains permitted in
   every non-terminal phase so startup and reconnect cancellation cannot be
   blocked by readiness gating;
-- JSON frames have a four-byte big-endian length prefix and an 8 MiB maximum;
+- every frame has a four-byte big-endian body-length prefix and an 8 MiB
+  maximum body; wire version 2 sends framebuffer pixels as binary RGBA,
+  while control, credential and other event payloads retain strict JSON;
 - clipboard input is capped at 1 MiB;
 - helper lifecycle distinguishes protocol failure, crash, cancellation, and
   clean stop;
 - debug formatting redacts opaque credential references and clipboard text.
+
+Wire version 2's framebuffer body is `MRFB` (four bytes), wire version
+(`u16`), width (`u16`), height (`u16`), then exactly `width × height × 4` RGBA
+bytes. All integer fields are big-endian. The ten-byte header is reserved in
+`MAX_FRAMEBUFFER_BYTES`, so an accepted display fits the body budget regardless
+of pixel values. The decoder checks the outer length, version, dimensions and
+exact pixel count before copying pixel data. Malformed frames fail closed;
+the existing zeroizing temporary buffers and pipe-write deadlines remain.
+
+The version change is deliberate: the parent and both helpers use the shared
+`WIRE_VERSION` in their startup handshake. Version 1 and version 2 binaries
+must not be mixed; old/new mismatches are rejected before remote data is
+accepted. Published v0.1.17 installers remain version 1 until rebuilt as a
+matching app/helper cohort. This native pipe change does not change the Tauri
+renderer event schema or establish GUI performance or real-server compatibility.
 
 The crate is a contract, test seam, and native-parent API. The isolated
 `tools/rdp-helper` and `tools/vnc-helper` implement real protocol-client paths

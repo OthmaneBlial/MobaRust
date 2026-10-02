@@ -6,7 +6,7 @@ use des::Des;
 use des::cipher::{Block, BlockCipherEncrypt, KeyInit};
 use mobarust_remote_desktop::{
     DesktopProtocol, DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState,
-    decode_event_frame, encode_command_frame, read_frame, write_credential_frame,
+    WIRE_VERSION, decode_event_frame, encode_command_frame, read_frame, write_credential_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -18,12 +18,12 @@ const FIXTURE_SIZE: DisplaySize = DisplaySize {
     width: 320,
     height: 200,
 };
-// Keep protocol fixtures at the smallest valid canvas sizes. Large JSON
-// framebuffer serialization belongs in performance checks, not the fixture's
-// three-second deadline for receiving input after the display handshake.
+// Exercise a full-HD canvas through the actual helper pipe, including input
+// after the framebuffer arrives. Binary RGBA must fit the unchanged IPC budget
+// and fixture input deadlines without JSON's per-byte expansion.
 const RESIZED_FIXTURE_SIZE: DisplaySize = DisplaySize {
-    width: FIXTURE_SIZE.width + 1,
-    height: FIXTURE_SIZE.height + 1,
+    width: 1920,
+    height: 1080,
 };
 const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
 const REJECTED_PASSWORD: &str = "fixture-auth-rejection-secret";
@@ -1210,7 +1210,9 @@ async fn spawn_helper_with_quality_and_policy_and_clipboard(
     let mut stdout = child.stdout.take().unwrap();
     assert!(matches!(
         next_event(&mut stdout).await,
-        HelperEvent::Hello { version: 1 }
+        HelperEvent::Hello {
+            version: WIRE_VERSION
+        }
     ));
     assert!(matches!(
         next_event(&mut stdout).await,

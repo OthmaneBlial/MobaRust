@@ -108,3 +108,17 @@ app_startup_note=first_run_and_repeated_process_launch_only; no_gui_no_network_n
 
 This is a process-launch receipt for the explicit binary path, not a claim
 about GUI startup, memory, idle CPU, or performance on another platform.
+
+## Native framebuffer codec probe
+
+```text
+cargo run -p mobarust-remote-desktop --example framebuffer-ipc
+cargo run -p mobarust-remote-desktop --example framebuffer-ipc --release
+```
+
+The probe generates fixed RGBA images in memory, checks exact round trips, and
+reports raw/wire byte counts and five-sample encode/decode min/median/max times
+for 320×200, 640×400, 1280×720 and 1920×1080. It opens no socket, helper, GUI or
+application data. Timings exclude fixture construction, equality checks, final
+buffer disposal and pipe/Tauri/renderer transport. The [2026-10-02 receipt](2026-10-02-framebuffer-ipc.md)
+records the version-1 size failures and the version-2 debug/release results.

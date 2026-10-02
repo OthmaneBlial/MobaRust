@@ -2,8 +2,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use mobarust_remote_desktop::{
-    DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState, decode_event_frame,
-    encode_command_frame, encode_credential_frame, read_frame, write_frame_with_timeout,
+    DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState, WIRE_VERSION,
+    decode_event_frame, encode_command_frame, encode_credential_frame, read_frame,
+    write_frame_with_timeout,
 };
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdout, Command};
@@ -89,7 +90,9 @@ async fn real_helper_process_round_trips_native_start_and_exits_on_closed_loopba
 
     assert!(matches!(
         first_event(&mut child, &mut stdout, "hello").await,
-        HelperEvent::Hello { version: 1 }
+        HelperEvent::Hello {
+            version: WIRE_VERSION
+        }
     ));
     assert!(matches!(
         next_event(&mut stdout, "starting").await,
@@ -217,7 +220,9 @@ async fn real_helper_waits_for_the_gateway_credential_before_starting() {
 
     assert!(matches!(
         first_event(&mut child, &mut stdout, "gateway hello").await,
-        HelperEvent::Hello { version: 1 }
+        HelperEvent::Hello {
+            version: WIRE_VERSION
+        }
     ));
     assert!(matches!(
         next_event(&mut stdout, "gateway starting").await,

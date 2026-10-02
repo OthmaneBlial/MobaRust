@@ -37,6 +37,11 @@ cargo +nightly fuzz run session-json -- -runs=1000
 cargo +nightly fuzz run helper-frame -- -runs=1000
 ```
 
+The helper target exercises the actual command, event and credential decoders,
+including wire-version checks and version-2 binary framebuffer headers, bounds
+and pixel counts. It does not bypass these boundaries through a generic JSON
+payload decoder.
+
 The default corpus and artifacts are disposable and must not contain exported
 profiles, private keys, passwords, clipboard text, or files from the host
 system. Keep fuzz output under `fuzz/` and do not copy it into application

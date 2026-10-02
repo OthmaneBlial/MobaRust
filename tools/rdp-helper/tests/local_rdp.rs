@@ -14,8 +14,9 @@ use ironrdp_server::{
     TlsIdentityCtx,
 };
 use mobarust_remote_desktop::{
-    DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState, decode_event_frame,
-    encode_command_frame, encode_credential_frame, read_frame, write_frame_with_timeout,
+    DisplaySize, HelperCommand, HelperCredential, HelperEvent, HelperState, WIRE_VERSION,
+    decode_event_frame, encode_command_frame, encode_credential_frame, read_frame,
+    write_frame_with_timeout,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::process::{ChildStdout, Command};
@@ -377,7 +378,9 @@ async fn real_helper_controls_a_real_loopback_rdp_server() {
 
             assert!(matches!(
                 next_event(&mut stdout, "hello").await,
-                HelperEvent::Hello { version: 1 }
+                HelperEvent::Hello {
+                    version: WIRE_VERSION
+                }
             ));
             assert!(matches!(
                 next_event(&mut stdout, "starting").await,
@@ -641,7 +644,9 @@ async fn real_helper_reconnects_after_real_loopback_server_loss() {
 
             assert!(matches!(
                 next_event(&mut stdout, "hello").await,
-                HelperEvent::Hello { version: 1 }
+                HelperEvent::Hello {
+                    version: WIRE_VERSION
+                }
             ));
             assert!(matches!(
                 next_event(&mut stdout, "starting").await,
@@ -892,7 +897,9 @@ async fn real_helper_reports_rejected_credentials_from_real_loopback_server() {
 
             assert!(matches!(
                 next_event(&mut stdout, "hello").await,
-                HelperEvent::Hello { version: 1 }
+                HelperEvent::Hello {
+                    version: WIRE_VERSION
+                }
             ));
             assert!(matches!(
                 next_event(&mut stdout, "starting").await,

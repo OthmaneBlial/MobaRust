@@ -239,9 +239,12 @@ mutate the remembered display size or reach the engine even if a future caller
 invokes the handler outside the already-validating wire decoder.
 
 The shared helper contract also rejects a display whose raw RGBA framebuffer
-would exceed the bounded IPC frame budget. This happens before helper launch
+plus the binary frame header would exceed the bounded IPC frame budget. This happens before helper launch
 and before a resize reaches the client input queue, so an oversized request
-cannot turn into an avoidable native allocation or a late serialization error.
+cannot turn into an avoidable native allocation or a late frame-size error.
+Wire version 2 uses binary RGBA for framebuffer events, so JSON byte-array
+expansion no longer rejects otherwise-valid HD images. Both helper and parent
+must be rebuilt together; the native wire ADR records this compatibility gate.
 
 The pinned IronRDP client accepts only 16-bit and 32-bit color depth values.
 MobaRust now validates that capability in the shared launch contract, at the

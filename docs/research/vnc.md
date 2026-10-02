@@ -114,14 +114,14 @@ in four failed cases; their resized framebuffer reached the consumer after
 roughly 4.6–5.2 seconds. A serial trace passed all 17 cases, so serial execution
 alone is not a reliable correction for the earlier failures.
 
-The handshake fixture now resizes the minimum valid 320×200 canvas to 321×201,
+At source `b5ec90d`, the handshake fixture resized the minimum valid 320×200 canvas to 321×201,
 retaining both dimension changes, exact pixel checks, pointer bounds, keyboard,
 clipboard, authentication, encoding negotiation and shutdown assertions. The
 three-second fixture input deadline and production pipe deadlines are unchanged.
 The corrected parallel suite passed all 17 cases in 5.74 seconds. This isolates
 protocol correctness from large-image processing cost; it is not a VNC
 performance improvement. Large-frame IPC throughput and input responsiveness
-still need a separate measured acceptance gate.
+still needed a separate measured acceptance gate.
 
 The subsequent ordinary `cargo xtask check` passed locally: workspace tests and
 Clippy, frontend unit/type/lint/build checks, release-asset tests, RDP helper
@@ -130,6 +130,24 @@ package-layout checks and fuzz-target compilation. The real Xvfb case was
 skipped because its prerequisites were unavailable. GitHub Quality and Release
 installers remained `disabled_manually`; this result is local validation, not
 CI or new installer publication.
+
+## Full-HD native frames — 2026-10-02
+
+The subsequent in-memory codec probe found a production boundary defect:
+1280×720 and 1920×1080 RGBA images passed display validation but their JSON
+byte arrays exceeded the 8 MiB encoded-frame limit. Shared wire version 2
+now carries framebuffer pixels as bounded binary RGBA, with strict JSON
+retained for other messages. The app and both helpers require matching wire
+versions; the [wire ADR](../adr/0013-remote-desktop-helper-wire-contract.md)
+records the format, header budget and rejection rules.
+
+The real-helper RFB fixture now announces 1920×1080 after its initial 320×200
+image. All 17 parallel cases passed, including authentication/version/quality
+cases that receive the Full-HD framebuffer then verify keyboard, final-pixel
+pointer/wheel, clipboard and shutdown over loopback. The original input and
+pipe deadlines remain unchanged. The [debug/release codec receipt](../../benchmarks/2026-10-02-framebuffer-ipc.md)
+records byte counts and timings; it does not measure Tauri rendering, end-to-end
+input latency, sustained VNC throughput or another platform.
 
 ## Isolated implementation experiment
 
@@ -155,7 +173,7 @@ and clean stop. A separate RFB 3.7 fixture rejects the authentication result
 and verifies that the helper emits a stable diagnostic without echoing the
 password. After the server-announced resize, the fixture sends
 `u16::MAX` pointer and wheel coordinates and verifies that the real helper
-forwards them at the final framebuffer pixel `(639,399)`. It also sends the
+forwards them at the final framebuffer pixel `(1919,1079)`. It also sends the
 Unicode Euro keysym `0x010020ac` and checks the exact RFB key event received by
 the fixture. A separate malformed fixture sends a rectangle beyond the
 negotiated framebuffer and verifies that the helper emits a stable diagnostic,
