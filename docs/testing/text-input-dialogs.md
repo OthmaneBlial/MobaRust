@@ -290,6 +290,21 @@ and recovery checks separate.
 
 ## Remaining native acceptance gate
 
+### Settings cancellation check — 2026-10-02
+
+A copied macOS ARM64 debug bundle from `8067326` used portable storage and a
+disposable HOME/ZDOTDIR; the actual app process environment was checked.
+No protocol server or network listener was started. Import settings opened the
+multiline prompt. After entering valid settings JSON, Escape cancelled it:
+the settings form still showed the original dark theme and font size 14, and
+the persisted settings file matched its baseline byte for byte.
+
+The automation tool subsequently could not locate the native window, including
+after an isolated relaunch. Both owned app processes and their local shell
+children were stopped. Malformed/valid accepted imports, focus return and
+native menu Quit remain unverified by this check; SIGTERM cleanup is not
+evidence of normal application shutdown.
+
 Use a separate portable app and disposable generated fixtures, as in
 [the native runbook](native-workflow.md). Still verify:
 
