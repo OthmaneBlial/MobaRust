@@ -81,6 +81,9 @@ cargo xtask test-ssh
 
 See the [OpenSSH lab guide](../testing/ssh-lab.md) for installed-tool
 requirements and the distinction between local fixture and platform evidence.
+Agent authentication uses a dedicated foreground agent and generated keys.
+Its temporary socket is passed only to an isolated child test; ambient agent
+state and fixture-child overrides are removed by the validation launcher.
 
 Before a user-authenticated push, the repository-only payload audit can be run
 without contacting GitHub:

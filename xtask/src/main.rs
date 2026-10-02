@@ -1693,6 +1693,7 @@ fn should_remove_process_variable(variable: &std::ffi::OsStr) -> bool {
         variable.as_str(),
         "SSH_AUTH_SOCK"
             | "SSH_AGENT_PID"
+            | "MOBARUST_TEST_AGENT_SOCKET"
             | "GIT_SSH_COMMAND"
             | "GIT_SSH"
             | "GIT_SSH_VARIANT"
@@ -1889,6 +1890,7 @@ mod tests {
             "CARGO_REGISTRIES_PRIVATE_TOKEN",
             "CARGO_NET_GIT_FETCH_WITH_CLI",
             "SSH_AUTH_SOCK",
+            "MOBARUST_TEST_AGENT_SOCKET",
             "NETRC",
             "SSLKEYLOGFILE",
             "SSL_CERT_FILE",

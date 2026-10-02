@@ -13,7 +13,7 @@ personal SSH files, and remote servers are unnecessary.
 
 ## Requirements
 
-- macOS or Linux, Rust, `ssh-keygen`, and an installed OpenSSH `sshd` at
+- macOS or Linux, Rust, `ssh-keygen`, `ssh-agent`, `ssh-add`, and an installed OpenSSH `sshd` at
   `/usr/sbin/sshd` or `/usr/local/sbin/sshd`;
 - an existing, unlocked, non-root OS account (`USER`) that can run its shell;
 - `xauth` on PATH for the loopback X11-channel test;
@@ -33,6 +33,8 @@ coverage; `test-ssh` reports that the OpenSSH fixture requires a Unix host.
 | Local workstation | Generated Ed25519 host/client keys, rejection of unknown hosts, fingerprint inspection, PTY resize, environment/startup input, SFTP operations/editor conflicts/cancellation, SCP, direct and remote forwarding, concurrent idempotent disconnect |
 | Idle connection | Completed SFTP traffic, silence longer than the setup deadline with keepalives disabled, then actual shell execution and a successful exit status |
 | Credentials | Encrypted Ed25519 key authentication; missing/incorrect passphrase and unauthorized-key rejection; a successful fresh connection after failure |
+| Dedicated Unix agent | Empty-agent and unauthorized-identity rejection, followed by successful signing and shell execution with a generated authorized key |
+| IPv6 loopback | Connection to `::1`, an explicit bracketed IPv6 known_hosts entry, and actual shell execution; reports a skip if IPv6 loopback is unavailable |
 | Separate jump servers | Two bastions and a target with distinct keys and ports; rejection of an incorrect fingerprint at each hop; target known_hosts mismatch without modifying trust; shell execution and Unicode file round-trip over the entire chain |
 | Stalled setup | A TCP peer that never sends an SSH banner; connection timeout and cancellation each close the client socket |
 | Session isolation | Remote HOME/ZDOTDIR match the temporary fixture; personal SSH rc/environment files are disabled; PID and X11 authority files stay in the fixture |
@@ -52,12 +54,17 @@ The encrypted-key fixture uses a public test passphrase and one bcrypt round
 to keep interoperability checks fast under CPU contention. This is only for
 disposable test keys and does not change how operator keys are generated or
 loaded.
+The agent fixture starts its own foreground `ssh-agent` on a temporary socket.
+Only a child test process receives that socket through its environment; the
+parallel test harness never changes its own `SSH_AUTH_SOCK`. The child loads
+only generated fixture keys, and the parent kills/reaps its agent on success
+or child-test failure. No operator agent or identities are queried.
 
 ## Limits and next interoperability gates
 
 These tests exercise the installed OpenSSH version on the current machine.
 They do not prove Windows SSH-server compatibility, password or PAM/MFA
-authentication, ssh-agent interoperability, IPv6, RSA support, server restart
+authentication, Windows Pageant or other agent implementations, routed IPv6, RSA support, server restart
 recovery, sustained terminal/UI performance, or internet-host compatibility.
 RSA remains disabled under the existing advisory policy.
 

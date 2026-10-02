@@ -70,6 +70,39 @@ fn fixture_shell_uses_only_the_disposable_home() {
 }
 
 #[test]
+fn ipv6_loopback_verifies_known_hosts_and_runs_a_shell() {
+    if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err() {
+        eprintln!("skipping IPv6 OpenSSH fixture: IPv6 loopback is unavailable");
+        return;
+    }
+    let runtime = tokio::runtime::Runtime::new().expect("create IPv6 test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start_internal(false, true).expect("start IPv6 SSH fixture");
+        wait_for_port(fixture.port).await;
+        let trust = fixture.directory.path().join("known_hosts_ipv6");
+        fs::write(
+            &trust,
+            fs::read_to_string(&fixture.known_hosts)
+                .unwrap()
+                .replace("[127.0.0.1]", "[::1]"),
+        )
+        .expect("write IPv6 fixture trust file");
+        let mut options = fixture.options();
+        options.host = "::1".into();
+        options.host_key_policy = HostKeyPolicy::KnownHosts(trust);
+        let connection = SshConnection::connect(options)
+            .await
+            .expect("connect over IPv6");
+        let output = shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'IPV6_OK'; exit\n").await;
+        assert!(output.contains("MOBARUST_IPV6_OK"));
+        connection
+            .disconnect()
+            .await
+            .expect("disconnect IPv6 fixture");
+    });
+}
+
+#[test]
 fn stalled_handshakes_timeout_or_cancel_and_release_the_socket() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
     runtime.block_on(async {
@@ -119,6 +152,109 @@ fn stalled_handshakes_timeout_or_cancel_and_release_the_socket() {
             assert!(remaining.len() < 4096);
         }
     });
+}
+
+#[test]
+fn dedicated_agent_rejects_empty_and_wrong_keys_then_authenticates() {
+    const CHILD_SOCKET: &str = "MOBARUST_TEST_AGENT_SOCKET";
+    if let Some(socket) = std::env::var_os(CHILD_SOCKET) {
+        // Only the subprocess receives this socket. Never mutate the shared
+        // test process environment or consult the operator's agent.
+        let socket = PathBuf::from(socket);
+        assert_eq!(socket.file_name().unwrap(), "agent.sock");
+        assert!(
+            socket
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("mobarust-agent-")
+        );
+        assert_eq!(
+            std::env::var_os("SSH_AUTH_SOCK"),
+            Some(socket.clone().into())
+        );
+        let runtime = tokio::runtime::Runtime::new().expect("create agent test runtime");
+        runtime.block_on(async {
+            for _ in 0..100 {
+                if socket.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            assert!(socket.exists(), "dedicated agent must create its socket");
+            let fixture = LocalSshd::start().expect("start agent SSH fixture");
+            wait_for_port(fixture.port).await;
+            let options = || {
+                let mut options = fixture.options();
+                options.credentials = SshCredentials::agent(fixture.username.clone());
+                options
+            };
+            let wrong_key = fixture.directory.path().join("agent-wrong-key");
+            run_keygen(&wrong_key).expect("generate unauthorized agent key");
+            for key in [&wrong_key, &fixture.client_key] {
+                assert!(matches!(
+                    SshConnection::connect(options()).await,
+                    Err(SshError::AuthenticationRejected)
+                ));
+                let mut add = Command::new("ssh-add");
+                clear_credential_environment(&mut add);
+                assert!(
+                    add.env("SSH_AUTH_SOCK", &socket)
+                        .arg(key)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .expect("load generated agent key")
+                        .success()
+                );
+            }
+            let connection = SshConnection::connect(options())
+                .await
+                .expect("authenticate with agent");
+            let output =
+                shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'AGENT_OK'; exit\n").await;
+            assert!(output.contains("MOBARUST_AGENT_OK"));
+            connection
+                .disconnect()
+                .await
+                .expect("disconnect agent fixture");
+        });
+        return;
+    }
+
+    let executable = std::env::current_exe().expect("locate SSH test executable");
+    let directory = tempfile::Builder::new()
+        .prefix("mobarust-agent-")
+        .tempdir()
+        .expect("create disposable agent directory");
+    let socket = directory.path().join("agent.sock");
+    let mut command = Command::new("ssh-agent");
+    clear_credential_environment(&mut command);
+    let mut agent = command
+        .args(["-D", "-a"])
+        .arg(&socket)
+        .env("HOME", directory.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start dedicated foreground SSH agent");
+    let mut child = Command::new(executable);
+    clear_credential_environment(&mut child);
+    let status = child
+        .args([
+            "--exact",
+            "dedicated_agent_rejects_empty_and_wrong_keys_then_authenticates",
+            "--nocapture",
+        ])
+        .env(CHILD_SOCKET, &socket)
+        .env("SSH_AUTH_SOCK", &socket)
+        .status();
+    // Reap our own foreground agent even when the child test fails.
+    let _ = agent.kill();
+    let _ = agent.wait();
+    assert!(status.expect("run isolated agent test").success());
 }
 
 #[test]
@@ -1247,14 +1383,14 @@ impl LocalSshd {
     }
 
     fn start() -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_internal(false)
+        Self::start_internal(false, false)
     }
 
     fn start_with_x11() -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_internal(true)
+        Self::start_internal(true, false)
     }
 
-    fn start_internal(x11: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    fn start_internal(x11: bool, ipv6: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let host_key = directory.path().join("host_key");
         let client_key = directory.path().join("client_key");
@@ -1311,10 +1447,11 @@ impl LocalSshd {
             .replace('\\', "\\\\")
             .replace('"', "\\\"");
         let config = directory.path().join("sshd_config");
+        let ipv6_listener = if ipv6 { "ListenAddress ::1\n" } else { "" };
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nPidFile \"{home}/sshd.pid\"\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nPermitUserRC no\nPermitUserEnvironment no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\nSetEnv \"HOME={home}\" \"ZDOTDIR={home}\" \"XDG_CONFIG_HOME={home}\" \"XAUTHORITY={home}/.Xauthority\" BASH_ENV=/dev/null ENV=/dev/null\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\n{ipv6_listener}HostKey {}\nAuthorizedKeysFile {}\nPidFile \"{home}/sshd.pid\"\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nPermitUserRC no\nPermitUserEnvironment no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\nSetEnv \"HOME={home}\" \"ZDOTDIR={home}\" \"XDG_CONFIG_HOME={home}\" \"XAUTHORITY={home}/.Xauthority\" BASH_ENV=/dev/null ENV=/dev/null\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),
@@ -1413,6 +1550,7 @@ fn clear_credential_environment(command: &mut Command) {
     for variable in [
         "SSH_AUTH_SOCK",
         "SSH_AGENT_PID",
+        "MOBARUST_TEST_AGENT_SOCKET",
         "GIT_SSH_COMMAND",
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_SYSTEM",

@@ -31,7 +31,7 @@ Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
 - [x] Bounded reconnect policy and failure-state telemetry
 - [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
 - [x] Focused `cargo xtask test-ssh` lab with encrypted keys, per-hop trust rejection, distinct two-jump topology, idle-session and stalled-setup regressions (local OpenSSH evidence)
-- [ ] OpenSSH lab matrix for password/PAM/MFA, agent, IPv6, restart recovery, and additional server versions
+- [ ] OpenSSH lab matrix for password/PAM/MFA, Windows/alternative agents, routed IPv6, restart recovery, and additional server versions (disposable Unix OpenSSH agent and IPv6 loopback covered)
 
 ## 0.3 — remote files and movement
 
