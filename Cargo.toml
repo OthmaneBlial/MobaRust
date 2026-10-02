@@ -19,7 +19,7 @@ version = "0.1.17"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/OthmaneBlial/MobaRust"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

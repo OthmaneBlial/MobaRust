@@ -10,7 +10,7 @@ configuration.
   files they created. The local SSH server also uses its fixture directory for
   every remote path and directory listing; it never enumerates or writes the
   system `/tmp` directory.
-- Network fixtures bind to `127.0.0.1` on an OS-assigned port. Tests do not use
+- Network fixtures bind to `127.0.0.1` or `::1` on an OS-assigned port. Tests do not use
   public hostnames, LAN addresses, cloud instances, or production endpoints.
 - SSH tests generate fixture host/client keys in the temporary test directory.
   They pass an explicit fixture `known_hosts` path and never read `~/.ssh`,
@@ -24,6 +24,14 @@ configuration.
 - OpenSSH import requires an explicit path and never falls back to
   `~/.ssh/config`; tests and development runs must use a repository fixture or
   an isolated temporary file.
+- Native GUI checks use a copied portable bundle, generated profiles and a
+  disposable HOME/ZDOTDIR/XDG environment with SSH-agent variables removed.
+  On macOS, verify the actual app PID's HOME/ZDOTDIR before connecting and after
+  selecting the app for automation: a Launch Services relaunch can discard the
+  original process environment. Stop a copy that fails this check. Keep the app
+  launch in a live foreground session; any `LSEnvironment` safeguard belongs
+  only in the copied test bundle. See the
+  [native renderer receipt](../testing/remote-desktop-renderer.md#fullscreen-recheck-with-tauri-2121).
 - SSH connection setup never falls back to `~/.ssh/known_hosts`. An explicit
   known-hosts path or pinned fingerprint is required for trust; otherwise the
   observed key is rejected without reading a personal file.

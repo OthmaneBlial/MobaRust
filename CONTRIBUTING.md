@@ -6,7 +6,7 @@ workflow or reproduce a concrete bug before adding a new protocol surface.
 
 ## Setup
 
-Install Rust stable (1.88 or newer), Node.js 22, pnpm 10, and the
+Install Rust stable (1.90 or newer), Node.js 22, pnpm 10, and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 Clone the repository and install the locked frontend dependencies:
 

@@ -156,7 +156,9 @@ generation checks across reconnects. A macOS ARM64 debug app displayed Full-HD
 pixels from the loopback RFB fixture and changed them after keyboard input both
 before and after a forced disconnect. See the [native renderer receipt](../testing/remote-desktop-renderer.md).
 This is controlled-fixture evidence; sustained FPS/input latency, external VNC
-servers, fullscreen and other platforms remain separate acceptance gates.
+servers and other platforms remain separate acceptance gates. The later Tauri
+2.12.1 recheck verified native fullscreen entry and button/Escape exit on macOS
+ARM64 while retaining the 1920×1080 server geometry.
 
 ## Isolated implementation experiment
 

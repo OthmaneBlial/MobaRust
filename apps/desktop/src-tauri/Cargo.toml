@@ -23,7 +23,7 @@ portable-pty = "0.9"
 rfd = "0.15.4"
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2.8", features = [] }
+tauri = { version = "2.12.1", features = [] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

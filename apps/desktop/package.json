@@ -12,7 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/api": "^2.12.1",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "0.16.0",
     "@xterm/xterm": "^5.3.0",
@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
-    "@tauri-apps/cli": "^2.8.0",
+    "@tauri-apps/cli": "^2.12.1",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.4",

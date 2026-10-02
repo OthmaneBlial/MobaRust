@@ -62,11 +62,55 @@ Observed in the actual native app using accessibility actions and screenshots:
   Another `r` reached the reconnected fixture and changed its displayed palette.
 - Closing the VNC tab disconnected its helper and returned to the local terminal.
 - Fullscreen was blocked by the desktop runtime and displayed an error. It is
-  **not** accepted as working.
+  **not** accepted as working in that Tauri 2.11.5 observation; see the subsequent
+  runtime recheck below.
 
 The fixture reported 1,268 frames on the first connection before the recorded
 keyboard check, and 39 on the second before the post-reconnect key. These are
 server-send counters, **not** rendered-frame counts or an FPS measurement.
+
+## Fullscreen recheck with Tauri 2.12.1
+
+The previous runtime compiled Wry's macOS element-fullscreen preference behind
+an opt-in feature. Tauri 2.12.1 / Wry 0.57.0 enable it without that opt-in;
+macOS 12.3+ uses WebKit's public `setElementFullscreenEnabled` API. The
+[upstream correction](https://github.com/tauri-apps/tauri/commit/c9a3cb892e901e39ca46aad2ff6b14aac21fea0d)
+and installed source identify the runtime boundary. The app's existing
+`requestFullscreen` / `exitFullscreen` handlers required no rewrite.
+
+The frontend API, CLI and Rust runtime were aligned to 2.12.1. This runtime
+requires Rust 1.90; contributor instructions and workspace metadata now match.
+The debug app bundle and full local `cargo xtask check` passed on Rust 1.95.0.
+Dependency metadata declares no resolved package MSRV above 1.90; compilation
+on the minimum compiler itself was not repeated in this check. The refreshed
+workspace audit has no reported vulnerability and two transitive warnings.
+
+A newly copied portable app used a generated profile and the same loopback-only
+fixture, on ephemeral port 64429. An initial launcher attempt lost its temporary
+HOME and was stopped before connecting. The accepted run used a live foreground
+process with HOME/ZDOTDIR and XDG paths pointing to the disposable directory;
+the actual native PID's HOME/ZDOTDIR were checked before and after selecting it
+for UI automation. SSH-agent variables were removed. A copied bundle's
+`LSEnvironment` also recorded the disposable environment as a launch safeguard.
+Do not assume a detached process's environment survives a macOS app relaunch.
+
+Observed in the native app, without injecting page JavaScript:
+
+- Enter fullscreen replaced the workspace with the aspect-preserving Full-HD
+  canvas and an **Exit fullscreen** button, without a blocked-runtime notice.
+- Focusing the canvas and pressing `r` reached the fixture as keysym 114 and
+  changed the visible blue/orange palette to green/purple.
+- Exit fullscreen returned to the normal workspace. Focusing the canvas and
+  pressing `r` again reached the fixture and restored the blue/orange palette.
+- A second fullscreen entry followed by Escape returned to the normal window.
+  The helper remained connected and continued to report 1920×1080 throughout;
+  VNC server-side resize is still not claimed.
+- Closing the VNC tab disconnected the helper. The native test process and
+  fixture were terminated after the check, and port 64429 refused connections.
+
+This establishes macOS ARM64 debug fullscreen behavior against the controlled
+fixture. Windows/Linux fullscreen, release installers, external VNC servers and
+long-session rendering metrics remain unverified. No RDP production gate changed.
 
 ## Reproduce without exposing a listener
 
@@ -91,7 +135,7 @@ a connection probe confirmed the port was closed after cleanup.
 This is macOS ARM64 debug evidence against a controlled RFB fixture, not an
 external VNC-server compatibility test, Windows/Linux result or release-install
 check. No sustained rendering throughput or end-to-end input latency was
-measured. Record those in release builds under a defined workload, fix native
-fullscreen, exercise longer sessions and other platforms, and rebuild matching
+measured. Record those in release builds under a defined workload, verify
+fullscreen on other platforms, exercise longer sessions, and rebuild matching
 wire-version-2 app/helper installers before publishing. Published v0.1.17
 installers do not contain this renderer change. GitHub workflows stay disabled.

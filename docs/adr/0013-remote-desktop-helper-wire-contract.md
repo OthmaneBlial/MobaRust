@@ -120,8 +120,10 @@ reconnect, audio, certificate handling, and Windows interoperability before
 the adapter is promoted.
 
 Fullscreen and visual scaling remain renderer-owned controls. Scaling preserves
-the canvas aspect ratio without asking the remote protocol to resize; fullscreen
-depends on runtime support and was blocked in the recorded macOS native check.
+the canvas aspect ratio without asking the remote protocol to resize. Fullscreen
+was blocked with Tauri 2.11.5; the Tauri 2.12.1 recheck verified entry, focused
+keyboard input and button/Escape exit on macOS ARM64. Other platforms and release
+installers remain pending in the [native receipt](../testing/remote-desktop-renderer.md).
 RDP dynamic resize is coalesced to the latest
 bounded viewport size before it crosses the Tauri command queue, and pending
 resize timers are cancelled when a view closes. VNC server-side resize remains

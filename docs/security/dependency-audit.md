@@ -1,6 +1,24 @@
 # Dependency audit record
 
-## Source recheck — 2026-10-02
+## Tauri fullscreen update — 2026-10-02
+
+The workspace now uses Tauri 2.12.1 with matching frontend API/CLI 2.12.1,
+Wry 0.57.0 and the corresponding Tauri runtime/build crates. This fixes the
+macOS HTML fullscreen opt-in at the existing runtime boundary; macOS 12.3+
+uses WebKit's public element-fullscreen preference. See the
+[upstream correction](https://github.com/tauri-apps/tauri/commit/c9a3cb892e901e39ca46aad2ff6b14aac21fea0d).
+The new Tauri crates require Rust 1.90; workspace metadata and contributor
+instructions now state that minimum. Local validation uses Rust 1.95.0.
+
+RustSec database commit `117edb3bed98e9be112f277b7615eea3252e7c43`
+(1,280 advisories) reports **no workspace vulnerability and two warnings**:
+unmaintained `proc-macro-error 1.0.4` and GTK3/`glib 0.18.5` unsoundness.
+Five unmaintained Unicode dependencies disappeared with this runtime update.
+The VNC helper remains free of reported advisories; the unchanged RDP helper
+still has the RSA timing advisory and stays excluded from normal bundles.
+No advisory was suppressed. This is a dependency check, not a security guarantee.
+
+## Earlier source recheck — 2026-10-02
 
 With RustSec refreshed to 1,280 advisories (database commit
 `117edb3bed98e9be112f277b7615eea3252e7c43`), the workspace still reports no
@@ -24,7 +42,7 @@ The refreshed RustSec database contains 1,271 advisories (last updated
 
 | Lockfile | Result | Interpretation |
 | --- | --- | --- |
-| Workspace `Cargo.lock` (656 packages) | Exit 0; no vulnerability reported | Seven warnings remain: six unmaintained transitive Unicode/proc-macro crates and the GTK3/`glib 0.18.5` unsoundness advisory `RUSTSEC-2024-0429`. No yanked release remains in this lockfile. |
+| Workspace `Cargo.lock` (638 packages, Tauri update) | Exit 0; no vulnerability reported | Two warnings remain: unmaintained `proc-macro-error 1.0.4` and GTK3/`glib 0.18.5` unsoundness (`RUSTSEC-2024-0429`). No yanked release remains in this lockfile. |
 | `tools/vnc-helper/Cargo.lock` (82 packages) | Exit 0; no warning or vulnerability reported | The isolated VNC helper passes the advisory check. This does not replace cross-platform interoperability evidence. |
 | `tools/rdp-helper/Cargo.lock` (374 packages) | Exit 1; one vulnerability | `cryptoki 0.12.1` and `rustls 0.23.45` clear the two newly fixed advisories. `rsa 0.10.0-rc.18` still triggers `RUSTSEC-2023-0071` (Marvin timing attack); no fixed release is available. Two transitive crates are also reported as unmaintained. |
 

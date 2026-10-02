@@ -138,7 +138,7 @@ Rust owns protocols, processes, saved credentials and persistence. Unknown SSH h
 <details>
 <summary><strong>🛠️ Build and contribute</strong></summary>
 
-Use Rust stable **1.88+**, Node.js **22**, pnpm **10**, and the [native Tauri prerequisites](CONTRIBUTING.md).
+Use Rust stable **1.90+**, Node.js **22**, pnpm **10**, and the [native Tauri prerequisites](CONTRIBUTING.md).
 
 ```bash
 git clone https://github.com/OthmaneBlial/MobaRust.git
