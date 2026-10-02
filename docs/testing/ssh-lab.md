@@ -37,6 +37,7 @@ coverage; `test-ssh` reports that the OpenSSH fixture requires a Unix host.
 | IPv6 loopback | Connection to `::1`, an explicit bracketed IPv6 known_hosts entry, and actual shell execution; reports a skip if IPv6 loopback is unavailable |
 | Separate jump servers | Two bastions and a target with distinct keys and ports; rejection of an incorrect fingerprint at each hop; target known_hosts mismatch without modifying trust; shell execution and Unicode file round-trip over the entire chain |
 | Stalled setup | A TCP peer that never sends an SSH banner; connection timeout and cancellation each close the client socket |
+| Interrupted transport / server restart | Cut an owned loopback bridge after authentication and PTY setup; observe channel loss within a deadline, reject a connection while the daemon is stopped, then authenticate and execute a shell after restarting it with unchanged keys and trust |
 | Session isolation | Remote HOME/ZDOTDIR match the temporary fixture; personal SSH rc/environment files are disabled; PID and X11 authority files stay in the fixture |
 | X11 | Native channel bridge to a loopback display; optional real Xvfb setup |
 
@@ -59,13 +60,19 @@ Only a child test process receives that socket through its environment; the
 parallel test harness never changes its own `SSH_AUTH_SOCK`. The child loads
 only generated fixture keys, and the parent kills/reaps its agent on success
 or child-test failure. No operator agent or identities are queried.
+The restart fixture closes only its owned TCP sockets and kills/reaps only its
+own daemon. The generated keys, selected port, server configuration, and
+`known_hosts` remain unchanged across the restart. Recovery creates a fresh
+transport explicitly; it does not exercise the desktop's automatic reconnect
+loop or its retry budget.
 
 ## Limits and next interoperability gates
 
 These tests exercise the installed OpenSSH version on the current machine.
 They do not prove Windows SSH-server compatibility, password or PAM/MFA
-authentication, Windows Pageant or other agent implementations, routed IPv6, RSA support, server restart
-recovery, sustained terminal/UI performance, or internet-host compatibility.
+authentication, Windows Pageant or other agent implementations, routed IPv6,
+RSA support, automatic GUI reconnect/retry-budget behavior, sustained
+terminal/UI performance, or internet-host compatibility.
 RSA remains disabled under the existing advisory policy.
 
 Record the OS/architecture, OpenSSH version, Git commit, exact command, result,

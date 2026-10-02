@@ -155,6 +155,96 @@ fn stalled_handshakes_timeout_or_cancel_and_release_the_socket() {
 }
 
 #[test]
+fn interrupted_transport_recovers_after_the_fixture_server_restarts() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH restart runtime");
+    runtime.block_on(async {
+        let mut fixture = LocalSshd::start().expect("start restart fixture");
+        wait_for_port(fixture.port).await;
+        let original_trust = fs::read(&fixture.known_hosts).expect("read original trust");
+
+        // Own both sockets so dropping the bridge interrupts an established
+        // SSH session without killing any process outside this fixture.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let bridge_port = listener.local_addr().unwrap().port();
+        let bridge_trust = fixture.directory.path().join("bridge_known_hosts");
+        fs::write(
+            &bridge_trust,
+            String::from_utf8(original_trust.clone()).unwrap().replace(
+                &format!("[127.0.0.1]:{}", fixture.port),
+                &format!("[127.0.0.1]:{bridge_port}"),
+            ),
+        )
+        .unwrap();
+        let server_port = fixture.port;
+        let (cut_tx, cut_rx) = oneshot::channel();
+        let bridge = tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut server = TcpStream::connect(("127.0.0.1", server_port))
+                .await
+                .unwrap();
+            tokio::select! {
+                _ = cut_rx => {},
+                _ = copy_bidirectional(&mut client, &mut server) => {
+                    panic!("fixture transport ended before the requested interruption");
+                }
+            }
+        });
+        let mut options = fixture.options();
+        options.port = bridge_port;
+        options.host_key_policy = HostKeyPolicy::KnownHosts(bridge_trust);
+        let connection = SshConnection::connect(options).await.unwrap();
+        let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
+        cut_tx
+            .send(())
+            .expect("interrupt established fixture transport");
+        tokio::time::timeout(Duration::from_secs(5), bridge)
+            .await
+            .expect("transport bridge cleanup deadline")
+            .expect("join interrupted transport bridge");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(message) = reader.next_output().await {
+                match message {
+                    Err(_) => break,
+                    Ok(SshOutput::ExitStatus(_)) => {
+                        panic!("transport interruption must not look like a normal shell exit");
+                    }
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await
+        .expect("lost shell must stop producing output");
+        drop(writer);
+        drop(reader);
+        let _ = tokio::time::timeout(Duration::from_secs(5), connection.disconnect())
+            .await
+            .expect("lost connection cleanup deadline");
+        drop(connection);
+
+        fixture.child.kill().expect("stop only the fixture daemon");
+        fixture.child.wait().expect("reap stopped fixture daemon");
+        assert!(matches!(
+            SshConnection::connect(fixture.options()).await,
+            Err(SshError::ConnectionRefused)
+        ));
+        fixture.child = spawn_sshd(&fixture.directory.path().join("sshd_config"))
+            .expect("restart with the same generated keys and configuration");
+        wait_for_port(fixture.port).await;
+        let recovered = SshConnection::connect(fixture.options())
+            .await
+            .expect("reconnect after server restart");
+        let output =
+            shell_output(&recovered, b"printf 'MOBARUST_%s\\n' 'RESTART_OK'; exit\n").await;
+        assert!(output.contains("MOBARUST_RESTART_OK"));
+        assert_eq!(fs::read(&fixture.known_hosts).unwrap(), original_trust);
+        recovered
+            .disconnect()
+            .await
+            .expect("disconnect recovered session");
+    });
+}
+
+#[test]
 fn dedicated_agent_rejects_empty_and_wrong_keys_then_authenticates() {
     const CHILD_SOCKET: &str = "MOBARUST_TEST_AGENT_SOCKET";
     if let Some(socket) = std::env::var_os(CHILD_SOCKET) {
@@ -1457,19 +1547,7 @@ impl LocalSshd {
             ),
         )?;
 
-        let sshd = if Path::new("/usr/sbin/sshd").exists() {
-            "/usr/sbin/sshd"
-        } else {
-            "/usr/local/sbin/sshd"
-        };
-        let mut command = Command::new(sshd);
-        clear_credential_environment(&mut command);
-        let child = command
-            .args(["-D", "-e", "-f"])
-            .arg(&config)
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+        let child = spawn_sshd(&config)?;
 
         Ok(Self {
             child,
@@ -1480,6 +1558,22 @@ impl LocalSshd {
             known_hosts,
         })
     }
+}
+
+fn spawn_sshd(config: &Path) -> std::io::Result<Child> {
+    let sshd = if Path::new("/usr/sbin/sshd").exists() {
+        "/usr/sbin/sshd"
+    } else {
+        "/usr/local/sbin/sshd"
+    };
+    let mut command = Command::new(sshd);
+    clear_credential_environment(&mut command);
+    command
+        .args(["-D", "-e", "-f"])
+        .arg(config)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
 }
 
 fn find_command(name: &str) -> Option<std::path::PathBuf> {

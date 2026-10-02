@@ -28,13 +28,14 @@ These changes are in source; no new installer release has been published for the
 - [x] Test a distinct two-bastion/target topology, per-hop key rejection, and Unicode SFTP over the chain.
 - [x] Exercise empty/wrong-key rejection and successful signing with a dedicated Unix SSH agent.
 - [x] Exercise `::1` and explicit IPv6 known_hosts locally; expose a skip when loopback IPv6 is unavailable.
+- [x] Interrupt an established loopback SSH transport, reject connections while its server is stopped, and recover after restart with unchanged keys/trust.
 - [x] Add frontend and native Rust quality jobs on Ubuntu, macOS, and Windows; Ubuntu/macOS results are verified.
 - [x] Include the Windows resource icon required by ordinary native builds; Windows now reaches its runtime tests.
 - [x] Fix release-asset tests launched from a different working directory and include them in the local suite.
 - [x] Add contributor/security/architecture guides and GitHub report/PR templates.
 - [x] Refresh advisory records and publish a benchmark receipt with hardware, samples, and observed CPU load.
 
-The SSH lab reports **41 unit tests and 10 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
+The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
 ## Next, in priority order
 
@@ -59,7 +60,7 @@ The SSH lab reports **41 unit tests and 10 integration test cases**. IPv6 and re
 
 ### 3. Expand the OpenSSH interoperability lab
 
-- [ ] Add server disconnect/restart and reconnect-budget recovery scenarios.
+- [ ] Exercise the desktop automatic reconnect loop and retry budget against a restarting server; transport interruption and explicit fresh-connection recovery are now covered.
 - [ ] Add password and keyboard-interactive/PAM/MFA cases using dedicated disposable accounts or servers.
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
 - [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.
