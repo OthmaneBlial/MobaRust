@@ -416,7 +416,7 @@ async fn native_lab(jumps: bool) {
             "target/authentication-native-lab"
         });
     std::fs::create_dir_all(&root).unwrap();
-    let directory = tempfile::tempdir_in(&root).unwrap();
+    let directory = native_lab_directory(&root);
     let mut endpoints = JoinSet::new();
     let target = native_endpoint(
         directory.path(),
@@ -433,6 +433,27 @@ async fn native_lab(jumps: bool) {
     while let Some(result) = endpoints.join_next().await {
         result.unwrap();
     }
+}
+
+#[cfg(unix)]
+fn native_lab_directory(root: &std::path::Path) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn native_lab_metadata_directory_is_private_and_removed() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let directory = native_lab_directory(root.path());
+    let path = directory.path().to_owned();
+    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+    drop(directory);
+    assert!(!path.exists());
 }
 
 #[cfg(unix)]

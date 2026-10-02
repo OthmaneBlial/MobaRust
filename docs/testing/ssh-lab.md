@@ -25,8 +25,9 @@ Tests do not create users, set account passwords, install dependencies, or
 enable Remote Login. A missing prerequisite is a lab setup failure; configure
 a dedicated test runner rather than granting the tests system permissions.
 On Windows, `test-ssh` runs portable unit and authentication-wire tests and
-reports that the OpenSSH fixtures are skipped. The new fixture contains no
-Unix-specific APIs; its execution has so far been verified on macOS ARM64.
+reports that the OpenSSH fixtures are skipped. The wire cases contain no
+Unix-specific APIs; their execution has so far been verified on macOS ARM64.
+The opt-in native labs and their metadata-permission regression are Unix-only.
 
 ## Portable authentication-wire fixture
 
@@ -75,8 +76,9 @@ user-selected responses are not supported by this path.
 
 Verified 2026-10-02 on macOS ARM64 with Rust 1.95.0 and the
 [repository-local `russh` 0.63.3 patch](../../vendor/russh/MOBARUST_PATCH.md):
-the local SSH suite passes eight automated wire tests; both opt-in native
-fixtures are ignored by default. The earlier static-response receipt
+the local SSH suite passes eight automated wire tests and a Unix-only native
+lab directory-permission/cleanup regression; both opt-in native fixtures are
+ignored by default. The earlier static-response receipt
 had 41 unit, five wire and 12 OpenSSH tests, with loopback IPv6 executed and the
 real Xvfb case skipped for missing prerequisites.
 The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
@@ -116,9 +118,10 @@ Two native broker regressions cover bounded/one-shot answers, expired waiter
 cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
 DOM boundary checks cover password masking, plain-text server labels, abort
 cancellation and clearing the input; these are not native keyboard/focus proof.
-The native receipts below cover saved profiles, Quick connect and controlled
-reconnects on Mac debug. Jump-hop challenge acceptance, broader reconnect
-cases and OpenSSH/PAM interoperability remain separate gates. This mode is
+The native receipts below cover saved profiles, Quick connect, controlled
+reconnects and two-bastion prompt routing on Mac debug. Concurrent prompt
+ownership, broader reconnect cases and OpenSSH/PAM interoperability remain
+separate gates. This mode is
 post-v0.1.18 source work; the published installers do not contain it.
 
 ### Native password/OTP check — 2026-10-02
@@ -284,9 +287,48 @@ on exit and all three ports were rebound successfully. The GUI lab process
 was terminated separately because native window observation was unavailable;
 this run did not establish native menu Quit or jump-dialogue acceptance.
 
-The local automated chain cases and native-lab listener/cleanup checks do not
-establish native prompt labels/focus/cancellation across jump hops. That GUI
-acceptance is still pending, alongside OpenSSH/PAM and Windows/Linux evidence.
+### Native two-bastion password/OTP check — 2026-10-02
+
+A fresh run restored native window observation in the isolated macOS ARM64
+debug app, with disposable HOME/ZDOTDIR and portable data. It used source
+`e006aab` for the lab and the debug bundle built from `d3b4fb3` for the unchanged
+authentication runtime. Two secret-free saved profiles configured independently
+pinned bastion 1, bastion 2 and target endpoints on generated loopback ports.
+
+- The first bastion's password and OTP fields were masked and focused, with
+  its configured address in the label. Enter advanced each response. The next
+  password prompt showed the second bastion's address; Escape cancelled it,
+  displayed the cancellation error and created no SSH terminal. Socket
+  inspection then showed only the three fixture listeners.
+- With correct factors at both bastions and a deliberately wrong target pin,
+  the app displayed host-key rejection with the actual target fingerprint
+  before any target password prompt. No SSH terminal was created.
+- With all three correct pins, six separately focused masked prompts showed
+  the expected hop/target addresses in order. Distinct generated password and
+  OTP values opened a connected target terminal. After clicking its input,
+  `JUMP_PASSWORD_OTP_OK` was echoed below the **no OS shell** banner. Socket
+  inspection showed the three loopback transport connections through the chain.
+- Native application-menu Quit removed the recorded app and local zsh PIDs.
+  All chain connections were gone while all three fixture listeners remained.
+  The app was launched through native UI control, so no process exit-code
+  receipt is claimed. None of the six responses appeared in the three
+  persisted profile/settings/audit JSON files.
+- The Rust fixture passed after 300.01 seconds; its recorded PID disappeared,
+  its metadata directory was removed and all three ports rebound successfully.
+
+This run also exposed a metadata-directory permission discrepancy: the default
+temporary directory was `0755`, despite the earlier `0700` documentation.
+Each generated response file was already `0600`. The owned live directory was
+restricted to `0700` before importing profiles. Both native labs now use
+`tempfile::Builder::permissions` to request `0700` at creation. The shared
+directory regression failed with `0755` before the fix, then passed with
+`0700` and verified removal on drop.
+
+These observations cover sequential native hop routing, second-hop cancellation,
+target trust-before-prompt, successful authentication and active-chain Quit on
+Mac debug. Concurrent dialogue ownership and stale-answer UI races, automatic
+terminal focus, OpenSSH/PAM, Windows/Linux and published-installer behavior
+remain separate acceptance gates.
 
 ## OpenSSH coverage
 
