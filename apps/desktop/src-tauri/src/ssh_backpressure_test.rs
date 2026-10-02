@@ -256,12 +256,19 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 retire_shell_output(reader, &writer).await;
                 drop(writer);
                 size.send((132, 41)).unwrap();
-                let (mut reader, writer) = open_shell_at_current_size(&connection, &viewport).await.unwrap().split();
-                pty_pending.await.unwrap();
-                assert_eq!(sizes.recv().await.unwrap(), ("pty", 132, 41),
-                    "replacement PTY uses current geometry rather than connect defaults");
-                size.send((155, 53)).unwrap();
-                pty_release.send(()).unwrap();
+                let (mut reader, writer) = {
+                    let reopening = open_shell_at_current_size(&connection, &viewport);
+                    tokio::pin!(reopening);
+                    tokio::select! {
+                        _ = &mut reopening => panic!("replacement shell needs server acceptance"),
+                        entered = pty_pending => entered.unwrap(),
+                    }
+                    assert_eq!(sizes.recv().await.unwrap(), ("pty", 132, 41),
+                        "replacement PTY uses current geometry rather than connect defaults");
+                    size.send((155, 53)).unwrap();
+                    pty_release.send(()).unwrap();
+                    reopening.await.unwrap().split()
+                };
                 viewport.changed().await.unwrap();
                 let (cols, rows) = *viewport.borrow_and_update();
                 let mut closing = close.subscribe();

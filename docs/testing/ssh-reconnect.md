@@ -151,3 +151,49 @@ This correction follows the v0.1.20 tag and is not in its published DMGs.
 Native GUI resize/reconnect acceptance and Windows/Linux runtime evidence remain
 open. Replacing a shell on one authenticated transport is not evidence of a
 complete transport restart or sustained GUI responsiveness.
+
+## Shell request acceptance on main
+
+**2026-10-03.** The pinned russh channel's `request_shell(true).await` enqueues
+a request; it does not wait for the server's reply. MobaRust previously treated
+that enqueue as completed setup and its output reader ignored a subsequent
+failure. A memory-only loopback regression against `9ddf74c` reproduced a
+successful `open_shell` result after the server explicitly denied shell access.
+
+Shell setup now checks the server's success/failure reply before returning a
+shell or sending configured startup input. Optional X11 forwarding is checked
+first, so its success cannot be mistaken for shell acceptance. This follows
+[RFC 4254 sections 5.4 and 6.5](https://www.rfc-editor.org/rfc/rfc4254.html#section-5.4).
+PTY and environment requests retain their existing no-reply behavior.
+
+Channel open, X11, shell acceptance and startup input share the original setup
+deadline. A denied request, early closure or missing reply returns an explicit
+error. Failure/timeout cleanup retires the reader before enqueueing channel
+close, with a separate one-second maximum for that cleanup enqueue.
+Stdout/stderr arriving before success are buffered in order and delivered before
+live output in both split and unsplit readers. The 1 MiB setup budget accounts
+for data and queue entries, including empty/tiny packets.
+
+```sh
+cargo test --locked -p mobarust-ssh --test authentication shell_setup_requires_server_acceptance
+cargo test --locked -p mobarust blocked_shell_input_keeps_output_and_cancellation_live
+cargo xtask check
+```
+
+The authentication fixture checks shell rejection, X11-success followed by shell
+rejection, missing shell reply, early channel closure, pre-acceptance output
+overflow, X11 rejection, and ordered fragmented Unicode/stdout/stderr in both
+reader modes. Failed setups send no startup command; rejection, timeout and
+overflow close the channel before transport teardown. The desktop fixture also
+pauses replacement PTY handling, proves the open future is still pending, then
+releases it and checks the latest geometry on the wire.
+
+The complete local `cargo xtask check` passed on macOS ARM64, including all
+104 desktop tests, workspace tests/Clippy, frontend tests/type/lint/build,
+protocol fixtures, unsigned package-layout contracts and fuzz compilation.
+
+The memory-only fixtures use generated credentials, pinned host keys and
+`127.0.0.1` listeners with cleanup assertions. They do not access an OS account,
+personal SSH state, agent, Keychain or X server. Native GUI rejection/timeout
+acceptance and wider server/platform coverage remain open. The correction is on
+main after v0.1.20 and is not in its published DMGs.

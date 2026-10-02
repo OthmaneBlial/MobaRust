@@ -20,6 +20,20 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const DEADLINE: Duration = Duration::from_secs(10);
+const SHELL_BANNER: &[u8] = b"Disposable SSH authentication echo fixture (no OS shell).\r\n";
+const SHELL_PRELUDE: &[u8] = "prelude: été 🦀\r\n".as_bytes();
+const SHELL_STDERR: &[u8] = b"setup stderr\r\n";
+
+#[derive(Clone, Copy, Debug)]
+enum ShellReply {
+    Accept,
+    Reject,
+    Silent,
+    Close,
+    Prelude,
+    Flood,
+    X11Reject,
+}
 
 #[derive(Clone, Copy)]
 enum Method {
@@ -43,6 +57,11 @@ struct Observations {
     responses: AtomicUsize,
     authenticated: AtomicUsize,
     entered: Notify,
+    shell_requests: AtomicUsize,
+    shell_input_bytes: AtomicUsize,
+    x11_requests: AtomicUsize,
+    closed_channels: AtomicUsize,
+    channel_closed: Notify,
 }
 
 struct Handler {
@@ -52,6 +71,7 @@ struct Handler {
     observations: Arc<Observations>,
     release: Option<oneshot::Receiver<()>>,
     native_echo: bool,
+    shell_reply: ShellReply,
     forward_to: Option<SocketAddr>,
     forwarded: JoinSet<()>,
 }
@@ -145,11 +165,34 @@ impl server::Handler for Handler {
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         if self.native_echo {
+            self.observations
+                .shell_requests
+                .fetch_add(1, Ordering::SeqCst);
+            match self.shell_reply {
+                ShellReply::Reject => {
+                    session.channel_failure(channel)?;
+                    return Ok(());
+                }
+                ShellReply::Silent => return Ok(()),
+                ShellReply::Close => {
+                    session.close(channel)?;
+                    return Ok(());
+                }
+                ShellReply::Prelude => {
+                    let split = SHELL_PRELUDE.len() - 4;
+                    session.data(channel, SHELL_PRELUDE[..split].to_vec())?;
+                    session.data(channel, SHELL_PRELUDE[split..].to_vec())?;
+                    session.extended_data(channel, 1, SHELL_STDERR.to_vec())?;
+                }
+                ShellReply::Flood => {
+                    for _ in 0..33 {
+                        session.data(channel, vec![b'x'; 32 * 1024])?;
+                    }
+                }
+                _ => {}
+            }
             session.channel_success(channel)?;
-            session.data(
-                channel,
-                b"Disposable SSH authentication echo fixture (no OS shell).\r\n".to_vec(),
-            )?;
+            session.data(channel, SHELL_BANNER.to_vec())?;
         }
         Ok(())
     }
@@ -161,8 +204,43 @@ impl server::Handler for Handler {
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         if self.native_echo {
+            self.observations
+                .shell_input_bytes
+                .fetch_add(data.len(), Ordering::SeqCst);
             session.data(channel, data.to_vec())?;
         }
+        Ok(())
+    }
+
+    async fn x11_request(
+        &mut self,
+        channel: russh::ChannelId,
+        _single_connection: bool,
+        _protocol: &str,
+        _cookie: &str,
+        _screen: u32,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        self.observations
+            .x11_requests
+            .fetch_add(1, Ordering::SeqCst);
+        if matches!(self.shell_reply, ShellReply::X11Reject) {
+            session.channel_failure(channel)?;
+        } else {
+            session.channel_success(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        _channel: russh::ChannelId,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        self.observations
+            .closed_channels
+            .fetch_add(1, Ordering::SeqCst);
+        self.observations.channel_closed.notify_one();
         Ok(())
     }
 
@@ -264,6 +342,16 @@ impl Fixture {
         forward_to: Option<SocketAddr>,
         native_echo: bool,
     ) -> Self {
+        Self::start_with_shell(method, stall, forward_to, native_echo, ShellReply::Accept).await
+    }
+
+    async fn start_with_shell(
+        method: Method,
+        stall: bool,
+        forward_to: Option<SocketAddr>,
+        native_echo: bool,
+        shell_reply: ShellReply,
+    ) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind loopback fixture");
@@ -298,6 +386,7 @@ impl Fixture {
             observations: observations.clone(),
             release: stall.then_some(receiver),
             native_echo,
+            shell_reply,
             forward_to,
             forwarded: JoinSet::new(),
         };
@@ -520,6 +609,7 @@ async fn native_endpoint(
                         expected: password.clone(), otp: otp.clone(),
                         observations: Arc::new(Observations::default()), release: None,
                         native_echo: forward_to.is_none(), forward_to,
+                        shell_reply: ShellReply::Accept,
                         forwarded: JoinSet::new(),
                     };
                     let config = config.clone();
@@ -531,6 +621,120 @@ async fn native_endpoint(
         while sessions.join_next().await.is_some() {}
     });
     address
+}
+
+#[tokio::test]
+async fn shell_setup_requires_server_acceptance() {
+    for (reply, x11) in [
+        (ShellReply::Reject, false),
+        (ShellReply::Reject, true),
+        (ShellReply::Silent, false),
+        (ShellReply::Close, false),
+        (ShellReply::Flood, false),
+        (ShellReply::X11Reject, true),
+    ] {
+        let fixture = Fixture::start_with_shell(Method::Password, false, None, true, reply).await;
+        let mut options = fixture.options(Method::Password, true);
+        options.timeout = Duration::from_secs(1);
+        options.startup_command = Some("must-not-execute".into());
+        if x11 {
+            options.x11 = Some(mobarust_ssh::X11ForwardingOptions {
+                display: mobarust_ssh::X11Display::parse("tcp://127.0.0.1:6000").unwrap(),
+                single_connection: false,
+            });
+        }
+        let connection = SshConnection::connect(options).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(3), connection.open_shell(80, 24))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                (reply, &result),
+                (
+                    ShellReply::Reject,
+                    Err(SshError::ChannelRequestRejected { request: "shell" })
+                ) | (
+                    ShellReply::X11Reject,
+                    Err(SshError::ChannelRequestRejected {
+                        request: "X11 forwarding"
+                    })
+                ) | (ShellReply::Silent, Err(SshError::Timeout))
+                    | (
+                        ShellReply::Close,
+                        Err(SshError::ChannelRequestClosed { request: "shell" })
+                    )
+                    | (ShellReply::Flood, Err(SshError::ShellSetupOutputTooLarge))
+            ),
+            "unexpected {reply:?} shell result"
+        );
+        if !matches!(reply, ShellReply::Close) {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                fixture.observations.channel_closed.notified(),
+            )
+            .await
+            .expect("failed setup sends channel close before transport teardown");
+        }
+        assert_eq!(
+            fixture
+                .observations
+                .shell_input_bytes
+                .load(Ordering::SeqCst),
+            0,
+            "startup commands must not reach an unaccepted shell"
+        );
+        assert_eq!(
+            fixture.observations.shell_requests.load(Ordering::SeqCst),
+            usize::from(!matches!(reply, ShellReply::X11Reject))
+        );
+        assert_eq!(
+            fixture.observations.x11_requests.load(Ordering::SeqCst),
+            usize::from(x11)
+        );
+        connection.disconnect().await.unwrap();
+        drop(connection);
+        fixture.finish().await;
+    }
+    for split in [false, true] {
+        let fixture =
+            Fixture::start_with_shell(Method::Password, false, None, true, ShellReply::Prelude)
+                .await;
+        let connection = SshConnection::connect(fixture.options(Method::Password, true))
+            .await
+            .unwrap();
+        let mut shell = Some(connection.open_shell(80, 24).await.unwrap());
+        let expected = [SHELL_PRELUDE, SHELL_STDERR, SHELL_BANNER].concat();
+        let output = tokio::time::timeout(Duration::from_secs(1), async {
+            let (mut reader, _writer) = if split {
+                let (reader, writer) = shell.take().unwrap().split();
+                (Some(reader), Some(writer))
+            } else {
+                (None, None)
+            };
+            let mut output = Vec::new();
+            while output.len() < expected.len() {
+                let next = if let Some(reader) = &mut reader {
+                    reader.next_output().await
+                } else {
+                    shell.as_mut().unwrap().next_output().await
+                };
+                if let SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) = next.unwrap().unwrap()
+                {
+                    output.extend(bytes);
+                }
+            }
+            output
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            output, expected,
+            "setup bytes precede live bytes exactly once"
+        );
+        connection.disconnect().await.unwrap();
+        drop(connection);
+        fixture.finish().await;
+    }
 }
 
 #[tokio::test]

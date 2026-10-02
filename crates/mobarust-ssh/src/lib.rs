@@ -43,6 +43,7 @@ const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
 const MAX_QUEUED_X11_CHANNELS: usize = 8;
 pub const MAX_FORWARD_HOST_BYTES: usize = 255;
 const MAX_SFTP_DIRECTORY_ENTRIES: usize = 10_000;
+const MAX_SHELL_SETUP_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -104,6 +105,14 @@ pub enum SshError {
     Handshake(String),
     #[error("SSH channel operation failed")]
     Channel(#[source] russh::Error),
+    #[error(
+        "SSH server rejected the {request} request; check account permissions and server configuration"
+    )]
+    ChannelRequestRejected { request: &'static str },
+    #[error("SSH channel closed before the {request} request was accepted")]
+    ChannelRequestClosed { request: &'static str },
+    #[error("SSH shell setup output exceeded the 1 MiB safety limit")]
+    ShellSetupOutputTooLarge,
     #[error("remote monitoring command failed with exit status {0}")]
     RemoteMonitorCommandFailed(u32),
     #[error("remote monitoring output exceeded its safety limit")]
@@ -1132,12 +1141,14 @@ impl SshConnection {
     }
 
     pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshShell, SshError> {
-        tokio::time::timeout(self.connect_timeout, async {
-            let channel = self
-                .handle
-                .channel_open_session()
-                .await
-                .map_err(SshError::Channel)?;
+        let deadline = tokio::time::Instant::now() + self.connect_timeout;
+        let mut channel = tokio::time::timeout_at(deadline, self.handle.channel_open_session())
+            .await
+            .map_err(|_| SshError::Timeout)?
+            .map_err(SshError::Channel)?;
+        let mut pending_output = VecDeque::new();
+        let mut buffered_bytes = 0;
+        let setup = tokio::time::timeout_at(deadline, async {
             channel
                 .request_pty(false, "xterm-256color", cols.max(1), rows.max(1), 0, 0, &[])
                 .await
@@ -1157,6 +1168,13 @@ impl SshConnection {
                     )
                     .await
                     .map_err(SshError::Channel)?;
+                wait_for_shell_request(
+                    &mut channel,
+                    "X11 forwarding",
+                    &mut pending_output,
+                    &mut buffered_bytes,
+                )
+                .await?;
             }
             for (name, value) in &self.environment {
                 channel
@@ -1168,17 +1186,38 @@ impl SshConnection {
                 .request_shell(true)
                 .await
                 .map_err(SshError::Channel)?;
-            let shell = SshShell { channel };
+            wait_for_shell_request(
+                &mut channel,
+                "shell",
+                &mut pending_output,
+                &mut buffered_bytes,
+            )
+            .await?;
             if let Some(startup) = build_startup_input(
                 self.startup_directory.as_deref(),
                 self.startup_command.as_deref(),
             ) {
-                shell.write(&startup).await?;
+                channel
+                    .data(startup.as_slice())
+                    .await
+                    .map_err(SshError::Channel)?;
             }
-            Ok(shell)
+            Ok::<(), SshError>(())
         })
         .await
-        .map_err(|_| SshError::Timeout)?
+        .map_err(|_| SshError::Timeout)
+        .and_then(|result| result);
+        if let Err(error) = setup {
+            // Stop backpressure from unread output before enqueueing channel close.
+            let (reader, writer) = channel.split();
+            drop(reader);
+            let _ = tokio::time::timeout(Duration::from_secs(1), writer.close()).await;
+            return Err(error);
+        }
+        Ok(SshShell {
+            channel,
+            pending_output,
+        })
     }
 
     /// Collects a bounded, one-shot system snapshot through a fixed remote
@@ -2259,12 +2298,14 @@ async fn authenticate_with_agent(
 
 pub struct SshShell {
     channel: Channel<client::Msg>,
+    pending_output: VecDeque<SshOutput>,
 }
 
 /// Read-only half of an interactive SSH shell. It can run concurrently with
 /// [`SshShellWriter`] so terminal input never blocks remote output.
 pub struct SshShellReader {
     channel: ChannelReadHalf,
+    pending_output: VecDeque<SshOutput>,
 }
 
 /// Write/control half of an interactive SSH shell.
@@ -3131,7 +3172,10 @@ impl SshShell {
     pub fn split(self) -> (SshShellReader, SshShellWriter) {
         let (reader, writer) = self.channel.split();
         (
-            SshShellReader { channel: reader },
+            SshShellReader {
+                channel: reader,
+                pending_output: self.pending_output,
+            },
             SshShellWriter { channel: writer },
         )
     }
@@ -3148,6 +3192,9 @@ impl SshShell {
     }
 
     pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
+        if let Some(output) = self.pending_output.pop_front() {
+            return Some(Ok(output));
+        }
         shell_message_output(self.channel.wait().await?).map(Ok)
     }
 
@@ -3158,7 +3205,46 @@ impl SshShell {
 
 impl SshShellReader {
     pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
+        if let Some(output) = self.pending_output.pop_front() {
+            return Some(Ok(output));
+        }
         shell_message_output(self.channel.wait().await?).map(Ok)
+    }
+}
+
+async fn wait_for_shell_request(
+    channel: &mut Channel<client::Msg>,
+    request: &'static str,
+    pending_output: &mut VecDeque<SshOutput>,
+    buffered_bytes: &mut usize,
+) -> Result<(), SshError> {
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Success) => return Ok(()),
+            Some(ChannelMsg::Failure) => return Err(SshError::ChannelRequestRejected { request }),
+            None
+            | Some(
+                ChannelMsg::Close
+                | ChannelMsg::Eof
+                | ChannelMsg::ExitStatus { .. }
+                | ChannelMsg::ExitSignal { .. },
+            ) => return Err(SshError::ChannelRequestClosed { request }),
+            Some(message) => {
+                if let Some(output) = shell_message_output(message) {
+                    let bytes = match &output {
+                        SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => bytes.len(),
+                        _ => continue,
+                    };
+                    // Count queue entries too, so empty/tiny packets cannot
+                    // evade the setup buffer's memory limit.
+                    *buffered_bytes += bytes + std::mem::size_of::<SshOutput>();
+                    if *buffered_bytes > MAX_SHELL_SETUP_BUFFER_BYTES {
+                        return Err(SshError::ShellSetupOutputTooLarge);
+                    }
+                    pending_output.push_back(output);
+                }
+            }
+        }
     }
 }
 
