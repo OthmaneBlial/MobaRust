@@ -1,8 +1,8 @@
 # Hardware and interoperability evidence matrix
 
-This document is a runbook for the hardware and cross-platform checks that
-remain before MobaRust can claim broad interoperability. It is a test plan,
-not evidence that those checks have already passed.
+This document records controlled evidence and the hardware/cross-platform
+checks that remain before MobaRust can claim broad interoperability. The
+required matrix is a test plan; pending checks have not passed.
 
 ## Safety boundary
 
@@ -33,7 +33,7 @@ or server is a pending result, not a reason to probe the local machine.
 | Area | Safe evidence available now | What it does not prove |
 | --- | --- | --- |
 | Native PTY | macOS ARM64 local evidence; Ubuntu x64, macOS ARM64, and Windows x64 CI exercise resize, input/output, exit, and child cleanup | Full shell/version coverage, WSL, real clipboard/window-manager behavior |
-| SSH | Local SSH fixture covers authentication, PTY I/O, resize, SFTP, and disconnect; a native macOS app smoke test also connected to a disposable loopback server and loaded the SFTP browser | Internet-host interoperability, sustained GUI terminal input, or the operator's SSH configuration |
+| SSH / SFTP / tunnels | Local/CI SSH fixtures plus the [native ARM64 workflow receipt](native-workflow.md): terminal input/output, SFTP editing/save and download, local/remote/SOCKS5 HTTP round trips and listener cleanup | Internet-host interoperability, sustained GUI use, automatic reconnect, or the operator's SSH configuration |
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
 | VNC | Isolated helper controls local RFB fixtures, including password auth and reconnect | Mature-engine selection, encrypted transport, and cross-platform packaging |
@@ -134,11 +134,23 @@ architecture, and both packaged executables returned `MobaRust 0.1.16` for
 `--version`. The collected DMGs passed their SHA-256 files. This run did not
 open the GUI or exercise an Intel Mac hardware session.
 
+On 2026-10-02, the v0.1.17 preview published locally built ARM64 and Intel
+DMGs from application source `7713783`, tagged with documentation at `74d2bb4`.
+The final images were mounted read-only with valid disk checks; mounted apps
+passed layout and strict ad hoc signature checks. App/VNC-helper architectures,
+packaged CLI versions and both checksum manifests passed. The [native ARM64
+receipt](native-workflow.md) and [94-second recording](../release/desktop-demo.md)
+add short GUI workflow evidence. All six published release assets were
+downloaded again and matched the local files byte for byte. Both GitHub
+workflows remained disabled; no tag CI run occurred. Intel CLI startup ran
+through Rosetta on ARM64, not on Intel hardware. Signing, notarization and
+clean-install gates remain open.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| macOS ARM64 | Native CI/local fixtures; GUI checks remain | Local/CI OpenSSH; broader manual checks remain | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Partial fixture/local evidence |
+| macOS ARM64 | Native CI/local fixtures and short GUI input/split checks; broader shell checks remain | Local/CI OpenSSH plus GUI SFTP edit/download and three tunnel modes; sustained/recovery checks remain | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Partial fixture/local GUI evidence |
 | macOS x64 | Separate runtime required | Separate runtime required | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Pending |
 | Windows x64 | PowerShell/cmd native CI fixtures; WSL and GUI checks remain | Real Windows runtime required | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Partial CI fixture evidence |
 | Windows ARM64 | Real Windows ARM64 runtime | Real Windows ARM64 runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
