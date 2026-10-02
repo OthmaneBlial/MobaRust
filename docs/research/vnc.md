@@ -104,6 +104,33 @@ failed native pipe. This remains local lifecycle evidence only.
 Reader and writer failure paths claim the stop state atomically, so a single
 pipe failure cannot produce duplicate crash events while cleanup is racing.
 
+## Local fixture deadline diagnosis — 2026-10-02
+
+The failed authentication/version/quality fixtures were closing their own
+loopback server while the test consumer processed JSON framebuffer events.
+An isolated password-authentication case reproduced the unexpected reconnect.
+A parallel trace then confirmed `fixture timed out waiting for helper input`
+in four failed cases; their resized framebuffer reached the consumer after
+roughly 4.6–5.2 seconds. A serial trace passed all 17 cases, so serial execution
+alone is not a reliable correction for the earlier failures.
+
+The handshake fixture now resizes the minimum valid 320×200 canvas to 321×201,
+retaining both dimension changes, exact pixel checks, pointer bounds, keyboard,
+clipboard, authentication, encoding negotiation and shutdown assertions. The
+three-second fixture input deadline and production pipe deadlines are unchanged.
+The corrected parallel suite passed all 17 cases in 5.74 seconds. This isolates
+protocol correctness from large-image processing cost; it is not a VNC
+performance improvement. Large-frame IPC throughput and input responsiveness
+still need a separate measured acceptance gate.
+
+The subsequent ordinary `cargo xtask check` passed locally: workspace tests and
+Clippy, frontend unit/type/lint/build checks, release-asset tests, RDP helper
+and three real loopback RDP cases, all 17 parallel VNC cases (5.36 seconds),
+package-layout checks and fuzz-target compilation. The real Xvfb case was
+skipped because its prerequisites were unavailable. GitHub Quality and Release
+installers remained `disabled_manually`; this result is local validation, not
+CI or new installer publication.
+
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`

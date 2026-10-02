@@ -47,7 +47,8 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [x] Verify native paste and per-action macro refusal across real loopback SSH reconnects, exact selected-target broadcast delivery, emergency shortcuts, session JSON import and startup-command approval on macOS ARM64.
 - [x] Handle emergency stops before terminal/modal event propagation; clear stale import errors after a successful retry.
 - [x] Bind file actions and editor documents to their original SSH connection generation; verify native stale approval refusal for transfers/retry, mkdir, rename, delete, chmod and editor Save/Save as after real reconnects.
-- [ ] Diagnose the five persistent VNC fixture failures in the current local global check (missing framebuffer events/resize diagnostics); serial reruns still fail. Keep this candidate's focused native/frontend evidence separate from the earlier green global baseline.
+- [x] Diagnose the VNC fixture disconnects as server input deadlines expiring during large JSON framebuffer processing; use a minimum-size resize canvas and retain the original deadlines and protocol assertions. All 17 parallel fixture cases and the ordinary local `cargo xtask check` passed. [Diagnosis and limits](docs/research/vnc.md#local-fixture-deadline-diagnosis--2026-10-02).
+- [ ] Measure large-frame helper IPC throughput and input responsiveness separately, including release builds; the smaller protocol fixture is not evidence of a production performance improvement.
 - [ ] Finish native transfer cancellation/collision choices, settings JSON import, editor discard and cross-platform dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
 
 ## Next, in priority order

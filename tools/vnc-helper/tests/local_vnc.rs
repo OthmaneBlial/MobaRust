@@ -18,9 +18,12 @@ const FIXTURE_SIZE: DisplaySize = DisplaySize {
     width: 320,
     height: 200,
 };
+// Keep protocol fixtures at the smallest valid canvas sizes. Large JSON
+// framebuffer serialization belongs in performance checks, not the fixture's
+// three-second deadline for receiving input after the display handshake.
 const RESIZED_FIXTURE_SIZE: DisplaySize = DisplaySize {
-    width: 640,
-    height: 400,
+    width: FIXTURE_SIZE.width + 1,
+    height: FIXTURE_SIZE.height + 1,
 };
 const FIXTURE_PASSWORD: &str = "mobarust-vnc-fixture";
 const REJECTED_PASSWORD: &str = "fixture-auth-rejection-secret";
@@ -993,10 +996,12 @@ async fn exercise_fixture_session_with_quality(
         if matches!(
             event,
             HelperEvent::Framebuffer {
-                width: 640,
-                height: 400,
+                width,
+                height,
                 ref pixels,
-            } if pixels[..4] == [0x44, 0x55, 0x66, 0xff]
+            } if width == RESIZED_FIXTURE_SIZE.width
+                && height == RESIZED_FIXTURE_SIZE.height
+                && pixels[..4] == [0x44, 0x55, 0x66, 0xff]
         ) {
             saw_resized_framebuffer = true;
         }
@@ -1029,10 +1034,7 @@ async fn exercise_fixture_session_with_quality(
     send_command(
         &mut stdin,
         HelperCommand::Resize {
-            display: DisplaySize {
-                width: 640,
-                height: 400,
-            },
+            display: RESIZED_FIXTURE_SIZE,
         },
     )
     .await;

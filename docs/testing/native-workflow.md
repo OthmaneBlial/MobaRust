@@ -24,6 +24,21 @@ entries, personal keys, remote hosts or hardware were used.
 - A snippet was saved and its variable preview rendered the expected command.
   It was not executed automatically. The light/dark switch changed the UI and terminal.
 
+## Local test isolation
+
+Run development and native acceptance servers only on `127.0.0.1` or `::1`,
+using disposable credentials and generated host keys. These loopback listeners
+are reachable from this computer only. Do not bind fixtures to wildcard or LAN
+addresses, enable macOS Remote Login, change the firewall/router, or publish a
+home-network port. Tunnel tests must also keep their listener and destination
+inside the disposable loopback lab.
+
+Stop the owned app, SSH/HTTP servers and relays after each native lab; verify
+that their recorded ports refuse new connections. Use the generated test HOME
+and explicit fixture trust, without personal SSH configuration, agent or keys.
+Repository downloads and GitHub pushes are outbound operations; they do not
+require an inbound test listener.
+
 ## Repeat the tunnel regression check
 
 Use a dedicated loopback SSH/HTTP lab, explicit generated trust, and a separate
