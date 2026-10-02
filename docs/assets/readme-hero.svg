@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
-  <title id="title">MobaRust — your remote workstation</title>
+  <title id="title">MobaRust — Free, open-source MobaXterm alternative built with Rust</title>
   <desc id="desc">A dark green and copper banner for the open-source Rust desktop application. Connect servers, work in terminals, move files, and manage tunnels.</desc>
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#27382e" stroke-width="1"/></pattern>
@@ -12,8 +12,8 @@
     <circle cx="77" cy="75" r="6" fill="#d2e2aa"/>
     <text x="99" y="82" fill="#d2e2aa" font-size="23" letter-spacing="4">OPEN SOURCE / REMOTE WORKSTATION</text>
     <text x="64" y="223" fill="#f7f2e8" font-size="134" font-weight="700" letter-spacing="-6">MobaRust<tspan fill="#eaa570">.</tspan></text>
-    <text x="70" y="296" fill="#e3dccb" font-family="Georgia, serif" font-size="43">Servers, shells &amp; files.</text>
-    <text x="70" y="346" fill="#e3dccb" font-family="Georgia, serif" font-size="43">One place to work.</text>
+    <text x="70" y="296" fill="#e3dccb" font-family="Georgia, serif" font-size="43">Free, open-source</text>
+    <text x="70" y="346" fill="#e3dccb" font-family="Georgia, serif" font-size="38">MobaXterm alternative built with Rust</text>
     <text x="72" y="436" fill="#a7baaa" font-size="24" letter-spacing="2">RUST + TAURI</text>
     <text x="318" y="436" fill="#6f8374" font-size="24">/</text>
     <text x="350" y="436" fill="#a7baaa" font-size="24">Free. Local. Yours.</text>

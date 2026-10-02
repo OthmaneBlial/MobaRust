@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/assets/readme-hero.svg" alt="MobaRust — Servers. Shells. Files. One place to work." width="100%" />
+<img src="docs/assets/readme-hero.svg" alt="MobaRust — Free, open-source MobaXterm alternative built with Rust" width="100%" />
 
-**A free, open-source remote workstation for developers, operators and homelabs.**
+**Free, open-source MobaXterm alternative built with Rust**
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
