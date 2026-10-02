@@ -1036,13 +1036,17 @@ async fn exercise_fixture_session_with_quality(
         },
     )
     .await;
-    assert!(matches!(
-        timeout(Duration::from_secs(2), next_event(&mut stdout))
-            .await
-            .unwrap(),
-        HelperEvent::Diagnostic { message, .. }
-            if message == "VNC server-side resize is not supported; viewport scaling remains local"
-    ));
+    timeout(Duration::from_secs(2), async {
+        loop {
+            match next_event(&mut stdout).await {
+                // Display events may already be queued when Resize is sent.
+                HelperEvent::Framebuffer { .. } => {}
+                HelperEvent::Diagnostic { message, .. }
+                    if message == "VNC server-side resize is not supported; viewport scaling remains local" => break,
+                event => panic!("unexpected event while waiting for the VNC resize diagnostic: {event:?}"),
+            }
+        }
+    }).await.expect("VNC resize diagnostic deadline");
 
     send_command(
         &mut stdin,
