@@ -110,7 +110,7 @@ authentication, and an 8,192-byte startup command (`fixture-startup-` repeated
 The echo server does **not** execute this text as an OS command.
 
 Import `profiles.json` through **Import MobaRust session export** in the isolated
-app. Select each profile, then answer the
+app. Select each profile, approve its configured startup input, then answer the
 password/OTP prompts with that endpoint's generated factors:
 
 - **SSH setup startup:** a 1 KiB peer input window plus 256 KiB of output in

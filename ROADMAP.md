@@ -8,6 +8,12 @@ and stalled input. Its automated endpoint/profile/cleanup regression passes;
 the native attempt lost window observation before connecting, so GUI acceptance
 and updated installers remain pending. No completion checkbox changed.
 
+On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
+now covers saved/imported SSH profiles as well as local profiles. It shows the
+full command and destination, explains automatic reconnect repetition, and
+refuses a stopped macro's pending startup. Native acceptance and inclusion in
+published downloads remain pending.
+
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
 
 ## Where the project stands

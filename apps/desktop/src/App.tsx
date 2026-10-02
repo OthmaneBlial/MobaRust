@@ -28,7 +28,7 @@ import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { focusConnectedTerminal } from "./terminal-focus";
 import { createSshAuthHandler, type SshAuthEvent } from "./ssh-authentication";
 import { parseTunnelPort } from "./tunnel-port";
-import { chooseOverwrite, confirmAction, promptText } from "./text-prompt";
+import { chooseOverwrite, confirmAction, confirmSessionStartup, promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionCloseStatus, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
@@ -2412,11 +2412,15 @@ function App() {
       return;
     }
     try {
+      request = structuredClone(request);
+      const sshSettings = { ...settingsRef.current.ssh };
+      const macroAtApproval = macroRunRef.current;
+      const stillAllowed = () => !macroAtApproval || (!macroCancelRef.current && macroRunRef.current === macroAtApproval);
+      if (!await confirmSessionStartup(request.startupCommand, `SSH ${request.username}@${request.host}:${request.port}`, sshSettings.reconnectEnabled && sshSettings.reconnectAttempts > 0, stillAllowed) || !stillAllowed()) return;
       const authEvents = new Channel<SshAuthEvent>();
       // Installed before IPC; this channel also owns this session's reconnect
       // prompts. A closed request cannot deliver answers to another attempt.
       authEvents.onmessage = createSshAuthHandler(setConnectionError);
-      const sshSettings = settingsRef.current.ssh;
       const response = await invoke<SshConnectResponse>("ssh_connect", {
         authEvents,
         request: {
@@ -2648,7 +2652,9 @@ function App() {
 
   const openSavedLocalSession = useCallback(async (session: SavedSession) => {
     const startupCommand = session.startup_command?.trim();
-    if (startupCommand && !await confirmAction(`This saved local profile has a startup command. It will be sent to the newly opened local shell. Continue?`)) return;
+    const macroAtApproval = macroRunRef.current;
+    const stillAllowed = () => !macroAtApproval || (!macroCancelRef.current && macroRunRef.current === macroAtApproval);
+    if (!await confirmSessionStartup(startupCommand, "the new local shell", false, stillAllowed) || !stillAllowed()) return;
     recordAudit("sessionOpened", "LOCAL", session.id);
     touchSavedSession(session.id);
     startNewTerminal({

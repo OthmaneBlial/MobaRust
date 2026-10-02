@@ -1,5 +1,39 @@
 # Text-input dialogue checks — 2026-10-02
 
+## Saved startup command review on main
+
+**2026-10-03, after the published v0.1.20 Mac preview.** Saved local profiles
+already asked before sending startup input, but the shared SSH connection
+handler sent configured startup commands without asking. This included profiles
+from a session JSON import and sessions opened by a macro.
+
+Both paths now use the shared startup review dialogue. It displays the complete
+command as literal text and names its destination. SSH also explains repetition
+after automatic reconnect when enabled. Cancel, Escape, closure, page teardown,
+an unavailable dialogue or an already-pending review prevents startup approval.
+SSH captures the request and connection settings before waiting and does not
+create its authentication event channel or invoke `ssh_connect` until approval.
+The local path likewise waits before opening a terminal.
+
+Both handlers capture the owning macro, if any, before review and recheck that
+it is still running and has not been cancelled after approval. A later Continue
+cannot revive an emergency-stopped macro's pending session startup. Approval is
+once per explicit connection; the native reconnect path retains the approved
+configuration. Profiles without a startup command have no additional dialogue.
+
+Frontend unit tests, TypeScript checks, ESLint and the production build passed
+on macOS ARM64. The existing `text-prompt.test.mjs` exercises the production review helper with
+the existing DOM boundary: full Unicode/markup-looking text, all 16 KiB of a
+bounded command, initial Cancel focus, cancellation/closure/page teardown,
+concurrent/unavailable review refusal, explicit approval, and ownership stopped
+before or during review. This is helper/control-flow evidence, not a native GUI
+acceptance receipt. The [disposable native setup lab](ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
+provides generated pinned profiles for the next native check. Updated installers
+and native approval/focus/emergency-stop observations remain pending; published
+v0.1.20 downloads do not contain this change.
+
+## Earlier native dialogue baseline
+
 These changes follow v0.1.17 and are included in the v0.1.18 Mac preview.
 Windows/Linux installers remain v0.1.12. The detailed native observations below
 used isolated ARM64 debug copies; the [v0.1.18 release-copy recheck](remote-desktop-renderer.md#v0118-release-bundle-recheck)

@@ -10,6 +10,13 @@ export async function confirmAction(message: string): Promise<boolean> {
   return await openDialogue(message, undefined) !== null;
 }
 
+/** Review configured shell input before opening a local or SSH session. */
+export async function confirmSessionStartup(command: string | undefined, destination: string, reconnect = false, stillAllowed: () => boolean = () => true): Promise<boolean> {
+  if (!stillAllowed()) return false;
+  if (command?.trim() && !await confirmAction(`Send this profile's startup command to ${destination}?${reconnect ? " It will also run again after automatic SSH reconnects." : ""}\n\n${command}`)) return false;
+  return stillAllowed();
+}
+
 /** Cancel/closing returns null; create-only is an explicit, distinct choice. */
 export async function chooseOverwrite(message: string): Promise<boolean | null> {
   const choice = await openDialogue(message, undefined, { createOnly: true });

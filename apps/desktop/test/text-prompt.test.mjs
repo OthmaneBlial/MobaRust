@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { log } from "node:console";
 import { setMaxListeners } from "node:events";
-import { chooseOverwrite, confirmAction, promptText } from "../src/text-prompt.ts";
+import { chooseOverwrite, confirmAction, confirmSessionStartup, promptText } from "../src/text-prompt.ts";
 import { createSshAuthHandler } from "../src/ssh-authentication.ts";
 
 const { Event, EventTarget } = globalThis;
@@ -80,6 +80,41 @@ const approved = confirmAction("Explicit approval");
 assert.equal(await confirmAction("Concurrent approval"), false);
 latest().querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
 assert.equal(await approved, true);
+
+const dialogsBeforeStartup = body.children.length;
+for (const command of [undefined, "", "  "]) {
+  assert.equal(await confirmSessionStartup(command, "SSH fixture@127.0.0.1:10001"), true);
+}
+assert.equal(body.children.length, dialogsBeforeStartup, "profiles without startup commands need no approval");
+const startupCommand = '<script>not markup</script>; printf "été 🦀"';
+for (const action of ["cancel", "close", "button", "pagehide", "submit"]) {
+  const startup = confirmSessionStartup(startupCommand, "SSH fixture@127.0.0.1:10001", true);
+  const current = latest();
+  assert.equal(current.querySelector("label").textContent, `Send this profile's startup command to SSH fixture@127.0.0.1:10001? It will also run again after automatic SSH reconnects.\n\n${startupCommand}`);
+  assert.equal(globalThis.document.activeElement, current.querySelector('button[type="button"]'), "startup approval initially focuses Cancel");
+  assert.equal(await confirmSessionStartup("another command", "another host"), false, "a pending review must not queue an unreviewed startup");
+  if (action === "submit") current.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+  else if (action === "button") current.querySelector('button[type="button"]').dispatchEvent(new Event("click"));
+  else if (action === "pagehide") window.dispatchEvent(new Event("pagehide"));
+  else current.dispatchEvent(new Event(action, { cancelable: true }));
+  assert.equal(await startup, action === "submit", action);
+}
+const longStartupCommand = "x".repeat(16 * 1024);
+const localStartup = confirmSessionStartup(longStartupCommand, "the new local shell");
+assert.equal(latest().querySelector("label").textContent, `Send this profile's startup command to the new local shell?\n\n${longStartupCommand}`, "review must preserve the full bounded command");
+latest().dispatchEvent(new Event("cancel"));
+assert.equal(await localStartup, false);
+for (const phase of ["before", "during", "unchanged"]) {
+  let allowed = phase !== "before";
+  const before = body.children.length;
+  const startup = confirmSessionStartup("printf reviewed", "SSH fixture@127.0.0.1:10001", false, () => allowed);
+  if (phase === "before") assert.equal(body.children.length, before, "a stopped owner must not request approval");
+  else {
+    allowed = phase !== "during";
+    latest().querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+  }
+  assert.equal(await startup, phase === "unchanged", "approval must not revive a stopped or replaced macro owner");
+}
 for (const action of ["cancel", "create", "replace"]) {
   const choice = chooseOverwrite("Existing destination");
   if (action === "cancel") latest().querySelector('button[type="button"]').dispatchEvent(new Event("click"));
@@ -89,6 +124,7 @@ for (const action of ["cancel", "create", "replace"]) {
 }
 failOpening = true;
 assert.equal(await confirmAction("Unavailable approval"), false);
+assert.equal(await confirmSessionStartup("printf unsafe", "SSH fixture@127.0.0.1:10001"), false);
 assert.equal(await chooseOverwrite("Unavailable overwrite choice"), null);
 failOpening = false;
 const expired = new globalThis.AbortController();
