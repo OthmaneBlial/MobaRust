@@ -9,7 +9,7 @@
 A free, open-source remote workstation built with **Rust + Tauri**.
 SSH, files, local shells, and tunnels — with no cloud account required.
 
-[![Preview](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square&color=7d9967)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.16) [![Quality](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml/badge.svg)](https://github.com/OthmaneBlial/MobaRust/actions/workflows/quality.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE)
+[![Preview](https://img.shields.io/github/v/release/OthmaneBlial/MobaRust?include_prereleases&label=preview&style=flat-square&color=7d9967)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.16) [![Checks](https://img.shields.io/badge/checks-local-7d9967?style=flat-square)](CONTRIBUTING.md) [![License](https://img.shields.io/badge/license-Apache--2.0-4b6653?style=flat-square)](LICENSE)
 
 **[Download](#download)** · **[Website](https://othmaneblial.github.io/MobaRust/)** · **[Docs](https://othmaneblial.github.io/MobaRust/docs.html)** · **[Roadmap](ROADMAP.md)** · **[Contribute](CONTRIBUTING.md)**
 
@@ -54,7 +54,7 @@ Open a local terminal or create an SSH session. Verify the server fingerprint be
 
 - Fixed quiet SSH sessions closing at the setup timeout, exit status arriving after EOF, and misleading host-trust errors.
 - Expanded the disposable OpenSSH lab: encrypted keys, two distinct jump hosts, trust failures, cancellation, a dedicated Unix agent, and IPv6 loopback.
-- Added Ubuntu/macOS/Windows quality CI. Ubuntu x64 and macOS ARM64 pass; the Windows ConPTY fixture currently fails and remains an open priority.
+- Verified a complete Ubuntu/macOS/Windows quality run, including PowerShell and cmd. GitHub workflows are now disabled at the maintainer's request; validation continues locally.
 - Added contributor and architecture guides, private security reporting, release-asset regressions, and a reproducible benchmark receipt.
 
 See the **[roadmap and next acceptance gates](ROADMAP.md)**, [native test evidence](docs/testing/hardware-interoperability.md), and [benchmark record](benchmarks/2026-10-02-local.md). There is no overall completion percentage: implementation, CI, packaged releases, and real-device evidence are tracked separately.

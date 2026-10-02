@@ -32,7 +32,7 @@ or server is a pending result, not a reason to probe the local machine.
 
 | Area | Safe evidence available now | What it does not prove |
 | --- | --- | --- |
-| Native PTY | macOS ARM64 local evidence; Ubuntu x64 and macOS ARM64 CI exercise resize, input/output, exit, and child cleanup | Full shell/version coverage, WSL, real clipboard/window-manager behavior |
+| Native PTY | macOS ARM64 local evidence; Ubuntu x64, macOS ARM64, and Windows x64 CI exercise resize, input/output, exit, and child cleanup | Full shell/version coverage, WSL, real clipboard/window-manager behavior |
 | SSH | Local SSH fixture covers authentication, PTY I/O, resize, SFTP, and disconnect; a native macOS app smoke test also connected to a disposable loopback server and loaded the SFTP browser | Internet-host interoperability, sustained GUI terminal input, or the operator's SSH configuration |
 | Telnet | Local TCP fixture covers negotiation, I/O, reconnect, and cancellation | Security; Telnet remains unencrypted |
 | Serial | Disposable pseudo-terminal fixture covers lifecycle and device-loss handling | USB driver, permission, baud/parity, and real-adapter behavior |
@@ -45,23 +45,31 @@ inference.
 
 ### Automated native CI, 2026-10-02
 
-[Quality run 36996373657](https://github.com/OthmaneBlial/MobaRust/actions/runs/36996373657)
-tests source `622dfbc08dd4ce11defcbdc1cbe19268dc6c9921` with Rust
+[Quality run 36998538983](https://github.com/OthmaneBlial/MobaRust/actions/runs/36998538983)
+passed all three jobs on source `ac70e39c98b54d8f2a444b0c4b3232486fd6e3bf` with Rust
 `1.99.0 (b940084d7 2026-09-28)`:
 
 | Runner / compiler host | Observed result | Native fixture scope |
 | --- | --- | --- |
 | Ubuntu 22.04 / `x86_64-unknown-linux-gnu` | Passed | PTY I/O/resize/exit/cleanup, Unix serial PTY, disposable OpenSSH lab including a dedicated agent |
 | macOS 15 / `aarch64-apple-darwin` | Passed | PTY I/O/resize/exit/cleanup, Unix serial PTY, disposable OpenSSH lab including a dedicated agent |
-| Windows / `x86_64-pc-windows-msvc` | Failed | Native build succeeds; PowerShell/ConPTY I/O fixture times out; Clippy is not reached |
+| Windows 2025 / `x86_64-pc-windows-msvc` | Passed | Native PowerShell and cmd ConPTY round trips, resize/exit/cleanup, workspace tests, and Clippy |
 
 Each job runs locked frontend unit tests, TypeScript checking, lint, build,
 release-asset tests, then `cargo xtask check-rust` (workspace formatting,
 shippable VNC-helper staging, workspace tests, and Clippy). Unix shell variants
 run only when installed. The OpenSSH suite has conditional IPv6/Xvfb checks;
 a passing harness result alone does not prove an optional fixture executed.
-The current check command retains successful-test output to expose explicit
-skip messages in subsequent runs.
+Successful-test output records bash 5.1.16 on Ubuntu (zsh/fish unavailable)
+and bash 3.2.57 plus zsh 5.9 on macOS (fish unavailable). IPv6 and the real
+Xvfb fixture executed on Ubuntu; IPv6 executed on macOS, where Xvfb was
+explicitly skipped. Windows shell versions were not recorded.
+
+GitHub Quality and installer workflows were disabled after this successful
+baseline at the maintainer's request. The follow-up run for source `6bbf349`
+was cancelled. Its new SSH restart case passed locally; the added Linux
+zsh/fish installation and three consecutive Windows startup checks have no
+completed CI receipt. Quality has no push/PR triggers; use local checks.
 
 These are native CI fixtures, not GUI, WSL, USB serial, clean installation,
 signed release, experimental-helper, or external-server evidence. The local
@@ -132,7 +140,7 @@ open the GUI or exercise an Intel Mac hardware session.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | macOS ARM64 | Native CI/local fixtures; GUI checks remain | Local/CI OpenSSH; broader manual checks remain | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Partial fixture/local evidence |
 | macOS x64 | Separate runtime required | Separate runtime required | Dedicated adapter required | Dedicated server required | Dedicated server required | Record native behavior | Pending |
-| Windows x64 | Real Windows runtime, PowerShell/cmd, and WSL | Real Windows runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
+| Windows x64 | PowerShell/cmd native CI fixtures; WSL and GUI checks remain | Real Windows runtime required | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Partial CI fixture evidence |
 | Windows ARM64 | Real Windows ARM64 runtime | Real Windows ARM64 runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
 | Linux x64 | Native CI fixture; X11/Wayland GUI checks remain | CI OpenSSH fixture; manual checks remain | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Partial CI fixture evidence |
 | Linux ARM64 | Separate runtime required | Separate runtime required | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Pending |

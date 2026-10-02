@@ -11,7 +11,7 @@ A checked item means its stated implementation or test exists. It does not imply
 | **Published previews** | macOS ARM64/x64 v0.1.16; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
-| **Quality checks** | Full local suite passes on macOS ARM64; Ubuntu/macOS native CI passes | Windows ConPTY fixture currently fails; three-platform green CI remains unfinished. |
+| **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
@@ -29,7 +29,7 @@ These changes are in source; no new installer release has been published for the
 - [x] Exercise empty/wrong-key rejection and successful signing with a dedicated Unix SSH agent.
 - [x] Exercise `::1` and explicit IPv6 known_hosts locally; expose a skip when loopback IPv6 is unavailable.
 - [x] Interrupt an established loopback SSH transport, reject connections while its server is stopped, and recover after restart with unchanged keys/trust.
-- [x] Add frontend and native Rust quality jobs on Ubuntu, macOS, and Windows; Ubuntu/macOS results are verified.
+- [x] Verify frontend, native workspace tests, and Clippy on Ubuntu, macOS, and Windows in [Quality run 36998538983](https://github.com/OthmaneBlial/MobaRust/actions/runs/36998538983), source `ac70e39`.
 - [x] Include the Windows resource icon required by ordinary native builds; Windows now reaches its runtime tests.
 - [x] Fix release-asset tests launched from a different working directory and include them in the local suite.
 - [x] Add contributor/security/architecture guides and GitHub report/PR templates.
@@ -39,21 +39,22 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 
 ## Next, in priority order
 
-### 1. Make Windows native validation reliable
+### 1. Maintain the native validation baseline locally
 
-**Current gap:** the checkout builds after the icon fix, but the PowerShell/ConPTY I/O fixture times out. Failure cleanup also leaves the disposable HOME temporarily locked.
+**Completed baseline:** Windows builds, PowerShell/cmd PTY tests, workspace tests, and Clippy pass in the recorded three-platform run. An earlier PowerShell startup timed out; the fixture now uses direct console output and joins its reader during cleanup. GitHub Quality and installer workflows are disabled at the maintainer's request; Quality has no push/PR triggers.
 
-- [ ] Diagnose terminal handshake/input behavior and child/reader cleanup; retain a bounded regression.
-- [ ] Run workspace tests and Clippy to completion on Windows x64.
-- [ ] Obtain one completed green Quality run across Ubuntu, macOS, and Windows.
+- [x] Add direct console fixture I/O, child/reader cleanup, and a distinct cmd round trip with bounded deadlines.
+- [x] Run workspace tests and Clippy to completion on Windows x64.
+- [x] Obtain one completed green Quality run across Ubuntu, macOS, and Windows.
+- [ ] Run the stricter three-startup PowerShell/cmd checks on a dedicated Windows runtime and exercise zsh/fish on Linux; these additions were locally validated but their follow-up CI run was cancelled when CI was disabled.
 
-**Done when:** every required job passes, expected PTY output is produced by the shell, the child exits, and disposable state can be removed. A rerun or a larger timeout alone is not a fix.
+**Next gate:** every repeated startup must produce expected output, exit successfully, and release disposable state. Retain local validation receipts; the recorded CI baseline does not prove the newer repeated-startup cases ran.
 
 ### 2. Turn shell and platform assumptions into evidence
 
 - [ ] Exercise PowerShell and cmd input/output, resize, cancellation, and exit separately.
 - [ ] Validate WSL discovery and terminal startup on a dedicated Windows runtime.
-- [ ] Record installed bash/zsh/fish variants and explicit skips on Unix.
+- [x] Record installed bash/zsh/fish variants and explicit skips on Unix; Linux zsh/fish runtime coverage remains pending.
 - [ ] Exercise native GUI focus, paste, split-pane lifecycle, and application shutdown on Windows, macOS, and Linux.
 
 **Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
@@ -74,7 +75,7 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [ ] Validate release notes and artifact names against the actual uploaded binaries.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
-**Done when:** verified artifacts and their limitations are documented per platform. The installer workflow remains disabled; quality CI does not publish releases. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
+**Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
 
 ### 5. Polish daily terminal and file workflows
 

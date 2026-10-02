@@ -1,12 +1,10 @@
 name: Quality
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**/*.md', '.github/ISSUE_TEMPLATE/**']
-  pull_request:
-    paths-ignore: ['**/*.md', '.github/ISSUE_TEMPLATE/**']
   workflow_dispatch:
+
+# Disabled on GitHub at the maintainer's request. No push/PR triggers;
+# retain this recipe for explicitly authorized future manual validation.
 
 permissions:
   contents: read

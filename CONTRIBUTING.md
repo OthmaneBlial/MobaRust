@@ -47,17 +47,19 @@ The [fuzzing guide](docs/testing/fuzzing.md) and [benchmark guide](benchmarks/RE
 describe the existing isolated tools.
 
 `cargo xtask check-rust` runs just workspace formatting, helper staging,
-tests, and Clippy. The [Quality workflow](.github/workflows/quality.yml)
-runs it alongside frontend and release-asset checks on Ubuntu, macOS, and
-Windows. The Linux CI job installs zsh and fish; Unix PTY checks
+tests, and Clippy. GitHub Quality and installer workflows are disabled at the
+maintainer's request. Quality has no push/PR triggers; use the local commands
+above. The preserved [Quality recipe](.github/workflows/quality.yml) combines
+frontend/release-asset checks with native Ubuntu, macOS, and Windows checks
+if explicitly re-enabled for future manual validation.
+The Linux recipe installs zsh and fish; Unix PTY checks
 record each installed shell's version and explicitly report missing variants.
 PowerShell and cmd each perform three consecutive ConPTY round trips; every
 startup must pass, with no retry after a failure.
 Successful test output is retained so optional fixture skip messages
 remain visible in CI logs. The full local command additionally checks
 experimental helpers and fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
-external-server interoperability. The separate release workflow remains
-disabled and is not invoked by Quality.
+external-server interoperability. Quality never publishes installers.
 
 The payload audit checks the established main-branch workflow and secret/path
 boundaries; it does not push. Contributors working on topic branches can use
