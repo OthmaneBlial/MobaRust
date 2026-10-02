@@ -668,7 +668,7 @@ mod tests {
 
         let mut output = String::new();
         let (output_tx, output_rx) = mpsc::channel();
-        thread::spawn(move || {
+        let reader_thread = thread::spawn(move || {
             let mut buffer = [0; 1024];
             loop {
                 match reader.read(&mut buffer) {
@@ -689,64 +689,74 @@ mod tests {
             }
         });
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            writer.write_all(b"hello\n").expect("write test input");
-            writer.flush().expect("flush test input");
-        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(not(target_os = "windows"))]
+            {
+                writer.write_all(b"hello\n").expect("write test input");
+                writer.flush().expect("flush test input");
+            }
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        #[cfg(target_os = "windows")]
-        let mut sent_input = false;
-        #[cfg(target_os = "windows")]
-        let mut cursor_queries_replied = 0;
-        while !output.contains("INPUT:hello") {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
             #[cfg(target_os = "windows")]
-            {
-                // PowerShell asks its host for cursor position before running the command.
-                let queries = output.match_indices("\u{1b}[6n").count();
-                while cursor_queries_replied < queries {
-                    writer
-                        .write_all(b"\x1b[1;1R")
-                        .expect("reply to PTY cursor query");
-                    writer.flush().expect("flush PTY cursor reply");
-                    cursor_queries_replied += 1;
+            let mut sent_input = false;
+            #[cfg(target_os = "windows")]
+            let mut cursor_queries_replied = 0;
+            while !output.contains("INPUT:hello") {
+                #[cfg(target_os = "windows")]
+                {
+                    // PowerShell asks its host for cursor position before running the command.
+                    let queries = output.match_indices("\u{1b}[6n").count();
+                    while cursor_queries_replied < queries {
+                        writer
+                            .write_all(b"\x1b[1;1R")
+                            .expect("reply to PTY cursor query");
+                        writer.flush().expect("flush PTY cursor reply");
+                        cursor_queries_replied += 1;
+                    }
+                    if output.contains("MOBARUST_PTY_OK") && !sent_input {
+                        writer.write_all(b"hello\r").expect("write test input");
+                        writer.flush().expect("flush test input");
+                        sent_input = true;
+                    }
                 }
-                if output.contains("MOBARUST_PTY_OK") && !sent_input {
-                    writer.write_all(b"hello\r").expect("write test input");
-                    writer.flush().expect("flush test input");
-                    sent_input = true;
+                match output_rx
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                {
+                    Ok(Ok(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                    Ok(Err(error)) => panic!("{error}; captured PTY output: {output:?}"),
+                    Err(_) => {
+                        panic!("timed out waiting for test PTY output; captured: {output:?}");
+                    }
                 }
             }
-            match output_rx
-                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-            {
-                Ok(Ok(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
-                Ok(Err(error)) => panic!("{error}; captured PTY output: {output:?}"),
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("timed out waiting for test PTY output; captured: {output:?}");
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let status = loop {
+                if let Some(status) = child.try_wait().expect("poll test shell") {
+                    break status;
                 }
-            }
+                if std::time::Instant::now() >= deadline {
+                    panic!("test shell did not exit after writing its output");
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+
+            assert!(status.success());
+            assert!(output.contains("MOBARUST_PTY_OK"), "{output:?}");
+            assert!(output.contains("INPUT:hello"));
+        }));
+        // Close ConPTY and join its output reader before xtask removes the
+        // disposable HOME, including when an assertion or deadline fails.
+        let cleanup = cleanup_child(child.as_mut());
+        drop(writer);
+        drop(pair.master);
+        drop(output_rx);
+        let joined = reader_thread.join();
+        if let Err(failure) = result {
+            std::panic::resume_unwind(failure);
         }
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let status = loop {
-            if let Some(status) = child.try_wait().expect("poll test shell") {
-                break status;
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("test shell did not exit after writing its output");
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
-
-        assert!(status.success());
-        assert!(output.contains("MOBARUST_PTY_OK"), "{output:?}");
-        assert!(output.contains("INPUT:hello"));
+        cleanup.expect("reap test shell");
+        joined.expect("join test PTY reader");
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -935,11 +945,13 @@ mod tests {
         #[cfg(target_os = "windows")]
         {
             let mut command = CommandBuilder::new("powershell.exe");
+            // Readiness must reach ConPTY directly, independently of the
+            // PowerShell pipeline's output formatting around a blocking read.
             command.args([
                 "-NoLogo",
                 "-NoProfile",
                 "-Command",
-                "Write-Output 'MOBARUST_PTY_OK'; $line = [Console]::ReadLine(); Write-Output ('INPUT:' + $line); exit 0",
+                "[Console]::WriteLine('MOBARUST_PTY_OK'); $line = [Console]::ReadLine(); [Console]::WriteLine('INPUT:' + $line); exit 0",
             ]);
             command
         }
