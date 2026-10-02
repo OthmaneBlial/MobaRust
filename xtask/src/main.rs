@@ -1403,7 +1403,11 @@ fn test_ssh() -> Result<(), String> {
 fn check_rust() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
     stage_helpers()?;
-    run_sanitized_test("cargo", ["test", "--locked", "--workspace"], None)?;
+    run_sanitized_test(
+        "cargo",
+        ["test", "--locked", "--workspace", "--", "--show-output"],
+        None,
+    )?;
     run(
         "cargo",
         [

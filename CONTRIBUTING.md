@@ -49,8 +49,9 @@ describe the existing isolated tools.
 `cargo xtask check-rust` runs just workspace formatting, helper staging,
 tests, and Clippy. The [Quality workflow](.github/workflows/quality.yml)
 runs it alongside frontend and release-asset checks on Ubuntu, macOS, and
-Windows. The full local command additionally checks experimental helpers and
-fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
+Windows. Successful test output is retained so optional fixture skip messages
+remain visible in CI logs. The full local command additionally checks
+experimental helpers and fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
 external-server interoperability. The separate release workflow remains
 disabled and is not invoked by Quality.
 
