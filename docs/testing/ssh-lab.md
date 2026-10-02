@@ -108,9 +108,10 @@ Two native broker regressions cover bounded/one-shot answers, expired waiter
 cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
 DOM boundary checks cover password masking, plain-text server labels, abort
 cancellation and clearing the input; these are not native keyboard/focus proof.
-The remaining native GUI coverage, jump-hop/reconnect challenge acceptance
-and OpenSSH/PAM interoperability remain separate gates. This mode is post-v0.1.18
-source work; the published installers do not contain it.
+The native receipts below cover saved profiles, Quick connect and controlled
+reconnects on Mac debug. Jump-hop challenge acceptance, broader reconnect
+cases and OpenSSH/PAM interoperability remain separate gates. This mode is
+post-v0.1.18 source work; the published installers do not contain it.
 
 ### Native password/OTP check — 2026-10-02
 
@@ -138,10 +139,11 @@ Observed through the native app:
   loopback listener was still running. This does not establish Quit-shortcut
   timing or other OS-originated exit routes.
 
-This establishes these Mac debug workflows against the same-stack Rust fixture.
-It does not establish OpenSSH/PAM interoperability, jump-hop/reconnect dialogues,
-automatic terminal focus after login, Windows/Linux acceptance or behavior of
-the published installers. Quick connect and keyboard cancellation focus were
+These observations establish the stated Mac debug workflows against the
+same-stack Rust fixture. Alone, they do not establish OpenSSH/PAM
+interoperability, jump-hop/reconnect dialogues, automatic terminal focus after
+login, Windows/Linux acceptance or behavior of the published installers.
+Quick connect, keyboard cancellation focus and controlled reconnects were
 checked separately below.
 
 ### Native Quick connect and cancellation focus — 2026-10-02
@@ -183,8 +185,52 @@ Observed through native keyboard/mouse actions:
 
 These observations cover Mac debug Quick connect, saving its challenge-mode
 profile, trust-before-prompt and keyboard focus after challenge cancellation.
-Jump-hop/reconnect challenge ownership, OpenSSH/PAM interoperability, other
-platforms and updated published installers remain separate acceptance gates.
+They do not establish jump-hop/reconnect challenge ownership, OpenSSH/PAM
+interoperability, other platforms or updated published installers. Controlled
+reconnects were checked separately below.
+
+### Native reconnect password/OTP check — 2026-10-02
+
+The same Mac ARM64 debug source bundle (`d3b4fb3`) was copied into a fresh app
+with disposable HOME/portable data, pinned generated trust and a two-attempt
+reconnect budget. The Rust authentication server and a TCP relay both listened
+only on `127.0.0.1`. The relay interrupted its owned sockets while keeping its
+listener available; it did not restart the server or change its host key.
+An initial relay configuration error was corrected before the observations
+below; that failed harness attempt is excluded from the connection counts.
+
+Observed through the native app, with relay event timestamps/counters:
+
+- A saved challenge-mode profile accepted separate, masked password and OTP
+  responses and opened the fixture's **no OS shell** echo channel.
+- Interrupting its transport opened a new focused password challenge, followed
+  by a separate masked OTP challenge. Correct responses restored connected/LIVE
+  state in the existing SSH tab. After a terminal click, the non-secret marker
+  `RECONNECT_PASSWORD_OTP_OK` was echoed after the new fixture banner.
+- A second interruption opened another password challenge. Escape closed the
+  session and left its tab/status/callout **closed / CLOSED / SSH closed**.
+  The relay count remained at three accepted connections when checked 13.9
+  seconds after disconnection, with only its listening socket remaining.
+  Cancellation therefore stopped the remaining configured retry.
+- Explicitly selecting the saved profile started connection four and prompted
+  for both factors again. Successful recovery opened a fresh connected SSH tab
+  while retaining the previous closed tab.
+- A third interruption started connection five and opened a password prompt.
+  Native application-menu Quit while that prompt was unanswered exited with
+  code 0. The recorded app and local zsh child were absent; both relay/server
+  had only listeners and no established SSH sockets before fixture shutdown.
+- Neither generated response appeared in the three persisted profile/settings/
+  audit JSON files. The owned relay was stopped/reaped, its generated credential
+  metadata removed and its port rebound successfully. The Rust lab passed after
+  300.02 seconds, removed its private metadata and released its port. All recorded
+  app, zsh, server and relay PIDs were absent after cleanup.
+
+This covers one successful reconnect, user cancellation, explicit recovery and
+Quit with a pending reconnect challenge on Mac debug. It does not prove
+jump-hop prompt routing, concurrent sessions, stale-answer UI races, changing
+OTP policies, all retry budgets, a real daemon restart, OpenSSH/PAM, other
+platforms or behavior of published installers. The existing one-shot broker
+and responder-disconnect regressions remain separate automated evidence.
 
 For a manual native GUI check on Unix:
 
