@@ -156,9 +156,10 @@ The native receipts below cover saved profiles, Quick connect, controlled
 reconnects, two-bastion prompt routing and two-session queued prompt ownership
 on Mac debug. Native queued expiry/overflow, broader reconnect cases and
 OpenSSH/PAM interoperability remain separate gates. The ask-each-challenge mode
-is included in the v0.1.19 Mac
-previews; Windows/Linux remain v0.1.12. The concurrent frontend queue is
-post-v0.1.19 source work and is not in the published installers.
+is included in the v0.1.20 Mac previews, including the concurrent frontend queue.
+Windows/Linux remain v0.1.12. Native acceptance of that queue in the v0.1.20
+release copies remains pending; the debug and earlier release receipts below
+must not be treated as observations of the new installers.
 
 ### Concurrent authentication queue follow-up — 2026-10-02
 

@@ -98,7 +98,9 @@ desktop tests, workspace tests/Clippy, frontend checks and protocol fixtures.
 debug bundle; its process-launch check does not establish GUI acceptance.
 This is native backend wire evidence, not native GUI acceptance, sustained-output
 performance or a guarantee that every transfer/actor-queue shutdown is bounded.
-The correction is on `main`; the published v0.1.19 Mac previews do not contain it.
+Both backpressure corrections are included in the v0.1.20 Mac preview. The
+earlier v0.1.19 Mac previews do not contain them; the new package/CLI checks do
+not establish native GUI acceptance.
 
 ### Queue retirement
 
@@ -145,7 +147,8 @@ generated key/trust files were removed. The signal is not native Quit evidence.
 
 ## Limits and remaining evidence
 
-This is a post-v0.1.18 source correction; published installers are unchanged.
+The v0.1.20 Mac preview includes these queue and output retirement corrections.
+Earlier Mac previews and the Windows/Linux v0.1.12 installers remain unchanged.
 Native GUI acceptance with a deliberately queued action during transport loss,
 repeated disconnect/reconnect and Windows/Linux runtime behavior remains open.
 The earlier [native reconnect receipt](ssh-reconnect.md) and [native transfer/exit

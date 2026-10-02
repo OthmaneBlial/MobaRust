@@ -52,5 +52,6 @@ sustained startup output, or native Telnet/serial acceptance.
 The manager regressions do not establish GUI timing on every OS,
 physical serial-device acceptance, or sustained output responsiveness. A native
 follow-up should attach while a controlled server/device continues output and
-verify the complete visible sequence. Published v0.1.19 Mac installers and
-v0.1.12 Windows/Linux installers do not contain this source correction.
+verify the complete visible sequence. The v0.1.20 Mac preview packages this
+correction; its package/CLI checks do not close that GUI acceptance gate.
+Earlier v0.1.19 Mac and v0.1.12 Windows/Linux installers remain unchanged.
