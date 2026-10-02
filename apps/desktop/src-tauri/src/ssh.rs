@@ -672,6 +672,7 @@ impl SshManager {
             .get(terminal_id)
             .map(|state| state.close.clone())
             .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        self.cancel_for_terminal(terminal_id);
         close.send(true).map_err(|_| SshManagerError::Closed)
     }
 
@@ -1278,6 +1279,17 @@ impl SshManager {
         }
     }
 
+    async fn finish_session_transfers(&self, terminal_id: &str, workers: &mut JoinSet<()>) {
+        self.cancel_for_terminal(terminal_id);
+        // Keep the transport alive for part cleanup and any promotion/rollback
+        // already in its critical section. Aborting here can strand originals.
+        while let Some(result) = workers.join_next().await {
+            if result.is_err() {
+                tracing::warn!(event = "transfer_worker_failed_during_session_close");
+            }
+        }
+    }
+
     fn finish_transfer(&self, transfer_id: &str) {
         if let Ok(mut transfers) = self.transfers.lock() {
             transfers.remove(transfer_id);
@@ -1579,6 +1591,7 @@ async fn run_remote_session(
     let mut connection_is_live = true;
     let mut shell_started_at = Instant::now();
     let mut reconnects_since_stable_shell = 0;
+    let mut transfers = JoinSet::new();
 
     'session: loop {
         let shell_result = run_shell_once(
@@ -1590,8 +1603,12 @@ async fn run_remote_session(
             &writer,
             &mut commands,
             &mut close,
+            &mut transfers,
         )
         .await;
+        manager
+            .finish_session_transfers(&terminal_id, &mut transfers)
+            .await;
         manager.finish_output(&app, &terminal_id);
         match shell_result {
             ShellRunResult::Closed => break 'session,
@@ -1816,6 +1833,7 @@ async fn run_shell_once(
     writer: &mobarust_ssh::SshShellWriter,
     commands: &mut mpsc::Receiver<SshCommand>,
     close: &mut watch::Receiver<bool>,
+    transfers: &mut JoinSet<()>,
 ) -> ShellRunResult {
     loop {
         tokio::select! {
@@ -1936,7 +1954,7 @@ async fn run_shell_once(
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
                         let transfer_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
+                        transfers.spawn(async move {
                             run_transfer(transfer_app, transfer_manager, transfer_connection, job, cancel).await;
                         });
                     }
@@ -1946,6 +1964,7 @@ async fn run_shell_once(
                     }
                 }
             }
+            _ = transfers.join_next(), if !transfers.is_empty() => {}
             changed = close.changed() => {
                 if changed.is_err() || *close.borrow() {
                     let _ = writer.close().await;
@@ -2948,6 +2967,7 @@ async fn download_directory<F>(
 where
     F: FnMut(u64, Option<u64>),
 {
+    check_transfer_cancelled(cancel)?;
     match fs::symlink_metadata(local_root).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(SshError::Sftp(
@@ -2971,15 +2991,14 @@ where
     let (files, directories, total) =
         collect_remote_files(sftp, remote_root, local_root, cancel).await?;
     for directory in directories {
+        check_transfer_cancelled(cancel)?;
         ensure_local_download_directory(&directory).await?;
     }
 
     let mut transferred = 0_u64;
     on_progress(0, total);
     for (remote_path, local_path, size) in files {
-        if cancel.try_recv().is_ok() {
-            return Err(SshError::Cancelled);
-        }
+        check_transfer_cancelled(cancel)?;
         let mut progress = FileTransferProgress {
             base: transferred,
             total,
@@ -2998,6 +3017,7 @@ where
         transferred = transferred.saturating_add(copied);
         on_progress(transferred, total);
     }
+    check_transfer_cancelled(cancel)?;
     Ok(transferred)
 }
 
@@ -3039,9 +3059,7 @@ async fn collect_remote_files(
     let mut seen = 0_usize;
 
     while let Some((remote_directory, local_directory)) = pending.pop_front() {
-        if cancel.try_recv().is_ok() {
-            return Err(SshError::Cancelled);
-        }
+        check_transfer_cancelled(cancel)?;
         let entries = tokio::select! {
             _ = &mut *cancel => return Err(SshError::Cancelled),
             result = sftp.read_dir(remote_directory.clone()) => result?,
@@ -3159,20 +3177,17 @@ where
     F: FnMut(u64, Option<u64>),
 {
     let (files, directories, total) = collect_local_files(local_root, remote_root, cancel).await?;
-    if cancel.try_recv().is_ok() {
-        return Err(SshError::Cancelled);
-    }
+    check_transfer_cancelled(cancel)?;
     ensure_remote_directory(sftp, remote_root).await?;
     for directory in directories {
+        check_transfer_cancelled(cancel)?;
         ensure_remote_directory(sftp, &directory).await?;
     }
 
     let mut transferred = 0_u64;
     on_progress(0, Some(total));
     for (local_path, remote_path, size) in files {
-        if cancel.try_recv().is_ok() {
-            return Err(SshError::Cancelled);
-        }
+        check_transfer_cancelled(cancel)?;
         let mut progress = FileTransferProgress {
             base: transferred,
             total: Some(total),
@@ -3191,6 +3206,7 @@ where
         transferred = transferred.saturating_add(copied);
         on_progress(transferred, Some(total));
     }
+    check_transfer_cancelled(cancel)?;
     Ok(transferred)
 }
 
@@ -3199,6 +3215,7 @@ async fn collect_local_files(
     remote_root: &str,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(Vec<LocalUploadFile>, Vec<String>, u64), SshError> {
+    check_transfer_cancelled(cancel)?;
     let metadata = fs::symlink_metadata(local_root)
         .await
         .map_err(SshError::LocalIo)?;
@@ -3214,9 +3231,7 @@ async fn collect_local_files(
     let mut seen = 0_usize;
 
     while let Some((local_directory, remote_directory)) = pending.pop_front() {
-        if cancel.try_recv().is_ok() {
-            return Err(SshError::Cancelled);
-        }
+        check_transfer_cancelled(cancel)?;
         let mut entries = fs::read_dir(&local_directory)
             .await
             .map_err(SshError::LocalIo)?;
@@ -3489,6 +3504,13 @@ fn remote_part_path(remote_path: &str, transfer_id: &str) -> Result<String, SshE
     Ok(format!("{parent}/.{name}.mobarust-{transfer_id}.part"))
 }
 
+fn check_transfer_cancelled(cancel: &mut oneshot::Receiver<()>) -> Result<(), SshError> {
+    match cancel.try_recv() {
+        Err(oneshot::error::TryRecvError::Empty) => Ok(()),
+        _ => Err(SshError::Cancelled),
+    }
+}
+
 fn commit_local_file(
     temporary: &Path,
     destination: &Path,
@@ -3497,9 +3519,7 @@ fn commit_local_file(
 ) -> Result<(), SshError> {
     // The copy and fsync may have finished before a queued cancellation arrived.
     // Do not replace the destination when cancellation preceded this commit.
-    if !matches!(cancel.try_recv(), Err(oneshot::error::TryRecvError::Empty)) {
-        return Err(SshError::Cancelled);
-    }
+    check_transfer_cancelled(cancel)?;
     match std::fs::symlink_metadata(destination) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(SshError::Sftp(
@@ -3641,8 +3661,8 @@ mod tests {
     use super::{
         MAX_SERVER_ALIVE_INTERVAL_SECONDS, MAX_SSH_JUMP_HOSTS, ReconnectOutcome, SshConnectRequest,
         SshManager, SshManagerError, SshTransferRequest, TRANSFER_PROGRESS_MIN_INTERVAL,
-        TransferProtocol, add_transfer_size, commit_local_file, local_part_path,
-        next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
+        TransferProtocol, add_transfer_size, collect_local_files, commit_local_file,
+        local_part_path, next_shell_reconnect_count, reconnect_with_backoff, remote_child_path,
         remove_partial_download, remove_partial_download_path, server_alive_interval_duration,
         should_emit_transfer_progress, transfer_metrics, validate_local_file_path,
         validate_remote_directory_path, validate_remote_file_path, validate_remote_mutation_path,
@@ -3971,6 +3991,86 @@ mod tests {
         assert!(commit_local_file(&temporary, &destination, true, &mut cancel).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"target remains unchanged");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    #[tokio::test]
+    async fn session_transfer_drain_cancels_only_its_jobs_and_waits_for_cleanup() {
+        use super::TransferControl;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        use tokio::task::JoinSet;
+
+        let manager = SshManager::default();
+        let directory = tempdir().unwrap();
+        let original = directory.path().join("original");
+        let part = directory.path().join("part");
+        fs::write(&original, b"original bytes").unwrap();
+        fs::write(&part, b"unfinished upload").unwrap();
+        let (cancel, cancellation) = oneshot::channel();
+        let (other_cancel, mut other_cancellation) = oneshot::channel();
+        for (id, terminal_id, cancel) in [
+            ("closing-job", "closing-session", cancel),
+            ("other-job", "other-session", other_cancel),
+        ] {
+            manager.transfers.lock().unwrap().insert(
+                id.into(),
+                TransferControl {
+                    terminal_id: terminal_id.into(),
+                    cancel,
+                },
+            );
+        }
+        let (cleanup_started, cleanup_observed) = oneshot::channel();
+        let (finish_cleanup, cleanup_finished) = oneshot::channel();
+        let part_for_worker = part.clone();
+        let mut workers = JoinSet::new();
+        workers.spawn(async move {
+            cancellation.await.unwrap();
+            fs::remove_file(part_for_worker).unwrap();
+            cleanup_started.send(()).unwrap();
+            cleanup_finished.await.unwrap();
+        });
+        let mut drain = Box::pin(manager.finish_session_transfers("closing-session", &mut workers));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                _ = &mut drain => panic!("session closed before worker cleanup finished"),
+                _ = cleanup_observed => {}
+            }
+            assert!(!part.exists());
+            assert_eq!(fs::read(&original).unwrap(), b"original bytes");
+            assert!(matches!(
+                other_cancellation.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(manager.transfers.lock().unwrap().contains_key("other-job"));
+            poll_fn(|cx| {
+                assert!(drain.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            finish_cleanup.send(()).unwrap();
+            drain.await;
+        })
+        .await
+        .expect("cooperative transfer drain deadline");
+        assert!(workers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recursive_empty_upload_scan_honors_cancel_and_closed_control() {
+        let directory = tempdir().unwrap();
+        for explicit in [false, true] {
+            let (sender, mut cancel) = oneshot::channel();
+            if explicit {
+                sender.send(()).unwrap();
+            } else {
+                drop(sender);
+            }
+            assert!(matches!(
+                collect_local_files(directory.path(), "/fixture", &mut cancel).await,
+                Err(mobarust_ssh::SshError::Cancelled)
+            ));
+        }
     }
 
     #[tokio::test]

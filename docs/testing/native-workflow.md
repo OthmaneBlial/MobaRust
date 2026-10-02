@@ -82,3 +82,12 @@ an active SSH session/remote shell plus the local zsh PTY. The rebuilt candidate
 also distinguished ERROR from normal CLOSED and removed stale LIVE/active
 labels. This correction is on `main` after v0.1.18; published DMGs are unchanged.
 In-flight transfer shutdown and other platforms remain separate gates.
+
+## Post-v0.1.18 transfer cancellation and SSH-tab closure
+
+The [native transfer lifecycle receipt](transfer-lifecycle.md) adds 32 MiB SFTP
+download/upload cancellation with original preservation and part cleanup,
+byte-matched download Retry, and a reproduced/fixed cleanup race when closing
+SSH during an upload. Session-owned workers now finish cleanup before transport
+disconnect. App Quit during an active transfer, recursive/SCP GUI workflows and
+other platforms remain separate gates.

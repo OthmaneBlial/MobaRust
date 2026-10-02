@@ -63,6 +63,7 @@ The SSH lab reports **41 unit tests and 12 integration test cases**. IPv6 and re
 - [x] Preserve the SSH error state after final disconnected/closed events; distinguish normal shell exit, and replace stale LIVE/active-transport labels with the selected terminal's actual state.
 - [x] Verify native macOS ARM64 two-attempt exhaustion, explicit profile recovery and Quit releasing an active SSH session plus local PTY. [Receipt and limits](docs/testing/ssh-reconnect.md).
 - [x] Honor cancellation queued after copying and before final promotion on all six transfer paths; verify local original/part preservation and six real-SFTP promotion cases, including cancellation during metadata. [Checks and limits](docs/testing/transfer-cancellation.md).
+- [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [ ] Include these post-tag corrections in the next checked installer cohort; published v0.1.18 DMGs remain unchanged.
 
 ## Next, in priority order
@@ -110,7 +111,7 @@ The SSH lab reports **41 unit tests and 12 integration test cases**. IPv6 and re
 ### 5. Polish daily terminal and file workflows
 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
-- [ ] Validate multi-file/recursive transfers, collision decisions, native Cancel/retry, shutdown during transfer and progress under realistic workloads. The [pre-promotion cancellation checks](docs/testing/transfer-cancellation.md) do not close this GUI gate.
+- [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, app Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.
 - [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
 - [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.

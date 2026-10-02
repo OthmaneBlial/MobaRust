@@ -23,6 +23,13 @@ cooperative: the manager signals the transfer, the copy loop observes the
 signal between bounded reads/writes, and the transfer removes its temporary
 destination before reporting cancellation.
 
+The SSH session owns its dispatched transfer workers and reaps completed tasks
+while reading shell output. Session closure cancels its jobs and waits for their
+cleanup before disconnecting the transport. It also drains the old generation's
+workers before reconnecting. Workers are not aborted during promotion/rollback;
+loss of the transport can still make remote cleanup fail explicitly.
+[Native cancellation and SSH-close evidence](../testing/transfer-lifecycle.md).
+
 Downloads stream into a uniquely named local sibling `.mobarust.part` file,
 sync it, and replace the destination only after the complete remote byte count
 has been copied. Uploads stream into a uniquely named remote sibling `.part`

@@ -65,9 +65,11 @@ Actions remain disabled.
 
 ## Limits and next acceptance gate
 
-These are local commit and real-SFTP protocol checks, not a native UI Cancel
-button acceptance run. GUI cancellation/retry, interrupted large transfers,
-shutdown during transfer and cross-platform native behavior remain open.
+These pre-promotion regressions are local commit and real-SFTP protocol checks.
+The separate [native lifecycle receipt](transfer-lifecycle.md) verifies 32 MiB
+single-file SFTP Cancel, download Retry and active-upload SSH-tab closure on
+macOS ARM64. Broader recursive/SCP cancellation, interrupted large transfers,
+app Quit during transfer and cross-platform native behavior remain open.
 Metadata and cleanup requests retain their existing timeout; this change does
 not promise immediate cancellation while one is pending. If the remote server
 cannot remove a part, the cleanup failure remains explicit.
