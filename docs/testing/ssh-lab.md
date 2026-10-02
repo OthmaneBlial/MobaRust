@@ -385,7 +385,47 @@ OTP policies, all retry budgets, a real daemon restart, OpenSSH/PAM, other
 platforms or behavior of published installers. The existing one-shot broker
 and responder-disconnect regressions remain separate automated evidence.
 
-For a manual native GUI check on Unix:
+Before a manual Mac GUI check, prepare a fresh application copy:
+
+```bash
+cargo xtask package-check
+node tools/prepare-macos-ui-lab.mjs
+```
+
+The tool prints its owned paths, unique application ID and unchanged executable
+SHA-256. It copies the clean debug bundle into a private directory under
+`target/`, adds empty portable session data and an executable launcher that
+clears inherited environment variables before setting disposable HOME/ZDOTDIR,
+XDG paths and empty SSH agent/askpass values. Open the **printed app bundle**;
+launching its `mobarust` binary directly bypasses that launcher. This lab copy
+has modified bundle metadata and is unsigned; it is not a distributable build.
+The tool refuses bundle symlinks and existing portable state, preserves the
+source bundle, and starts neither an app nor a listener. An optional argument
+selects another clean built Mac app bundle.
+
+Do not rely on `LSEnvironment` alone: during a fresh launch preflight on
+2026-10-02, the running app retained the usual HOME and agent socket despite
+its disposable bundle settings. It was stopped before starting SSH fixtures.
+An explicit environment launcher was then verified on an owned app PID with
+disposable HOME/ZDOTDIR/XDG paths and an empty agent socket. Native observation
+still reported `cgWindowNotFound`; the owned app and shell were stopped, with
+no fixture started. This is isolation evidence, not queued-expiry acceptance.
+
+The preparation regression executes a harmless child through the generated
+launcher: inherited HOME/agent/test variables are dropped, paths containing
+spaces/apostrophes/shell metacharacters and arguments remain literal, source
+bytes stay unchanged, private modes are checked, and unsafe source copies are
+refused without deleting previous labs. Run it with
+`node --test tools/prepare-macos-ui-lab.test.mjs`; it also runs in
+`cargo xtask check` and explicitly skips on other platforms.
+
+Before entering credentials or starting fixtures, verify the owned process's
+disposable environment and working native accessibility/screenshot observation.
+Keep responses out of receipts and shared process-environment dumps. After
+Quit, verify owned PIDs outside UI before removing only that lab's generated
+directory; a subsequent native observation may relaunch a stopped app.
+
+For a manual native SSH fixture on Unix:
 
 ```bash
 cargo test --locked -p mobarust-ssh --test authentication native_authentication_lab -- --ignored --nocapture
