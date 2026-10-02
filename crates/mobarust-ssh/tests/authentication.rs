@@ -39,6 +39,13 @@ enum ShellReply {
     StartupOverflow,
 }
 
+#[cfg(unix)]
+const NATIVE_SHELL_CASES: [(&str, ShellReply); 3] = [
+    ("startup", ShellReply::StartupFlood),
+    ("rejected", ShellReply::Reject),
+    ("stalled", ShellReply::StartupStall),
+];
+
 #[derive(Clone, Copy)]
 enum Method {
     Password,
@@ -533,6 +540,74 @@ async fn native_jump_authentication_lab() {
     native_lab(true).await;
 }
 
+/// Separate GUI setup lab: generated password/OTP, no OS command execution.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "manual native shell startup acceptance; five-minute deadline"]
+async fn native_shell_setup_lab() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target/shell-setup-native-lab");
+    std::fs::create_dir_all(&root).unwrap();
+    let directory = native_lab_directory(&root);
+    let mut endpoints = JoinSet::new();
+    native_shell_endpoints(directory.path(), Duration::from_secs(300), &mut endpoints).await;
+    while let Some(result) = endpoints.join_next().await {
+        result.unwrap();
+    }
+}
+
+#[cfg(unix)]
+async fn native_shell_endpoints(
+    directory: &std::path::Path,
+    lifetime: Duration,
+    endpoints: &mut JoinSet<()>,
+) -> Vec<SocketAddr> {
+    use mobarust_core::{AuthMethod, Protocol, SessionRecord};
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut profiles = Vec::new();
+    let mut addresses = Vec::new();
+    for (name, reply) in NATIVE_SHELL_CASES {
+        let address = native_endpoint(directory, name, None, reply, lifetime, endpoints).await;
+        addresses.push(address);
+        let bytes = Zeroizing::new(std::fs::read(directory.join(format!("{name}.json"))).unwrap());
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut profile = SessionRecord::local_terminal(format!("SSH setup {name}"));
+        profile.protocol = Protocol::Ssh;
+        profile.hostname = address.ip().to_string();
+        profile.port = address.port();
+        profile.username = Some("fixture".into());
+        profile.auth = AuthMethod::KeyboardInteractivePrompt;
+        profile.pinned_fingerprint = Some(metadata["fingerprint"].as_str().unwrap().to_owned());
+        profile.folder = Some("Disposable SSH setup lab".into());
+        profile.tags = vec!["loopback".into()];
+        profile.startup_command = Some("fixture-startup-".repeat(512));
+        profile.notes = Some("Bounded echo fixture; no OS shell or command execution.".into());
+        profile.validate().unwrap();
+        profiles.push(profile);
+    }
+    let path = directory.join("profiles.json");
+    let file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    serde_json::to_writer(
+        file,
+        &serde_json::json!({"schema_version": 1, "sessions": profiles}),
+    )
+    .unwrap();
+    eprintln!(
+        "Native shell setup secret-free profiles: {}",
+        path.display()
+    );
+    addresses
+}
+
 #[cfg(unix)]
 async fn native_lab(jumps: bool) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -552,13 +627,30 @@ async fn native_lab(jumps: bool) {
         directory.path(),
         if jumps { "target" } else { "fixture" },
         None,
+        ShellReply::Accept,
+        Duration::from_secs(300),
         &mut endpoints,
     )
     .await;
     if jumps {
-        let second =
-            native_endpoint(directory.path(), "bastion2", Some(target), &mut endpoints).await;
-        native_endpoint(directory.path(), "bastion1", Some(second), &mut endpoints).await;
+        let second = native_endpoint(
+            directory.path(),
+            "bastion2",
+            Some(target),
+            ShellReply::Accept,
+            Duration::from_secs(300),
+            &mut endpoints,
+        )
+        .await;
+        native_endpoint(
+            directory.path(),
+            "bastion1",
+            Some(second),
+            ShellReply::Accept,
+            Duration::from_secs(300),
+            &mut endpoints,
+        )
+        .await;
     }
     while let Some(result) = endpoints.join_next().await {
         result.unwrap();
@@ -591,6 +683,8 @@ async fn native_endpoint(
     directory: &std::path::Path,
     name: &str,
     forward_to: Option<SocketAddr>,
+    shell_reply: ShellReply,
+    lifetime: Duration,
     endpoints: &mut JoinSet<()>,
 ) -> SocketAddr {
     use std::io::Write;
@@ -624,16 +718,23 @@ async fn native_endpoint(
         "Native authentication lab metadata: {}",
         metadata_path.display()
     );
-    let config = Arc::new(server::Config {
+    let mut config = server::Config {
         keys: vec![key],
         auth_rejection_time: Duration::ZERO,
         inactivity_timeout: Some(Duration::from_secs(180)),
         nodelay: true,
         ..Default::default()
-    });
+    };
+    if matches!(shell_reply, ShellReply::StartupFlood) {
+        config.window_size = 1024;
+    } else if matches!(shell_reply, ShellReply::StartupStall) {
+        config.window_size = 0;
+    }
+    let config = Arc::new(config);
+    let label = name.to_owned();
     endpoints.spawn(async move {
         let mut sessions = JoinSet::new();
-        let lifetime = tokio::time::sleep(Duration::from_secs(300));
+        let lifetime = tokio::time::sleep(lifetime);
         tokio::pin!(lifetime);
         loop {
             tokio::select! {
@@ -645,23 +746,166 @@ async fn native_endpoint(
                     let (stream, peer) = peer.unwrap();
                     assert!(peer.ip().is_loopback());
                     if sessions.len() >= 8 { drop(stream); continue; }
+                    let observations = Arc::new(Observations::default());
                     let handler = Handler {
                         method: Method::Distinct { together: false },
                         expected: password.clone(), otp: otp.clone(),
-                        observations: Arc::new(Observations::default()), release: None,
+                        observations: observations.clone(), release: None,
                         native_echo: forward_to.is_none(), forward_to,
-                        shell_reply: ShellReply::Accept,
+                        shell_reply,
                         forwarded: JoinSet::new(),
                     };
                     let config = config.clone();
-                    sessions.spawn(async move { server::run_stream(config, stream, handler).await?.await });
+                    let label = label.clone();
+                    sessions.spawn(async move {
+                        let result = server::run_stream(config, stream, handler).await?.await;
+                        if !matches!(shell_reply, ShellReply::Accept) {
+                            // Report only counts and equality, never entered input or credentials.
+                            let expected = format!("{}\n", "fixture-startup-".repeat(512));
+                            eprintln!("Native shell setup {label}: shell_requests={}, input_bytes={}, startup_exact_once={}",
+                                observations.shell_requests.load(Ordering::SeqCst),
+                                observations.shell_input_bytes.load(Ordering::SeqCst),
+                                *observations.startup_input.lock().unwrap() == expected.as_bytes());
+                        }
+                        result
+                    });
                 }
             }
         }
         sessions.abort_all();
         while sessions.join_next().await.is_some() {}
+        drop(listener);
+        drop(TcpListener::bind(address).await.expect("native lab must release its port"));
     });
     address
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let directory = native_lab_directory(root.path());
+    let path = directory.path().to_owned();
+    let mut endpoints = JoinSet::new();
+    let addresses =
+        native_shell_endpoints(directory.path(), Duration::from_secs(3), &mut endpoints).await;
+    let profiles_path = directory.path().join("profiles.json");
+    assert_eq!(
+        profiles_path.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let profiles = std::fs::read_to_string(profiles_path).unwrap();
+    let export: serde_json::Value = serde_json::from_str(&profiles).unwrap();
+    assert_eq!(export["schema_version"], 1);
+    let sessions: Vec<mobarust_core::SessionRecord> =
+        serde_json::from_value(export["sessions"].clone()).unwrap();
+    assert_eq!(sessions.len(), NATIVE_SHELL_CASES.len());
+    for (((name, reply), address), profile) in
+        NATIVE_SHELL_CASES.into_iter().zip(&addresses).zip(sessions)
+    {
+        assert!(address.ip().is_loopback());
+        profile.validate().unwrap();
+        assert_eq!(
+            profile.auth,
+            mobarust_core::AuthMethod::KeyboardInteractivePrompt
+        );
+        assert_eq!(profile.port, address.port());
+        assert_eq!(profile.hostname, address.ip().to_string());
+        assert_eq!(
+            profile.startup_command.as_deref(),
+            Some("fixture-startup-".repeat(512).as_str())
+        );
+        let file = directory.path().join(format!("{name}.json"));
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        let bytes = Zeroizing::new(std::fs::read(file).unwrap());
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            profile.pinned_fingerprint.as_deref(),
+            metadata["fingerprint"].as_str()
+        );
+        for secret in ["password", "otp"] {
+            assert!(
+                !profiles.contains(metadata[secret].as_str().unwrap()),
+                "generated factors must not enter session exports"
+            );
+        }
+        let password = Zeroizing::new(metadata["password"].as_str().unwrap().to_owned());
+        let otp = Zeroizing::new(metadata["otp"].as_str().unwrap().to_owned());
+        let options = SshConnectOptions {
+            host: metadata["host"].as_str().unwrap().to_owned(),
+            port: u16::try_from(metadata["port"].as_u64().unwrap()).unwrap(),
+            host_key_policy: HostKeyPolicy::PinnedFingerprint(
+                metadata["fingerprint"].as_str().unwrap().to_owned(),
+            ),
+            timeout: Duration::from_millis(500),
+            keepalive_interval: None,
+            credentials: SshCredentials::keyboard_interactive_prompt("fixture", move |challenge| {
+                let responses = challenge
+                    .prompts
+                    .iter()
+                    .map(|prompt| {
+                        Secret::from_zeroizing(if prompt == "OTP: " {
+                            otp.clone()
+                        } else {
+                            password.clone()
+                        })
+                    })
+                    .collect();
+                async move { Ok(responses) }
+            }),
+            x11: None,
+            environment: Vec::new(),
+            startup_directory: None,
+            startup_command: Some("fixture-startup-".repeat(512)),
+        };
+        let connection = SshConnection::connect(options).await.unwrap();
+        let result = connection.open_shell(80, 24).await;
+        match reply {
+            ShellReply::StartupFlood => {
+                let mut shell = result.expect("manual startup endpoint must drain output");
+                let expected = [
+                    vec![b'x'; 256 * 1024],
+                    SHELL_BANNER.to_vec(),
+                    format!("{}\n", "fixture-startup-".repeat(512)).into_bytes(),
+                ]
+                .concat();
+                let received = tokio::time::timeout(DEADLINE, async {
+                    let mut received = Vec::new();
+                    while received.len() < expected.len() {
+                        if let SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) =
+                            shell.next_output().await.unwrap().unwrap()
+                        {
+                            received.extend(bytes);
+                        }
+                    }
+                    received
+                })
+                .await
+                .unwrap();
+                assert_eq!(received, expected);
+            }
+            ShellReply::Reject => assert!(matches!(
+                result,
+                Err(SshError::ChannelRequestRejected { request: "shell" })
+            )),
+            ShellReply::StartupStall => assert!(matches!(result, Err(SshError::Timeout))),
+            _ => unreachable!(),
+        }
+        connection.disconnect().await.unwrap();
+        drop(connection);
+    }
+    while let Some(result) = tokio::time::timeout(DEADLINE, endpoints.join_next())
+        .await
+        .unwrap()
+    {
+        result.unwrap();
+    }
+    for address in addresses {
+        drop(TcpListener::bind(address).await.unwrap());
+    }
+    drop(directory);
+    assert!(!path.exists(), "manual lab metadata must be removed");
 }
 
 #[tokio::test]

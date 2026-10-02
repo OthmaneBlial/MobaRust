@@ -2,6 +2,12 @@
 
 **Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
+The latest [native SSH setup lab](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
+provides disposable import profiles for startup output pressure, shell rejection
+and stalled input. Its automated endpoint/profile/cleanup regression passes;
+the native attempt lost window observation before connecting, so GUI acceptance
+and updated installers remain pending. No completion checkbox changed.
+
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
 
 ## Where the project stands

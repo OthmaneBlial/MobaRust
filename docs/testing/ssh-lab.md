@@ -27,7 +27,7 @@ a dedicated test runner rather than granting the tests system permissions.
 On Windows, `test-ssh` runs portable unit and authentication-wire tests and
 reports that the OpenSSH fixtures are skipped. The wire cases contain no
 Unix-specific APIs; their execution has so far been verified on macOS ARM64.
-The opt-in native labs and their metadata-permission regression are Unix-only.
+The opt-in native labs and their metadata/profile/cleanup regressions are Unix-only.
 
 ## Portable authentication-wire fixture
 
@@ -35,17 +35,17 @@ The opt-in native labs and their metadata-permission regression are Unix-only.
 cargo test --locked -p mobarust-ssh --test authentication
 ```
 
-`tests/authentication.rs` starts a single-connection `russh` server on
+The portable cases in `tests/authentication.rs` start a single-connection `russh` server on
 `127.0.0.1:0` for each case, using generated memory-only Ed25519 keys and
 zeroizing disposable credentials. The client pins the generated fingerprint.
 There are no OS accounts, PAM changes, agent requests, credential files,
-subprocesses, or new dependencies. Each test uses its own Tokio runtime; it
+subprocesses, or new runtime dependencies. Each test uses its own Tokio runtime; it
 awaits server-session termination and rebinds the released listener address.
 The server has no inactivity timeout, so that cannot satisfy the client-socket
 cleanup assertion. Stalled authentication callbacks are explicitly released
 after timeout/cancellation to let the server observe closure.
 
-Eight tests cover:
+Authentication coverage includes:
 
 - Password acceptance/rejection, connected lifecycle state, explicit disconnect
   and session/socket cleanup.
@@ -68,6 +68,13 @@ Eight tests cover:
   TCP/DNS; all reached sessions close and all fixture ports are rebound after
   the attempt.
 
+Shell setup regressions additionally cover actual request acceptance, ordered
+stdout/stderr before acceptance, X11/shell rejection, deadline and output-budget
+failure, startup input under output backpressure, and cancellation of an owned
+pending startup transport. See [startup setup evidence](ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
+The Unix native-endpoint smoke test below also writes and removes private lab
+metadata; that metadata is separate from the portable memory-only cases.
+
 These are actual SSH handshakes and encrypted authentication packets, with the
 same Rust stack at both ends. They do not establish OpenSSH password/PAM/MFA
 interoperability. The existing static keyboard-interactive credential repeats
@@ -82,6 +89,69 @@ ignored by default. The earlier static-response receipt
 had 41 unit, five wire and 12 OpenSSH tests, with loopback IPv6 executed and the
 real Xvfb case skipped for missing prerequisites.
 The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
+
+### Repeatable native shell setup lab on main
+
+```bash
+cargo xtask package-check
+node tools/prepare-macos-ui-lab.mjs
+# After checking the disposable app environment and native window:
+cargo test --locked -p mobarust-ssh --test authentication native_shell_setup_lab -- --ignored --exact --nocapture
+```
+
+The Unix-only lab runs for five minutes with three OS-assigned `127.0.0.1`
+listeners, generated in-memory host keys and distinct generated password/OTP
+factors. Its printed private directory contains `startup.json`, `rejected.json`
+and `stalled.json` with connection metadata and disposable factors. Files are
+`0600` inside a `0700` temporary directory; do not publish them. `profiles.json`
+is a secret-free session export: generated host-key pins, ask-each-challenge
+authentication, and an 8,192-byte startup command (`fixture-startup-` repeated
+512 times). No credential reference, agent, Keychain or OS account is involved.
+The echo server does **not** execute this text as an OS command.
+
+Import `profiles.json` through **Import MobaRust session export** in the isolated
+app. Select each profile, then answer the
+password/OTP prompts with that endpoint's generated factors:
+
+- **SSH setup startup:** a 1 KiB peer input window plus 256 KiB of output in
+  256 packets; expect a connected terminal, the no-OS-shell banner and the
+  startup echo. Close the SSH tab before further input if checking the exact
+  startup receipt. The server retains at most 16 KiB of received input.
+- **SSH setup rejected:** authentication succeeds, but the shell request is
+  rejected. Expect a useful error and no successful shell or startup input.
+- **SSH setup stalled:** authentication and the shell request succeed, but the
+  peer gives no input credit. Expect a setup timeout, not a connected shell.
+
+Completed server sessions report only shell-request/input counts and whether
+the input exactly matches the 8,193-byte command plus newline. Entering other
+terminal input changes that equality result. At the deadline, owned workers
+are cancelled/joined, listener addresses are rebound, and the temporary directory
+is removed. This is a fixture deadline, not proof of native app Quit.
+
+The ordinary test
+`native_shell_setup_endpoints_are_isolated_and_cleanup` exercises the same
+endpoint/profile preparation with a three-second fixture lifetime. It verifies
+private file modes, valid secret-free profiles and their matching host-key pins,
+real two-factor authentication, ordered burst/banner/startup echo, shell refusal,
+startup timeout, completed workers, port rebinding and metadata removal.
+It uses the workspace's existing `serde_json` as a dev dependency; application
+dependencies and shipped runtime behavior are unchanged.
+
+On **2026-10-03**, `cargo xtask check` passed on macOS ARM64, including all
+13 automated authentication-fixture tests; three native manual labs remained
+ignored. Workspace tests/Clippy, frontend checks, 17 VNC cases, package-layout
+contracts and fuzz compilation also passed. A separate native
+attempt built current source `545bd1c`, verified the owned app's disposable
+HOME/ZDOTDIR/XDG paths and empty agent socket, and observed the window plus
+Quick connect through native accessibility and a screenshot. Subsequent native
+observation reported `cgWindowNotFound`, including after selecting the live app
+by its bundle ID and resetting UI control. No fixture credentials were entered
+and no SSH profile was connected. The owned app PID and zsh child were stopped
+with SIGTERM; the five-minute fixture completed, removed its metadata, and all
+four recorded app/shell/cargo/fixture PIDs were absent. This does **not** establish
+GUI startup/backpressure/rejection acceptance or normal native Quit. Those
+gates remain open, as do updated installer and Windows/Linux observations.
+GitHub workflows remain disabled.
 
 ### Ask each challenge on main
 
