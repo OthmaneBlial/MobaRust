@@ -48,6 +48,50 @@ async fn shell_output(connection: &SshConnection, command: &[u8]) -> String {
     String::from_utf8(output).expect("fixture UTF-8 output")
 }
 
+async fn connect_through_interruptible_bridge(
+    fixture: &LocalSshd,
+) -> (
+    SshConnection,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+    std::net::SocketAddr,
+) {
+    // Own both sockets: interruption never kills another session or daemon.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let trust = fixture
+        .directory
+        .path()
+        .join(format!("bridge_known_hosts_{}", address.port()));
+    fs::write(
+        &trust,
+        fs::read_to_string(&fixture.known_hosts).unwrap().replace(
+            &format!("[127.0.0.1]:{}", fixture.port),
+            &format!("[127.0.0.1]:{}", address.port()),
+        ),
+    )
+    .unwrap();
+    let server_port = fixture.port;
+    let (cut_tx, cut_rx) = oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = TcpStream::connect(("127.0.0.1", server_port))
+            .await
+            .unwrap();
+        tokio::select! {
+            _ = cut_rx => {},
+            _ = copy_bidirectional(&mut client, &mut server) => {
+                panic!("fixture transport ended before the requested interruption");
+            }
+        }
+    });
+    let mut options = fixture.options();
+    options.port = address.port();
+    options.host_key_policy = HostKeyPolicy::KnownHosts(trust);
+    let connection = SshConnection::connect(options).await.unwrap();
+    (connection, cut_tx, worker, address)
+}
+
 #[test]
 fn fixture_shell_uses_only_the_disposable_home() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
@@ -162,37 +206,7 @@ fn interrupted_transport_recovers_after_the_fixture_server_restarts() {
         wait_for_port(fixture.port).await;
         let original_trust = fs::read(&fixture.known_hosts).expect("read original trust");
 
-        // Own both sockets so dropping the bridge interrupts an established
-        // SSH session without killing any process outside this fixture.
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let bridge_port = listener.local_addr().unwrap().port();
-        let bridge_trust = fixture.directory.path().join("bridge_known_hosts");
-        fs::write(
-            &bridge_trust,
-            String::from_utf8(original_trust.clone()).unwrap().replace(
-                &format!("[127.0.0.1]:{}", fixture.port),
-                &format!("[127.0.0.1]:{bridge_port}"),
-            ),
-        )
-        .unwrap();
-        let server_port = fixture.port;
-        let (cut_tx, cut_rx) = oneshot::channel();
-        let bridge = tokio::spawn(async move {
-            let (mut client, _) = listener.accept().await.unwrap();
-            let mut server = TcpStream::connect(("127.0.0.1", server_port))
-                .await
-                .unwrap();
-            tokio::select! {
-                _ = cut_rx => {},
-                _ = copy_bidirectional(&mut client, &mut server) => {
-                    panic!("fixture transport ended before the requested interruption");
-                }
-            }
-        });
-        let mut options = fixture.options();
-        options.port = bridge_port;
-        options.host_key_policy = HostKeyPolicy::KnownHosts(bridge_trust);
-        let connection = SshConnection::connect(options).await.unwrap();
+        let (connection, cut_tx, bridge, _) = connect_through_interruptible_bridge(&fixture).await;
         let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
         cut_tx
             .send(())
@@ -241,6 +255,261 @@ fn interrupted_transport_recovers_after_the_fixture_server_restarts() {
             .disconnect()
             .await
             .expect("disconnect recovered session");
+    });
+}
+
+#[test]
+fn interrupted_large_sftp_and_scp_transfers_fail_then_retry_from_the_start() {
+    let runtime = tokio::runtime::Runtime::new().expect("create interrupted transfer runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start interrupted transfer fixture");
+        wait_for_port(fixture.port).await;
+        let payload = (0..16 * 1024 * 1024)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let source = fixture.directory.path().join("source café 🦀.bin");
+        fs::write(&source, &payload).unwrap();
+        let remote_source = source.to_string_lossy().into_owned();
+        let original_trust = fs::read(&fixture.known_hosts).unwrap();
+
+        for scp in [false, true] {
+            for upload in [false, true] {
+                let label = format!(
+                    "{}-{}",
+                    if scp { "scp" } else { "sftp" },
+                    if upload { "upload" } else { "download" },
+                );
+                let destination = fixture.directory.path().join(format!("{label} café final.bin"));
+                let part = fixture.directory.path().join(format!(".{label} café.mobarust.part"));
+                let remote_part = part.to_string_lossy().into_owned();
+                let remote_destination = destination.to_string_lossy().into_owned();
+                fs::write(&destination, b"original destination").unwrap();
+                let (connection, cut, bridge, address) =
+                    connect_through_interruptible_bridge(&fixture).await;
+                let sftp = connection.open_sftp().await.unwrap();
+                let mut input = tokio::fs::File::open(&source).await.unwrap();
+                let mut output = if upload {
+                    None
+                } else {
+                    Some(tokio::fs::File::create(&part).await.unwrap())
+                };
+                let (_cancel_sender, mut cancel) = oneshot::channel();
+                let (progress_tx, progress_rx) = oneshot::channel();
+                let mut progress_tx = Some(progress_tx);
+                let mut progress = |bytes| {
+                    if bytes >= 256 * 1024
+                        && let Some(sender) = progress_tx.take()
+                    {
+                        sender.send(bytes).unwrap();
+                    }
+                };
+                {
+                    let transfer = async {
+                        match (scp, upload) {
+                            (false, false) => sftp
+                                .download_to_with_cancel(
+                                    &remote_source,
+                                    output.as_mut().unwrap(),
+                                    &mut cancel,
+                                    &mut progress,
+                                )
+                                .await,
+                            (false, true) => sftp
+                                .upload_from_with_cancel(
+                                    &mut input, &remote_part, &mut cancel, &mut progress,
+                                )
+                                .await,
+                            (true, false) => connection
+                                .scp_download_with_cancel(
+                                    &remote_source,
+                                    output.as_mut().unwrap(),
+                                    &mut cancel,
+                                    |bytes, total| {
+                                        assert_eq!(total, payload.len() as u64);
+                                        progress(bytes);
+                                    },
+                                )
+                                .await,
+                            (true, true) => connection
+                                .scp_upload_with_cancel(
+                                    &remote_part,
+                                    payload.len() as u64,
+                                    &mut input,
+                                    &mut cancel,
+                                    &mut progress,
+                                )
+                                .await,
+                        }
+                    };
+                    tokio::pin!(transfer);
+                    let progressed = tokio::time::timeout(Duration::from_secs(20), async {
+                        tokio::select! {
+                            biased;
+                            bytes = progress_rx => bytes.unwrap(),
+                            result = &mut transfer => panic!("{label} completed before interruption: {result:?}"),
+                        }
+                    })
+                    .await
+                    .expect("transfer must reach the interruption boundary");
+                    assert!(progressed < payload.len() as u64);
+                    if upload {
+                        // Progress can mean queued writes. Require server-side
+                        // bytes before cutting an actual in-flight upload.
+                        tokio::time::timeout(Duration::from_secs(5), async {
+                            loop {
+                                if fs::metadata(&part).is_ok_and(|metadata| metadata.len() >= progressed) {
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            }
+                        })
+                        .await
+                        .expect("server must receive partial upload bytes");
+                    }
+                    // Stop polling the copy until both relay sockets are gone;
+                    // neither a sleep nor a racing cancellation selects the cut.
+                    cut.send(()).unwrap();
+                    tokio::time::timeout(Duration::from_secs(5), bridge)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    let failure = tokio::time::timeout(Duration::from_secs(20), &mut transfer)
+                        .await
+                        .expect("interrupted transfer must terminate")
+                        .expect_err("interrupted transfer must not report success");
+                    assert!(
+                        !matches!(failure, SshError::Cancelled),
+                        "{label} must fail from transport loss, not cancellation",
+                    );
+                    if !scp {
+                        assert!(
+                            matches!(failure, SshError::SftpConnectionLost),
+                            "{label}: misleading error {failure:?}",
+                        );
+                    }
+                    eprintln!("{label}: interrupted after {progressed} bytes: {failure}");
+                }
+                drop(output);
+                assert_eq!(fs::read(&destination).unwrap(), b"original destination");
+                let partial = fs::read(&part).expect("interruption leaves a real partial file");
+                assert!(
+                    !partial.is_empty() && partial.len() < payload.len(),
+                    "{label}: invalid partial length {}",
+                    partial.len(),
+                );
+                assert_eq!(partial, payload[..partial.len()], "{label}: partial bytes differ");
+                if upload {
+                    assert!(
+                        matches!(
+                            sftp.cleanup_temporary_file(&remote_part).await,
+                            Err(SshError::RemoteTemporaryCleanupFailed),
+                        ),
+                        "lost transport must report unavailable remote cleanup",
+                    );
+                    assert!(part.exists());
+                } else {
+                    fs::remove_file(&part).unwrap();
+                }
+                let _ = tokio::time::timeout(Duration::from_secs(5), connection.disconnect())
+                    .await
+                    .unwrap();
+                drop(sftp);
+                drop(connection);
+                drop(
+                    TcpListener::bind(address)
+                        .await
+                        .expect("interrupted relay listener must be released"),
+                );
+
+                let recovered = SshConnection::connect(fixture.options()).await.unwrap();
+                let recovered_sftp = recovered.open_sftp().await.unwrap();
+                if upload {
+                    recovered_sftp
+                        .cleanup_temporary_file(&remote_part)
+                        .await
+                        .unwrap();
+                    assert!(!part.exists());
+                }
+                let copied = tokio::time::timeout(Duration::from_secs(30), async {
+                    let input = tokio::fs::File::open(&source).await.unwrap();
+                    if upload {
+                        if scp {
+                            recovered.scp_upload(&remote_part, payload.len() as u64, input).await
+                        } else {
+                            recovered_sftp.upload_from(input, &remote_part).await
+                        }
+                    } else {
+                        let output = tokio::fs::File::create(&part).await.unwrap();
+                        if scp {
+                            recovered.scp_download(&remote_source, output).await
+                        } else {
+                            recovered_sftp.download_to(&remote_source, output).await
+                        }
+                    }
+                })
+                .await
+                .expect("full retry deadline")
+                .expect("full retry succeeds");
+                assert_eq!(copied, payload.len() as u64);
+                assert_eq!(fs::read(&part).unwrap(), payload);
+                if upload {
+                    recovered_sftp
+                        .promote_uploaded_file(&remote_part, &remote_destination, true)
+                        .await
+                        .unwrap();
+                    assert_eq!(fs::read(&destination).unwrap(), payload);
+                } else {
+                    fs::remove_file(&part).unwrap();
+                    assert_eq!(fs::read(&destination).unwrap(), b"original destination");
+                }
+                assert!(!part.exists());
+                assert!(fs::read_dir(fixture.directory.path()).unwrap().all(|entry| {
+                    !entry.unwrap().file_name().to_string_lossy()
+                        .contains(".mobarust-upload-backup-")
+                }));
+                assert_eq!(fs::read(&fixture.known_hosts).unwrap(), original_trust);
+                recovered_sftp.close().await.unwrap();
+                recovered.disconnect().await.unwrap();
+            }
+        }
+    });
+}
+
+#[test]
+fn sftp_local_stream_failures_remain_local_and_redacted() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let source = fixture.directory.path().join("private fixture path.bin");
+        fs::write(&source, b"source stays intact").unwrap();
+        let remote_source = source.to_string_lossy().into_owned();
+        let part = fixture.directory.path().join(".local-failure.part");
+        let remote_part = part.to_string_lossy().into_owned();
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let source_without_read = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .await
+            .unwrap();
+        let destination_without_write = tokio::fs::File::open(&source).await.unwrap();
+        let errors = [
+            sftp.upload_from(source_without_read, &remote_part)
+                .await
+                .unwrap_err(),
+            sftp.download_to(&remote_source, destination_without_write)
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert!(matches!(error, SshError::LocalIo(_)));
+            assert_eq!(error.to_string(), "local file operation failed");
+        }
+        assert_eq!(fs::read(&source).unwrap(), b"source stays intact");
+        sftp.cleanup_temporary_file(&remote_part).await.unwrap();
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
     });
 }
 

@@ -36,6 +36,7 @@ use zeroize::Zeroizing;
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
 const MAX_KEYBOARD_INTERACTIVE_ROUNDS: usize = 16;
 const MAX_KEYBOARD_INTERACTIVE_TEXT_BYTES: usize = 4096;
+const FILE_OPERATION_TIMEOUT: Duration = Duration::from_secs(12);
 pub const MAX_KEYBOARD_INTERACTIVE_RESPONSE_BYTES: usize = 16 * 1024;
 const INTERACTIVE_AUTH_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
@@ -1474,7 +1475,9 @@ impl SshConnection {
         while remaining > 0 {
             let read = tokio::select! {
                 _ = &mut *cancel => return Err(SshError::Cancelled),
-                result = channel.read_bytes(&mut buffer, remaining) => result?,
+                result = tokio::time::timeout(FILE_OPERATION_TIMEOUT, channel.read_bytes(&mut buffer, remaining)) => {
+                    result.map_err(|_| SshError::Timeout)??
+                },
             };
             if read == 0 {
                 return Err(SshError::Scp("source ended before declared size".into()));
@@ -1672,7 +1675,9 @@ impl ScpChannel {
         loop {
             let byte = tokio::select! {
                 _ = &mut *cancel => return Err(SshError::Cancelled),
-                result = self.read_byte() => result?,
+                result = tokio::time::timeout(FILE_OPERATION_TIMEOUT, self.read_byte()) => {
+                    result.map_err(|_| SshError::Timeout)??
+                },
             };
             if byte == b'\n' {
                 return Ok(line);
@@ -1691,7 +1696,9 @@ impl ScpChannel {
         loop {
             let byte = tokio::select! {
                 _ = &mut *cancel => return Err(SshError::Cancelled),
-                result = self.read_byte() => result?,
+                result = tokio::time::timeout(FILE_OPERATION_TIMEOUT, self.read_byte()) => {
+                    result.map_err(|_| SshError::Timeout)??
+                },
             };
             match byte {
                 0 => return Ok(()),
@@ -1739,12 +1746,17 @@ impl ScpChannel {
     ) -> Result<(), SshError> {
         tokio::select! {
             _ = &mut *cancel => Err(SshError::Cancelled),
-            result = self.channel.data_bytes(bytes) => result.map_err(SshError::Channel),
+            result = tokio::time::timeout(FILE_OPERATION_TIMEOUT, self.channel.data_bytes(bytes)) => {
+                result.map_err(|_| SshError::Timeout)?.map_err(SshError::Channel)
+            },
         }
     }
 
     async fn close(&self) -> Result<(), SshError> {
-        self.channel.eof().await.map_err(SshError::Channel)
+        tokio::time::timeout(FILE_OPERATION_TIMEOUT, self.channel.eof())
+            .await
+            .map_err(|_| SshError::Timeout)?
+            .map_err(SshError::Channel)
     }
 }
 
@@ -2372,6 +2384,20 @@ pub struct RemoteEntry {
 }
 
 impl SftpConnection {
+    async fn file_io<T>(
+        &self,
+        operation: impl Future<Output = io::Result<T>>,
+    ) -> Result<T, SshError> {
+        // russh-sftp's pipelined write acknowledgements have no request
+        // deadline. Bound each file operation, rather than the whole transfer.
+        match tokio::time::timeout(FILE_OPERATION_TIMEOUT, operation).await {
+            Ok(Ok(value)) => Ok(value),
+            _ if self.handle.is_closed() => Err(SshError::SftpConnectionLost),
+            Ok(Err(error)) => Err(map_sftp_io_error(error)),
+            Err(_) => Err(SshError::Timeout),
+        }
+    }
+
     pub async fn canonicalize(&self, path: impl Into<String>) -> Result<String, SshError> {
         self.session
             .canonicalize(path)
@@ -2558,7 +2584,7 @@ impl SftpConnection {
             .read_to_end(&mut bytes)
             .await
             .map_err(map_sftp_io_error);
-        let close_result = file.close().await.map_err(map_sftp_io_error);
+        let close_result = self.file_io(file.close()).await;
         result?;
         close_result?;
         if bytes.len() > MAX_REMOTE_EDITOR_BYTES {
@@ -2620,18 +2646,7 @@ impl SftpConnection {
             std::process::id(),
             next_editor_temp_id()
         );
-        let mut file = self
-            .session
-            .create(&temporary)
-            .await
-            .map_err(map_sftp_error)?;
-        let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
-        let close_result = file.shutdown().await.map_err(map_sftp_io_error);
-        if let Err(error) = write_result {
-            self.cleanup_temporary_file(&temporary).await?;
-            return Err(error);
-        }
-        if let Err(error) = close_result {
+        if let Err(error) = self.upload_from(encoded.as_slice(), &temporary).await {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
@@ -2646,7 +2661,7 @@ impl SftpConnection {
                 }
             };
             let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
-            let close_result = file.close().await.map_err(map_sftp_io_error);
+            let close_result = self.file_io(file.close()).await;
             if let Err(error) = set_result {
                 self.cleanup_temporary_file(&temporary).await?;
                 return Err(error);
@@ -2733,18 +2748,7 @@ impl SftpConnection {
             std::process::id(),
             next_editor_temp_id()
         );
-        let mut file = self
-            .session
-            .create(&temporary)
-            .await
-            .map_err(map_sftp_error)?;
-        let write_result = file.write_all(&encoded).await.map_err(map_sftp_io_error);
-        let close_result = file.shutdown().await.map_err(map_sftp_io_error);
-        if let Err(error) = write_result {
-            self.cleanup_temporary_file(&temporary).await?;
-            return Err(error);
-        }
-        if let Err(error) = close_result {
+        if let Err(error) = self.upload_from(encoded.as_slice(), &temporary).await {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
@@ -2790,7 +2794,7 @@ impl SftpConnection {
                     }
                 };
                 let set_result = file.set_metadata(metadata).await.map_err(map_sftp_error);
-                let close_result = file.close().await.map_err(map_sftp_io_error);
+                let close_result = self.file_io(file.close()).await;
                 if let Err(error) = set_result {
                     self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
@@ -2993,16 +2997,9 @@ impl SftpConnection {
     where
         R: AsyncWrite + Unpin,
     {
-        let mut file = self
-            .session
-            .open(remote_path)
+        let (_cancel_sender, mut cancel) = oneshot::channel();
+        self.download_to_with_cancel(remote_path, &mut destination, &mut cancel, |_| {})
             .await
-            .map_err(map_sftp_error)?;
-        let copied = tokio::io::copy(&mut file, &mut destination)
-            .await
-            .map_err(map_sftp_io_error)?;
-        destination.flush().await.map_err(map_sftp_io_error)?;
-        Ok(copied)
     }
 
     pub async fn download_to_with_cancel<W, F>(
@@ -3021,8 +3018,9 @@ impl SftpConnection {
             .open(remote_path)
             .await
             .map_err(map_sftp_error)?;
-        let copied = copy_with_cancel(&mut file, destination, cancel, on_progress).await?;
-        file.close().await.map_err(map_sftp_io_error)?;
+        let copied =
+            copy_with_cancel(&mut file, destination, cancel, on_progress, self, true).await?;
+        self.file_io(file.close()).await?;
         Ok(copied)
     }
 
@@ -3034,16 +3032,9 @@ impl SftpConnection {
     where
         R: AsyncRead + Unpin,
     {
-        let mut file = self
-            .session
-            .create(remote_path)
+        let (_cancel_sender, mut cancel) = oneshot::channel();
+        self.upload_from_with_cancel(&mut source, remote_path, &mut cancel, |_| {})
             .await
-            .map_err(map_sftp_error)?;
-        let copied = tokio::io::copy(&mut source, &mut file)
-            .await
-            .map_err(map_sftp_io_error)?;
-        file.shutdown().await.map_err(map_sftp_io_error)?;
-        Ok(copied)
     }
 
     pub async fn upload_from_with_cancel<R, F>(
@@ -3062,8 +3053,8 @@ impl SftpConnection {
             .create(remote_path)
             .await
             .map_err(map_sftp_error)?;
-        let copied = copy_with_cancel(source, &mut file, cancel, on_progress).await?;
-        file.shutdown().await.map_err(map_sftp_io_error)?;
+        let copied = copy_with_cancel(source, &mut file, cancel, on_progress, self, false).await?;
+        self.file_io(file.shutdown()).await?;
         Ok(copied)
     }
 
@@ -3139,6 +3130,8 @@ async fn copy_with_cancel<R, W, F>(
     destination: &mut W,
     cancel: &mut oneshot::Receiver<()>,
     mut on_progress: F,
+    sftp: &SftpConnection,
+    remote_source: bool,
 ) -> Result<u64, SshError>
 where
     R: AsyncRead + Unpin,
@@ -3152,7 +3145,13 @@ where
     loop {
         let read = tokio::select! {
             _ = &mut *cancel => return Err(SshError::Cancelled),
-            result = source.read(&mut buffer) => result.map_err(SshError::LocalIo)?,
+            result = async {
+                if remote_source {
+                    sftp.file_io(source.read(&mut buffer)).await
+                } else {
+                    source.read(&mut buffer).await.map_err(SshError::LocalIo)
+                }
+            } => result?,
         };
         if read == 0 {
             break;
@@ -3160,7 +3159,13 @@ where
 
         tokio::select! {
             _ = &mut *cancel => return Err(SshError::Cancelled),
-            result = destination.write_all(&buffer[..read]) => result.map_err(SshError::LocalIo)?,
+            result = async {
+                if remote_source {
+                    destination.write_all(&buffer[..read]).await.map_err(SshError::LocalIo)
+                } else {
+                    sftp.file_io(destination.write_all(&buffer[..read])).await
+                }
+            } => result?,
         }
         copied += read as u64;
         on_progress(copied);
@@ -3171,7 +3176,13 @@ where
 
     tokio::select! {
         _ = &mut *cancel => Err(SshError::Cancelled),
-        result = destination.flush() => result.map(|_| copied).map_err(SshError::LocalIo),
+        result = async {
+            if remote_source {
+                destination.flush().await.map_err(SshError::LocalIo)
+            } else {
+                sftp.file_io(destination.flush()).await
+            }
+        } => result.map(|_| copied),
     }
 }
 

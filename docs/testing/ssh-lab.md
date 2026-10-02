@@ -12,6 +12,10 @@ and without an inherited SSH agent or askpass. It uses the existing Rust test
 harness; Docker, system-service changes,
 personal SSH files, and remote servers are unnecessary.
 
+The [interrupted-transfer checks](interrupted-transfers.md) exercise 16 MiB
+SFTP/SCP streams over an owned loopback relay, preserve originals on loss,
+report unavailable remote cleanup and verify a full byte-matched retry.
+
 ## OpenSSH fixture requirements (Unix)
 
 - macOS or Linux, Rust, `ssh-keygen`, `ssh-agent`, `ssh-add`, and an installed OpenSSH `sshd` at

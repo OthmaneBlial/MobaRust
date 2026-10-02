@@ -66,6 +66,9 @@ Actions remain disabled.
 ## Limits and next acceptance gate
 
 These pre-promotion regressions are local commit and real-SFTP protocol checks.
+The separate [interrupted-stream checks](interrupted-transfers.md) verify 16 MiB
+SFTP/SCP upload/download transport loss, original preservation, explicit remote
+cleanup failure and full retry. These do not exercise the native manager.
 The separate [native lifecycle receipt](transfer-lifecycle.md) verifies 32 MiB
 single-file SFTP Cancel, download Retry and active-upload SSH-tab closure on
 macOS ARM64. Broader recursive/SCP cancellation, interrupted large transfers,
