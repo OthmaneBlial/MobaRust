@@ -15,6 +15,12 @@ configuration.
 - SSH tests generate fixture host/client keys in the temporary test directory.
   They pass an explicit fixture `known_hosts` path and never read `~/.ssh`,
   `SSH_AUTH_SOCK`, GitHub keys, or a user's private key.
+- Fixture sshd sessions override HOME, ZDOTDIR, XDG_CONFIG_HOME, and XAUTHORITY
+  before the account shell starts, disable personal SSH rc/environment files,
+  and use a fixture PID file. X11 fixtures wrap xauth so it can only update
+  their temporary authority file. Changing the daemon's HOME alone would not
+  isolate the remote shell, since sshd normally obtains its home from the OS
+  account database.
 - OpenSSH import requires an explicit path and never falls back to
   `~/.ssh/config`; tests and development runs must use a repository fixture or
   an isolated temporary file.
@@ -66,6 +72,15 @@ The default local quality command is repository-scoped:
 ```text
 cargo xtask check
 ```
+
+The focused SSH command uses the same sanitized subprocess boundary:
+
+```text
+cargo xtask test-ssh
+```
+
+See the [OpenSSH lab guide](../testing/ssh-lab.md) for installed-tool
+requirements and the distinction between local fixture and platform evidence.
 
 Before a user-authenticated push, the repository-only payload audit can be run
 without contacting GitHub:

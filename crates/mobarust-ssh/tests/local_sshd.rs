@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -13,6 +14,287 @@ use mobarust_ssh::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::oneshot;
+
+async fn shell_output(connection: &SshConnection, command: &[u8]) -> String {
+    let shell = connection
+        .open_shell(80, 24)
+        .await
+        .expect("open fixture PTY");
+    let (mut reader, writer) = shell.split();
+    writer.write(command).await.expect("send fixture command");
+    let mut output = Vec::new();
+    let mut exit_status = None;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(message) = reader.next_output().await {
+            match message.expect("read fixture PTY") {
+                SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => {
+                    output.extend(bytes);
+                    assert!(
+                        output.len() <= 64 * 1024,
+                        "fixture output exceeded its bound"
+                    );
+                }
+                SshOutput::ExitStatus(status) => {
+                    exit_status = Some(status);
+                    break;
+                }
+                SshOutput::Control => {}
+            }
+        }
+    })
+    .await
+    .expect("fixture command deadline");
+    assert_eq!(exit_status, Some(0), "fixture command must actually finish");
+    String::from_utf8(output).expect("fixture UTF-8 output")
+}
+
+#[test]
+fn fixture_shell_uses_only_the_disposable_home() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options())
+            .await
+            .expect("connect fixture");
+        let output = shell_output(
+            &connection,
+            b"printf '\\nMOBARUST_HOME=%s\\nMOBARUST_ZDOTDIR=%s\\n' \"$HOME\" \"$ZDOTDIR\"; exit\n",
+        )
+        .await;
+        let home = fixture.directory.path().to_string_lossy();
+        assert!(output.contains(&format!("MOBARUST_HOME={home}\r\n")));
+        assert!(output.contains(&format!("MOBARUST_ZDOTDIR={home}\r\n")));
+        connection.disconnect().await.expect("disconnect fixture");
+    });
+}
+
+#[test]
+fn stalled_handshakes_timeout_or_cancel_and_release_the_socket() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        for cancel in [false, true] {
+            let listener = TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("bind stalled SSH fixture");
+            let mut options = fixture.options();
+            options.port = listener
+                .local_addr()
+                .expect("stalled fixture address")
+                .port();
+            options.timeout = if cancel {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_millis(250)
+            };
+            let mut connecting = Box::pin(SshConnection::connect(options));
+            let (mut peer, _) = tokio::select! {
+                accepted = listener.accept() => accepted.expect("accept stalled handshake"),
+                _ = &mut connecting => panic!("SSH setup ended before fixture accepted"),
+            };
+            let mut banner = [0; 256];
+            tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::select! {
+                    read = peer.read(&mut banner) => assert!(read.expect("read client banner") > 0),
+                    _ = &mut connecting => panic!("SSH setup ended before fixture received banner"),
+                }
+            })
+            .await
+            .expect("client banner deadline");
+            if !cancel {
+                assert!(matches!(connecting.await, Err(SshError::Timeout)));
+            } else {
+                // This is how the native cancellation select releases an in-flight setup.
+                drop(connecting);
+            }
+            let mut remaining = Vec::new();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                peer.take(4096).read_to_end(&mut remaining),
+            )
+            .await
+            .expect("cancelled/timed-out handshake must close its socket")
+            .expect("read handshake EOF");
+            assert!(remaining.len() < 4096);
+        }
+    });
+}
+
+#[test]
+fn encrypted_keys_authenticate_and_wrong_credentials_fail_closed() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let encrypted_key = fixture.directory.path().join("encrypted_key");
+        fs::copy(&fixture.client_key, &encrypted_key).expect("copy fixture key");
+        // Public test data, never an operator credential.
+        let passphrase = "mobarust-disposable-fixture";
+        let mut keygen = Command::new("ssh-keygen");
+        clear_credential_environment(&mut keygen);
+        assert!(
+            keygen
+                .args(["-q", "-p", "-P", "", "-N", passphrase, "-f"])
+                .arg(&encrypted_key)
+                .stdout(Stdio::null())
+                .status()
+                .expect("encrypt fixture key")
+                .success()
+        );
+
+        let mut options = fixture.options();
+        options.credentials = SshCredentials::private_key(
+            fixture.username.clone(),
+            encrypted_key.clone(),
+            Some(passphrase),
+        );
+        let connection = SshConnection::connect(options)
+            .await
+            .expect("authenticate encrypted key");
+        let output = shell_output(
+            &connection,
+            b"printf 'MOBARUST_%s\\n' 'ENCRYPTED_OK'; exit\n",
+        )
+        .await;
+        assert!(output.contains("MOBARUST_ENCRYPTED_OK"));
+        connection
+            .disconnect()
+            .await
+            .expect("disconnect encrypted-key fixture");
+
+        for passphrase in [None, Some("incorrect-fixture-passphrase")] {
+            let mut options = fixture.options();
+            options.credentials = SshCredentials::private_key(
+                fixture.username.clone(),
+                encrypted_key.clone(),
+                passphrase,
+            );
+            assert!(matches!(
+                SshConnection::connect(options).await,
+                Err(SshError::PrivateKey(_))
+            ));
+        }
+        let unauthorized_key = fixture.directory.path().join("unauthorized_key");
+        run_keygen(&unauthorized_key).expect("generate unauthorized fixture key");
+        let mut options = fixture.options();
+        options.credentials =
+            SshCredentials::private_key(fixture.username.clone(), unauthorized_key, None::<String>);
+        assert!(matches!(
+            SshConnection::connect(options).await,
+            Err(SshError::AuthenticationRejected)
+        ));
+        // A rejected attempt must not prevent a subsequent valid connection.
+        let recovered = SshConnection::connect(fixture.options())
+            .await
+            .expect("recover after auth failure");
+        recovered
+            .disconnect()
+            .await
+            .expect("disconnect recovered fixture");
+    });
+}
+
+#[test]
+fn distinct_jump_hosts_verify_every_key_and_reach_the_target() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let first = LocalSshd::start().expect("start first jump fixture");
+        let second = LocalSshd::start().expect("start second jump fixture");
+        let target = LocalSshd::start().expect("start target fixture");
+        let fixtures = [&first, &second, &target];
+        let mut fingerprints = Vec::new();
+        for fixture in fixtures {
+            wait_for_port(fixture.port).await;
+            fingerprints.push(
+                inspect_host_key(SshFingerprintOptions {
+                    host: "127.0.0.1".into(),
+                    port: fixture.port,
+                    timeout: Duration::from_secs(5),
+                })
+                .await
+                .expect("inspect fixture host key")
+                .fingerprint,
+            );
+        }
+        assert!(
+            fingerprints
+                .iter()
+                .enumerate()
+                .all(|(i, key)| !fingerprints[..i].contains(key))
+        );
+        for rejected_hop in 0..3 {
+            let mut options = fixtures.map(LocalSshd::options);
+            options[rejected_hop].host_key_policy =
+                HostKeyPolicy::PinnedFingerprint("SHA256:untrusted-fixture".into());
+            let [first, second, target] = options;
+            match SshConnection::connect_with_jump_chain(target, vec![first, second]).await {
+                Err(SshError::HostKeyRejected { fingerprint }) => {
+                    assert_eq!(fingerprint, fingerprints[rejected_hop])
+                }
+                _ => panic!("jump chain accepted an untrusted hop"),
+            }
+        }
+
+        let wrong_hosts = target.directory.path().join("changed_known_hosts");
+        let first_key = fs::read_to_string(&first.known_hosts).expect("read fixture public key");
+        let (_, key) = first_key
+            .split_once(' ')
+            .expect("fixture known_hosts record");
+        fs::write(&wrong_hosts, format!("[127.0.0.1]:{} {key}", target.port))
+            .expect("write changed host key fixture");
+        let mut options = target.options();
+        options.host_key_policy = HostKeyPolicy::KnownHosts(wrong_hosts.clone());
+        assert!(matches!(
+            SshConnection::connect(options).await,
+            Err(SshError::HostKeyRejected { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(&wrong_hosts).expect("read unchanged trust file"),
+            format!("[127.0.0.1]:{} {key}", target.port)
+        );
+
+        let connection = SshConnection::connect_with_jump_chain(
+            target.options(),
+            vec![first.options(), second.options()],
+        )
+        .await
+        .expect("connect through two distinct jump hosts");
+        let output = shell_output(
+            &connection,
+            b"printf 'MOBARUST_%s\\n' 'MULTIHOP_OK'; exit\n",
+        )
+        .await;
+        assert!(output.contains("MOBARUST_MULTIHOP_OK"));
+        let sftp = connection
+            .open_sftp()
+            .await
+            .expect("open target SFTP through two jumps");
+        let remote_path = target.directory.path().join("café target file.txt");
+        let remote_path = remote_path.to_string_lossy().into_owned();
+        let payload = "UTF-8 fixture: café 🦀\n".as_bytes();
+        assert_eq!(
+            sftp.upload_from(payload, &remote_path)
+                .await
+                .expect("upload through jump chain"),
+            payload.len() as u64
+        );
+        let mut downloaded = Vec::new();
+        sftp.download_to(&remote_path, &mut downloaded)
+            .await
+            .expect("download through jump chain");
+        assert_eq!(downloaded, payload);
+        assert_eq!(
+            fs::read(&remote_path).expect("verify target fixture file"),
+            payload
+        );
+        sftp.close().await.expect("close jumped SFTP");
+        connection
+            .disconnect()
+            .await
+            .expect("disconnect complete jump chain");
+    });
+}
 
 #[test]
 fn idle_shell_survives_the_connection_timeout_without_keepalives() {
@@ -31,32 +313,9 @@ fn idle_shell_survives_the_connection_timeout_without_keepalives() {
             .expect("finish initial channel traffic");
 
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let shell = connection
-            .open_shell(80, 24)
-            .await
-            .expect("open shell after idle");
-        let (mut reader, writer) = shell.split();
-        writer
-            .write(b"printf 'MOBARUST_%s\\n' 'IDLE_OK'; exit\n")
-            .await
-            .expect("write after idle period");
-        let mut output = Vec::new();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(message) = reader.next_output().await {
-                match message.expect("read resumed shell") {
-                    SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => output.extend(bytes),
-                    SshOutput::ExitStatus(status) => {
-                        assert_eq!(status, 0);
-                        break;
-                    }
-                    SshOutput::Control => {}
-                }
-            }
-        })
-        .await
-        .expect("resumed shell deadline");
+        let output = shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'IDLE_OK'; exit\n").await;
         // The marker is assembled by printf, so terminal echo cannot pass this assertion.
-        assert!(String::from_utf8_lossy(&output).contains("MOBARUST_IDLE_OK"));
+        assert!(output.contains("MOBARUST_IDLE_OK"));
         sftp.close().await.expect("close idle SFTP");
         connection.disconnect().await.expect("disconnect fixture");
     });
@@ -121,7 +380,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             x11: None,
             environment: vec![("MOBARUST_FIXTURE".into(), "loopback-only".into())],
             startup_directory: Some("/tmp".into()),
-            startup_command: Some("printf 'MOBARUST_STARTUP_OK\\n'".into()),
+            startup_command: Some("printf 'MOBARUST_%s\\n' 'STARTUP_OK'".into()),
         })
         .await
         .expect("connect to local sshd");
@@ -141,7 +400,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         let (mut reader, writer) = shell.split();
         writer.resize(120, 40).await.expect("resize SSH PTY");
         writer
-            .write(b"printf 'MOBARUST_SSH_OK\n'; printf 'MOBARUST_ENV_%s\n' \"$MOBARUST_FIXTURE\"; exit\n")
+            .write(b"printf 'MOBARUST_%s\\n' 'SSH_OK'; printf 'MOBARUST_ENV_%s\\n' \"$MOBARUST_FIXTURE\"; exit\n")
             .await
             .expect("write shell command");
 
@@ -153,7 +412,10 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             let message = message.expect("SSH shell output error");
             match message {
                 SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => output.extend(bytes),
-                SshOutput::ExitStatus(_) => break,
+                SshOutput::ExitStatus(status) => {
+                    assert_eq!(status, 0);
+                    break;
+                }
                 SshOutput::Control => {}
             }
         }
@@ -695,73 +957,6 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("join remote-forward client");
         target_task.await.expect("join remote-forward target");
 
-        let jumped = SshConnection::connect_with_jump_chain(
-            SshConnectOptions {
-                host: "127.0.0.1".into(),
-                port: fixture.port,
-                host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
-                timeout: Duration::from_secs(5),
-                keepalive_interval: None,
-                credentials: SshCredentials::private_key(
-                    fixture.username.clone(),
-                    fixture.client_key.clone(),
-                    None::<String>,
-                ),
-                x11: None,
-                environment: Vec::new(),
-                startup_directory: None,
-                startup_command: None,
-            },
-            vec![SshConnectOptions {
-                host: "127.0.0.1".into(),
-                port: fixture.port,
-                host_key_policy: HostKeyPolicy::KnownHosts(fixture.known_hosts.clone()),
-                timeout: Duration::from_secs(5),
-                keepalive_interval: None,
-                credentials: SshCredentials::private_key(
-                    fixture.username.clone(),
-                    fixture.client_key.clone(),
-                    None::<String>,
-                ),
-                x11: None,
-                environment: Vec::new(),
-                startup_directory: None,
-                startup_command: None,
-            }],
-        )
-        .await
-        .expect("connect through a real SSH jump host");
-        let jumped_shell = jumped.open_shell(100, 30).await.expect("open jumped PTY");
-        let (mut jumped_reader, jumped_writer) = jumped_shell.split();
-        jumped_writer
-            .write(b"printf 'MOBARUST_JUMP_OK\\n'\\n")
-            .await
-            .expect("write through jumped shell");
-        let mut jumped_output = Vec::new();
-        while let Some(message) =
-            tokio::time::timeout(Duration::from_secs(5), jumped_reader.next_output())
-                .await
-                .expect("jumped shell output timeout")
-        {
-            match message.expect("jumped shell output error") {
-                SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => {
-                    jumped_output.extend(bytes);
-                    if String::from_utf8_lossy(&jumped_output).contains("MOBARUST_JUMP_OK") {
-                        break;
-                    }
-                }
-                SshOutput::ExitStatus(_) => break,
-                SshOutput::Control => {}
-            }
-        }
-        assert!(String::from_utf8_lossy(&jumped_output).contains("MOBARUST_JUMP_OK"));
-        drop(jumped_reader);
-        drop(jumped_writer);
-        jumped
-            .disconnect()
-            .await
-            .expect("disconnect jumped SSH fixture");
-
         let (first_disconnect, second_disconnect) =
             tokio::join!(connection.disconnect(), connection.disconnect());
         first_disconnect.expect("disconnect SSH fixture");
@@ -1078,20 +1273,40 @@ impl LocalSshd {
         let x11_config = if x11 {
             let xauth =
                 find_command("xauth").ok_or("X11 fixture requires a local xauth executable")?;
+            // sshd may derive its xauth path from the OS account's home.
+            // This test-only wrapper always writes the fixture authority file.
+            let wrapper = directory.path().join("fixture-xauth");
+            let authority = directory.path().join(".Xauthority");
+            fs::write(
+                &wrapper,
+                format!(
+                    "#!/bin/sh\nexec '{}' -q -f '{}' -\n",
+                    xauth.to_string_lossy().replace('\'', "'\\''"),
+                    authority.to_string_lossy().replace('\'', "'\\''"),
+                ),
+            )?;
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700))?;
             format!(
                 "X11Forwarding yes\nX11UseLocalhost yes\nXAuthLocation {}\n",
-                xauth.display()
+                wrapper.display()
             )
         } else {
             "X11Forwarding no\n".to_owned()
         };
 
         let username = std::env::var("USER")?;
+        // sshd builds a session environment from the OS account database, not
+        // the daemon's HOME. Override it before the user's shell starts.
+        let home = directory
+            .path()
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         let config = directory.path().join("sshd_config");
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nPidFile \"{home}/sshd.pid\"\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nPermitUserRC no\nPermitUserEnvironment no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\nSetEnv \"HOME={home}\" \"ZDOTDIR={home}\" \"XDG_CONFIG_HOME={home}\" \"XAUTHORITY={home}/.Xauthority\" BASH_ENV=/dev/null ENV=/dev/null\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),

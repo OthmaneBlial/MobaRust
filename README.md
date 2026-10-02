@@ -80,12 +80,16 @@ pnpm --dir apps/desktop tauri dev
 Focused checks:
 
 ```bash
+cargo xtask test-ssh
 cargo xtask package-check
 cargo xtask portable-check
 cargo xtask package-layout-check
 cargo xtask license-check
 cargo xtask pre-push-check
 ```
+
+The [OpenSSH lab guide](docs/testing/ssh-lab.md) lists prerequisites, test
+coverage, and limits for the disposable local servers and two-hop topology.
 
 ## Help MobaRust reach more operators
 

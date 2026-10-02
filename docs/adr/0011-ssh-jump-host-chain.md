@@ -49,7 +49,9 @@ connection, and failures are bounded by per-hop timeouts.
 
 ## Verification
 
-`crates/mobarust-ssh/tests/local_sshd.rs` connects to an ephemeral local SSH
-server through a real jump channel, opens a target PTY, sends a marker, and
-verifies the returned output. Rust Clippy and the desktop TypeScript/build
+`cargo xtask test-ssh` exercises `crates/mobarust-ssh/tests/local_sshd.rs` with
+two distinct ephemeral jump servers and a separate target. It rejects a wrong
+fingerprint at each hop, verifies target shell execution and exit status, and
+round-trips a Unicode-named file over SFTP through the chain. Each server has
+its own generated host/client keys and temporary trust file. Rust Clippy and the desktop TypeScript/build
 checks remain required for the desktop integration.

@@ -30,6 +30,8 @@ Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
 - [x] SSH agent authentication through the native Quick Connect path
 - [x] Bounded reconnect policy and failure-state telemetry
 - [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
+- [x] Focused `cargo xtask test-ssh` lab with encrypted keys, per-hop trust rejection, distinct two-jump topology, idle-session and stalled-setup regressions (local OpenSSH evidence)
+- [ ] OpenSSH lab matrix for password/PAM/MFA, agent, IPv6, restart recovery, and additional server versions
 
 ## 0.3 — remote files and movement
 

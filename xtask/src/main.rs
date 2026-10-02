@@ -14,6 +14,7 @@ fn main() {
     let command = arguments.next().unwrap_or_else(|| "help".to_owned());
     let result = match command.as_str() {
         "check" => check(),
+        "test-ssh" => test_ssh(),
         "check-fuzz" => check_fuzz(),
         "check-rdp-helper" => check_rdp_helper(),
         "check-rdp-fixture" => check_rdp_fixture(),
@@ -32,6 +33,9 @@ fn main() {
         "verify-macos-signature" => verify_macos_signature_command(arguments.collect()),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
+            println!(
+                "cargo xtask test-ssh    Run isolated SSH unit and local OpenSSH integration tests"
+            );
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
             println!(
@@ -1371,6 +1375,24 @@ fn run_app_version_probe(executable: &Path, root: &Path) -> Result<(Duration, St
     let output = String::from_utf8(stdout)
         .map_err(|_| "benchmark app version output was not valid UTF-8".to_owned())?;
     Ok((started.elapsed(), output))
+}
+
+fn test_ssh() -> Result<(), String> {
+    if !cfg!(unix) {
+        return Err("the local OpenSSH lab requires macOS or Linux; run cargo test -p mobarust-ssh --lib for transport unit tests on Windows".into());
+    }
+    run_sanitized_test(
+        "cargo",
+        [
+            "test",
+            "--locked",
+            "-p",
+            "mobarust-ssh",
+            "--",
+            "--nocapture",
+        ],
+        None,
+    )
 }
 
 fn check() -> Result<(), String> {
