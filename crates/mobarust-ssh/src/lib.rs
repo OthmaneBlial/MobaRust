@@ -2968,13 +2968,7 @@ impl SshShell {
     }
 
     pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
-        match self.channel.wait().await? {
-            ChannelMsg::Data { data } => Some(Ok(SshOutput::Stdout(data.to_vec()))),
-            ChannelMsg::ExtendedData { data, .. } => Some(Ok(SshOutput::Stderr(data.to_vec()))),
-            ChannelMsg::ExitStatus { exit_status } => Some(Ok(SshOutput::ExitStatus(exit_status))),
-            ChannelMsg::Eof | ChannelMsg::Close => None,
-            _ => Some(Ok(SshOutput::Control)),
-        }
+        shell_message_output(self.channel.wait().await?).map(Ok)
     }
 
     pub async fn close(&self) -> Result<(), SshError> {
@@ -2984,13 +2978,19 @@ impl SshShell {
 
 impl SshShellReader {
     pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
-        match self.channel.wait().await? {
-            ChannelMsg::Data { data } => Some(Ok(SshOutput::Stdout(data.to_vec()))),
-            ChannelMsg::ExtendedData { data, .. } => Some(Ok(SshOutput::Stderr(data.to_vec()))),
-            ChannelMsg::ExitStatus { exit_status } => Some(Ok(SshOutput::ExitStatus(exit_status))),
-            ChannelMsg::Eof | ChannelMsg::Close => None,
-            _ => Some(Ok(SshOutput::Control)),
-        }
+        shell_message_output(self.channel.wait().await?).map(Ok)
+    }
+}
+
+fn shell_message_output(message: ChannelMsg) -> Option<SshOutput> {
+    match message {
+        ChannelMsg::Data { data } => Some(SshOutput::Stdout(data.to_vec())),
+        ChannelMsg::ExtendedData { data, .. } => Some(SshOutput::Stderr(data.to_vec())),
+        ChannelMsg::ExitStatus { exit_status } => Some(SshOutput::ExitStatus(exit_status)),
+        ChannelMsg::Close => None,
+        // EOF ends output, but an exit-status request may still follow before
+        // channel close. Keep reading so normal shell exits do not reconnect.
+        _ => Some(SshOutput::Control),
     }
 }
 
@@ -3135,6 +3135,20 @@ mod tests {
     use std::fs;
 
     const TEST_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAILagOJFgwaMNhBWQINinKOXmqS4Gh5NgxgriXwdOoINJ";
+
+    #[test]
+    fn shell_eof_preserves_a_later_exit_status_until_channel_close() {
+        let messages = [
+            ChannelMsg::Eof,
+            ChannelMsg::ExitStatus { exit_status: 23 },
+            ChannelMsg::Close,
+        ];
+        let output: Vec<_> = messages
+            .into_iter()
+            .map_while(shell_message_output)
+            .collect();
+        assert_eq!(output, [SshOutput::Control, SshOutput::ExitStatus(23)]);
+    }
 
     #[test]
     fn pinned_fingerprint_is_exact_and_not_a_tofu_accept() {

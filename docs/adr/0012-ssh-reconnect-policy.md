@@ -31,6 +31,9 @@ On exhaustion it emits `failed`, cleans up transfers/tunnels owned by the
 session, and emits the existing terminal close event with an actionable
 reason. A normal shell exit is not retried when the channel reports an exit
 status. There is no infinite reconnect loop.
+SSH channel EOF alone does not end this decision: the reader continues until
+the exit status or channel close, since OpenSSH can send the exit status after
+EOF. Both split and unsplit readers share this policy.
 
 ## Safety and limits
 
