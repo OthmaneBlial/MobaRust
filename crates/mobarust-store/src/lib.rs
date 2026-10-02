@@ -2042,9 +2042,19 @@ mod tests {
         assert_eq!(target.import_json(&json).unwrap(), settings);
         assert_eq!(SettingsStore::open(&target_path).unwrap().get(), &settings);
 
-        let error = target.import_json(r#"{"schema_version":1,"settings":{},"secret":"nope"}"#);
-        assert!(matches!(error, Err(StoreError::SettingsDecode { .. })));
-        assert_eq!(target.get(), &settings);
+        let original_bytes = fs::read(&target_path).unwrap();
+        for invalid in [
+            "{bad",
+            r#"{"schema_version":1,"settings":{},"secret":"nope"}"#,
+            r#"{"schema_version":2,"settings":{}}"#,
+            r#"{"schema_version":1,"settings":{"appearance":{"fontSize":99}}}"#,
+            r#"{"schema_version":1,"settings":{"general":{"secret":"nope"}}}"#,
+        ] {
+            assert!(target.import_json(invalid).is_err());
+            assert_eq!(target.get(), &settings);
+            assert_eq!(fs::read(&target_path).unwrap(), original_bytes);
+            assert_eq!(SettingsStore::open(&target_path).unwrap().get(), &settings);
+        }
     }
 
     #[test]

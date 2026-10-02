@@ -288,29 +288,57 @@ do not roll back a job already dispatched or establish atomic transactions over
 a disconnect occurring after dispatch. Keep in-flight transfer cancellation
 and recovery checks separate.
 
+## Settings error visibility and normal shutdown — 2026-10-02
+
+Settings save/reset/import/export, diagnostic export and portable-vault errors
+previously went to the workspace error banner behind the open settings form.
+They now use a settings-specific alert near its action buttons. An error
+receives focus so scrolling cannot hide it; a new operation or reopening the
+form clears the previous settings error without importing unrelated SSH errors.
+The first native inspection showed why placement matters: an alert above the
+fields was outside the viewport after using the footer's Import button.
+
+A rebuilt macOS ARM64 debug bundle with this correction after `c40d349` used a
+copied portable app, disposable HOME/ZDOTDIR and generated local settings.
+The actual app PID environment was checked before and after automation selected
+it. These GUI checks started no protocol server or network listener:
+
+- Entering multiline settings JSON and pressing Escape kept the original dark
+  theme/font 14; the persisted file matched its baseline byte for byte.
+- Malformed JSON was rejected with a visible, focused error in dark mode.
+  The persisted file still matched that original baseline.
+- Valid multiline JSON imported light mode/font 18. The form closed, its old
+  error disappeared, and reopening displayed the imported values. Persisted
+  values matched; the session store remained byte-identical and no vault was
+  created.
+- Importing font size 99 was rejected. The error was visible and focused in
+  light mode; the persisted file remained byte-identical to the valid import.
+- Closing after that error and reopening through Terminal options cleared the
+  previous error and retained the imported preferences.
+- Setting Quick connect to `Mod+N`, already used by New terminal, then Save
+  produced a visible, focused collision error. The rejected draft remained in
+  the form; persisted settings and session bytes were unchanged.
+- After cancelling the draft, the native application's Quit menu exited with
+  status 0. The recorded app PID and its active local zsh PTY child both exited.
+  The same menu cleanup had passed on the preceding candidate as well.
+
+The store regression now checks malformed JSON, unknown root/nested fields,
+unsupported schema and out-of-range settings against both in-memory state and
+exact persisted bytes. The full local `cargo xtask check` and final
+`cargo xtask package-check` passed. This verifies a debug Mac bundle with the
+production frontend; it is not a new release installer or Windows/Linux GUI
+result. Native Quit with SSH, helpers or an in-flight transfer remains a
+separate lifecycle gate. General focus return after Cancel is not established
+by these error-focus checks.
+
 ## Remaining native acceptance gate
-
-### Settings cancellation check — 2026-10-02
-
-A copied macOS ARM64 debug bundle from `8067326` used portable storage and a
-disposable HOME/ZDOTDIR; the actual app process environment was checked.
-No protocol server or network listener was started. Import settings opened the
-multiline prompt. After entering valid settings JSON, Escape cancelled it:
-the settings form still showed the original dark theme and font size 14, and
-the persisted settings file matched its baseline byte for byte.
-
-The automation tool subsequently could not locate the native window, including
-after an isolated relaunch. Both owned app processes and their local shell
-children were stopped. Malformed/valid accepted imports, focus return and
-native menu Quit remain unverified by this check; SIGTERM cleanup is not
-evidence of normal application shutdown.
 
 Use a separate portable app and disposable generated fixtures, as in
 [the native runbook](native-workflow.md). Still verify:
 
 - Upload/download picker → destination → all overwrite choices, including Cancel.
-- Malformed/valid multiline settings JSON imports; cancellation must
-  leave persisted state unchanged.
+- Repeat settings JSON import, rejection and error-focus checks on Windows/Linux;
+  macOS observations do not establish other WebViews.
 - Native broadcast destination changes while approval is open, macro emergency
   stops, and retry exhaustion/server restart while approval is pending.
 - Remote dirty-editor discard and credential deletion, then focus return and

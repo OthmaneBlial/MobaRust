@@ -1449,6 +1449,8 @@ function App() {
   const [wslTerminalOpen, setWslTerminalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const openSettings = () => { setSettingsError(null); setSettingsOpen(true); };
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [macrosOpen, setMacrosOpen] = useState(false);
@@ -2164,6 +2166,7 @@ function App() {
   }, []);
 
   const saveSettings = useCallback(async (next: AppSettings) => {
+    setSettingsError(null);
     try {
       const saved = IS_TAURI ? await invoke<AppSettings>("settings_save", { settings: next }) : next;
       setSettings(saved);
@@ -2171,7 +2174,7 @@ function App() {
       setSessionNotice("Settings saved. New terminal instances use the updated terminal profile.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Settings could not be saved: ${String(error)}`);
+      setSettingsError(`Settings could not be saved: ${String(error)}`);
     }
   }, []);
 
@@ -2220,6 +2223,7 @@ function App() {
 
   const resetSettings = useCallback(async () => {
     if (!await confirmAction("Reset MobaRust settings to their safe defaults?")) return;
+    setSettingsError(null);
     try {
       const reset = IS_TAURI ? await invoke<AppSettings>("settings_reset") : defaultSettings;
       setSettings(reset);
@@ -2227,12 +2231,13 @@ function App() {
       setSessionNotice("Settings reset to defaults.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Settings could not be reset: ${String(error)}`);
+      setSettingsError(`Settings could not be reset: ${String(error)}`);
     }
   }, []);
 
   const exportSettings = useCallback(async () => {
     if (!IS_TAURI) return;
+    setSettingsError(null);
     try {
       const json = await invoke<string>("settings_export");
       if (navigator.clipboard?.writeText) {
@@ -2244,19 +2249,20 @@ function App() {
       }
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Settings export failed: ${String(error)}`);
+      setSettingsError(`Settings export failed: ${String(error)}`);
     }
   }, []);
 
   const exportDiagnostics = useCallback(async () => {
     if (!IS_TAURI) return;
+    setSettingsError(null);
     try {
       const report = await invoke<string>("diagnostic_export");
       downloadDiagnosticReport(report);
       setSessionNotice("Sanitized diagnostics downloaded. No sessions, hosts, commands, logs, paths, or credentials were included.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Diagnostic export failed: ${String(error)}`);
+      setSettingsError(`Diagnostic export failed: ${String(error)}`);
     }
   }, []);
 
@@ -2264,6 +2270,7 @@ function App() {
     if (!IS_TAURI) return;
     const json = await promptText("Paste a secret-free MobaRust settings export JSON", "", { multiline: true });
     if (!json?.trim()) return;
+    setSettingsError(null);
     try {
       const imported = await invoke<AppSettings>("settings_import", { payload: { json } });
       setSettings(imported);
@@ -2271,43 +2278,46 @@ function App() {
       setSessionNotice("Settings imported after validation. Credentials and session definitions were untouched.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Settings import failed: ${String(error)}`);
+      setSettingsError(`Settings import failed: ${String(error)}`);
     }
   }, []);
 
   const createPortableVault = useCallback(async (passphrase: string) => {
     if (!IS_TAURI) return;
+    setSettingsError(null);
     try {
       const status = await invoke<PortableVaultStatus>("portable_vault_create", { payload: { passphrase } });
       setPortableVaultStatus(status);
       setSessionNotice("Created and unlocked the encrypted portable vault. Lock it before leaving the computer unattended.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Portable vault could not be created: ${String(error)}`);
+      setSettingsError(`Portable vault could not be created: ${String(error)}`);
     }
   }, []);
 
   const unlockPortableVault = useCallback(async (passphrase: string) => {
     if (!IS_TAURI) return;
+    setSettingsError(null);
     try {
       const status = await invoke<PortableVaultStatus>("portable_vault_unlock", { payload: { passphrase } });
       setPortableVaultStatus(status);
       setSessionNotice("Portable vault unlocked in native memory. The passphrase was not returned to the interface.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Portable vault could not be unlocked: ${String(error)}`);
+      setSettingsError(`Portable vault could not be unlocked: ${String(error)}`);
     }
   }, []);
 
   const lockPortableVault = useCallback(async () => {
     if (!IS_TAURI) return;
+    setSettingsError(null);
     try {
       const status = await invoke<PortableVaultStatus>("portable_vault_lock");
       setPortableVaultStatus(status);
       setSessionNotice("Portable vault locked and its native key material was released.");
       setConnectionError(null);
     } catch (error) {
-      setConnectionError(`Portable vault could not be locked: ${String(error)}`);
+      setSettingsError(`Portable vault could not be locked: ${String(error)}`);
     }
   }, []);
 
@@ -3881,7 +3891,7 @@ function App() {
           <button className="icon-button" aria-label="Help" title="Help" onClick={() => setHelpOpen(true)}>
             <CircleHelp size={17} strokeWidth={1.7} />
           </button>
-          <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
+          <button className="icon-button" aria-label="Settings" title="Settings" onClick={openSettings}>
             <Settings2 size={17} strokeWidth={1.7} />
           </button>
           <button className="icon-button" aria-label="Credential vault" title="Credential vault" onClick={() => setCredentialsOpen(true)}>
@@ -4026,7 +4036,7 @@ function App() {
                         </div>
                       );
                     })}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={() => startNewTerminal()}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={() => setSettingsOpen(true)}><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={() => startNewTerminal()}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={openSettings}><MoreHorizontal size={16} /></button></div>
                   </div>
                   {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
                   {macroRecording && <div className="macro-recording-banner" role="alert"><Radio size={15} /><div><strong>RECORDING INPUT · {macroRecording.terminalLabel}</strong><span>Only terminal input is captured locally. Do not type passwords, tokens, or private keys.</span></div><button type="button" className="danger-button" onClick={stopMacroRecording}><Square size={13} /> Stop recording</button></div>}
@@ -4074,13 +4084,13 @@ function App() {
         </section>
       </div>
 
-      {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewShell={startExplicitShell} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
+      {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewShell={startExplicitShell} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { openSettings(); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
       {helpOpen && <HelpModal keyboard={settings.keyboard} onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
       {tunnelDraft && <TunnelDialog kind={tunnelDraft.kind} onClose={() => setTunnelDraft(null)} onStart={startTunnel} />}
       {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
-      {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
+      {settingsOpen && <SettingsModal settings={settings} error={settingsError} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
       {editingRemoteFile && <RemoteEditorModal key={`${editingRemoteFile.sessionId}:${editingRemoteFile.document.path}:${editingRemoteFile.document.revision}`} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
@@ -5237,7 +5247,7 @@ function SessionEditor({ session, onClose, onSave }: { session: SavedSession; on
   );
 }
 
-function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset, onExport, onImport, onExportDiagnostics, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onExport: () => Promise<void>; onImport: () => Promise<void>; onExportDiagnostics: () => Promise<void>; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
+function SettingsModal({ settings, error, portableVaultStatus, onClose, onSave, onReset, onExport, onImport, onExportDiagnostics, onPortableCreate, onPortableUnlock, onPortableLock }: { settings: AppSettings; error: string | null; portableVaultStatus: PortableVaultStatus | null; onClose: () => void; onSave: (settings: AppSettings) => void; onReset: () => void; onExport: () => Promise<void>; onImport: () => Promise<void>; onExportDiagnostics: () => Promise<void>; onPortableCreate: (passphrase: string) => Promise<void>; onPortableUnlock: (passphrase: string) => Promise<void>; onPortableLock: () => Promise<void> }) {
   const [theme, setTheme] = useState(settings.general.theme);
   const [confirmMultilinePaste, setConfirmMultilinePaste] = useState(settings.general.confirmMultilinePaste);
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
@@ -5251,6 +5261,9 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
   const [scanConcurrency, setScanConcurrency] = useState(String(settings.network.scanConcurrency));
   const [portablePassphrase, setPortablePassphrase] = useState("");
   const [portableBusy, setPortableBusy] = useState(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { errorRef.current?.focus(); }, [error]);
 
   const close = () => {
     setPortablePassphrase("");
@@ -5354,6 +5367,8 @@ function SettingsModal({ settings, portableVaultStatus, onClose, onSave, onReset
           <p className="settings-section-note">Download runtime metadata for troubleshooting. The report excludes sessions, hosts, commands, logs, local paths, environment values, and credentials.</p>
           <button type="button" className="outline-button" onClick={() => void onExportDiagnostics()}><Download size={14} /> Export sanitized diagnostics</button>
         </div>
+
+        {error && <div ref={errorRef} className="connect-error-inline" role="alert" tabIndex={-1}>{error}</div>}
 
         <div className="session-editor-footer">
           <div className="settings-footer-left"><button type="button" className="outline-button" onClick={onReset}>Reset defaults</button><button type="button" className="outline-button" onClick={() => void onImport()}>Import settings</button><button type="button" className="outline-button" onClick={() => void onExport()}>Export settings</button></div>

@@ -58,3 +58,17 @@ This is a short lab smoke test, not sustained-use, clean-install, Windows/Linux
 GUI or Intel hardware evidence. The video uses two successive 0.1.17 production
 builds: the tunnel chapters show the final integrated form; earlier chapters
 were recorded immediately before that focused correction.
+
+## Post-release settings and local-shell shutdown
+
+A rebuilt macOS ARM64 debug app with the settings-error correction after
+`c40d349` verified cancelled, malformed, valid multiline and out-of-range
+settings imports, rejected shortcut collisions, unchanged settings/session
+bytes after rejection, and visible error focus in light/dark mode. Native menu
+Quit returned exit status 0 and released the app's active local zsh PTY child.
+These GUI checks started no server or network listener. The copied app's
+actual HOME/ZDOTDIR was verified before and after automation selected it.
+
+[Detailed receipt and remaining limits](text-input-dialogs.md#settings-error-visibility-and-normal-shutdown--2026-10-02).
+This is local-shell shutdown evidence; active SSH, remote-desktop helpers and
+in-flight transfer shutdown still require their own native checks.

@@ -53,7 +53,9 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 - [x] Resolve native fullscreen rejection on macOS ARM64 with Tauri 2.12.1; observe Full-HD canvas entry, focused keyboard input, button/Escape exit and unchanged server geometry in the disposable native app. [Receipt](docs/testing/remote-desktop-renderer.md#fullscreen-recheck-with-tauri-2121).
 - [ ] Verify the updated runtime and fullscreen on Windows/Linux and in rebuilt release installers; macOS debug evidence does not establish those results.
 - [ ] Measure sustained native pipe/Tauri/rendering throughput and end-to-end input latency under large-frame workloads; codec timings and bounded fixture success do not establish GUI responsiveness. Rebuild matching version-2 app/helper cohorts before publishing installers.
-- [ ] Finish native transfer cancellation/collision choices, settings JSON import, editor discard and cross-platform dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
+- [x] Verify macOS ARM64 settings JSON cancellation, malformed/out-of-range rejection, valid multiline import, unchanged persisted bytes and visible error focus in light/dark mode; also reject conflicting shortcut saves. [Receipt](docs/testing/text-input-dialogs.md#settings-error-visibility-and-normal-shutdown--2026-10-02).
+- [x] Observe native macOS menu Quit exiting successfully and releasing an active local zsh PTY in the isolated debug app; SSH/helper/transfer shutdown is still separate.
+- [ ] Finish in-flight native transfer cancellation/collision recovery, cross-platform editor discard and dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
 
 ## Next, in priority order
 
