@@ -20,6 +20,7 @@ apps/desktop/src-tauri/icons/*.icns
 apps/desktop/src-tauri/icons/*.ico
 apps/desktop/src-tauri/icons/*.png
 !apps/desktop/src-tauri/icons/icon.png
+!apps/desktop/src-tauri/icons/icon.ico
 
 # Local state and secrets
 .env

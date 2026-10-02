@@ -21,6 +21,11 @@ The browser preview uses synthetic data. To work on native IPC and protocols,
 run `pnpm --dir apps/desktop tauri dev`. Keep development profiles and secrets
 in a dedicated disposable environment; never use production hosts for tests.
 
+The required Windows resource icon is included in the checkout. When changing
+the source `icon.png`, regenerate it with
+`pnpm --dir apps/desktop tauri icon src-tauri/icons/icon.png` and commit the
+updated `icon.ico`; other platform icon derivatives remain generated assets.
+
 ## Validate a change
 
 ```bash
