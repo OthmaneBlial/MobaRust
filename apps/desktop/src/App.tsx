@@ -25,6 +25,7 @@ import { prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { parseTunnelPort } from "./tunnel-port";
+import { promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
@@ -1878,7 +1879,7 @@ function App() {
         setSessionNotice("Terminal selection copied explicitly.");
       } else {
         setSessionNotice(null);
-        window.prompt("Copy this terminal selection", selection);
+        await promptText("Copy this terminal selection", selection, { multiline: true, readOnly: true });
       }
       setConnectionError(null);
     } catch (error) {
@@ -2096,7 +2097,7 @@ function App() {
         setSessionNotice("Rendered snippet copied. Review it, then paste manually; MobaRust does not auto-send it.");
       } else {
         setSessionNotice(null);
-        window.prompt("Copy this rendered snippet and paste it manually", command);
+        await promptText("Copy this rendered snippet and paste it manually", command, { multiline: true, readOnly: true });
       }
       setConnectionError(null);
     } catch (error) {
@@ -2204,7 +2205,7 @@ function App() {
         setSessionNotice("Secret-free settings copied. Credentials and session definitions are not included.");
       } else {
         setSessionNotice(null);
-        window.prompt("Copy this secret-free MobaRust settings export", json);
+        await promptText("Copy this secret-free MobaRust settings export", json, { multiline: true, readOnly: true });
       }
       setConnectionError(null);
     } catch (error) {
@@ -2226,7 +2227,7 @@ function App() {
 
   const importSettings = useCallback(async () => {
     if (!IS_TAURI) return;
-    const json = window.prompt("Paste a secret-free MobaRust settings export JSON");
+    const json = await promptText("Paste a secret-free MobaRust settings export JSON", "", { multiline: true });
     if (!json?.trim()) return;
     try {
       const imported = await invoke<AppSettings>("settings_import", { payload: { json } });
@@ -2373,7 +2374,7 @@ function App() {
       setQuickConnectOpen(false);
       if (offerSave) {
         const suggestedName = `${request.username}@${response.host}`;
-        const name = window.prompt("Save this SSH session as", suggestedName);
+        const name = await promptText("Save this SSH session as", suggestedName);
         if (name?.trim()) {
           try {
             await invoke("session_save_ssh", { payload: { name: name.trim(), request } });
@@ -2413,7 +2414,7 @@ function App() {
       setSessionNotice("Connected over Telnet. This connection is unencrypted.");
       if (offerSave) {
         const suggestedName = `Telnet · ${response.host}`;
-        const name = window.prompt("Save this Telnet session as", suggestedName);
+        const name = await promptText("Save this Telnet session as", suggestedName);
         if (name?.trim()) {
           try {
             await invoke("session_save_telnet", { payload: { name: name.trim(), request } });
@@ -2453,7 +2454,7 @@ function App() {
       setSessionNotice(`Connected to ${response.device}. Serial traffic is not encrypted by MobaRust.`);
       if (offerSave) {
         const suggestedName = `${response.device} · ${request.baudRate}`;
-        const name = window.prompt("Save this serial profile as", suggestedName);
+        const name = await promptText("Save this serial profile as", suggestedName);
         if (name?.trim()) {
           try {
             await invoke("session_save_serial", { payload: { name: name.trim(), request } });
@@ -2469,7 +2470,7 @@ function App() {
     }
   }, [recordAudit, refreshSavedSessions]);
 
-  const connectRemoteDesktop = useCallback((request: RemoteDesktopConnectRequest, offerSave = true) => {
+  const connectRemoteDesktop = useCallback(async (request: RemoteDesktopConnectRequest, offerSave = true) => {
     if (request.protocol === "vnc" && request.allowInsecureVnc && !window.confirm("VNC over TCP is unencrypted. Continue only if this target is trusted or protected by an external tunnel?")) {
       return;
     }
@@ -2490,7 +2491,7 @@ function App() {
     setSessionNotice(`${request.protocol.toUpperCase()} session queued. The native helper will report its actual connection state.`);
     if (offerSave && IS_TAURI) {
       const suggestedName = `${request.username ? `${request.username}@` : ""}${request.host}`;
-      const name = window.prompt(`Save this ${request.protocol.toUpperCase()} session as`, suggestedName);
+      const name = await promptText(`Save this ${request.protocol.toUpperCase()} session as`, suggestedName);
       if (name?.trim()) {
         void invoke("session_save_remote_desktop", { payload: { name: name.trim(), request } })
           .then(() => {
@@ -2504,7 +2505,7 @@ function App() {
 
   const importOpenSshConfig = useCallback(async () => {
     if (!IS_TAURI) return;
-    const requestedPath = window.prompt("OpenSSH config path (explicit path only; never read automatically)", "");
+    const requestedPath = await promptText("OpenSSH config path (explicit path only; never read automatically)", "");
     if (requestedPath === null || !requestedPath.trim()) return;
     try {
       const report = await invoke<OpenSshImportReport>("session_import_openssh", {
@@ -2537,7 +2538,7 @@ function App() {
         await navigator.clipboard.writeText(json);
         setSessionNotice("Secret-free session definitions copied to the clipboard; credential material is not included.");
       } else {
-        window.prompt("Copy this secret-free MobaRust session export", json);
+        await promptText("Copy this secret-free MobaRust session export", json, { multiline: true, readOnly: true });
       }
     } catch (error) {
       setConnectionError(`Session export failed: ${String(error)}`);
@@ -2546,7 +2547,7 @@ function App() {
 
   const importSessions = useCallback(async () => {
     if (!IS_TAURI) return;
-    const json = window.prompt("Paste a secret-free MobaRust session export JSON. Existing session IDs stay unchanged.");
+    const json = await promptText("Paste a secret-free MobaRust session export JSON. Existing session IDs stay unchanged.", "", { multiline: true });
     if (!json?.trim()) return;
     try {
       const report = await invoke<SessionImportReport>("session_import", { payload: { json } });
@@ -2968,7 +2969,7 @@ function App() {
         return;
       }
     } else {
-      localPath = window.prompt(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
+      localPath = await promptText(entry.isDirectory ? "Local destination directory" : "Local destination path", entry.name);
     }
     if (!localPath?.trim()) return;
     if (remoteSessionIdRef.current !== remoteSessionId) {
@@ -3004,7 +3005,7 @@ function App() {
       }
     }
     if (paths.length === 0 && !IS_TAURI) {
-      const localPath = window.prompt("Local file or directory to upload", "");
+      const localPath = await promptText("Local file or directory to upload", "");
       paths = localPath?.trim() ? [localPath] : [];
     }
     for (const localPath of paths) {
@@ -3014,7 +3015,7 @@ function App() {
       }
       const fallbackName = localPath.split(/[\\/]/).pop() || "upload.bin";
       const defaultRemotePath = remoteChildPath(remotePath, fallbackName);
-      const destination = window.prompt("Remote destination path", defaultRemotePath);
+      const destination = await promptText("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
       const overwrite = window.confirm("Replace existing remote files? OK: allow replacement. Cancel: upload only if the destination does not exist.");
       if (remoteSessionIdRef.current !== remoteSessionId) return;
@@ -3095,8 +3096,8 @@ function App() {
   const createRemoteDirectory = useCallback(async () => {
     if (!remoteSessionId) return;
     const defaultPath = remoteChildPath(remotePath, "new-folder");
-    const path = window.prompt("Remote folder path", defaultPath);
-    if (!path?.trim()) return;
+    const path = await promptText("Remote folder path", defaultPath);
+    if (!path?.trim() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_create_remote_directory", { terminalId: remoteSessionId, path });
       setConnectionError(null);
@@ -3108,8 +3109,8 @@ function App() {
 
   const renameRemote = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
-    const nextName = window.prompt(`New remote name or path for ${quoteRemotePromptPath(entry.path)}`, entry.name);
-    if (!nextName?.trim()) return;
+    const nextName = await promptText(`New remote name or path for ${quoteRemotePromptPath(entry.path)}`, entry.name);
+    if (!nextName?.trim() || remoteSessionIdRef.current !== remoteSessionId) return;
     const target = nextName.includes("/") ? nextName : remoteChildPath(remoteParentPath(entry.path), nextName);
     try {
       await invoke("ssh_rename_remote", { terminalId: remoteSessionId, from: entry.path, to: target });
@@ -3134,8 +3135,8 @@ function App() {
   const setRemotePermissions = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
     const current = entry.permissions == null ? "644" : (entry.permissions & 0o7777).toString(8).padStart(3, "0");
-    const value = window.prompt(`Set POSIX mode for ${quoteRemotePromptPath(entry.path)} (octal 0000–7777)`, current);
-    if (value === null) return;
+    const value = await promptText(`Set POSIX mode for ${quoteRemotePromptPath(entry.path)} (octal 0000–7777)`, current);
+    if (value === null || remoteSessionIdRef.current !== remoteSessionId) return;
     const normalized = value.trim();
     if (!/^[0-7]{3,4}$/.test(normalized)) {
       setConnectionError("Permissions must be an octal mode with 3 or 4 digits, for example 640.");
@@ -3163,7 +3164,7 @@ function App() {
         setSessionNotice(`Copied remote path ${entry.path}.`);
       } else {
         setSessionNotice(null);
-        window.prompt("Copy remote path", entry.path);
+        await promptText("Copy remote path", entry.path, { multiline: true, readOnly: true });
       }
     } catch (error) {
       setConnectionError(`Remote path could not be copied: ${String(error)}`);
@@ -4227,7 +4228,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   };
 
   const saveAs = async () => {
-    const target = window.prompt("Remote target path", document.path);
+    const target = await promptText("Remote target path", document.path);
     if (!target?.trim() || target === document.path) return;
     const overwrite = window.confirm("If the remote target already exists, allow replacing it atomically? Cancel to create only.");
     setBusy(true);

@@ -39,6 +39,11 @@ These changes are included in the v0.1.17 Mac preview. Windows/Linux installers 
 
 The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
+### After v0.1.17, on main
+
+- [x] Replace the remaining 19 browser text prompts with a shared modal input, multiline JSON and read-only copy fields; retain cancellation and session ownership guards.
+- [ ] Complete the new input workflows in a native SSH/SFTP lab, and audit native confirmation dialogues. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate browser observations, the native build and pending GUI evidence. Published installers do not include this change yet.
+
 ## Next, in priority order
 
 ### 1. Maintain the native validation baseline locally
