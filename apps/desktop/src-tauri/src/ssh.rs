@@ -330,10 +330,6 @@ struct SshX11Event {
 
 enum SshCommand {
     Write(Vec<u8>),
-    Resize {
-        cols: u32,
-        rows: u32,
-    },
     ListDirectory {
         path: String,
         reply: oneshot::Sender<Result<Vec<mobarust_ssh::RemoteEntry>, String>>,
@@ -429,6 +425,7 @@ impl Default for SshManager {
 
 struct SessionState {
     sender: mpsc::Sender<SshCommand>,
+    size: watch::Sender<(u32, u32)>,
     close: watch::Sender<bool>,
     finished: watch::Receiver<bool>,
     attached: bool,
@@ -443,6 +440,7 @@ struct RemoteSessionContext {
     request: SshConnectRequest,
     vault: Arc<dyn CredentialLookup>,
     close: watch::Receiver<bool>,
+    size: watch::Receiver<(u32, u32)>,
     auth_events: Channel<SshAuthEvent>,
 }
 
@@ -720,6 +718,7 @@ impl SshManager {
         }
         validate_ssh_connection_policy(&request)?;
         let host = request.host.clone();
+        let (size, size_receiver) = watch::channel((request.cols.max(1), request.rows.max(1)));
         let connection = tokio::select! {
             biased;
             _ = shutdown.changed() => return Err(SshManagerError::Closed),
@@ -729,7 +728,7 @@ impl SshManager {
         let shell = tokio::select! {
             biased;
             _ = shutdown.changed() => return Err(SshManagerError::Closed),
-            result = connection.open_shell(request.cols, request.rows) => result?,
+            result = open_shell_at_current_size(&connection, &size_receiver) => result?,
         };
         let (reader, writer) = shell.split();
         let terminal_id = Uuid::new_v4().to_string();
@@ -747,6 +746,7 @@ impl SshManager {
                 terminal_id.clone(),
                 SessionState {
                     sender,
+                    size,
                     close,
                     finished: finished_receiver,
                     attached: false,
@@ -773,6 +773,7 @@ impl SshManager {
             request,
             vault: reconnect_vault,
             close: close_receiver,
+            size: size_receiver,
             auth_events,
         };
         tauri::async_runtime::spawn(async move {
@@ -851,9 +852,18 @@ impl SshManager {
         cols: u32,
         rows: u32,
     ) -> Result<(), SshManagerError> {
-        self.sender(terminal_id)?
-            .send(SshCommand::Resize { cols, rows })
-            .await
+        let sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+        let state = sessions
+            .get(terminal_id)
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        if *self.shutdown.borrow() || *state.close.borrow() {
+            return Err(SshManagerError::Closed);
+        }
+        // Geometry is current state, not an action to replay. Keep only its
+        // latest value, including while the old command queue is retired.
+        state
+            .size
+            .send((cols.max(1), rows.max(1)))
             .map_err(|_| SshManagerError::Closed)
     }
 
@@ -1509,7 +1519,7 @@ impl SshManager {
         tunnel_event: impl FnOnce(SshTunnelEvent),
     ) {
         match command {
-            SshCommand::Write(_) | SshCommand::Resize { .. } => {}
+            SshCommand::Write(_) => {}
             SshCommand::ListDirectory { reply, .. } => {
                 let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
             }
@@ -1968,6 +1978,7 @@ async fn run_remote_session(
         request,
         vault,
         mut close,
+        mut size,
         auth_events,
     } = context;
     let mut should_report_error = None;
@@ -1986,6 +1997,7 @@ async fn run_remote_session(
             &writer,
             &mut commands,
             &mut close,
+            &mut size,
             &mut transfers,
         )
         .await;
@@ -2057,8 +2069,7 @@ async fn run_remote_session(
                         )
                         .await
                         .map_err(|error| error.to_string())?;
-                        let shell = new_connection
-                            .open_shell(request.cols, request.rows)
+                        let shell = open_shell_at_current_size(&new_connection, &size)
                             .await
                             .map_err(|error| error.to_string())?;
                         Ok((new_connection, shell.split()))
@@ -2231,6 +2242,14 @@ enum ShellRunResult {
     Lost(String),
 }
 
+async fn open_shell_at_current_size(
+    connection: &SshConnection,
+    size: &watch::Receiver<(u32, u32)>,
+) -> Result<mobarust_ssh::SshShell, SshError> {
+    let (cols, rows) = *size.borrow();
+    connection.open_shell(cols, rows).await
+}
+
 async fn retire_shell_output(
     reader: mobarust_ssh::SshShellReader,
     writer: &mobarust_ssh::SshShellWriter,
@@ -2290,6 +2309,7 @@ async fn run_shell_once(
     writer: &mobarust_ssh::SshShellWriter,
     commands: &mut mpsc::Receiver<SshCommand>,
     close: &mut watch::Receiver<bool>,
+    size: &mut watch::Receiver<(u32, u32)>,
     transfers: &mut JoinSet<()>,
 ) -> ShellRunResult {
     loop {
@@ -2320,12 +2340,6 @@ async fn run_shell_once(
                 match command {
                     Some(SshCommand::Write(data)) => {
                         if let Err(result) = run_shell_operation(writer.write(&data), reader, close,
-                            |bytes| manager.emit_output(app, terminal_id, bytes)).await {
-                            return result;
-                        }
-                    }
-                    Some(SshCommand::Resize { cols, rows }) => {
-                        if let Err(result) = run_shell_operation(writer.resize(cols, rows), reader, close,
                             |bytes| manager.emit_output(app, terminal_id, bytes)).await {
                             return result;
                         }
@@ -2434,6 +2448,16 @@ async fn run_shell_once(
                 }
             }
             _ = transfers.join_next(), if !transfers.is_empty() => {}
+            changed = size.changed() => {
+                if changed.is_err() {
+                    return ShellRunResult::Closed;
+                }
+                let (cols, rows) = *size.borrow_and_update();
+                if let Err(result) = run_shell_operation(writer.resize(cols, rows), reader, close,
+                    |bytes| manager.emit_output(app, terminal_id, bytes)).await {
+                    return result;
+                }
+            }
             changed = close.changed() => {
                 if changed.is_err() || *close.borrow() {
                     return ShellRunResult::Closed;
@@ -4512,6 +4536,7 @@ mod tests {
             id.into(),
             super::SessionState {
                 sender,
+                size: watch::channel((80, 24)).0,
                 close: watch::channel(false).0,
                 finished: watch::channel(false).1,
                 attached: false,
@@ -4763,6 +4788,65 @@ mod tests {
             manager.sender("closing"),
             Err(SshManagerError::Closed)
         ));
+    }
+
+    #[tokio::test]
+    async fn terminal_resize_survives_retired_command_queue() {
+        let manager = SshManager::default();
+        let mut commands = queue_test_session(&manager, "resizing");
+        let mut size = manager.sessions.lock().unwrap()["resizing"]
+            .size
+            .subscribe();
+        manager.resize("resizing", 100, 30).await.unwrap();
+        assert_eq!(*size.borrow_and_update(), (100, 30));
+        assert!(
+            commands.try_recv().is_err(),
+            "geometry does not fill the action queue"
+        );
+        commands.close();
+        assert!(
+            manager
+                .write("resizing", "do-not-replay".into())
+                .await
+                .is_err()
+        );
+        manager
+            .resize("resizing", 132, 41)
+            .await
+            .expect("current terminal size must survive reconnect backoff");
+        assert_eq!(*size.borrow_and_update(), (132, 41));
+        for cols in 1..=1000 {
+            manager.resize("resizing", cols, 50).await.unwrap();
+        }
+        assert_eq!(*size.borrow_and_update(), (1000, 50));
+        let mut fresh = manager.reopen_command_queue("resizing").unwrap();
+        manager.resize("resizing", 0, 0).await.unwrap();
+        assert_eq!(*size.borrow_and_update(), (1, 1));
+        assert!(
+            fresh.try_recv().is_err(),
+            "no old terminal actions are replayed"
+        );
+        manager.sessions.lock().unwrap()["resizing"]
+            .close
+            .send_replace(true);
+        assert!(manager.resize("resizing", 80, 24).await.is_err());
+        assert_eq!(
+            *size.borrow(),
+            (1, 1),
+            "Close refuses late geometry changes"
+        );
+        manager.sessions.lock().unwrap()["resizing"]
+            .close
+            .send_replace(false);
+        manager.shutdown.send_replace(true);
+        assert!(manager.resize("resizing", 80, 24).await.is_err());
+        manager.shutdown.send_replace(false);
+        drop(size);
+        assert!(
+            manager.resize("resizing", 80, 24).await.is_err(),
+            "a terminated worker cannot accept resize"
+        );
+        assert!(manager.resize("missing", 80, 24).await.is_err());
     }
 
     #[tokio::test]
@@ -5042,6 +5126,7 @@ mod tests {
                 id.into(),
                 SessionState {
                     sender,
+                    size: watch::channel((80, 24)).0,
                     close,
                     finished: finished_receiver,
                     attached: false,

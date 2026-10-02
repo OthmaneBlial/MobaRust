@@ -91,6 +91,10 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 The v0.1.20 Mac preview includes startup output ordering corrections across SSH, Telnet and serial
 attachment. Native manager regressions verify replay under the publication lock;
 [GUI timing and sustained output acceptance remain pending](docs/testing/terminal-attachment.md).
+After v0.1.20, main also preserves the latest SSH terminal dimensions across
+reconnect backoff without replaying input. Manager and loopback packet checks
+cover coalesced sizes and replacement-shell geometry;
+[native resize/reconnect acceptance remains pending](docs/testing/ssh-reconnect.md#terminal-size-across-reconnects-on-main).
 
 **Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
 

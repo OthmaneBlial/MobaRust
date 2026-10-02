@@ -19,8 +19,11 @@ obtained before closure rather than treating a temporarily empty queue as finish
 A successful reconnect creates a fresh bounded queue under the same terminal ID;
 old sender clones cannot write into it. During backoff and cleanup, new native
 SSH actions return the closed-queue error instead of waiting for a reconnect.
+Terminal geometry is separate current state: the latest dimensions survive
+backoff and are used when opening the replacement shell. See the
+[resize regression](ssh-reconnect.md#terminal-size-across-reconnects-on-main).
 
-Queued terminal input/resize is discarded; when retirement discards actions the
+Queued terminal input is discarded; when retirement discards actions the
 terminal receives a static notice asking for an explicit retry. Queued editor,
 file-browser, monitor and mutation replies receive an explicit cancellation error.
 Transfers report `cancelled` with zero bytes, and pending local/dynamic/remote

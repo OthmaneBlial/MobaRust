@@ -107,3 +107,47 @@ This does not prove zero/maximum retry budgets in the GUI, repeatedly flapping
 short-lived shells, a real daemon restart, password/PAM/MFA, larger or interrupted
 transfers, Windows/Linux GUI behavior, clean installation or sustained use.
 Those gates remain open. CI stays disabled; local evidence is not a CI run.
+
+## Terminal size across reconnects on main
+
+The native worker reopened SSH shells with the original connect dimensions.
+Resizes during backoff were rejected because the old command queue had closed;
+the frontend does not refit solely because SSH emits `connected`. A regression
+against `9f82da5` reproduced `Closed` when updating geometry during backoff.
+
+Terminal geometry now uses one per-session Tokio watch value. It coalesces
+updates independently of the command queue, including while authentication or
+reconnect is pending. Initial and replacement shell setup share the same method
+for reading current dimensions. Changes arriving after that snapshot remain
+pending for the shell pump, which sends the latest window-change request through
+the existing output-aware, cancellable operation path. Zero dimensions retain
+the previous transport behavior of clamping to one column/row.
+
+This preserves terminal size, not old actions: retired input and remote file
+commands remain rejected. Close, application shutdown, missing sessions and a
+terminated size receiver refuse further resize updates.
+
+```sh
+cargo test --locked -p mobarust terminal_resize_survives_retired_command_queue
+cargo test --locked -p mobarust blocked_shell_input_keeps_output_and_cancellation_live
+cargo xtask check
+```
+
+The manager regression checks updates before/after queue retirement, 1,000
+coalesced resizes, fresh queue isolation, clamping and refusal after closure or
+shutdown. The existing encrypted, memory-only loopback fixture additionally
+observes an initial `80×24` PTY, a replacement `132×41` PTY on the same transport,
+then a `155×53` window change submitted while the server's replacement PTY
+handler is paused. It also retains exact-once input and blocked-output/close
+checks. Listener addresses are `127.0.0.1` with OS-assigned ports; generated
+in-memory credentials and pinned host keys are used, and listener release is
+checked after transport/worker cleanup.
+
+The complete local `cargo xtask check` passed on macOS ARM64, including all
+104 desktop tests, workspace tests/Clippy, frontend tests/type/lint/build,
+protocol fixtures, unsigned package-layout contracts and fuzz compilation.
+
+This correction follows the v0.1.20 tag and is not in its published DMGs.
+Native GUI resize/reconnect acceptance and Windows/Linux runtime evidence remain
+open. Replacing a shell on one authenticated transport is not evidence of a
+complete transport restart or sustained GUI responsiveness.

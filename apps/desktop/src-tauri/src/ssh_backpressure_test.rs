@@ -1,5 +1,5 @@
 //! Production desktop I/O pump against encrypted, memory-only loopback SSH.
-use super::{ShellRunResult, retire_shell_output, run_shell_operation};
+use super::{ShellRunResult, open_shell_at_current_size, retire_shell_output, run_shell_operation};
 use mobarust_ssh::{HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials};
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::keys::{HashAlg, PrivateKey};
@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -19,6 +19,8 @@ struct Peer {
     delivered: Arc<Notify>,
     pause_first: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     ready: Option<oneshot::Sender<(server::Handle, russh::ChannelId)>>,
+    geometry: Option<mpsc::Sender<(&'static str, u32, u32)>>,
+    pause_replacement_pty: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
 }
 
 impl server::Handler for Peer {
@@ -50,6 +52,44 @@ impl server::Handler for Peer {
         session.channel_success(channel)?;
         if let Some(ready) = self.ready.take() {
             let _ = ready.send((session.handle(), channel));
+        }
+        Ok(())
+    }
+
+    async fn pty_request(
+        &mut self,
+        _channel: russh::ChannelId,
+        _term: &str,
+        cols: u32,
+        rows: u32,
+        _pixel_width: u32,
+        _pixel_height: u32,
+        _modes: &[(russh::Pty, u32)],
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(geometry) = &self.geometry {
+            geometry.try_send(("pty", cols, rows)).unwrap();
+        }
+        if self.ready.is_none()
+            && let Some((entered, release)) = self.pause_replacement_pty.take()
+        {
+            let _ = entered.send(());
+            release.await.unwrap();
+        }
+        Ok(())
+    }
+
+    async fn window_change_request(
+        &mut self,
+        _channel: russh::ChannelId,
+        cols: u32,
+        rows: u32,
+        _pixel_width: u32,
+        _pixel_height: u32,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(geometry) = &self.geometry {
+            geometry.try_send(("resize", cols, rows)).unwrap();
         }
         Ok(())
     }
@@ -90,9 +130,14 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
             let (first, first_received) = oneshot::channel();
             let (release, resumed) = oneshot::channel();
             let (ready, channel) = oneshot::channel();
+            let (geometry, mut sizes) = mpsc::channel(8);
+            let (pty_entered, pty_pending) = oneshot::channel();
+            let (pty_release, pty_resumed) = oneshot::channel();
             let peer = Peer { password: password.clone(), received: received.clone(),
                 received_bytes: received_bytes.clone(), delivered: delivered.clone(),
-                pause_first: (action == "resume").then_some((first, resumed)), ready: Some(ready) };
+                pause_first: (action == "resume").then_some((first, resumed)), ready: Some(ready),
+                geometry: (action == "resume").then_some(geometry),
+                pause_replacement_pty: (action == "resume").then_some((pty_entered, pty_resumed)) };
             let config = Arc::new(server::Config {
                 keys: vec![key], window_size: if action == "resume" { 1024 } else { 0 }, maximum_packet_size: 1024,
                 auth_rejection_time: Duration::ZERO, auth_rejection_time_initial: Some(Duration::ZERO),
@@ -110,8 +155,10 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 credentials: SshCredentials::password_secret("fixture", mobarust_ssh::Secret::from_zeroizing(password)),
                 keepalive_interval: None, x11: None, environment: Vec::new(), startup_directory: None, startup_command: None,
             }).await.unwrap();
-            let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
+            let (size, mut viewport) = watch::channel((80, 24));
+            let (mut reader, writer) = open_shell_at_current_size(&connection, &viewport).await.unwrap().split();
             let (remote, channel) = channel.await.unwrap();
+            if action == "resume" { assert_eq!(sizes.recv().await.unwrap(), ("pty", 80, 24)); }
             let (close, mut closing) = watch::channel(false);
             let entered = Arc::new(Notify::new());
             let output_ready = Arc::new(Notify::new());
@@ -205,6 +252,25 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 let (reader, next_writer) = shell.split();
                 retire_shell_output(reader, &next_writer).await;
                 drop(next_writer); drop(writer);
+            } else if action == "resume" {
+                retire_shell_output(reader, &writer).await;
+                drop(writer);
+                size.send((132, 41)).unwrap();
+                let (mut reader, writer) = open_shell_at_current_size(&connection, &viewport).await.unwrap().split();
+                pty_pending.await.unwrap();
+                assert_eq!(sizes.recv().await.unwrap(), ("pty", 132, 41),
+                    "replacement PTY uses current geometry rather than connect defaults");
+                size.send((155, 53)).unwrap();
+                pty_release.send(()).unwrap();
+                viewport.changed().await.unwrap();
+                let (cols, rows) = *viewport.borrow_and_update();
+                let mut closing = close.subscribe();
+                assert!(run_shell_operation(writer.resize(cols, rows), &mut reader, &mut closing,
+                    |_| panic!("retired output must not reach the replacement shell")).await.is_ok());
+                assert_eq!(sizes.recv().await.unwrap(), ("resize", 155, 53),
+                    "a resize arriving during shell setup is still delivered");
+                retire_shell_output(reader, &writer).await;
+                drop(writer);
             } else { drop(reader); drop(writer); }
             let _ = connection.disconnect().await;
             drop(connection);
