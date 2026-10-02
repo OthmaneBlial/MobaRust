@@ -285,9 +285,10 @@ async fn remote_desktop_start(
     manager: State<'_, RemoteDesktopManager>,
     resolver: State<'_, CredentialResolver>,
     request: RemoteDesktopConnectRequest,
+    on_event: tauri::ipc::Channel,
 ) -> Result<RemoteDesktopConnectResponse, String> {
     let program = helper_program(&app, request.protocol)?;
-    manager.start(app, program, &*resolver, request).await
+    manager.start(on_event, program, &*resolver, request).await
 }
 
 #[tauri::command]
@@ -356,6 +357,15 @@ async fn remote_desktop_clipboard(
             HelperCommand::Clipboard { text: payload.text },
         )
         .await
+}
+
+#[tauri::command]
+async fn remote_desktop_framebuffer(
+    manager: State<'_, RemoteDesktopManager>,
+    session_id: String,
+    generation: u64,
+) -> Result<tauri::ipc::Response, String> {
+    manager.take_framebuffer(&session_id, generation).await
 }
 
 #[tauri::command]
@@ -1890,6 +1900,7 @@ fn main() {
             network_scan_start,
             network_scan_cancel,
             remote_desktop_start,
+            remote_desktop_framebuffer,
             remote_desktop_key,
             remote_desktop_pointer,
             remote_desktop_wheel,

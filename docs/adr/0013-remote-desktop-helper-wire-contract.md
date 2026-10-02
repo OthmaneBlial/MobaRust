@@ -87,8 +87,20 @@ The version change is deliberate: the parent and both helpers use the shared
 `WIRE_VERSION` in their startup handshake. Version 1 and version 2 binaries
 must not be mixed; old/new mismatches are rejected before remote data is
 accepted. Published v0.1.17 installers remain version 1 until rebuilt as a
-matching app/helper cohort. This native pipe change does not change the Tauri
-renderer event schema or establish GUI performance or real-server compatibility.
+matching app/helper cohort. Neither wire version 2 nor the rendering bridge
+establishes sustained GUI performance or real-server compatibility.
+
+The desktop uses a per-connection Tauri channel for control events and small
+frame-ready notices. The parent retains only the latest validated binary frame;
+`remote_desktop_framebuffer` takes it as a raw binary response. One outstanding
+notice is allowed until a matching-generation pull takes the frame. Lifecycle
+transitions clear the cache and advance its generation, so an old pull cannot
+consume a new connection's image. The frontend permits one fetch and one
+animation-frame callback at a time, discards stale reconnect replies, and views
+RGBA bytes directly through `Uint8ClampedArray`. Canvas dimensions are reset
+only when they change. Pixel arrays no longer cross this bridge as JSON numbers.
+The [native renderer receipt](../testing/remote-desktop-renderer.md) records
+Full-HD loopback rendering, input and reconnect observations and their limits.
 
 The crate is a contract, test seam, and native-parent API. The isolated
 `tools/rdp-helper` and `tools/vnc-helper` implement real protocol-client paths
@@ -107,9 +119,10 @@ engine experiment must measure input latency, resize behavior, clipboard,
 reconnect, audio, certificate handling, and Windows interoperability before
 the adapter is promoted.
 
-Fullscreen and visual scaling remain renderer-owned controls: the UI can place
-the canvas in fullscreen and preserve its aspect ratio without asking the
-remote protocol to resize. RDP dynamic resize is coalesced to the latest
+Fullscreen and visual scaling remain renderer-owned controls. Scaling preserves
+the canvas aspect ratio without asking the remote protocol to resize; fullscreen
+depends on runtime support and was blocked in the recorded macOS native check.
+RDP dynamic resize is coalesced to the latest
 bounded viewport size before it crosses the Tauri command queue, and pending
 resize timers are cancelled when a view closes. VNC server-side resize remains
 capability-dependent and is not simulated.

@@ -149,6 +149,15 @@ pipe deadlines remain unchanged. The [debug/release codec receipt](../../benchma
 records byte counts and timings; it does not measure Tauri rendering, end-to-end
 input latency, sustained VNC throughput or another platform.
 
+The subsequent desktop change removes the second JSON pixel-array expansion at
+the native/WebView boundary. Per-connection channels carry control and bounded
+frame-ready notices; the renderer pulls only the latest binary frame, with
+generation checks across reconnects. A macOS ARM64 debug app displayed Full-HD
+pixels from the loopback RFB fixture and changed them after keyboard input both
+before and after a forced disconnect. See the [native renderer receipt](../testing/remote-desktop-renderer.md).
+This is controlled-fixture evidence; sustained FPS/input latency, external VNC
+servers, fullscreen and other platforms remain separate acceptance gates.
+
 ## Isolated implementation experiment
 
 The separate `tools/vnc-helper` workspace now contains a real `vnc-rs 0.5.3`

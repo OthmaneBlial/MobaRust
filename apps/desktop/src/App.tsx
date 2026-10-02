@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { RemoteFramebufferQueue } from "./remote-desktop-framebuffer";
 import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import { FitAddon } from "@xterm/addon-fit";
@@ -227,16 +228,14 @@ type RemoteDesktopCapabilities = {
   colorDepths: number[];
 };
 
-type RemoteDesktopEvent = {
-  sessionId: string;
-  event:
+type RemoteDesktopEvent =
     | { event: "hello"; payload: { version: number } }
     | { event: "capabilities"; payload: { capabilities: RemoteDesktopCapabilities } }
     | { event: "state"; payload: { state: "created" | "starting" | "ready" | "active" | "reconnecting" | "stopping" | "stopped" | "crashed" | "failed" } }
-    | { event: "framebuffer"; payload: { width: number; height: number; pixels: number[] } }
+    | { event: "framebuffer"; payload: { width: number; height: number; generation: number } }
     | { event: "clipboard"; payload: { text: string } }
     | { event: "diagnostic"; payload: { level: string; message: string } };
-};
+
 
 type SshSessionEvent = {
   terminalId: string;
@@ -1057,13 +1056,17 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
     const canvas = canvasRef.current;
     if (!host || !canvas) return;
     let disposed = false;
-    let unlisten: UnlistenFn | undefined;
+    let failed = false;
     let resizeTimer: number | null = null;
     let pendingResize: RemoteDesktopSize | null = null;
     let lastSentResize: RemoteDesktopSize | null = null;
 
     const setErrorAndFail = (message: string) => {
       if (disposed) return;
+      failed = true;
+      frames.reset();
+      const sessionId = sessionIdRef.current;
+      if (sessionId) void invoke("remote_desktop_stop", { sessionId }).catch(() => undefined);
       setError(message);
       onStatusChange(workspaceId, "error");
     };
@@ -1086,21 +1089,24 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       }, 75);
     };
 
-    const renderFramebuffer = (width: number, height: number, pixels: number[]) => {
-      if (pixels.length !== width * height * 4) {
-        setErrorAndFail("The remote desktop sent an invalid framebuffer.");
-        return;
-      }
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        setErrorAndFail("The remote desktop renderer is unavailable.");
-        return;
-      }
-      context.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-      setDimensions({ width, height });
-    };
+    const frames = new RemoteFramebufferQueue(
+      async (generation) => {
+        const sessionId = sessionIdRef.current;
+        if (disposed || !sessionId) return new ArrayBuffer(0);
+        return invoke<ArrayBuffer>("remote_desktop_framebuffer", { sessionId, generation });
+      },
+      ({ width, height, pixels }) => {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          setDimensions({ width, height });
+        }
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("The remote desktop renderer is unavailable.");
+        context.putImageData(new ImageData(pixels, width, height), 0, 0);
+      },
+      (error) => setErrorAndFail(String(error)),
+    );
 
     const boot = async () => {
       setError(null);
@@ -1119,9 +1125,8 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
         return;
       }
       try {
-        unlisten = await listen<RemoteDesktopEvent>("remote-desktop://event", (event) => {
-          if (event.payload.sessionId !== sessionIdRef.current) return;
-          const helperEvent = event.payload.event;
+        const onEvent = new Channel<RemoteDesktopEvent>((helperEvent) => {
+          if (disposed) return;
           if (helperEvent.event === "capabilities") {
             if (helperEvent.payload.capabilities.protocol !== request.protocol) {
               setErrorAndFail("The remote desktop helper reported the wrong protocol.");
@@ -1137,6 +1142,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               onStatusChange(workspaceId, "connected");
             }
             if (helperEvent.payload.state === "reconnecting") {
+              frames.reset();
               canvas.width = request.width;
               canvas.height = request.height;
               canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
@@ -1151,12 +1157,14 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
               onStatusChange(workspaceId, "reconnecting");
             }
             if (helperEvent.payload.state === "failed" || helperEvent.payload.state === "crashed") {
+              failed = true;
+              frames.reset();
               setError((current) => preserveRemoteDesktopError(current, REMOTE_DESKTOP_FALLBACK_ERROR));
               onStatusChange(workspaceId, "error");
             }
-            if (helperEvent.payload.state === "stopped") onStatusChange(workspaceId, "closed");
+            if (helperEvent.payload.state === "stopped") { failed = true; frames.reset(); onStatusChange(workspaceId, "closed"); }
           }
-          if (helperEvent.event === "framebuffer") renderFramebuffer(helperEvent.payload.width, helperEvent.payload.height, helperEvent.payload.pixels);
+          if (helperEvent.event === "framebuffer") frames.request(helperEvent.payload.generation);
           if (helperEvent.event === "clipboard") {
             if (!remoteDesktopCanReceiveClipboard(request.protocol, request.clipboardEnabled, capabilitiesRef.current)) {
               setErrorAndFail("The remote desktop helper sent clipboard data without negotiated opt-in.");
@@ -1167,17 +1175,14 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
           }
           if (helperEvent.event === "diagnostic") setError(helperEvent.payload.message);
         });
-        if (disposed) {
-          unlisten();
-          return;
-        }
-        const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request });
-        if (disposed) {
+        const response = await invoke<RemoteDesktopConnectResponse>("remote_desktop_start", { request, onEvent });
+        if (disposed || failed) {
           void invoke("remote_desktop_stop", { sessionId: response.sessionId }).catch(() => undefined);
           return;
         }
         sessionIdRef.current = response.sessionId;
         onNativeTerminalId(workspaceId, response.sessionId);
+        frames.refresh();
         sendResize();
       } catch (startError) {
         setErrorAndFail(String(startError));
@@ -1193,6 +1198,7 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
 
     return () => {
       disposed = true;
+      frames.dispose();
       lastRemotePointerRef.current = null;
       pressedRemoteKeysRef.current.clear();
       pointerQueueRef.current = [];
@@ -1201,7 +1207,6 @@ function RemoteDesktopViewport({ workspaceId, instanceKey, request, onStatusChan
       resizeTimer = null;
       pendingResize = null;
       document.removeEventListener("fullscreenchange", syncFullscreen);
-      unlisten?.();
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = null;
       onNativeTerminalId(workspaceId, null);

@@ -15,10 +15,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use tauri::{AppHandle, Manager};
 use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const HELPER_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const HELPER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,13 +75,6 @@ pub struct RemoteDesktopConnectResponse {
     pub session_id: String,
     pub protocol: DesktopProtocol,
     pub host: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteDesktopEvent {
-    pub session_id: String,
-    pub event: HelperEvent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +142,36 @@ fn required_helper_capabilities(
     }
 }
 
+#[derive(Default)]
+struct PendingFramebuffer {
+    frame: Option<Zeroizing<Vec<u8>>>,
+    generation: u64,
+    notified: bool,
+}
+
+impl PendingFramebuffer {
+    fn replace(&mut self, frame: Zeroizing<Vec<u8>>) -> bool {
+        self.frame = Some(frame);
+        let notify = !self.notified;
+        self.notified = true;
+        notify
+    }
+
+    fn take(&mut self, generation: u64) -> Option<Zeroizing<Vec<u8>>> {
+        if generation != self.generation {
+            return None;
+        }
+        self.notified = false;
+        self.frame.take()
+    }
+
+    fn clear(&mut self) {
+        self.frame = None;
+        self.notified = false;
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
 #[derive(Clone)]
 struct ManagedSession {
     commands: mpsc::Sender<HelperCommand>,
@@ -155,6 +180,7 @@ struct ManagedSession {
     command_policy: SessionCommandPolicy,
     capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
     phase: Arc<Mutex<HelperSessionPhase>>,
+    framebuffer: Arc<Mutex<PendingFramebuffer>>,
 }
 
 #[derive(Clone, Default)]
@@ -165,7 +191,7 @@ pub struct RemoteDesktopManager {
 impl RemoteDesktopManager {
     pub async fn start(
         &self,
-        app: AppHandle,
+        events: Channel,
         program: PathBuf,
         resolver: &dyn CredentialLookup,
         request: RemoteDesktopConnectRequest,
@@ -272,6 +298,7 @@ impl RemoteDesktopManager {
         let stop_requested = Arc::new(AtomicBool::new(false));
         let capabilities = Arc::new(Mutex::new(None));
         let phase = Arc::new(Mutex::new(HelperSessionPhase::Starting));
+        let framebuffer = Arc::new(Mutex::new(PendingFramebuffer::default()));
         self.sessions.lock().await.insert(
             session_id.clone(),
             ManagedSession {
@@ -281,13 +308,13 @@ impl RemoteDesktopManager {
                 command_policy: capability_requirements.into(),
                 capabilities: Arc::clone(&capabilities),
                 phase: Arc::clone(&phase),
+                framebuffer: Arc::clone(&framebuffer),
             },
         );
         let sessions = Arc::clone(&self.sessions);
         let reader_session_id = session_id.clone();
         let reader_supervisor = Arc::clone(&supervisor);
-        let writer_app = app.clone();
-        let writer_session_id = session_id.clone();
+        let writer_events = events.clone();
         let writer_supervisor = Arc::clone(&supervisor);
         let writer_stop_requested = Arc::clone(&stop_requested);
         let reader_context = HelperReaderContext {
@@ -297,16 +324,16 @@ impl RemoteDesktopManager {
             capability_requirements,
             capabilities,
             phase,
+            framebuffer,
         };
         tokio::spawn(read_helper_events(
-            app,
+            events,
             reader_session_id,
             stdout,
             reader_context,
         ));
         tokio::spawn(write_helper_commands(
-            writer_app,
-            writer_session_id,
+            writer_events,
             stdin,
             command_rx,
             writer_supervisor,
@@ -346,11 +373,34 @@ impl RemoteDesktopManager {
             .map_err(|_| "remote desktop helper is no longer accepting input".to_owned())
     }
 
+    pub async fn take_framebuffer(
+        &self,
+        session_id: &str,
+        generation: u64,
+    ) -> Result<Response, String> {
+        let session = self
+            .sessions
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| "remote desktop session was not found".to_owned())?;
+        let data = session
+            .framebuffer
+            .lock()
+            .await
+            .take(generation)
+            .map(|mut frame| std::mem::take(&mut *frame))
+            .unwrap_or_default();
+        Ok(Response::new(data))
+    }
+
     pub async fn stop(&self, session_id: &str) -> Result<(), String> {
         let Some(session) = self.sessions.lock().await.remove(session_id) else {
             return Ok(());
         };
         session.stop_requested.store(true, Ordering::Release);
+        session.framebuffer.lock().await.clear();
         let _ = session.commands.send(HelperCommand::Stop).await;
         session
             .supervisor
@@ -542,8 +592,7 @@ fn protocol_name(protocol: DesktopProtocol) -> &'static str {
 }
 
 async fn write_helper_commands<W: AsyncWrite + Unpin>(
-    app: AppHandle,
-    session_id: String,
+    events: Channel,
     mut stdin: W,
     mut commands: mpsc::Receiver<HelperCommand>,
     supervisor: Arc<Mutex<HelperSupervisor>>,
@@ -553,28 +602,19 @@ async fn write_helper_commands<W: AsyncWrite + Unpin>(
         let frame = match encode_command_frame(&command) {
             Ok(frame) => frame,
             Err(error) => {
-                report_helper_input_failure(
-                    &app,
-                    &session_id,
-                    &supervisor,
-                    &stop_requested,
-                    &error,
-                )
-                .await;
+                report_helper_input_failure(&events, &supervisor, &stop_requested, &error).await;
                 break;
             }
         };
         if let Err(error) = write_frame_with_timeout(&mut stdin, &frame).await {
-            report_helper_input_failure(&app, &session_id, &supervisor, &stop_requested, &error)
-                .await;
+            report_helper_input_failure(&events, &supervisor, &stop_requested, &error).await;
             break;
         }
     }
 }
 
 async fn report_helper_input_failure(
-    app: &AppHandle,
-    session_id: &str,
+    events: &Channel,
     supervisor: &Arc<Mutex<HelperSupervisor>>,
     stop_requested: &Arc<AtomicBool>,
     error: &HelperProtocolError,
@@ -582,17 +622,15 @@ async fn report_helper_input_failure(
     if !claim_unexpected_helper_exit(stop_requested) {
         return;
     }
-    emit_helper_event(
-        app,
-        session_id,
+    let _ = emit_helper_event(
+        events,
         HelperEvent::Diagnostic {
             level: mobarust_remote_desktop::DiagnosticLevel::Error,
             message: helper_input_failure_message(error).into(),
         },
     );
-    emit_helper_event(
-        app,
-        session_id,
+    let _ = emit_helper_event(
+        events,
         HelperEvent::State {
             state: mobarust_remote_desktop::HelperState::Crashed,
         },
@@ -614,6 +652,7 @@ struct HelperReaderContext {
     capability_requirements: HelperCapabilityRequirements,
     capabilities: Arc<Mutex<Option<HelperCapabilities>>>,
     phase: Arc<Mutex<HelperSessionPhase>>,
+    framebuffer: Arc<Mutex<PendingFramebuffer>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -643,7 +682,7 @@ async fn read_next_helper_frame<R: tokio::io::AsyncRead + Unpin>(
 }
 
 async fn read_helper_events(
-    app: AppHandle,
+    events: Channel,
     session_id: String,
     mut stdout: impl tokio::io::AsyncRead + Unpin,
     context: HelperReaderContext,
@@ -655,6 +694,7 @@ async fn read_helper_events(
         capability_requirements,
         capabilities,
         phase,
+        framebuffer,
     } = context;
     let mut progress = HelperEventProgress::default();
     let mut handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
@@ -668,9 +708,8 @@ async fn read_helper_events(
             Ok(Some(frame)) => frame,
             Ok(None) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::State {
                             state: mobarust_remote_desktop::HelperState::Crashed,
                         },
@@ -680,17 +719,15 @@ async fn read_helper_events(
             }
             Err(HelperFrameReadError::HandshakeTimeout) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::Diagnostic {
                             level: mobarust_remote_desktop::DiagnosticLevel::Error,
                             message: "remote desktop helper handshake timed out".into(),
                         },
                     );
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::State {
                             state: mobarust_remote_desktop::HelperState::Failed,
                         },
@@ -700,17 +737,15 @@ async fn read_helper_events(
             }
             Err(HelperFrameReadError::Protocol) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::Diagnostic {
                             level: mobarust_remote_desktop::DiagnosticLevel::Error,
                             message: "remote desktop helper protocol failed".into(),
                         },
                     );
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::State {
                             state: mobarust_remote_desktop::HelperState::Crashed,
                         },
@@ -723,17 +758,15 @@ async fn read_helper_events(
             Ok(event) => event,
             Err(_) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::Diagnostic {
                             level: mobarust_remote_desktop::DiagnosticLevel::Error,
                             message: "remote desktop helper sent an invalid event".into(),
                         },
                     );
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::State {
                             state: mobarust_remote_desktop::HelperState::Crashed,
                         },
@@ -746,17 +779,15 @@ async fn read_helper_events(
             Ok(next_progress) => progress = next_progress,
             Err(message) => {
                 if claim_unexpected_helper_exit(&stop_requested) {
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::Diagnostic {
                             level: mobarust_remote_desktop::DiagnosticLevel::Error,
                             message: message.into(),
                         },
                     );
-                    emit_helper_event(
-                        &app,
-                        &session_id,
+                    let _ = emit_helper_event(
+                        &events,
                         HelperEvent::State {
                             state: mobarust_remote_desktop::HelperState::Failed,
                         },
@@ -781,6 +812,9 @@ async fn read_helper_events(
             handshake_deadline = Instant::now() + HELPER_HANDSHAKE_TIMEOUT;
         }
         if let HelperEvent::State { state } = &event {
+            if !matches!(state, mobarust_remote_desktop::HelperState::Active) {
+                framebuffer.lock().await.clear();
+            }
             *phase.lock().await = match state {
                 mobarust_remote_desktop::HelperState::Starting => HelperSessionPhase::Starting,
                 mobarust_remote_desktop::HelperState::Ready => HelperSessionPhase::Ready,
@@ -803,13 +837,29 @@ async fn read_helper_events(
                     | mobarust_remote_desktop::HelperState::Crashed
             }
         );
-        emit_helper_event(&app, &session_id, event);
+        let delivery = if let HelperEvent::Framebuffer { width, height, .. } = event {
+            let mut pending = framebuffer.lock().await;
+            if pending.replace(frame) {
+                events.send(InvokeResponseBody::Json(serde_json::json!({
+                    "event": "framebuffer",
+                    "payload": { "width": width, "height": height, "generation": pending.generation }
+                }).to_string()))
+            } else {
+                Ok(())
+            }
+        } else {
+            emit_helper_event(&events, event)
+        };
+        if delivery.is_err() {
+            break;
+        }
         if terminal_event {
             stop_requested.store(true, Ordering::Release);
             break;
         }
     }
     stop_requested.store(true, Ordering::Release);
+    framebuffer.lock().await.clear();
     // EOF and protocol errors can happen while the child still owns the
     // other side of the pipe. Reuse the same bounded wait/kill/reap path as a
     // user-initiated stop before dropping the supervisor.
@@ -970,14 +1020,8 @@ fn validate_command_for_session(
     }
 }
 
-fn emit_helper_event(app: &AppHandle, session_id: &str, event: HelperEvent) {
-    let _ = app.emit(
-        "remote-desktop://event",
-        RemoteDesktopEvent {
-            session_id: session_id.to_owned(),
-            event,
-        },
-    );
+fn emit_helper_event(events: &Channel, event: HelperEvent) -> tauri::Result<()> {
+    events.send(InvokeResponseBody::Json(serde_json::to_string(&event)?))
 }
 
 fn claim_unexpected_helper_exit(stop_requested: &AtomicBool) -> bool {
@@ -991,7 +1035,7 @@ mod tests {
     use super::{
         HelperCapabilityRequirements, HelperDataPhase, HelperEventProgress, HelperFrameReadError,
         HelperSessionPhase, MAX_CREDENTIAL_REFERENCE_BYTES, MAX_DOMAIN_BYTES, MAX_HOST_BYTES,
-        MAX_USERNAME_BYTES, RemoteDesktopConnectRequest, RemoteDesktopManager,
+        MAX_USERNAME_BYTES, PendingFramebuffer, RemoteDesktopConnectRequest, RemoteDesktopManager,
         SessionCommandPolicy, claim_unexpected_helper_exit, helper_input_failure_message,
         read_next_helper_frame, validate_command_for_session, validate_helper_capabilities,
         validate_helper_event, validate_helper_resource, validate_request,
@@ -1004,6 +1048,21 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn pending_framebuffer_keeps_only_latest_and_rejects_old_generation_pulls() {
+        let mut pending = PendingFramebuffer::default();
+        assert!(pending.replace(zeroize::Zeroizing::new(vec![1])));
+        assert!(!pending.replace(zeroize::Zeroizing::new(vec![2])));
+        assert_eq!(&*pending.take(0).unwrap(), &[2]);
+        assert!(pending.replace(zeroize::Zeroizing::new(vec![3])));
+        pending.clear();
+        assert!(pending.replace(zeroize::Zeroizing::new(vec![4])));
+        assert!(pending.take(0).is_none());
+        assert!(pending.notified);
+        assert_eq!(&*pending.take(1).unwrap(), &[4]);
+        assert!(pending.take(1).is_none());
+    }
 
     #[test]
     fn normal_helper_exit_claims_the_single_failure_path() {
