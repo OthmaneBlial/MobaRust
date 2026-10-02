@@ -1,5 +1,17 @@
 # Dependency audit record
 
+## v0.1.19 candidate recheck — 2026-10-02
+
+`cargo audit --json` refreshed RustSec before release preparation. The database
+remains at commit `117edb3bed98e9be112f277b7615eea3252e7c43`, with 1,280
+advisories. After aligning the workspace, fuzz and helper lockfiles to 0.1.19,
+cached checks reported zero workspace vulnerabilities and the same two warnings
+(`proc-macro-error` unmaintained and GTK3/`glib` unsoundness). The VNC helper
+reported no vulnerability or warning. The isolated RDP helper still reported
+one RSA timing vulnerability and two unmaintained dependencies; it remains
+excluded from normal installers. No advisory was suppressed. Only local
+package versions changed in the lockfiles; third-party dependencies are unchanged.
+
 ## Interactive SSH packet-reader patch — 2026-10-02
 
 The workspace uses a [repository-local russh 0.63.3 copy](../../vendor/russh/MOBARUST_PATCH.md)
