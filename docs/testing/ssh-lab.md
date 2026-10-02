@@ -225,6 +225,33 @@ cancellation handoff, focus/input and pending-authentication shutdown workflows.
 Native queued expiry/overflow, additional concurrency topologies, the queue in
 release copies, Windows/Linux and OpenSSH password/PAM remain separate gates.
 
+### Queued expiry attempt — 2026-10-02
+
+A fresh isolated ARM64 debug copy with the same `f513ead` executable used two
+new five-minute, loopback-only authentication fixtures and relays. Both pinned
+saved profiles completed their distinct password/OTP logins. Reconnect A was
+interrupted first; reconnect B followed 27.25 seconds later. Submitting A's
+password opened B's password field while A's OTP waited behind it. B's generated
+password was entered without submitting; native accessibility and a screenshot
+showed B's label, masked value and focus.
+
+A's second relay connection disconnected 120.04 seconds after it opened,
+consistent with the client's whole-authentication deadline. An owned watcher
+stopped relay A only after observing that disconnect, to prevent a fresh retry
+from obscuring the stale-challenge check. Native observation then failed with
+`cgWindowNotFound` for both screenshot/accessibility and accessibility alone.
+No further responses were entered. B's field preservation, retirement of A's
+queued OTP and B's subsequent successful authentication therefore remain
+**unverified**; this attempt does not close the native queued-expiry gate.
+
+Both Rust fixtures and both relays completed with exit code 0. The still-running
+isolated app was terminated with SIGTERM after observation failed; this is not
+native Quit acceptance. All six owned app/shell/server/relay PIDs were absent,
+no test-port listeners remained, and all four loopback ports could be rebound
+with `SO_REUSEADDR`. Transient response metadata was removed. Exact-value scans
+found none of the four generated responses in persisted `sessions.json` or
+`audit.json`; they do not establish whole-process zeroization.
+
 ### Native password/OTP check — 2026-10-02
 
 On macOS ARM64, an isolated copy of the debug bundle used a disposable HOME,
