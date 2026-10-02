@@ -1,100 +1,117 @@
 # MobaRust roadmap
 
-The roadmap is ordered by operator value and evidence, not by protocol count.
+**Updated 2026-10-02.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
-The local implementation layer is intentionally tracked separately from
-platform and release evidence. PTY, the isolated RDP candidate, the real VNC
-helper/fixtures, and the unsigned package contract can be developed and
-verified on macOS; the unchecked matrix items below still require dedicated
-Windows/Linux runtimes, real servers, hardware, or signing infrastructure.
+A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
 
-## 0.1 — local workstation foundation
+## Where the project stands
 
-- [x] Rust workspace with explicit connection and transfer state models
-- [x] Rust-owned local PTY with resize, input, output batching, and clean exit
-- [x] Tauri shell and xterm.js operator workspace
-- [x] Persistent terminal tabs for local and remote sessions with per-tab lifecycle routing
-- [x] Two-pane horizontal/vertical terminal splits with explicit close semantics
-- [x] Nested splits, drag-resizing, and richer pane focus management
-- [x] Typed local shell targets for PowerShell/cmd on Windows and bash/zsh/fish on Unix (runtime matrix remains open)
-- [x] Local validation command and architecture/research records
-- [x] Explicit Windows WSL distribution discovery and native PTY launch path (Windows runtime evidence remains part of the matrix)
-- [ ] Cross-platform PTY matrix on Windows, Linux, and macOS
+| Area | Progress | What remains |
+| --- | --- | --- |
+| **Published previews** | macOS ARM64/x64 v0.1.16; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
+| **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
+| **Quality checks** | Full local suite passes on macOS ARM64; Ubuntu/macOS native CI passes | Windows ConPTY fixture currently fails; three-platform green CI remains unfinished. |
+| **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
+| **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-## 0.2 — SSH vertical slice
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.16.md).
 
-- [x] Host-key verification and known_hosts policy
-- [x] Interactive SSH with PTY resize and cooperative close
-- [x] Agent, password-reference, and private-key-reference auth in the saved-session UX
-- [x] Encrypted-key passphrase entry and keyboard-interactive auth in the saved-session UX
-- [x] SSH agent authentication through the native Quick Connect path
-- [x] Bounded reconnect policy and failure-state telemetry
-- [x] Local integration fixture for authentication, resize, PTY I/O, SFTP, and disconnect
-- [x] Focused `cargo xtask test-ssh` lab with encrypted keys, per-hop trust rejection, distinct two-jump topology, idle-session and stalled-setup regressions (local OpenSSH evidence)
-- [ ] OpenSSH lab matrix for password/PAM/MFA, Windows/alternative agents, routed IPv6, restart recovery, and additional server versions (disposable Unix OpenSSH agent and IPv6 loopback covered)
+## Completed in the current improvement cycle
 
-## 0.3 — remote files and movement
+These changes are in source; no new installer release has been published for them.
 
-- [x] SFTP browser with listing, create-folder, rename, delete, and single-file streaming/cancellation/progress
-- [x] Native SCP compatibility primitive for streaming single-file upload/download
-- [x] SCP transfer-manager wiring for bounded single-file jobs with progress, cancellation, and atomic commits
-- [x] Bounded recursive SFTP upload/download with streaming files, progress, cancellation, and atomic file commits
-- [x] Bounded native transfer manager (three concurrent single-file jobs)
-- [x] Remote terminal and file browser composition
+- [x] Keep established quiet SSH sessions alive beyond their setup deadline.
+- [x] Preserve exit status sent after channel EOF, so normal shell exit does not become a reconnect.
+- [x] Distinguish rejected host keys, unreadable trust files, and transport failures; preserve redacted errors.
+- [x] Add `cargo xtask test-ssh` with disposable HOME/state, generated credentials, encrypted-key rejection/recovery, and stalled-handshake cancellation/cleanup.
+- [x] Test a distinct two-bastion/target topology, per-hop key rejection, and Unicode SFTP over the chain.
+- [x] Exercise empty/wrong-key rejection and successful signing with a dedicated Unix SSH agent.
+- [x] Exercise `::1` and explicit IPv6 known_hosts locally; expose a skip when loopback IPv6 is unavailable.
+- [x] Add frontend and native Rust quality jobs on Ubuntu, macOS, and Windows; Ubuntu/macOS results are verified.
+- [x] Include the Windows resource icon required by ordinary native builds; Windows now reaches its runtime tests.
+- [x] Fix release-asset tests launched from a different working directory and include them in the local suite.
+- [x] Add contributor/security/architecture guides and GitHub report/PR templates.
+- [x] Refresh advisory records and publish a benchmark receipt with hardware, samples, and observed CPU load.
 
-## 0.4 — network workstation
+The SSH lab reports **41 unit tests and 10 integration test cases**. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
 
-- [x] Local and remote SSH forwarding through native direct-tcpip/forwarded-tcpip channels with bounded clients and cancellation
-- [x] Bounded local SOCKS5 `-D` proxy path with explicit tunnel-manager controls
-- [x] Native remote and dynamic forwarding transport primitives
-- [x] Local, remote, and dynamic forwarding manager UI with explicit direction labels and stop controls
-- [x] Native jump-host chain transport with host-key policy per hop
-- [x] Bounded shell reconnect attempts with explicit lifecycle telemetry
-- [x] Resolve imported OpenSSH `ProxyJump` aliases into reconnectable saved profiles when matching saved hop records exist
-- [x] Session tags, search, favorites, recents, and secret-free MobaRust import/export
-- [x] Session folders and metadata-only profile editing/deletion
-- [x] OpenSSH config import for common secret-free fields with an explicit compatibility report
-- [x] OS credential vault abstraction
-- [x] Reproducible synthetic benchmark harness for terminal batching, 10K-profile search, and secret-free serialization
-- [x] Native structured tracing with WARN-by-default stderr output and tested redaction marker
-- [x] Explicit native vault reference save/delete commands with transient secret entry
-- [x] Typed non-secret settings with validation, atomic persistence, reset, safe import/export, and terminal application
-- [x] Secret-free snippets with tags, validated variables, rendered preview, and explicit manual copy
-- [x] Portable encrypted vault backend with marker-gated data directory, explicit unlock/lock, and native-only lookup
-- [x] Optional bounded local audit history with explicit clear, lifecycle-only fields, and no terminal transcript
-- [x] Local macOS ARM64 unsigned app bundle smoke check with native resource verification
-- [x] Local macOS ARM64 unsigned portable archive assembly with path and checksum verification
-- [x] Target-aware unsigned package layout contract for macOS, Windows, and Linux (fixture-verified locally; runtime builds and signing remain open)
-- [ ] Signed portable distribution/package matrix
+## Next, in priority order
 
-## Later protocol adapters
+### 1. Make Windows native validation reliable
 
-- [x] RDP/VNC helper-boundary research and versioned Rust-side contract
-- [x] Isolated IronRDP helper with native session and RD Gateway credential handoff, lifecycle, input, and framebuffer bridge
-- [ ] Real FreeRDP integration with a controlled helper and Windows evidence
-- [ ] Real VNC integration with a mature engine and local/manual fixtures
-- [x] Native Telnet transport with bounded negotiation and a local TCP fixture
-- [x] Telnet Quick Connect, native session manager, terminal output, input, and resize wiring
-- [x] Native serial transport configuration and recoverable device lifecycle
-- [x] Serial Quick Connect, native session manager, terminal output, and input wiring
-- [x] Explicit serial device refresh and secret-free saved serial profiles
-- [ ] Hardware interoperability matrix
-- [x] Bounded native TCP check and port-range diagnostic primitive
-- [x] DNS resolution, bounded TCP checks, and explicit diagnostics UI
-- [x] Bounded port-scan UI with progress and cancellation
-- [x] Bounded platform-native ping and traceroute with cancellation and output limits
-- [x] Explicit unauthenticated SSH fingerprint inspection with no credential or known_hosts access
-- [ ] X11 forwarding and integrated/external X-server strategy (opt-in native external-display path shipped; research in `docs/research/x11.md`; cross-platform server matrix remains)
-- [x] One-shot SSH remote monitoring with capability-aware metrics and bounded collection
-- [ ] Signed portable packaging and cross-platform distribution evidence
+**Current gap:** the checkout builds after the icon fix, but the PowerShell/ConPTY I/O fixture times out. Failure cleanup also leaves the disposable HOME temporarily locked.
 
-## Operator workflows
+- [ ] Diagnose terminal handshake/input behavior and child/reader cleanup; retain a bounded regression.
+- [ ] Run workspace tests and Clippy to completion on Windows x64.
+- [ ] Obtain one completed green Quality run across Ubuntu, macOS, and Windows.
 
-- [x] Bounded terminal macros with visible confirmation, cancellable execution, and typed permission boundaries
-- [x] Explicit multi-exec/broadcast mode with selected targets, strong indicator, whole-event preflight, and emergency disable
-- [x] Macro recording, per-action approval policies, and browser stress testing
-- [x] Bounded UTF-8 remote text editing with conflict detection and rollback-safe temporary-file promotion
-- [x] Editor syntax highlighting, search/replace, encoding selection, and save-as workflow
+**Done when:** every required job passes, expected PTY output is produced by the shell, the child exits, and disposable state can be removed. A rerun or a larger timeout alone is not a fix.
 
-Each adapter must have a real lifecycle, failure tests, and an honest platform
-support statement before it is presented as complete.
+### 2. Turn shell and platform assumptions into evidence
+
+- [ ] Exercise PowerShell and cmd input/output, resize, cancellation, and exit separately.
+- [ ] Validate WSL discovery and terminal startup on a dedicated Windows runtime.
+- [ ] Record installed bash/zsh/fish variants and explicit skips on Unix.
+- [ ] Exercise native GUI focus, paste, split-pane lifecycle, and application shutdown on Windows, macOS, and Linux.
+
+**Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
+
+### 3. Expand the OpenSSH interoperability lab
+
+- [ ] Add server disconnect/restart and reconnect-budget recovery scenarios.
+- [ ] Add password and keyboard-interactive/PAM/MFA cases using dedicated disposable accounts or servers.
+- [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
+- [ ] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab.
+
+**Done when:** each added case has success, rejection/failure, bounded cancellation, and cleanup checks, runnable through the existing lab command. No personal accounts, agents, or production hosts are test prerequisites.
+
+### 4. Align and verify the next preview release
+
+- [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
+- [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
+- [ ] Validate release notes and artifact names against the actual uploaded binaries.
+- [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
+
+**Done when:** verified artifacts and their limitations are documented per platform. The installer workflow remains disabled; quality CI does not publish releases. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
+
+### 5. Polish daily terminal and file workflows
+
+- [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
+- [ ] Validate multi-file/recursive transfers, collision decisions, cancellation, and progress under realistic workloads.
+- [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
+- [ ] Record a new native demo of a disposable SSH connection, file transfer, and tunnel, with real evidence and redacted fixture data.
+
+**Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The current demo's v0.1.11 provenance stays explicit until replaced.
+
+## Experimental work and beta gates
+
+| Area | Already implemented | Gate before broader support claims |
+| --- | --- | --- |
+| **RDP** | Isolated IronRDP helper, credential/IPC boundaries, framebuffer/input/resize/reconnect loopback tests | Resolve the RSA advisory and certificate-validation boundary; authenticate against a controlled Windows desktop; verify framebuffer, keyboard/mouse, resize, failure recovery, and a 30-minute session. Keep it out of normal bundles until security gates pass. |
+| **VNC** | Native helper, controlled RFB/password/JPEG fixtures, input, clipboard opt-in, quality controls, and reconnect | Validate a real controlled VNC server, explicit transport policy, unsupported capability diagnostics, a 30-minute session, and helper packaging on each target. TCP remains unencrypted. |
+| **X11** | Opt-in SSH channel bridge to an explicitly selected external display; loopback tests and optional Xvfb fixture | Run real external X-server cases on Linux, macOS, and Windows; verify authentication, DISPLAY setup, cancellation, and cleanup. |
+| **Serial** | Native configuration, refresh, sessions, and Unix pseudo-terminal lifecycle/device-loss tests | Test dedicated physical adapters, drivers/permissions, baud/parity/flow control, removal, and explicit reconnection per OS. |
+
+## Implemented foundation
+
+These existing capabilities should be improved rather than recreated:
+
+- [x] Typed Rust connection/transfer state, native PTY batching, tabs, nested split panes, resize, and explicit close.
+- [x] Session folders, tags, favorites, recents, search, OpenSSH import with compatibility reporting, and secret-free import/export.
+- [x] SSH trust policy, password/key/agent auth, encrypted keys, keyboard-interactive path, per-hop jump transport, and bounded reconnect.
+- [x] SFTP browsing/file actions, streaming SCP/SFTP, recursive SFTP, a bounded transfer queue, cancellation, and explicit file promotion.
+- [x] Local/remote forwarding, SOCKS5 tunnels, bounded DNS/TCP/ping/traceroute diagnostics, and opt-in remote monitoring.
+- [x] OS credential references, a marker-gated encrypted portable vault, atomic settings persistence, and optional bounded audit history.
+- [x] Reviewed snippets, variables and preview, cancellable macros/recording, explicit broadcast targets, and emergency disable.
+- [x] Remote text editing with conflict detection, syntax highlighting, search/replace, encoding selection, and save-as.
+- [x] Telnet transport/UI and native serial transport/UI with controlled fixtures.
+- [x] Fuzz targets, synthetic package-layout contracts, and terminal/session benchmark tooling.
+
+## Performance and maintenance
+
+- [ ] Repeat terminal batching and 10K-profile benchmarks under comparable idle conditions; record hardware, compiler, samples, medians, and load.
+- [ ] Measure sustained native terminal rendering and UI responsiveness before claiming throughput improvements.
+- [ ] Recheck advisories at release time; keep RDP's known-vulnerable dependency path isolated and track the remaining GTK/glib warnings.
+
+The [2026-10-02 benchmark receipt](benchmarks/2026-10-02-local.md) was measured under high CPU contention. It is reproducible evidence of that run, not a before/after performance claim.
