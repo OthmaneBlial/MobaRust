@@ -58,6 +58,33 @@ disconnect within one-second deadlines. The peer receives zero input bytes,
 each server worker finishes, and its owned port can be rebound. The test failed
 before the correction at the output-delivery deadline and passed afterward.
 
+The same regression now includes a 64 KiB write through a 1 KiB receive window.
+The peer pauses after receiving the first chunk, then resumes while stdout/stderr
+arrive. The production operation starts once and the peer receives the exact
+input bytes once, preserving the write's progress across output events.
+
+### Retiring unread output before cleanup
+
+Returning from the desktop shell loop did not retire its reader. If the peer
+kept producing output, the reader's bounded queue could fill and block the SSH
+actor. Awaiting EOF from that actor, or waiting for transfers that needed other
+channels on it, could then hang closure.
+
+All shell outcomes now use one retirement path after closing command admission
+and before transfer cleanup. It drops the old reader before awaiting EOF. The
+actor can discard subsequent output for that retired shell and keep servicing
+other channels. Transfer workers still drain cooperatively; they are not aborted.
+
+The wire fixture sends 256 output packets of 1 KiB into an unread shell, fills
+the outbound actor queue with resize requests, and observes that enqueue progress
+has stopped. Its fill worker is then cancelled without draining the queues.
+Keeping the reader alive while awaiting EOF reproduced a one-second retirement
+deadline failure. Dropping it first passes that deadline and allows another shell
+to open on the same authenticated transport, followed by worker/socket cleanup.
+The fixture accepts normal peer EOF/reset errors during teardown and still
+rejects protocol errors. It does not establish native Quit or real SFTP cleanup
+under sustained output; those require separate acceptance evidence.
+
 Run it through the sanitized local suite:
 
 ```sh

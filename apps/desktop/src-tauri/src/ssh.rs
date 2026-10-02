@@ -1997,6 +1997,7 @@ async fn run_remote_session(
                 |event| manager.emit_tunnel(&app, event),
             )
             .await;
+        retire_shell_output(reader, &writer).await;
         manager
             .finish_session_transfers(&terminal_id, &mut transfers)
             .await;
@@ -2230,6 +2231,16 @@ enum ShellRunResult {
     Lost(String),
 }
 
+async fn retire_shell_output(
+    reader: mobarust_ssh::SshShellReader,
+    writer: &mobarust_ssh::SshShellWriter,
+) {
+    // An unread bounded output queue can block the actor that must enqueue EOF
+    // and service transfer cleanup on other channels of this transport.
+    drop(reader);
+    let _ = writer.close().await;
+}
+
 async fn run_shell_operation(
     operation: impl std::future::Future<Output = Result<(), SshError>>,
     reader: &mut mobarust_ssh::SshShellReader,
@@ -2283,7 +2294,6 @@ async fn run_shell_once(
 ) -> ShellRunResult {
     loop {
         if *close.borrow() || *manager.shutdown.borrow() {
-            let _ = writer.close().await;
             return ShellRunResult::Closed;
         }
         tokio::select! {
@@ -2305,7 +2315,6 @@ async fn run_shell_once(
                             |event| manager.emit_transfer(app, event),
                             |event| manager.emit_tunnel(app, event));
                     }
-                    let _ = writer.close().await;
                     return ShellRunResult::Closed;
                 }
                 match command {
@@ -2420,7 +2429,6 @@ async fn run_shell_once(
                         });
                     }
                     None => {
-                        let _ = writer.close().await;
                         return ShellRunResult::Closed;
                     }
                 }
@@ -2428,7 +2436,6 @@ async fn run_shell_once(
             _ = transfers.join_next(), if !transfers.is_empty() => {}
             changed = close.changed() => {
                 if changed.is_err() || *close.borrow() {
-                    let _ = writer.close().await;
                     return ShellRunResult::Closed;
                 }
             }

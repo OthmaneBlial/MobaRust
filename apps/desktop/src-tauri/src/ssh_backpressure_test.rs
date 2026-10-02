@@ -1,5 +1,5 @@
 //! Production desktop I/O pump against encrypted, memory-only loopback SSH.
-use super::{ShellRunResult, run_shell_operation};
+use super::{ShellRunResult, retire_shell_output, run_shell_operation};
 use mobarust_ssh::{HostKeyPolicy, SshConnectOptions, SshConnection, SshCredentials};
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::keys::{HashAlg, PrivateKey};
@@ -15,6 +15,9 @@ use zeroize::Zeroizing;
 struct Peer {
     password: Zeroizing<String>,
     received: Arc<AtomicUsize>,
+    received_bytes: Arc<Mutex<Vec<u8>>>,
+    delivered: Arc<Notify>,
+    pause_first: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     ready: Option<oneshot::Sender<(server::Handle, russh::ChannelId)>>,
 }
 
@@ -45,7 +48,9 @@ impl server::Handler for Peer {
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
-        let _ = self.ready.take().unwrap().send((session.handle(), channel));
+        if let Some(ready) = self.ready.take() {
+            let _ = ready.send((session.handle(), channel));
+        }
         Ok(())
     }
 
@@ -56,6 +61,12 @@ impl server::Handler for Peer {
         _session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         self.received.fetch_add(data.len(), Ordering::SeqCst);
+        self.received_bytes.lock().unwrap().extend_from_slice(data);
+        self.delivered.notify_one();
+        if let Some((entered, release)) = self.pause_first.take() {
+            let _ = entered.send(());
+            release.await.unwrap();
+        }
         Ok(())
     }
 }
@@ -63,7 +74,7 @@ impl server::Handler for Peer {
 #[tokio::test]
 async fn blocked_shell_input_keeps_output_and_cancellation_live() {
     tokio::time::timeout(Duration::from_secs(10), async {
-        for action in ["close", "exit", "disconnect"] {
+        for action in ["close", "exit", "disconnect", "resume", "flood-close"] {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let address = listener.local_addr().unwrap();
             assert!(address.ip().is_loopback());
@@ -74,10 +85,16 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
             let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
             let password = Zeroizing::new(Uuid::new_v4().to_string());
             let received = Arc::new(AtomicUsize::new(0));
+            let received_bytes = Arc::new(Mutex::new(Vec::new()));
+            let delivered = Arc::new(Notify::new());
+            let (first, first_received) = oneshot::channel();
+            let (release, resumed) = oneshot::channel();
             let (ready, channel) = oneshot::channel();
-            let peer = Peer { password: password.clone(), received: received.clone(), ready: Some(ready) };
+            let peer = Peer { password: password.clone(), received: received.clone(),
+                received_bytes: received_bytes.clone(), delivered: delivered.clone(),
+                pause_first: (action == "resume").then_some((first, resumed)), ready: Some(ready) };
             let config = Arc::new(server::Config {
-                keys: vec![key], window_size: 0, maximum_packet_size: 1024,
+                keys: vec![key], window_size: if action == "resume" { 1024 } else { 0 }, maximum_packet_size: 1024,
                 auth_rejection_time: Duration::ZERO, auth_rejection_time_initial: Some(Duration::ZERO),
                 inactivity_timeout: None, nodelay: true, ..Default::default()
             });
@@ -103,10 +120,20 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
             let stderr = b"stderr while input blocked\r\n";
             let expected_len = stdout.len() + stderr.len();
             let started = entered.clone();
+            let starts = Arc::new(AtomicUsize::new(0));
+            let operation_starts = starts.clone();
+            let input = if action == "resume" {
+                (0..65536).map(|index| (index % 251) as u8).collect::<Vec<_>>()
+            } else { b"must-not-be-replayed".to_vec() };
+            let sent = input.clone();
             let observed = output.clone();
             let notified = output_ready.clone();
             let task = tokio::spawn(async move {
-                let operation = async { started.notify_one(); writer.write(b"must-not-be-replayed").await };
+                let operation = async {
+                    operation_starts.fetch_add(1, Ordering::SeqCst);
+                    started.notify_one();
+                    writer.write(&sent).await
+                };
                 let result = run_shell_operation(operation, &mut reader, &mut closing, |bytes| {
                     let mut output = observed.lock().unwrap();
                     output.extend_from_slice(bytes);
@@ -115,32 +142,81 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 (result, reader, writer)
             });
             entered.notified().await;
-            assert!(!task.is_finished(), "zero receive window must stall the actual write");
+            if action == "resume" {
+                first_received.await.unwrap();
+                assert_eq!(*received_bytes.lock().unwrap(), input[..1024]);
+            }
+            assert!(!task.is_finished(), "receive-window backpressure must stall the actual write");
             remote.data(channel, stdout.to_vec()).await.unwrap();
             remote.extended_data(channel, 1, stderr.to_vec()).await.unwrap();
+            if action == "resume" { release.send(()).unwrap(); }
             tokio::time::timeout(Duration::from_secs(1), output_ready.notified()).await
                 .expect("desktop must deliver stdout/stderr while terminal input waits for window credit");
             assert_eq!(*output.lock().unwrap(), [stdout, stderr].concat());
-            assert!(!task.is_finished(), "output must not release the peer's zero input window");
-            assert_eq!(received.load(Ordering::SeqCst), 0);
+            if action != "resume" {
+                assert!(!task.is_finished(), "output must not release the peer's zero input window");
+                assert_eq!(received.load(Ordering::SeqCst), 0);
+            }
             match action {
-                "close" => { close.send_replace(true); }
+                "close" | "flood-close" => { close.send_replace(true); }
                 "exit" => {
                     remote.eof(channel).await.unwrap();
                     remote.exit_status_request(channel, 0).await.unwrap();
                     remote.close(channel).await.unwrap();
                 }
-                _ => { remote.disconnect(russh::Disconnect::ByApplication, String::new(), "en".into()).await.unwrap(); }
+                "disconnect" => { remote.disconnect(russh::Disconnect::ByApplication, String::new(), "en".into()).await.unwrap(); }
+                _ => {}
             }
             let (result, reader, writer) = tokio::time::timeout(Duration::from_secs(1), task).await
                 .expect("close/exit/transport loss must retire a blocked terminal write").unwrap();
-            assert!(matches!((&result, action), (Err(ShellRunResult::Closed), "close" | "exit") | (Err(ShellRunResult::Lost(_)), "disconnect")));
-            drop(reader); drop(writer);
+            assert!(matches!((&result, action), (Err(ShellRunResult::Closed), "close" | "exit" | "flood-close") | (Err(ShellRunResult::Lost(_)), "disconnect") | (Ok(()), "resume")));
+            assert_eq!(starts.load(Ordering::SeqCst), 1, "output never restarts a partial write");
+            if action == "resume" {
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    while received.load(Ordering::SeqCst) < input.len() { delivered.notified().await; }
+                }).await.expect("peer receives the completed write");
+                assert_eq!(*received_bytes.lock().unwrap(), input, "input is delivered exactly once");
+            }
+            if action == "flood-close" {
+                // More packets than the reader's bounded queue. Keep the same transport alive.
+                for _ in 0..256 { remote.data(channel, vec![b'x'; 1024]).await.unwrap(); }
+                let writer = Arc::new(writer);
+                let fill_writer = writer.clone();
+                let accepted = Arc::new(AtomicUsize::new(0));
+                let sent = accepted.clone();
+                let mut fill = tokio::spawn(async move {
+                    for _ in 0..64 {
+                        fill_writer.resize(80, 24).await.unwrap();
+                        sent.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+                assert!(tokio::time::timeout(Duration::from_millis(100), &mut fill).await.is_err(),
+                    "unread shell output must backpressure the transport actor");
+                assert!(accepted.load(Ordering::SeqCst) >= 10, "fill the outbound actor queue too");
+                let stalled = accepted.load(Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                assert_eq!(accepted.load(Ordering::SeqCst), stalled, "actor remains blocked by unread output");
+                fill.abort();
+                assert!(fill.await.unwrap_err().is_cancelled());
+                tokio::time::timeout(Duration::from_secs(1), retire_shell_output(reader, &writer)).await
+                    .expect("retired output must not deadlock EOF behind the full actor queue");
+                let shell = tokio::time::timeout(Duration::from_secs(1), connection.open_shell(80, 24)).await
+                    .expect("the same transport must still process other channels").unwrap();
+                let (reader, next_writer) = shell.split();
+                retire_shell_output(reader, &next_writer).await;
+                drop(next_writer); drop(writer);
+            } else { drop(reader); drop(writer); }
             let _ = connection.disconnect().await;
             drop(connection);
             let result = server.await.unwrap();
-            assert!(result.is_ok() || matches!(result, Err(russh::Error::Disconnect)));
-            assert_eq!(received.load(Ordering::SeqCst), 0, "discarded input never reaches the peer");
+            if let Err(error) = result {
+                assert!(matches!(error, russh::Error::Disconnect)
+                    || matches!(&error, russh::Error::IO(error) if matches!(error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe)),
+                    "unexpected {action} fixture protocol error: {error}");
+            }
+            assert_eq!(received.load(Ordering::SeqCst), if action == "resume" { input.len() } else { 0 }, "no replay or delivery of discarded input");
             drop(TcpListener::bind(address).await.expect("owned listener released"));
         }
     }).await.expect("loopback backpressure fixture cleanup deadline");
