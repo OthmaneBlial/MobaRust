@@ -2877,6 +2877,7 @@ dependencies = [
  "mobarust-vault",
  "portable-pty",
  "rfd",
+ "russh",
  "serde",
  "serde_json",
  "tauri",

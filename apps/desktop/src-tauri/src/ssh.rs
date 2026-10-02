@@ -2230,6 +2230,45 @@ enum ShellRunResult {
     Lost(String),
 }
 
+async fn run_shell_operation(
+    operation: impl std::future::Future<Output = Result<(), SshError>>,
+    reader: &mut mobarust_ssh::SshShellReader,
+    close: &mut watch::Receiver<bool>,
+    mut emit_output: impl FnMut(&[u8]),
+) -> Result<(), ShellRunResult> {
+    // Keep the same write future across output events: recreating it could replay input.
+    tokio::pin!(operation);
+    loop {
+        if *close.borrow() {
+            return Err(ShellRunResult::Closed);
+        }
+        tokio::select! {
+            biased;
+            changed = close.changed() => {
+                if changed.is_err() || *close.borrow() {
+                    return Err(ShellRunResult::Closed);
+                }
+            }
+            result = &mut operation => {
+                return result.map_err(|error| ShellRunResult::Lost(error.to_string()));
+            }
+            output = reader.next_output() => {
+                match output {
+                    Some(Ok(SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes))) => emit_output(&bytes),
+                    Some(Ok(SshOutput::Control)) => {},
+                    Some(Ok(SshOutput::ExitStatus(_))) => return Err(ShellRunResult::Closed),
+                    Some(Err(error)) => return Err(ShellRunResult::Lost(error.to_string())),
+                    None => return Err(ShellRunResult::Lost("SSH shell channel closed".into())),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "ssh_backpressure_test.rs"]
+mod backpressure_tests;
+
 #[allow(clippy::too_many_arguments)]
 async fn run_shell_once(
     app: &AppHandle,
@@ -2271,13 +2310,15 @@ async fn run_shell_once(
                 }
                 match command {
                     Some(SshCommand::Write(data)) => {
-                        if let Err(error) = writer.write(&data).await {
-                            return ShellRunResult::Lost(error.to_string());
+                        if let Err(result) = run_shell_operation(writer.write(&data), reader, close,
+                            |bytes| manager.emit_output(app, terminal_id, bytes)).await {
+                            return result;
                         }
                     }
                     Some(SshCommand::Resize { cols, rows }) => {
-                        if let Err(error) = writer.resize(cols, rows).await {
-                            return ShellRunResult::Lost(error.to_string());
+                        if let Err(result) = run_shell_operation(writer.resize(cols, rows), reader, close,
+                            |bytes| manager.emit_output(app, terminal_id, bytes)).await {
+                            return result;
                         }
                     }
                     Some(SshCommand::ListDirectory { path, reply }) => {

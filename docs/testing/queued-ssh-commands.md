@@ -35,6 +35,46 @@ the same rejection routine to settle their previously emitted UI row.
 
 ## Runnable regressions
 
+### Blocked terminal input
+
+The desktop shell loop previously awaited input writes inline. A peer advertising
+a zero receive window could therefore stop terminal output delivery and prevent
+the loop from observing Close, exit status or transport loss. The SSH library's
+wait for receive-window credit is valid; the desktop must keep reading while it
+waits.
+
+Input and resize now share a wait that polls the existing operation, output and
+session close signal concurrently. The operation is pinned once, so incoming
+output cannot restart a partially completed write. Close takes priority; a ready
+operation takes priority over output to avoid starving input. EOF remains a
+control event so a following exit status still produces a normal shell exit.
+Retirement then follows the existing command and transfer cleanup path.
+
+The encrypted wire regression calls this production wait against a memory-only
+Rust SSH peer on `127.0.0.1` with generated password/host-key credentials and a
+zero input window. It verifies ordered Unicode stdout/stderr during the blocked
+write, then separately verifies Close, EOF plus exit status, and transport
+disconnect within one-second deadlines. The peer receives zero input bytes,
+each server worker finishes, and its owned port can be rebound. The test failed
+before the correction at the output-delivery deadline and passed afterward.
+
+Run it through the sanitized local suite:
+
+```sh
+cargo xtask check-rust
+```
+
+Test name: `ssh::backpressure_tests::blocked_shell_input_keeps_output_and_cancellation_live`.
+The full local `cargo xtask check` passed on macOS ARM64, including all 103
+desktop tests, workspace tests/Clippy, frontend checks and protocol fixtures.
+`cargo xtask package-check` also built and inspected the matching unsigned Mac
+debug bundle; its process-launch check does not establish GUI acceptance.
+This is native backend wire evidence, not native GUI acceptance, sustained-output
+performance or a guarantee that every transfer/actor-queue shutdown is bounded.
+The correction is on `main`; the published v0.1.19 Mac previews do not contain it.
+
+### Queue retirement
+
 ```sh
 cargo test --locked -p mobarust command_sender_refuses_close
 cargo test --locked -p mobarust retired_queue
