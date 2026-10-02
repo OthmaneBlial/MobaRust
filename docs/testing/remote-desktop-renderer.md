@@ -112,6 +112,38 @@ This establishes macOS ARM64 debug fullscreen behavior against the controlled
 fixture. Windows/Linux fullscreen, release installers, external VNC servers and
 long-session rendering metrics remain unverified. No RDP production gate changed.
 
+## v0.1.18 release-bundle recheck
+
+On the same Apple M2/macOS machine, both v0.1.18 DMGs passed disk-image checks,
+read-only package layout, strict ad hoc signatures, app/helper architecture,
+CLI version and SHA-256 verification. The native ARM64 test copied its app from
+the verified DMG; only that disposable copy received the portable marker,
+generated profile, isolated HOME/ZDOTDIR/XDG launch environment and a unique
+bundle identity. Its actual PID environment was checked before and after CUA
+selection. Clipboard was disabled; no personal profiles, keys or agents were used.
+
+The loopback-only fixture used ephemeral port 51705. Observed in the real app:
+
+- The binary frame rendered the two-colour 1920×1080 canvas.
+- Focused keyboard `r` reached the fixture as keysym 114 and changed the palette.
+- An owned-fixture SIGUSR1 disconnect produced a second Full-HD frame and a
+  connected workspace. Another `r` reached that connection and changed pixels.
+- Enter fullscreen exposed a WebKit fullscreen accessibility surface containing
+  Exit fullscreen and 1920×1080. CUA window selection returned to the original
+  workspace; fullscreen input and explicit exit are therefore not accepted by
+  this release run. The debug receipt above remains a separate result.
+- Settings rejected duplicate Mod+N shortcuts, focused the visible inline error
+  and preserved persisted settings byte for byte.
+- Native menu Quit exited the app with code zero and released both its active
+  local zsh PTY and VNC helper. The fixture observed disconnection, was stopped,
+  and a connection probe confirmed port 51705 was closed. Owned mounts were detached.
+
+Fixture counters at the two keyboard checks were 1,127 and 32 server sends,
+not rendered-frame counts or a sustained-performance benchmark. This is a
+short portable-copy release-bundle test, not clean installation, Intel GUI,
+external-server or Windows/Linux evidence. Both Mac app/helper cohorts contain
+wire version 2; older v0.1.17 binaries do not.
+
 ## Reproduce without exposing a listener
 
 ```sh
@@ -132,10 +164,11 @@ a connection probe confirmed the port was closed after cleanup.
 
 ## Remaining acceptance gates
 
-This is macOS ARM64 debug evidence against a controlled RFB fixture, not an
-external VNC-server compatibility test, Windows/Linux result or release-install
-check. No sustained rendering throughput or end-to-end input latency was
+The debug and ARM64 release-copy receipts use a controlled RFB fixture.
+They do not establish external VNC-server compatibility, Windows/Linux behavior
+or clean installation. No sustained rendering throughput or end-to-end input latency was
 measured. Record those in release builds under a defined workload, verify
 fullscreen on other platforms, exercise longer sessions, and rebuild matching
-wire-version-2 app/helper installers before publishing. Published v0.1.17
-installers do not contain this renderer change. GitHub workflows stay disabled.
+wire-version-2 app/helper installers for Windows/Linux. The v0.1.18 Mac
+cohort contains this renderer change; older v0.1.17 installers do not.
+GitHub workflows stay disabled.
