@@ -32,6 +32,24 @@ provides generated pinned profiles for the next native check. Updated installers
 and native approval/focus/emergency-stop observations remain pending; published
 v0.1.20 downloads do not contain this change.
 
+### Current-source native preflight — 2026-10-03
+
+`cargo xtask package-check` rebuilt source `f3ad8e0` with the startup review
+change. The unsigned Mac app layout and generated checksum manifest passed;
+the packaged version path returned `MobaRust 0.1.20`. A fresh disposable copy
+used generated local/SSH cancellation profiles with no saved credentials.
+The actual owned app process had disposable HOME/ZDOTDIR/XDG values and an
+empty agent socket. Native window observation failed with `cgWindowNotFound`
+on the first selection and on a retry by the confirmed-live app's bundle ID.
+No profile button, approval or authentication prompt was operated, and no SSH
+fixture or listener was started. The local startup marker remained absent.
+
+The owned app and its zsh child were stopped with SIGTERM and their absence
+was verified before removing that invocation's generated lab copy. These
+observations establish build/isolation/cleanup, not approval cancellation,
+command execution, focus behavior, SSH acceptance or graceful native Quit.
+They do not close the native startup review gate.
+
 ## Earlier native dialogue baseline
 
 These changes follow v0.1.17 and are included in the v0.1.18 Mac preview.
