@@ -1481,6 +1481,7 @@ function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
   const [sessionNotice, setSessionNotice] = useState<SessionNotice | null>(null);
+  const [closing, setClosing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -3715,6 +3716,27 @@ function App() {
     if (!IS_TAURI) return;
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
+    void listen("app://closing", () => {
+      macroCancelRef.current = true;
+      broadcastEnabledRef.current = false;
+      macroRecordingRef.current = null;
+      setBroadcastEnabled(false);
+      setMacroRecording(null);
+      setRemoteMonitorLive(false);
+      setClosing(true);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch((error) => {
+      if (!disposed) setConnectionError(`Shutdown status updates are unavailable: ${String(error)}`);
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
     void listen<SshTransferEvent>("sftp://transfer", (event) => {
       const payload = event.payload;
       const previousState = transferAuditStateRef.current.get(payload.transferId);
@@ -3742,6 +3764,7 @@ function App() {
   }, [recordAudit]);
 
   useEffect(() => {
+    if (closing) return;
     // Capture emergency keys before xterm and modal inputs stop propagation.
     const isEmergency = (event: KeyboardEvent) => event.key === "Escape" || matchesShortcut(event, settings.keyboard.emergencyBroadcastDisable);
     const onEmergencyKeyDown = (event: KeyboardEvent) => {
@@ -3847,7 +3870,7 @@ function App() {
       window.removeEventListener("keydown", onEmergencyKeyDown, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -3862,6 +3885,8 @@ function App() {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
     return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalPaste={handleTerminalPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
   }, [colorTheme, handleTerminalPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+
+  if (closing) return <main className={`app-shell shutdown-state theme-${colorTheme}`}><section role="status" aria-live="polite"><LoaderCircle className="spin" size={24} aria-hidden="true" /><h1>Closing MobaRust</h1><p>Finishing SSH file cleanup before exiting.</p></section></main>;
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${colorTheme}`}>

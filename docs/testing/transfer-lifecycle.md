@@ -86,9 +86,95 @@ also passed.
 ## Remaining acceptance gates
 
 This verifies single-file SFTP Cancel, download Retry, and active-upload SSH-tab
-closure on macOS ARM64. App Quit while a transfer is still active, queued-command
-closure races, recursive/multi-file GUI recovery, native SCP, interrupted network
+closure on macOS ARM64. The application-exit cases below add Mac menu Quit and
+window-close evidence. Queued-command closure races, recursive/multi-file GUI recovery, native SCP, interrupted network
 cleanup, larger workloads and Windows/Linux behavior remain open. A lost transport
 can still prevent remote cleanup; the explicit cleanup error remains necessary.
 Metadata/cleanup retain their request timeouts. There is no immediate-cancellation
 or whole-directory transaction guarantee. See the [promotion boundary](transfer-cancellation.md).
+
+
+## Application shutdown correction — 2026-10-02
+
+The desktop previously let the runtime exit without awaiting active SSH session
+workers. Normal Quit and window-close requests now defer exit, announce a closing
+state, and call the SSH manager's all-session shutdown. The manager signals every
+session and its transfer controls before waiting for their completion
+acknowledgements. It reuses the session drain described above rather than aborting
+workers during promotion or rollback. The frontend stops macro/broadcast activity
+and remote-monitor polling and displays a closing status while cleanup runs.
+
+Shutdown also rejects new SSH commands and connection registrations. Pending
+connection/shell setup observes a shared shutdown signal. Transfer registration
+rechecks that signal under the control-registry lock, preventing a caller that
+obtained its sender earlier from inserting a job after the cancellation sweep.
+An already-closed session checks its close flag before another shell-loop turn.
+
+```sh
+cargo test --locked -p mobarust app_shutdown
+```
+
+The deterministic manager regression holds two synthetic session workers pending,
+checks both close signals and transfer cancellations before either cleanup is
+released, and verifies that shutdown waits for both acknowledgements. It also
+checks rejection of further SSH commands and repeated shutdown with no sessions.
+These checks do not exercise the native runtime callback or a real active transfer.
+
+The isolated baseline app was alive, but CUA could not select its window
+(`cgWindowNotFound`), so no baseline Quit-during-transfer outcome was observed.
+A process signal used to stop that owned baseline for replacement is lab cleanup,
+not native Quit evidence.
+
+CUA could select the first rebuilt candidate. Native SFTP upload started against
+an existing generated destination, and its remote part contained 5,046,272 bytes
+before menu Quit. Quit exited with status zero and disconnected the relay but left
+the part behind. The original destination remained unchanged. This disproved the
+assumption that the runtime exit callback alone covered macOS menu Quit.
+
+The installed `muda` macOS menu implementation maps predefined Quit to Cocoa's
+`terminate:`. That bypasses Tauri's cancellable `ExitRequested` route. MobaRust now
+replaces that one item in the default macOS menu with a regular item retaining its
+text and Command-Q shortcut, whose handler invokes `app.exit(0)`. Window-close and
+that menu action then share the deferred exit path. A changed upstream menu layout
+fails explicitly instead of silently restoring direct termination. Other platform
+menus are unchanged.
+
+On the final rebuilt candidate, CUA observed the Quit item as `customAction:`.
+The same upload was active with 2,621,440 remote part bytes before menu Quit.
+The app exited with status zero, the relay observed disconnection, original remote
+bytes were unchanged, and no remote part or backup remained.
+
+A fresh final-candidate process then downloaded the generated 32 MiB `large.bin`
+into an existing generated local destination. CUA approved the picker and explicit
+Replace policy. With 2,162,688 local part bytes present, clicking the native window
+close button exited with status zero, preserved the original local bytes, removed
+the part, and disconnected the SSH relay. Neither exit check used a process signal
+or a subsequent CUA observation that could relaunch the app.
+
+Both final processes had verified disposable HOME/ZDOTDIR, native production
+frontend assets, and generated key/trust references. The daemon and relay listened
+only on `127.0.0.1:57118` and `127.0.0.1:57119`, verified with `lsof`. These are
+single-file macOS ARM64 debug checks, not all-platform installer acceptance.
+The closing status view is implemented; it was not separately captured during the
+short cleanup interval.
+
+If an OS termination source bypasses `ExitRequested`, the final `Exit` callback
+also waits for the manager's native cleanup before returning. The event loop is
+already ending on that fallback, so it cannot provide the same responsive status
+view. OS-originated/Dock Quit, restart, simultaneous real transfers, native SCP,
+recursive recovery and Windows/Linux exit acceptance remain pending.
+
+There is no whole-directory rollback, immediate-exit deadline, crash/force-kill
+cleanup guarantee, or Tauri restart acceptance claim. Metadata/cleanup retain their
+request timeouts; final exit waits rather than forcibly interrupting replacement.
+A dropped session acknowledgement logs a static warning and cannot establish
+successful cleanup. Remote editor mutations and other detached operations are not
+newly covered by the transfer drain.
+
+
+The final native bundle build and `cargo xtask check` passed, including all 93
+desktop tests, frontend tests/type/lint/build, workspace Clippy/tests, protocol
+fixtures, package contracts and fuzz-target compilation. The pre-push audit also
+passed. After the native checks, the owned supervisor and daemon were stopped and
+reaped, both loopback ports refused new connections, and generated key/trust files
+were removed. GitHub CI remains disabled; published v0.1.18 installers are unchanged.

@@ -404,6 +404,7 @@ pub struct SshManager {
     tunnels: Arc<Mutex<HashMap<String, TunnelControl>>>,
     remote_forwards: Arc<Mutex<HashMap<String, String>>>,
     transfer_slots: Arc<Semaphore>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl Default for SshManager {
@@ -414,6 +415,7 @@ impl Default for SshManager {
             tunnels: Arc::new(Mutex::new(HashMap::new())),
             remote_forwards: Arc::new(Mutex::new(HashMap::new())),
             transfer_slots: Arc::new(Semaphore::new(3)),
+            shutdown: watch::channel(false).0,
         }
     }
 }
@@ -421,6 +423,7 @@ impl Default for SshManager {
 struct SessionState {
     sender: mpsc::Sender<SshCommand>,
     close: watch::Sender<bool>,
+    finished: watch::Receiver<bool>,
     attached: bool,
     pending_output: Vec<String>,
     output_decoder: Utf8OutputDecoder,
@@ -596,28 +599,47 @@ impl SshManager {
         vault: Arc<dyn CredentialLookup>,
         request: SshConnectRequest,
     ) -> Result<SshConnectResponse, SshManagerError> {
+        let mut shutdown = self.shutdown.subscribe();
+        if *shutdown.borrow() {
+            return Err(SshManagerError::Closed);
+        }
         validate_ssh_connection_policy(&request)?;
         let host = request.host.clone();
-        let connection = connect_transport(vault.as_ref(), &request).await?;
+        let connection = tokio::select! {
+            biased;
+            _ = shutdown.changed() => return Err(SshManagerError::Closed),
+            result = connect_transport(vault.as_ref(), &request) => result?,
+        };
         let connection = Arc::new(connection);
-        let shell = connection.open_shell(request.cols, request.rows).await?;
+        let shell = tokio::select! {
+            biased;
+            _ = shutdown.changed() => return Err(SshManagerError::Closed),
+            result = connection.open_shell(request.cols, request.rows) => result?,
+        };
         let (reader, writer) = shell.split();
         let terminal_id = Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let (close, close_receiver) = watch::channel(false);
-        self.sessions
-            .lock()
-            .map_err(|_| SshManagerError::Closed)?
-            .insert(
+        let (finished, finished_receiver) = watch::channel(false);
+        {
+            let mut sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
+            // Serialize registration with shutdown's snapshot: a connection
+            // finishing setup after Quit must not start an untracked session.
+            if *self.shutdown.borrow() {
+                return Err(SshManagerError::Closed);
+            }
+            sessions.insert(
                 terminal_id.clone(),
                 SessionState {
                     sender,
                     close,
+                    finished: finished_receiver,
                     attached: false,
                     pending_output: Vec::new(),
                     output_decoder: Utf8OutputDecoder::default(),
                 },
             );
+        }
 
         self.start_x11_bridge(
             Arc::clone(&connection),
@@ -639,6 +661,7 @@ impl SshManager {
         };
         tauri::async_runtime::spawn(async move {
             run_remote_session(context, connection, reader, writer, receiver).await;
+            finished.send_replace(true);
         });
 
         Ok(SshConnectResponse { terminal_id, host })
@@ -662,6 +685,38 @@ impl SshManager {
             .send(SshCommand::Resize { cols, rows })
             .await
             .map_err(|_| SshManagerError::Closed)
+    }
+
+    /// Cancel every SSH session and wait for transfer cleanup/transport teardown.
+    /// No timeout aborts a worker that may already be replacing a remote file.
+    pub async fn shutdown(&self) {
+        let sessions = {
+            // Recover the still-owned controls even after an unrelated panic;
+            // skipping shutdown because this registry is poisoned loses cleanup.
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.shutdown.send_replace(true);
+            sessions
+                .iter()
+                .map(|(id, state)| (id.clone(), state.close.clone(), state.finished.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (id, close, _) in &sessions {
+            self.cancel_for_terminal(id);
+            let _ = close.send(true);
+        }
+        for (_, _, mut finished) in sessions {
+            while !*finished.borrow() {
+                if finished.changed().await.is_err() {
+                    // A terminated session task cannot acknowledge completion.
+                    // It is gone; do not wait forever for a dropped sender.
+                    tracing::warn!(event = "ssh_cleanup_acknowledgement_lost");
+                    break;
+                }
+            }
+        }
     }
 
     pub async fn close(&self, terminal_id: &str) -> Result<(), SshManagerError> {
@@ -1149,16 +1204,21 @@ impl SshManager {
             created_at: Instant::now(),
         };
 
-        self.transfers
-            .lock()
-            .map_err(|_| SshManagerError::Closed)?
-            .insert(
+        {
+            let mut controls = self.transfers.lock().map_err(|_| SshManagerError::Closed)?;
+            // Quit sets the flag before cancelling this registry. A caller that
+            // obtained its command sender earlier must not register after that sweep.
+            if *self.shutdown.borrow() {
+                return Err(SshManagerError::Closed);
+            }
+            controls.insert(
                 transfer_id.clone(),
                 TransferControl {
                     terminal_id: terminal_id.clone(),
                     cancel,
                 },
             );
+        }
 
         self.emit_transfer(&app, job.event(0, None, TransferState::Queued, None));
 
@@ -1189,6 +1249,9 @@ impl SshManager {
     }
 
     fn sender(&self, terminal_id: &str) -> Result<mpsc::Sender<SshCommand>, SshManagerError> {
+        if *self.shutdown.borrow() {
+            return Err(SshManagerError::Closed);
+        }
         self.sessions
             .lock()
             .map_err(|_| SshManagerError::Closed)?
@@ -1836,6 +1899,10 @@ async fn run_shell_once(
     transfers: &mut JoinSet<()>,
 ) -> ShellRunResult {
     loop {
+        if *close.borrow() {
+            let _ = writer.close().await;
+            return ShellRunResult::Closed;
+        }
         tokio::select! {
             output = reader.next_output() => {
                 match output {
@@ -3991,6 +4058,96 @@ mod tests {
         assert!(commit_local_file(&temporary, &destination, true, &mut cancel).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"target remains unchanged");
         assert_eq!(fs::read(&temporary).unwrap(), b"replacement");
+    }
+
+    #[tokio::test]
+    async fn app_shutdown_signals_all_sessions_and_waits_for_each_cleanup() {
+        use super::{SessionState, TransferControl};
+        use mobarust_core::Utf8OutputDecoder;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        use tokio::sync::mpsc;
+        use tokio::task::JoinSet;
+
+        let manager = SshManager::default();
+        let mut workers = JoinSet::new();
+        let mut observed = Vec::new();
+        let mut release = Vec::new();
+        for id in ["first", "second"] {
+            let (sender, _commands) = mpsc::channel(1);
+            let (close, mut closing) = watch::channel(false);
+            let (finished, finished_receiver) = watch::channel(false);
+            let (cancel, mut cancelled) = oneshot::channel();
+            manager.transfers.lock().unwrap().insert(
+                format!("{id}-transfer"),
+                TransferControl {
+                    terminal_id: id.into(),
+                    cancel,
+                },
+            );
+            manager.sessions.lock().unwrap().insert(
+                id.into(),
+                SessionState {
+                    sender,
+                    close,
+                    finished: finished_receiver,
+                    attached: false,
+                    pending_output: Vec::new(),
+                    output_decoder: Utf8OutputDecoder::default(),
+                },
+            );
+            let (close_observed, wait_for_close) = oneshot::channel();
+            let (allow_finish, wait_for_finish) = oneshot::channel();
+            observed.push(wait_for_close);
+            release.push(allow_finish);
+            workers.spawn(async move {
+                closing.changed().await.unwrap();
+                assert!(*closing.borrow());
+                assert!(cancelled.try_recv().is_ok());
+                close_observed.send(()).unwrap();
+                wait_for_finish.await.unwrap();
+                finished.send_replace(true);
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut shutdown = Box::pin(manager.shutdown());
+            tokio::select! {
+                _ = &mut shutdown => panic!("Quit skipped active session cleanup"),
+                _ = async { for receiver in observed { receiver.await.unwrap(); } } => {}
+            }
+            assert!(*manager.shutdown.borrow());
+            assert!(matches!(
+                manager.sender("first"),
+                Err(SshManagerError::Closed)
+            ));
+            release.remove(0).send(()).unwrap();
+            poll_fn(|cx| {
+                assert!(shutdown.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            release.remove(0).send(()).unwrap();
+            shutdown.await;
+            while let Some(result) = workers.join_next().await {
+                result.unwrap();
+            }
+            // Completed sessions and an already-started shutdown are idempotent.
+            manager.shutdown().await;
+        })
+        .await
+        .expect("all-session cleanup deadline");
+    }
+
+    #[tokio::test]
+    async fn empty_app_shutdown_still_rejects_new_ssh_work() {
+        let manager = SshManager::default();
+        manager.shutdown().await;
+        manager.shutdown().await;
+        assert!(*manager.shutdown.borrow());
+        assert!(matches!(
+            manager.sender("new-session"),
+            Err(SshManagerError::Closed)
+        ));
     }
 
     #[tokio::test]

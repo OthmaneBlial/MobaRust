@@ -34,9 +34,10 @@ use ssh::{
     SshManager, SshRemoteForwardRequest, SshTransferRequest,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
 use tauri::State;
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use telnet::{TelnetConnectRequest, TelnetManager};
 use terminal::TerminalManager;
 use zeroize::Zeroizing;
@@ -1801,7 +1802,50 @@ fn main() {
         event = "runtime_start",
         platform = std::env::consts::OS,
     );
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(|app| {
+            let menu = tauri::menu::Menu::default(app)?;
+            #[cfg(target_os = "macos")]
+            {
+                // Cocoa's predefined Quit calls terminate: directly and bypasses
+                // ExitRequested. Keep the native menu, but route Quit through exit.
+                let items = menu.items()?;
+                let app_menu = items
+                    .first()
+                    .and_then(|item| item.as_submenu())
+                    .ok_or_else(|| std::io::Error::other("application menu is missing"))?;
+                let quit = app_menu
+                    .items()?
+                    .pop()
+                    .ok_or_else(|| std::io::Error::other("application Quit item is missing"))?;
+                let text = quit
+                    .as_predefined_menuitem()
+                    .ok_or_else(|| {
+                        std::io::Error::other("application Quit item is not predefined")
+                    })?
+                    .text()?;
+                if !text.starts_with("Quit ") {
+                    return Err(std::io::Error::other("unexpected application Quit item").into());
+                }
+                app_menu.remove(&quit)?;
+                app_menu.append(&tauri::menu::MenuItem::with_id(
+                    app,
+                    "mobarust.quit",
+                    text,
+                    true,
+                    Some("CmdOrCtrl+Q"),
+                )?)?;
+            }
+            Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "mobarust.quit" {
+                app.exit(0);
+            }
+        });
+    let desktop = builder
         .manage(TerminalManager::default())
         .manage(SshManager::default())
         .manage(SerialManager::default())
@@ -1949,8 +1993,41 @@ fn main() {
             terminal_resize,
             terminal_close
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running MobaRust");
+        .build(tauri::generate_context!())
+        .expect("error while building MobaRust");
+    let exit_ready = Arc::new(AtomicBool::new(false));
+    let mut exit_pending = false;
+    desktop.run(move |app, event| match event {
+        RunEvent::WindowEvent {
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if !exit_ready.load(Ordering::Acquire) => {
+            api.prevent_close();
+            app.exit(0);
+        }
+        RunEvent::ExitRequested { api, code, .. } if !exit_ready.load(Ordering::Acquire) => {
+            api.prevent_exit();
+            if !exit_pending {
+                exit_pending = true;
+                let _ = app.emit("app://closing", ());
+                let manager = app.state::<SshManager>().inner().clone();
+                let app = app.clone();
+                let exit_ready = Arc::clone(&exit_ready);
+                tauri::async_runtime::spawn(async move {
+                    manager.shutdown().await;
+                    exit_ready.store(true, Ordering::Release);
+                    app.exit(code.unwrap_or(0));
+                });
+            }
+        }
+        RunEvent::Exit if !exit_ready.load(Ordering::Acquire) => {
+            // OS termination may bypass ExitRequested (for example, Dock Quit).
+            // The event loop is ending, so finish native cleanup before returning.
+            let manager = app.state::<SshManager>().inner().clone();
+            tauri::async_runtime::block_on(manager.shutdown());
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]
