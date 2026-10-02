@@ -437,7 +437,7 @@ button:not(:disabled) { cursor: pointer; }
 .text-prompt { color: var(--text); background: var(--panel); max-height: calc(100dvh - 40px); overflow-y: auto; }
 .text-prompt::backdrop { background: rgba(5, 8, 7, .72); backdrop-filter: blur(5px); }
 .text-prompt h2 { font-size: 18px; }
-.text-prompt-label { display: flex; flex-direction: column; gap: 12px; padding: 18px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.text-prompt-label { display: flex; flex-direction: column; gap: 12px; padding: 18px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .text-prompt-label :is(input, textarea) { width: 100%; padding: 10px; border: 1px solid var(--line-strong); outline: 0; color: var(--text); background: var(--bg); font-family: var(--mono); font-size: 12px; resize: vertical; }
 .text-prompt-label :is(input, textarea):focus { border-color: var(--amber); }
 .text-prompt button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }

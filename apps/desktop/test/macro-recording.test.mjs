@@ -54,17 +54,24 @@ assert.equal(
 );
 
 const nativeIds = new Map([["tab-1", "ssh-1"], ["tab-2", "ssh-2"]]);
-const pinned = pinMacroTargets(["tab-1", "tab-2", "tab-1"], nativeIds);
+const generations = new Map([["tab-1", 1], ["tab-2", 1]]);
+const pinned = pinMacroTargets(["tab-1", "tab-2", "tab-1"], nativeIds, generations);
 assert.deepEqual(pinned, [
-  { workspaceId: "tab-1", nativeId: "ssh-1" },
-  { workspaceId: "tab-2", nativeId: "ssh-2" },
+  { workspaceId: "tab-1", nativeId: "ssh-1", generation: 1 },
+  { workspaceId: "tab-2", nativeId: "ssh-2", generation: 1 },
 ]);
-assert.equal(pinMacroTargets([], nativeIds), null);
-assert.equal(pinMacroTargets(["tab-3"], nativeIds), null);
-assert.equal(macroTargetsStillBound([], nativeIds), false);
-assert.equal(macroTargetsStillBound(pinned, nativeIds), true);
+assert.equal(pinMacroTargets([], nativeIds, generations), null);
+assert.equal(pinMacroTargets(["tab-3"], nativeIds, generations), null);
+assert.equal(macroTargetsStillBound([], nativeIds, generations), false);
+assert.equal(macroTargetsStillBound(pinned, nativeIds, generations), true);
 nativeIds.set("tab-2", "ssh-reconnected");
-assert.equal(macroTargetsStillBound(pinned, nativeIds), false, "a reconnect must stop later macro input");
+assert.equal(macroTargetsStillBound(pinned, nativeIds, generations), false, "a reconnect must stop later macro input");
 nativeIds.set("tab-2", "ssh-2");
 nativeIds.delete("tab-1");
-assert.equal(macroTargetsStillBound(pinned, nativeIds), false, "a closed target must stop later macro input");
+assert.equal(macroTargetsStillBound(pinned, nativeIds, generations), false, "a closed target must stop later macro input");
+
+nativeIds.set("tab-1", "ssh-1");
+generations.set("tab-2", 3);
+assert.equal(macroTargetsStillBound(pinned, nativeIds, generations), false, "same-ID reconnects invalidate approval and later writes");
+generations.delete("tab-2");
+assert.equal(macroTargetsStillBound(pinned, nativeIds, generations), false, "removed lifecycle state must not restore approval");

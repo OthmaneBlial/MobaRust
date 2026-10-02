@@ -121,6 +121,7 @@ Windows build/icon and shell fixture corrections are in source. A new Windows in
 | ✅ **SSH reliability** | Disposable OpenSSH lab covers keys, jumps, agent, IPv6, interruption and fresh recovery. | Desktop automatic reconnect, password/PAM/MFA and sustained large transfers. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
+| 🟡 **Native dialogues, on main** | Modal input/approval; Mac lab verified Unicode file actions, Save as policies and local paste. These changes follow v0.1.17. | Native imports, transfers, broadcast and macro acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
 | 🟡 **Distribution** | Mac ARM64/x64 0.1.17 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 

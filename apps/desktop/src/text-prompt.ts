@@ -3,6 +3,20 @@ let pending: HTMLDialogElement | null = null;
 // WebKit desktop runtimes do not implement window.prompt. HTML dialogs also
 // provide native focus containment, an inert background, and Escape cancellation.
 export function promptText(message: string, initialValue = "", options: { multiline?: boolean; readOnly?: boolean } = {}): Promise<string | null> {
+  return openDialogue(message, initialValue, options);
+}
+
+export async function confirmAction(message: string): Promise<boolean> {
+  return await openDialogue(message, undefined) !== null;
+}
+
+/** Cancel/closing returns null; create-only is an explicit, distinct choice. */
+export async function chooseOverwrite(message: string): Promise<boolean | null> {
+  const choice = await openDialogue(message, undefined, { createOnly: true });
+  return choice === null ? null : choice === "yes";
+}
+
+function openDialogue(message: string, initialValue: string | undefined, options: { multiline?: boolean; readOnly?: boolean; createOnly?: boolean } = {}): Promise<string | null> {
   if (pending) return Promise.resolve(null);
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
@@ -15,14 +29,19 @@ export function promptText(message: string, initialValue = "", options: { multil
     const form = dialog.querySelector("form")!;
     const label = dialog.querySelector("label")!;
     label.textContent = message;
-    const input = document.createElement(options.multiline ? "textarea" : "input");
-    input.value = initialValue;
-    input.readOnly = options.readOnly ?? false;
-    input.spellcheck = false;
-    input.setAttribute("autocapitalize", "off");
-    input.setAttribute("autocomplete", "off");
-    if (options.multiline) input.setAttribute("rows", "8");
-    label.append(input);
+    const input = initialValue === undefined ? null : document.createElement(options.multiline ? "textarea" : "input");
+    if (input) {
+      input.value = initialValue!;
+      input.readOnly = options.readOnly ?? false;
+      input.spellcheck = false;
+      input.setAttribute("autocapitalize", "off");
+      input.setAttribute("autocomplete", "off");
+      if (options.multiline) input.setAttribute("rows", "8");
+      label.append(input);
+    } else {
+      dialog.querySelector("h2")!.textContent = "Confirm action";
+      if (options.createOnly) dialog.querySelector('button[type="submit"]')!.textContent = "Replace";
+    }
     if (options.readOnly) {
       dialog.querySelector("h2")!.textContent = "Copy text";
       dialog.querySelector('button[type="submit"]')!.textContent = "Done";
@@ -38,19 +57,28 @@ export function promptText(message: string, initialValue = "", options: { multil
       resolve(value);
     };
     const cancel = () => finish(null);
-    form.addEventListener("submit", (event) => { event.preventDefault(); finish(input.value); });
-    dialog.querySelector('button[type="button"]')!.addEventListener("click", cancel);
+    form.addEventListener("submit", (event) => { event.preventDefault(); finish(input?.value ?? "yes"); });
+    const cancelButton = dialog.querySelector<HTMLButtonElement>('button[type="button"]')!;
+    cancelButton.addEventListener("click", cancel);
+    if (options.createOnly) {
+      const createOnly = document.createElement("button");
+      createOnly.type = "button";
+      createOnly.className = "outline-button";
+      createOnly.textContent = "Create only";
+      createOnly.addEventListener("click", () => finish("no"));
+      cancelButton.after(createOnly);
+    }
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); cancel(); });
     dialog.addEventListener("close", cancel);
     // Keep application shortcuts out of the input; Escape remains available
     // to the application's emergency broadcast-disable handler.
     dialog.addEventListener("keydown", (event) => { if (event.key !== "Escape") event.stopPropagation(); });
     window.addEventListener("pagehide", cancel);
-    document.body.append(dialog);
     try {
+      document.body.append(dialog);
       dialog.showModal();
-      input.focus();
-      input.select();
+      (input ?? cancelButton).focus();
+      input?.select();
     } catch {
       cancel(); // Unsupported/closing webviews fail closed, without a value.
     }

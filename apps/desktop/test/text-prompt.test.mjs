@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { log } from "node:console";
-import { promptText } from "../src/text-prompt.ts";
+import { chooseOverwrite, confirmAction, promptText } from "../src/text-prompt.ts";
 
 const { Event, EventTarget } = globalThis;
 
 // Minimal DOM boundary: exercise promise/cancellation ownership, not rendering.
-// Native focus, keyboard and file workflows are checked in the desktop lab.
+// Native focus, keyboard and file workflows require separate GUI checks.
 class Element extends EventTarget {
   children = [];
   attributes = {};
@@ -18,6 +18,7 @@ class Element extends EventTarget {
   querySelector(selector) { return this.nodes[selector]; }
   setAttribute(name, value) { this.attributes[name] = value; }
   append(child) { this.children.push(child); }
+  after(child) { this.afterNode = child; }
   remove() { this.removed = true; }
   focus() {}
   select() {}
@@ -66,4 +67,23 @@ failOpening = false;
 const recovered = promptText("Can open again");
 latest().dispatchEvent(new Event("cancel"));
 assert.equal(await recovered, null);
+
+const denied = confirmAction("Do not execute without approval");
+assert.equal(input(latest()), undefined, "confirmation must not invent a text field");
+latest().dispatchEvent(new Event("cancel", { cancelable: true }));
+assert.equal(await denied, false);
+const approved = confirmAction("Explicit approval");
+assert.equal(await confirmAction("Concurrent approval"), false);
+latest().querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+assert.equal(await approved, true);
+for (const action of ["cancel", "create", "replace"]) {
+  const choice = chooseOverwrite("Existing destination");
+  if (action === "cancel") latest().querySelector('button[type="button"]').dispatchEvent(new Event("click"));
+  if (action === "create") latest().querySelector('button[type="button"]').afterNode.dispatchEvent(new Event("click"));
+  if (action === "replace") latest().querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+  assert.equal(await choice, action === "cancel" ? null : action === "replace");
+}
+failOpening = true;
+assert.equal(await confirmAction("Unavailable approval"), false);
+assert.equal(await chooseOverwrite("Unavailable overwrite choice"), null);
 log("Text prompt lifecycle checks passed");

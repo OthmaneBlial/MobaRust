@@ -42,7 +42,9 @@ The SSH lab reports **41 unit tests and 11 integration test cases**. IPv6 and re
 ### After v0.1.17, on main
 
 - [x] Replace the remaining 19 browser text prompts with a shared modal input, multiline JSON and read-only copy fields; retain cancellation and session ownership guards.
-- [ ] Complete the new input workflows in a native SSH/SFTP lab, and audit native confirmation dialogues. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate browser observations, the native build and pending GUI evidence. Published installers do not include this change yet.
+- [x] Replace all 20 browser confirmations with modal approval and explicit Cancel / Create only / Replace choices; pin paste and macro destinations across reconnects, including unchanged SSH IDs.
+- [x] Verify native macOS ARM64 input and approval for Unicode mkdir/rename, permission validation, Save as collision policies and local multiline paste in a disposable lab.
+- [ ] Finish native upload/download, JSON import, broadcast and per-action macro acceptance, including connection loss while awaiting approval. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Published v0.1.17 installers do not include these changes yet.
 
 ## Next, in priority order
 

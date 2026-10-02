@@ -21,11 +21,11 @@ import {
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
-import { prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
+import { approveTerminalPaste, prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { parseTunnelPort } from "./tunnel-port";
-import { promptText } from "./text-prompt";
+import { chooseOverwrite, confirmAction, promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
 import { boundedRemoteDesktopSize, enqueueRemoteDesktopPointer, mapRemoteDesktopPoint, remoteDesktopKeyCode, remoteDesktopKeyState, remoteDesktopPointerPoint, remoteDesktopSizeChanged, type RemoteDesktopPointerQueueItem, type RemoteDesktopPoint, type RemoteDesktopSize } from "./remote-desktop-input";
@@ -278,7 +278,7 @@ type TerminalViewportProps = {
   onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
   onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
   onInput: (workspaceId: string, terminalId: string, data: string) => void;
-  onBroadcastPaste: (workspaceId: string, data: string) => boolean;
+  onTerminalPaste: (workspaceId: string, nativeId: string | null, data: string, confirmationEnabled: boolean) => Promise<boolean>;
   onTerminalReady: (workspaceId: string, terminal: Terminal, searchAddon: SearchAddon) => void;
   onTerminalDisposed: (workspaceId: string) => void;
   onSearchResults: (workspaceId: string, resultIndex: number, resultCount: number) => void;
@@ -770,7 +770,7 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onBroadcastPaste, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
+function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalPaste, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -832,8 +832,8 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     const searchResults = searchAddon.onDidChangeResults((event) => onSearchResults(workspaceId, event.resultIndex, event.resultCount));
     const terminalLinks = terminal.registerLinkProvider(createTerminalHttpLinkProvider(
       (bufferLineNumber) => terminal.buffer.active.getLine(bufferLineNumber),
-      (url) => {
-        if (window.confirm(`Open this external URL?\n\n${url}`)) window.open(url, "_blank", "noopener,noreferrer");
+      async (url) => {
+        if (await confirmAction(`Open this external URL?\n\n${url}`) && !disposed) window.open(url, "_blank", "noopener,noreferrer");
       },
     ));
     onTerminalReady(workspaceId, terminal, searchAddon);
@@ -873,9 +873,14 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       if (data === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      const accepted = !shouldConfirmTerminalPaste(data, confirmMultilinePasteRef.current) || window.confirm("This paste contains multiple lines. The receiving shell may execute them. Send to the terminal?");
-      // Keep xterm's line-ending normalization and bracketed-paste handling.
-      if (accepted && !onBroadcastPaste(workspaceId, data)) terminal.paste(data);
+      const nativeId = terminalIdRef.current;
+      void onTerminalPaste(workspaceId, nativeId, data, confirmMultilinePasteRef.current).then((handled) => {
+        // Only the browser preview falls back to xterm paste. A native paste is
+        // sent to the exact destinations pinned before asynchronous approval.
+        if (!handled && !disposed && terminalIdRef.current === nativeId) terminal.paste(data);
+      }).catch(() => {
+        if (!disposed) terminal.writeln("\r\nPaste could not be completed. Check the terminal before retrying.");
+      });
     };
     host.addEventListener("paste", onPaste, true);
 
@@ -1018,7 +1023,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
       onTerminalDisposed(workspaceId);
       terminal.dispose();
     };
-  }, [instanceKey, localTarget, onBell, onBroadcastPaste, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
+  }, [instanceKey, localTarget, onBell, onTerminalPaste, onInput, onNativeTerminalId, onSearchResults, onStatusChange, onTerminalDisposed, onTerminalReady, onTitleChange, remoteProtocol, remoteSessionId, workspaceId]);
 
   return <div className="terminal-host" ref={hostRef} role="group" aria-label={remoteProtocol ? `${remoteProtocol.toUpperCase()} terminal` : "Local terminal"} />;
 }
@@ -1537,6 +1542,7 @@ function App() {
   const macroCancelRef = useRef(false);
   const macroRunRef = useRef<{ title: string; step: number; total: number; targets: string[] } | null>(null);
   const terminalAuditStateRef = useRef(new Map<string, TerminalStatus>());
+  const terminalGenerationsRef = useRef(new Map<string, number>());
   const terminalBellAtRef = useRef(new Map<string, number>());
   const transferAuditStateRef = useRef(new Map<string, TransferState>());
   const splitResizeRef = useRef<{ direction: Exclude<SplitDirection, "none">; frame: HTMLElement; path: SplitPath } | null>(null);
@@ -1697,6 +1703,8 @@ function App() {
     const protocol = auditProtocol(terminal?.remoteProtocol);
     const previous = terminalAuditStateRef.current.get(workspaceId);
     terminalAuditStateRef.current.set(workspaceId, status);
+    // SSH reconnects can keep the same native ID. Invalidate old approvals.
+    if (previous !== status) terminalGenerationsRef.current.set(workspaceId, (terminalGenerationsRef.current.get(workspaceId) ?? 0) + 1);
     if (!protocol || previous === status) return;
     if (status === "connected") recordAudit("connectionSucceeded", protocol);
     if (status === "error") recordAudit("connectionFailed", protocol);
@@ -1719,6 +1727,7 @@ function App() {
   }, []);
 
   const handleNativeTerminalId = useCallback((workspaceId: string, terminalId: string | null) => {
+    if (nativeTerminalIdsRef.current.get(workspaceId) !== (terminalId ?? undefined)) terminalGenerationsRef.current.set(workspaceId, (terminalGenerationsRef.current.get(workspaceId) ?? 0) + 1);
     if (terminalId) nativeTerminalIdsRef.current.set(workspaceId, terminalId);
     else nativeTerminalIdsRef.current.delete(workspaceId);
   }, []);
@@ -1750,6 +1759,7 @@ function App() {
   }, []);
 
   const handleTerminalDisposed = useCallback((workspaceId: string) => {
+    terminalGenerationsRef.current.set(workspaceId, (terminalGenerationsRef.current.get(workspaceId) ?? 0) + 1);
     terminalInstancesRef.current.delete(workspaceId);
     terminalBellAtRef.current.delete(workspaceId);
   }, []);
@@ -1811,25 +1821,44 @@ function App() {
       .catch((error) => setConnectionError(`Terminal input failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`));
   }, [recordTerminalInput, writeTerminalInput]);
 
-  const handleBroadcastPaste = useCallback((workspaceId: string, data: string) => {
-    if (!IS_TAURI || !broadcastEnabledRef.current) return false;
-    const targetIds = [...new Set(broadcastTargetIdsRef.current)];
-    const targets = targetIds.map((targetId) => ({
-      workspaceId: targetId,
-      nativeId: nativeTerminalIdsRef.current.get(targetId),
-      terminal: terminalInstancesRef.current.get(targetId)?.terminal,
-    }));
-    if (targets.length === 0 || targets.some((target) => !target.nativeId || !target.terminal)) {
-      setConnectionError("Paste was not sent: every selected terminal must be ready.");
-      return true;
-    }
+  const handleTerminalPaste = useCallback(async (workspaceId: string, nativeId: string | null, data: string, confirmationEnabled: boolean) => {
+    const approve = () => shouldConfirmTerminalPaste(data, confirmationEnabled)
+      ? confirmAction("This paste contains multiple lines. The receiving shells may execute them. Send to the selected terminals?")
+      : Promise.resolve(true);
+    if (!IS_TAURI) return !await approve();
+    const broadcasting = broadcastEnabledRef.current;
+    const targetIds = [...new Set(broadcasting ? broadcastTargetIdsRef.current : [workspaceId])];
     const source = terminalInstancesRef.current.get(workspaceId)?.terminal;
-    if (source) recordTerminalInput(workspaceId, prepareTerminalPaste(data, source.modes.bracketedPasteMode && source.options.ignoreBracketedPasteMode !== true));
-    void settleTerminalWrites(targets.map((target) => writeTerminalInput(
-      target.workspaceId,
-      target.nativeId!,
-      prepareTerminalPaste(data, target.terminal!.modes.bracketedPasteMode && target.terminal!.options.ignoreBracketedPasteMode !== true),
-    ))).catch((error) => setConnectionError(`Terminal paste failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`));
+    const terminals = new Map(targetIds.map((id) => [id, terminalInstancesRef.current.get(id)?.terminal]));
+    const lifecycle = pinMacroTargets([workspaceId, ...targetIds], nativeTerminalIdsRef.current, terminalGenerationsRef.current);
+    const currentTargets = () => {
+      if (!lifecycle || !macroTargetsStillBound(lifecycle, nativeTerminalIdsRef.current, terminalGenerationsRef.current) || lifecycle.some(({ workspaceId: id }) => terminalAuditStateRef.current.get(id) !== "connected")) return null;
+      if (!nativeId || !source || broadcasting !== broadcastEnabledRef.current || nativeTerminalIdsRef.current.get(workspaceId) !== nativeId || terminalInstancesRef.current.get(workspaceId)?.terminal !== source) return null;
+      const ids = [...new Set(broadcasting ? broadcastTargetIdsRef.current : [workspaceId])];
+      const bindings = new Map<string, string>();
+      for (const id of ids) {
+        const target = nativeTerminalIdsRef.current.get(id);
+        if (!target || !terminals.get(id) || terminals.get(id) !== terminalInstancesRef.current.get(id)?.terminal) return null;
+        bindings.set(id, target);
+      }
+      return bindings;
+    };
+    try {
+      const targets = await approveTerminalPaste(currentTargets, approve);
+      if (!targets) {
+        setSessionNotice("Paste cancelled or its selected terminals changed. No input was sent.");
+        return true;
+      }
+      setSessionNotice(null);
+      setConnectionError(null);
+      recordTerminalInput(workspaceId, prepareTerminalPaste(data, source!.modes.bracketedPasteMode && source!.options.ignoreBracketedPasteMode !== true));
+      await settleTerminalWrites([...targets].map(([id, target]) => {
+        const terminal = terminals.get(id)!;
+        return writeTerminalInput(id, target, prepareTerminalPaste(data, terminal.modes.bracketedPasteMode && terminal.options.ignoreBracketedPasteMode !== true));
+      }));
+    } catch (error) {
+      setConnectionError(`Terminal paste failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`);
+    }
     return true;
   }, [recordTerminalInput, writeTerminalInput]);
 
@@ -1905,6 +1934,7 @@ function App() {
   const closeTerminal = useCallback((workspaceId: string) => {
     nativeTerminalIdsRef.current.delete(workspaceId);
     terminalAuditStateRef.current.delete(workspaceId);
+    terminalGenerationsRef.current.delete(workspaceId);
     setBroadcastTargetIds((current) => current.filter((id) => id !== workspaceId));
     if (terminalTabs.length === 1) {
       const replacement = createWorkspaceTerminal();
@@ -2056,7 +2086,7 @@ function App() {
   }, []);
 
   const clearAudit = useCallback(async () => {
-    if (!IS_TAURI || !window.confirm("Clear the local audit history? Terminal commands and secrets are not stored there.")) return;
+    if (!IS_TAURI || !await confirmAction("Clear the local audit history? Terminal commands and secrets are not stored there.")) return;
     try {
       await invoke("audit_clear");
       setAuditEvents([]);
@@ -2079,7 +2109,7 @@ function App() {
   }, []);
 
   const deleteSnippet = useCallback(async (snippet: SnippetRecord) => {
-    if (!window.confirm(`Delete snippet “${snippet.title}”?`)) return;
+    if (!await confirmAction(`Delete snippet “${snippet.title}”?`)) return;
     try {
       if (IS_TAURI) await invoke<boolean>("snippet_delete", { snippetId: snippet.id });
       setSnippets((current) => current.filter((item) => item.id !== snippet.id));
@@ -2117,7 +2147,7 @@ function App() {
   }, []);
 
   const deleteMacro = useCallback(async (record: MacroRecord) => {
-    if (!window.confirm(`Delete macro “${record.title}”?`)) return;
+    if (!await confirmAction(`Delete macro “${record.title}”?`)) return;
     try {
       if (IS_TAURI) await invoke<boolean>("macro_delete", { macroId: record.id });
       setMacros((current) => current.filter((item) => item.id !== record.id));
@@ -2184,7 +2214,7 @@ function App() {
   }, []);
 
   const resetSettings = useCallback(async () => {
-    if (!window.confirm("Reset MobaRust settings to their safe defaults?")) return;
+    if (!await confirmAction("Reset MobaRust settings to their safe defaults?")) return;
     try {
       const reset = IS_TAURI ? await invoke<AppSettings>("settings_reset") : defaultSettings;
       setSettings(reset);
@@ -2471,7 +2501,7 @@ function App() {
   }, [recordAudit, refreshSavedSessions]);
 
   const connectRemoteDesktop = useCallback(async (request: RemoteDesktopConnectRequest, offerSave = true) => {
-    if (request.protocol === "vnc" && request.allowInsecureVnc && !window.confirm("VNC over TCP is unencrypted. Continue only if this target is trusted or protected by an external tunnel?")) {
+    if (request.protocol === "vnc" && request.allowInsecureVnc && !await confirmAction("VNC over TCP is unencrypted. Continue only if this target is trusted or protected by an external tunnel?")) {
       return;
     }
     setConnectionError(null);
@@ -2531,7 +2561,7 @@ function App() {
 
   const exportSessions = useCallback(async () => {
     if (!IS_TAURI) return;
-    if (!window.confirm("Export session metadata? The file contains no passwords or private keys, but may include credential references, key paths, and known_hosts paths. Continue only if this destination is trusted.")) return;
+    if (!await confirmAction("Export session metadata? The file contains no passwords or private keys, but may include credential references, key paths, and known_hosts paths. Continue only if this destination is trusted.")) return;
     try {
       const json = await invoke<string>("session_export");
       if (navigator.clipboard?.writeText) {
@@ -2578,9 +2608,9 @@ function App() {
       .catch(() => undefined);
   }, [refreshSavedSessions]);
 
-  const openSavedLocalSession = useCallback((session: SavedSession) => {
+  const openSavedLocalSession = useCallback(async (session: SavedSession) => {
     const startupCommand = session.startup_command?.trim();
-    if (startupCommand && !window.confirm(`This saved local profile has a startup command. It will be sent to the newly opened local shell. Continue?`)) return;
+    if (startupCommand && !await confirmAction(`This saved local profile has a startup command. It will be sent to the newly opened local shell. Continue?`)) return;
     recordAudit("sessionOpened", "LOCAL", session.id);
     touchSavedSession(session.id);
     startNewTerminal({
@@ -2605,7 +2635,7 @@ function App() {
   }, [refreshSavedSessions]);
 
   const deleteSavedSession = useCallback(async (session: SavedSession) => {
-    if (!IS_TAURI || !window.confirm(`Delete saved session “${session.name}”?`)) return;
+    if (!IS_TAURI || !await confirmAction(`Delete saved session “${session.name}”?`)) return;
     try {
       await invoke<boolean>("session_delete", { sessionId: session.id });
       if (editingSession?.id === session.id) setEditingSession(null);
@@ -2616,10 +2646,9 @@ function App() {
     }
   }, [editingSession?.id, refreshSavedSessions]);
 
-  const connectSavedSession = useCallback((session: SavedSession) => {
+  const connectSavedSession = useCallback(async (session: SavedSession) => {
     if (session.protocol === "LOCAL") {
-      openSavedLocalSession(session);
-      return;
+      return openSavedLocalSession(session);
     }
     recordAudit("sessionOpened", session.protocol, session.id);
     touchSavedSession(session.id);
@@ -2629,7 +2658,7 @@ function App() {
         setConnectionError("This Telnet profile has no saved terminal parameters.");
         return;
       }
-      void connectTelnet({
+      return connectTelnet({
         host: session.hostname,
         port: session.port,
         terminal: profile.terminal,
@@ -2637,7 +2666,6 @@ function App() {
         columns: profile.columns,
         rows: profile.rows,
       }, false);
-      return;
     }
     if (session.protocol === "SERIAL") {
       const profile = session.serial_profile;
@@ -2645,7 +2673,7 @@ function App() {
         setConnectionError("This serial profile has no saved device parameters.");
         return;
       }
-      void connectSerial({
+      return connectSerial({
         device: profile.device,
         baudRate: profile.baud_rate,
         dataBits: profile.data_bits,
@@ -2654,7 +2682,6 @@ function App() {
         flowControl: profile.flow_control,
         lineEnding: profile.line_ending,
       }, false);
-      return;
     }
     if (session.protocol === "RDP" || session.protocol === "VNC") {
       const profile = session.remote_desktop_profile;
@@ -2668,7 +2695,7 @@ function App() {
         setConnectionError("This RDP profile has no complete username or credential reference.");
         return;
       }
-      connectRemoteDesktop({
+      return connectRemoteDesktop({
         protocol,
         host: session.hostname,
         port: session.port,
@@ -2688,18 +2715,17 @@ function App() {
         reconnectEnabled: profile.reconnect_enabled ?? true,
         reconnectAttempts: profile.reconnect_attempts ?? 3,
       }, false);
-      return;
     }
     const request = requestFromSavedSession(session, savedSessions);
     if (!request) {
       setConnectionError("This SSH profile has incomplete authentication or an unresolved, cyclic, or oversized jump chain (maximum 8 hosts).");
       return;
     }
-    void connectSsh(request, false);
+    return connectSsh(request, false);
   }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targets: MacroTargetBinding[], data: string) => {
-    if (!macroTargetsStillBound(targets, nativeTerminalIdsRef.current)) {
+    if (!macroTargetsStillBound(targets, nativeTerminalIdsRef.current, terminalGenerationsRef.current)) {
       throw new Error("a selected terminal changed or closed during the macro; this action was not sent");
     }
     await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId, data)));
@@ -2715,8 +2741,8 @@ function App() {
       setConnectionError("Select at least one ready terminal before running a macro.");
       return;
     }
-    const targetBindings = pinMacroTargets(targets, nativeTerminalIdsRef.current);
-    if (!targetBindings) {
+    const targetBindings = pinMacroTargets(targets, nativeTerminalIdsRef.current, terminalGenerationsRef.current);
+    if (!targetBindings || targetBindings.some(({ workspaceId }) => terminalAuditStateRef.current.get(workspaceId) !== "connected")) {
       setConnectionError("The macro was not started because every selected terminal must be ready.");
       return;
     }
@@ -2725,7 +2751,11 @@ function App() {
       ? `Macro “${record.title}” includes command or session-control actions. Run it on ${targetLabels.join(", ")}?`
       : `Run macro “${record.title}” on ${targetLabels.join(", ")}?`;
     const approvalNote = record.approval === "eachAction" ? "Every action will ask for approval before it runs." : "Execution is visible and can be cancelled.";
-    if (!window.confirm(`${warning}\n\n${approvalNote} Do not include passwords or tokens in macro text.`)) return;
+    if (!await confirmAction(`${warning}\n\n${approvalNote} Do not include passwords or tokens in macro text.`)) return;
+    if (macroRunRef.current || !macroTargetsStillBound(targetBindings, nativeTerminalIdsRef.current, terminalGenerationsRef.current)) {
+      setConnectionError("The macro was not started because a selected terminal changed or another macro started during approval.");
+      return;
+    }
 
     const keyData: Record<MacroKey, string> = {
       enter: "\r",
@@ -2771,10 +2801,11 @@ function App() {
                   : action.kind === "openSession"
                     ? "open a saved session"
                     : "switch workspace";
-          if (!window.confirm(`Approve macro action ${index + 1}/${record.actions.length}: ${actionDescription}?\n\nNo action will run if you cancel.`)) {
+          if (!await confirmAction(`Approve macro action ${index + 1}/${record.actions.length}: ${actionDescription}?\n\nNo action will run if you cancel.`)) {
             throw new Error("approval declined");
           }
         }
+        if (macroCancelRef.current) throw new Error("cancelled");
         const nextRunState = { title: record.title, step: index + 1, total: record.actions.length, targets: targetLabels };
         macroRunRef.current = nextRunState;
         setMacroRun(nextRunState);
@@ -2790,7 +2821,7 @@ function App() {
         if (action.kind === "openSession") {
           const session = savedSessions.find((item) => item.id === action.sessionId);
           if (!session) throw new Error("saved session target no longer exists");
-          connectSavedSession(session);
+          await connectSavedSession(session);
           await wait(100);
         }
       }
@@ -2976,8 +3007,8 @@ function App() {
       setSessionNotice("Download setup stopped because the active SSH session changed.");
       return;
     }
-    const overwrite = window.confirm(entry.isDirectory ? "Allow replacing existing files inside this directory?" : "Allow replacing an existing local file?");
-    if (remoteSessionIdRef.current !== remoteSessionId) return;
+    const overwrite = await chooseOverwrite(entry.isDirectory ? "Choose how existing files inside this directory should be handled." : "Choose how an existing local destination should be handled.");
+    if (overwrite === null || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_download", {
         terminalId: remoteSessionId,
@@ -3017,8 +3048,8 @@ function App() {
       const defaultRemotePath = remoteChildPath(remotePath, fallbackName);
       const destination = await promptText("Remote destination path", defaultRemotePath);
       if (!destination?.trim()) break;
-      const overwrite = window.confirm("Replace existing remote files? OK: allow replacement. Cancel: upload only if the destination does not exist.");
-      if (remoteSessionIdRef.current !== remoteSessionId) return;
+      const overwrite = await chooseOverwrite("Choose how existing remote files should be handled. Create only refuses replacement.");
+      if (overwrite === null || remoteSessionIdRef.current !== remoteSessionId) return;
       try {
         await invoke("ssh_upload", {
           terminalId: remoteSessionId,
@@ -3072,7 +3103,7 @@ function App() {
     }
     const remotePath = transfer.direction === "download" ? transfer.source : transfer.destination;
     const localPath = transfer.direction === "download" ? transfer.destination : transfer.source;
-    const overwrite = window.confirm(`Retry this transfer and allow replacing the destination?\n\n${quoteRemotePromptPath(remotePath)}`);
+    const overwrite = await confirmAction(`Retry this transfer and allow replacing the destination?\n\n${quoteRemotePromptPath(remotePath)}`);
     if (!overwrite) return;
     const command = transfer.direction === "download" ? "ssh_download" : "ssh_upload";
     try {
@@ -3122,7 +3153,7 @@ function App() {
   }, [loadRemoteDirectory, remotePath, remoteSessionId]);
 
   const deleteRemote = useCallback(async (entry: RemoteEntry) => {
-    if (!remoteSessionId || !window.confirm(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`)) return;
+    if (!remoteSessionId || !await confirmAction(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`) || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_delete_remote", { terminalId: remoteSessionId, path: entry.path });
       setConnectionError(null);
@@ -3142,7 +3173,7 @@ function App() {
       setConnectionError("Permissions must be an octal mode with 3 or 4 digits, for example 640.");
       return;
     }
-    if (!window.confirm(`Apply mode ${normalized} to ${quoteRemotePromptPath(entry.path)}?`)) return;
+    if (!await confirmAction(`Apply mode ${normalized} to ${quoteRemotePromptPath(entry.path)}?`) || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_set_remote_permissions", {
         terminalId: remoteSessionId,
@@ -3764,8 +3795,8 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onBroadcastPaste={handleBroadcastPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
-  }, [colorTheme, handleBroadcastPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalPaste={handleTerminalPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
+  }, [colorTheme, handleTerminalPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${colorTheme}`}>
@@ -4203,9 +4234,9 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   const matchCount = countTextMatches(content, searchQuery, matchCase);
   const language = remoteEditorLanguage(document.path);
 
-  const close = () => {
+  const close = async () => {
     if (busy) return;
-    if (dirty && !window.confirm("Discard unsaved remote changes?")) return;
+    if (dirty && !await confirmAction("Discard unsaved remote changes?")) return;
     onClose();
   };
 
@@ -4230,7 +4261,8 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   const saveAs = async () => {
     const target = await promptText("Remote target path", document.path);
     if (!target?.trim() || target === document.path) return;
-    const overwrite = window.confirm("If the remote target already exists, allow replacing it atomically? Cancel to create only.");
+    const overwrite = await chooseOverwrite("Choose how an existing remote target should be handled. Replacement is atomic; Create only refuses an existing target.");
+    if (overwrite === null) return;
     setBusy(true);
     setError(null);
     try {
@@ -4678,7 +4710,7 @@ function CredentialVaultModal({ portableVaultStatus, onClose, onSave, onDelete, 
 
   const remove = async () => {
     const backendLabel = backend === "portable" ? "encrypted portable vault" : "platform vault";
-    if (!credentialId.trim() || !window.confirm(`Delete credential “${credentialId.trim()}” from the ${backendLabel}?`)) return;
+    if (!credentialId.trim() || !await confirmAction(`Delete credential “${credentialId.trim()}” from the ${backendLabel}?`)) return;
     setBusy(true);
     try {
       if (backend === "portable") await onPortableDelete(credentialId);

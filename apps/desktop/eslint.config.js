@@ -21,8 +21,8 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-      "no-restricted-globals": ["error", { name: "prompt", message: "Use promptText for desktop-compatible text input." }],
-      "no-restricted-properties": ["error", { object: "window", property: "prompt", message: "Use promptText for desktop-compatible text input." }],
+      "no-restricted-globals": ["error", { name: "prompt", message: "Use promptText for desktop-compatible text input." }, { name: "confirm", message: "Use confirmAction or chooseOverwrite for desktop-compatible approval." }],
+      "no-restricted-properties": ["error", { object: "window", property: "prompt", message: "Use promptText for desktop-compatible text input." }, { object: "window", property: "confirm", message: "Use confirmAction or chooseOverwrite for desktop-compatible approval." }],
     },
   },
 );

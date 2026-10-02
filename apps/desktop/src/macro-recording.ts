@@ -29,20 +29,20 @@ export const MAX_MACRO_ACTIONS = 64;
 const MAX_RECORDED_MACRO_ACTIONS = MAX_MACRO_ACTIONS;
 const MAX_RECORDED_MACRO_TEXT_BYTES = 64 * 1024;
 
-export type MacroTargetBinding = { workspaceId: string; nativeId: string };
+export type MacroTargetBinding = { workspaceId: string; nativeId: string; generation: number };
 
-export function pinMacroTargets(ids: readonly string[], nativeIds: ReadonlyMap<string, string>): MacroTargetBinding[] | null {
+export function pinMacroTargets(ids: readonly string[], nativeIds: ReadonlyMap<string, string>, generations: ReadonlyMap<string, number>): MacroTargetBinding[] | null {
   const bindings: MacroTargetBinding[] = [];
   for (const workspaceId of new Set(ids)) {
     const nativeId = nativeIds.get(workspaceId);
     if (!nativeId) return null;
-    bindings.push({ workspaceId, nativeId });
+    bindings.push({ workspaceId, nativeId, generation: generations.get(workspaceId) ?? 0 });
   }
   return bindings.length ? bindings : null;
 }
 
-export function macroTargetsStillBound(bindings: readonly MacroTargetBinding[], nativeIds: ReadonlyMap<string, string>): boolean {
-  return bindings.length > 0 && bindings.every(({ workspaceId, nativeId }) => nativeIds.get(workspaceId) === nativeId);
+export function macroTargetsStillBound(bindings: readonly MacroTargetBinding[], nativeIds: ReadonlyMap<string, string>, generations: ReadonlyMap<string, number>): boolean {
+  return bindings.length > 0 && bindings.every(({ workspaceId, nativeId, generation }) => nativeIds.get(workspaceId) === nativeId && (generations.get(workspaceId) ?? 0) === generation);
 }
 
 export function appendMacroAction(actions: MacroAction[], action: MacroAction): MacroAction[] {
