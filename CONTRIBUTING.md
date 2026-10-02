@@ -49,7 +49,11 @@ describe the existing isolated tools.
 `cargo xtask check-rust` runs just workspace formatting, helper staging,
 tests, and Clippy. The [Quality workflow](.github/workflows/quality.yml)
 runs it alongside frontend and release-asset checks on Ubuntu, macOS, and
-Windows. Successful test output is retained so optional fixture skip messages
+Windows. The Linux CI job installs zsh and fish; Unix PTY checks
+record each installed shell's version and explicitly report missing variants.
+PowerShell and cmd each perform three consecutive ConPTY round trips; every
+startup must pass, with no retry after a failure.
+Successful test output is retained so optional fixture skip messages
 remain visible in CI logs. The full local command additionally checks
 experimental helpers and fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
 external-server interoperability. The separate release workflow remains

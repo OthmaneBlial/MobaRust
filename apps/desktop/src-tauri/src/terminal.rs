@@ -641,21 +641,28 @@ mod tests {
 
     #[test]
     fn native_pty_supports_resize_input_output_and_exit() {
-        assert_native_pty_round_trip(fixture_command());
+        // ConPTY startup failed intermittently in CI. Every repetition must
+        // pass; this is not a retry that hides a failed startup.
+        let repetitions = if cfg!(target_os = "windows") { 3 } else { 1 };
+        for _ in 0..repetitions {
+            assert_native_pty_round_trip(fixture_command());
+        }
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn cmd_round_trips_input_and_exits_through_conpty() {
-        let mut command = CommandBuilder::new("cmd.exe");
-        command.args([
-            "/D",
-            "/Q",
-            "/V:ON",
-            "/C",
-            "echo MOBARUST_PTY_OK & set /p line= & echo INPUT:!line! & exit /b 0",
-        ]);
-        assert_native_pty_round_trip(command);
+        for _ in 0..3 {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args([
+                "/D",
+                "/Q",
+                "/V:ON",
+                "/C",
+                "echo MOBARUST_PTY_OK & set /p line= & echo INPUT:!line! & exit /b 0",
+            ]);
+            assert_native_pty_round_trip(command);
+        }
     }
 
     fn assert_native_pty_round_trip(command: CommandBuilder) {
