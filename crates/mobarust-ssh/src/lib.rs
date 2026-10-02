@@ -29,8 +29,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// Keep a hostile keyboard-interactive server from multiplying a secret into
-/// an unbounded number of response allocations. This allows ordinary password
-/// plus MFA prompt flows while failing closed on pathological fan-out.
+/// an unbounded number of response allocations. The static-response path repeats
+/// one secret; distinct password/OTP challenges need an interactive responder.
 const MAX_KEYBOARD_INTERACTIVE_PROMPTS: usize = 8;
 const MAX_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
@@ -3647,7 +3647,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_interactive_responses_reject_echo_and_support_bounded_mfa() {
+    fn keyboard_interactive_responses_reject_echo_and_repeat_one_secret() {
         let secret = Secret::new("fixture-response");
         let prompts = vec![
             client::Prompt {

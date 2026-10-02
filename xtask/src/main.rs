@@ -37,9 +37,7 @@ fn main() {
             println!(
                 "cargo xtask check-rust    Run sanitized workspace formatting, tests, and Clippy"
             );
-            println!(
-                "cargo xtask test-ssh    Run isolated SSH unit and local OpenSSH integration tests"
-            );
+            println!("cargo xtask test-ssh    Run isolated SSH tests and Unix OpenSSH fixtures");
             println!("cargo xtask check-fuzz    Compile and format-check isolated fuzz targets");
             println!("cargo xtask check-rdp-helper    Validate the isolated RDP helper locally");
             println!(
@@ -1384,7 +1382,9 @@ fn run_app_version_probe(executable: &Path, root: &Path) -> Result<(Duration, St
 
 fn test_ssh() -> Result<(), String> {
     if !cfg!(unix) {
-        return Err("the local OpenSSH lab requires macOS or Linux; run cargo test -p mobarust-ssh --lib for transport unit tests on Windows".into());
+        eprintln!(
+            "OpenSSH fixtures require macOS or Linux; running portable SSH unit and authentication-wire tests only"
+        );
     }
     run_sanitized_test(
         "cargo",

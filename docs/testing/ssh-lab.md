@@ -1,4 +1,4 @@
-# Local OpenSSH integration lab
+# Local SSH integration lab
 
 Run from the repository root:
 
@@ -6,12 +6,13 @@ Run from the repository root:
 cargo xtask test-ssh
 ```
 
-The command runs SSH transport unit tests and the disposable OpenSSH fixtures
-with an isolated HOME/XDG environment and without an inherited SSH agent or
-askpass. It uses the existing Rust test harness; Docker, system-service changes,
+The command runs SSH transport unit tests, portable authentication-wire tests,
+and the disposable Unix OpenSSH fixtures with an isolated HOME/XDG environment
+and without an inherited SSH agent or askpass. It uses the existing Rust test
+harness; Docker, system-service changes,
 personal SSH files, and remote servers are unnecessary.
 
-## Requirements
+## OpenSSH fixture requirements (Unix)
 
 - macOS or Linux, Rust, `ssh-keygen`, `ssh-agent`, `ssh-add`, and an installed OpenSSH `sshd` at
   `/usr/sbin/sshd` or `/usr/local/sbin/sshd`;
@@ -23,10 +24,50 @@ personal SSH files, and remote servers are unnecessary.
 Tests do not create users, set account passwords, install dependencies, or
 enable Remote Login. A missing prerequisite is a lab setup failure; configure
 a dedicated test runner rather than granting the tests system permissions.
-On Windows, use `cargo test --locked -p mobarust-ssh --lib` for portable unit
-coverage; `test-ssh` reports that the OpenSSH fixture requires a Unix host.
+On Windows, `test-ssh` runs portable unit and authentication-wire tests and
+reports that the OpenSSH fixtures are skipped. The new fixture contains no
+Unix-specific APIs; its execution has so far been verified on macOS ARM64.
 
-## Coverage
+## Portable authentication-wire fixture
+
+```bash
+cargo test --locked -p mobarust-ssh --test authentication
+```
+
+`tests/authentication.rs` starts a single-connection `russh` server on
+`127.0.0.1:0` for each case, using generated memory-only Ed25519 keys and
+zeroizing disposable credentials. The client pins the generated fingerprint.
+There are no OS accounts, PAM changes, agent requests, credential files,
+subprocesses, or new dependencies. Each test uses its own Tokio runtime; it
+awaits server-session termination and rebinds the released listener address.
+The server has no inactivity timeout, so that cannot satisfy the client-socket
+cleanup assertion. Stalled authentication callbacks are explicitly released
+after timeout/cancellation to let the server observe closure.
+
+Five tests cover:
+
+- Password acceptance/rejection, connected lifecycle state, explicit disconnect
+  and session/socket cleanup.
+- Keyboard-interactive acceptance/rejection, zero/one/eight non-echo prompts,
+  and a two-round challenge with the same response in each prompt.
+- Echo-enabled and nine-prompt challenge refusal before any response is sent.
+- Host-key rejection before password or keyboard-interactive callbacks run.
+- Timeout and task cancellation after each authentication method has started,
+  followed by session/socket cleanup.
+
+These are actual SSH handshakes and encrypted authentication packets, with the
+same Rust stack at both ends. They do not establish OpenSSH password/PAM/MFA
+interoperability. The existing static keyboard-interactive credential repeats
+one secret for all non-echo prompts and rounds; distinct password-plus-OTP or
+user-selected responses are not supported by this path.
+
+Verified 2026-10-02 on macOS ARM64 with Rust 1.95.0 and `russh` 0.63.1:
+the focused command passed all five tests. `cargo xtask test-ssh` passed 41
+unit, five authentication-wire and 12 OpenSSH tests; the real Xvfb case reported
+a prerequisite skip, while loopback IPv6 executed.
+The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
+
+## OpenSSH coverage
 
 | Fixture | Assertions |
 | --- | --- |
@@ -70,8 +111,9 @@ loop or its retry budget.
 ## Limits and next interoperability gates
 
 These tests exercise the installed OpenSSH version on the current machine.
-They do not prove Windows SSH-server compatibility, password or PAM/MFA
-authentication, Windows Pageant or other agent implementations, routed IPv6,
+They do not prove Windows SSH-server compatibility, OpenSSH password or PAM/MFA
+authentication (see the separate Rust-wire coverage above), Windows Pageant or
+other agent implementations, routed IPv6,
 RSA support, automatic GUI reconnect/retry-budget behavior, sustained
 terminal/UI performance, or internet-host compatibility.
 RSA remains disabled under the existing advisory policy.
