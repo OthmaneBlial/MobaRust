@@ -43,9 +43,13 @@ Intel VNC helper for the Intel package; use it with the matching Tauri target:
 
 ```bash
 cd apps/desktop
-pnpm tauri build --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
-MOBARUST_PACKAGE_TARGET=x86_64-apple-darwin pnpm tauri build --target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
+CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false pnpm tauri build --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
+CI=true TAURI_BUNDLER_DMG_IGNORE_CI=false MOBARUST_PACKAGE_TARGET=x86_64-apple-darwin pnpm tauri build --target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json -- --locked
 ```
+
+These process-local variables select headless DMG assembly and skip the
+bundler's Finder styling script. They do not enable or run GitHub Actions.
+Run the two builds sequentially because helper staging is shared.
 
 The Intel DMG is under `target/x86_64-apple-darwin/release/bundle/dmg/`.
 Verify its mounted app and helper architectures with `lipo -archs`, its package

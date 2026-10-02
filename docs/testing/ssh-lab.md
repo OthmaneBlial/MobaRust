@@ -481,3 +481,49 @@ explicit saved-profile recovery, accurate error/closed labels, and native Quit
 releasing an active SSH session plus its local PTY. See the [native receipt and
 remaining gates](ssh-reconnect.md). Zero/maximum GUI budgets, flapping shells,
 actual daemon-restart GUI recovery and other platforms remain open.
+
+## v0.1.19 ARM64 release-copy authentication — 2026-10-02
+
+Both Mac installers were built locally from `084a3c1` after the complete
+`cargo xtask check` passed. The ARM64 DMG passed integrity, read-only mounted
+layout, strict ad hoc signature, app/helper architecture and CLI version checks.
+A disposable app copy used a unique identifier, isolated HOME/ZDOTDIR and
+portable data. Its changed launch metadata required an ad hoc test signature;
+additional copies of the final-DMG and test executables were compared after
+removing their signatures and were byte-identical. The original DMG was not
+modified. This is an isolated release-runtime check, not clean installation.
+
+Native UI control observed:
+
+- A saved profile with a deliberately wrong generated pin displayed host-key
+  rejection and the observed fingerprint before any password prompt.
+- The correct-pin profile showed focused masked password and OTP fields.
+  Escape at OTP displayed authentication cancellation and created no SSH tab.
+  Socket inspection showed only the fixture and relay listeners afterwards.
+- A fresh attempt with the generated factors connected successfully. The SSH
+  input was focused automatically, and `V019_RELEASE_LOGIN_OK` was typed and
+  echoed without clicking the terminal beneath the **no OS shell** banner.
+- A controlled drop of the owned relay's sockets requested fresh password/OTP
+  factors. The same selected tab retained its scrollback and focused input;
+  `V019_RELEASE_RECONNECT_OK` was typed and echoed without a focus click.
+- Native application-menu Quit removed the recorded app and local zsh PIDs.
+  SSH connections disappeared while both owned listeners remained live.
+  Generated password/OTP values were absent from the two persisted profile/audit
+  JSON files. There was no saved settings file or credential reference.
+
+The already-checked Rust authentication harness ran its opt-in
+`native_authentication_lab --ignored --exact --nocapture` fixture with a
+sanitized environment. It passed after 300.02 seconds, removed its private
+metadata directory and released its listener. The owned relay exited normally
+after SIGTERM, removed its response metadata and accepted four connections
+(wrong pin, cancelled login, successful login and reconnect). All recorded
+app, shell, server and relay PIDs were absent; both ports rebound successfully.
+Every server/relay endpoint bound only `127.0.0.1`; no system SSH service or
+personal SSH configuration was used. UI launch provides no process exit-code
+receipt for the app.
+
+This closes the release-copy gap for these direct Mac authentication/focus
+flows. Concurrent native requests, release-copy two-bastion/Quick-connect
+acceptance, OpenSSH password/PAM, Windows/Linux, sustained workloads and
+clean-install/signing gates remain open. The earlier debug receipts and
+production-handler DOM ownership tests are separate evidence.
