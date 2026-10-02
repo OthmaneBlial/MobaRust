@@ -114,6 +114,21 @@ answers through its ordinary message loop, with one pending challenge per
 connection. At most 32 native challenge waiters can exist simultaneously.
 Concurrent UI dialogues fail closed rather than replacing an active prompt.
 
+The production per-channel handler in `ssh-authentication.ts` is exercised by
+the shared DOM-boundary test. Two independently owned handlers check that a
+competing challenge sends cancellation only for its own request ID, preserving
+the first connection's password/OTP dialogue and responses. Closing the other
+connection's request or a completed request leaves the active dialogue alone;
+closing its current request clears the field without sending a late response.
+An ordinary editor-path prompt also survives a competing SSH challenge. Fresh
+authentication works after cancellation, with answers bound to the new ID.
+A deliberate wrong-request cancellation mutation failed this regression.
+These are production-handler/DOM-boundary checks, not native simultaneous-window
+acceptance or a whole-process secret zeroization guarantee.
+After isolating the unchanged handler from `App.tsx`, frontend unit tests,
+type checking, lint/build and the rebuilt Mac debug `cargo xtask package-check`
+passed. No dependency or native IPC payload changed.
+
 Two native broker regressions cover bounded/one-shot answers, expired waiter
 cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
 DOM boundary checks cover password masking, plain-text server labels, abort
@@ -382,6 +397,25 @@ PAM/OpenSSH factors and published-installer behavior are not established.
 Frontend unit tests, type checking, lint/build and the full local
 `cargo xtask check` passed with this change. Published v0.1.18 installers remain
 unchanged.
+
+### Native concurrent-challenge follow-up — 2026-10-02
+
+An isolated copy of the `44a1c41` debug bundle opened two independent sessions,
+each with a generated host key/password/OTP and an owned loopback TCP relay.
+Both initial native logins succeeded. After interrupting session A, its relay
+accepted the reconnect, but native window observation returned
+`cgWindowNotFound`; reselecting the confirmed-live app and resetting the UI
+binding did not restore observation. No concurrent prompt outcome is claimed.
+Native simultaneous prompt ownership and stale-answer UI races remain pending.
+
+The owned app was terminated separately, so this attempt is not a native Quit
+receipt. Its recorded app/zsh PIDs and both relay PIDs disappeared. Both Rust
+labs passed at their five-minute deadlines (300.00/300.03 seconds), removed
+their private generated metadata, and released their ports. All four endpoint/
+relay ports rebound; all recorded server PIDs were absent. None of the four
+generated responses appeared in the three persisted profile/settings/audit
+JSON files. The production-handler regression above proceeds independently of
+this missing GUI evidence.
 
 ## OpenSSH coverage
 

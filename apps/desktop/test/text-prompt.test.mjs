@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { log } from "node:console";
 import { chooseOverwrite, confirmAction, promptText } from "../src/text-prompt.ts";
+import { createSshAuthHandler } from "../src/ssh-authentication.ts";
 
 const { Event, EventTarget } = globalThis;
 
@@ -108,3 +109,66 @@ freshDialog.querySelector("form").dispatchEvent(new Event("submit", { cancelable
 assert.equal(await submittedSecret, "distinct-response");
 assert.equal(input(freshDialog).value, "", "submitted authentication clears the DOM secret");
 log("Text prompt lifecycle checks passed");
+
+// Exercise the production per-channel handler with the same DOM boundary.
+const answers = [];
+const errors = [];
+window.__TAURI_INTERNALS__ = { invoke: async (command, payload) => {
+  assert.equal(command, "ssh_authentication_answer");
+  answers.push(globalThis.structuredClone(payload)); // IPC takes its copy before secrets clear.
+} };
+const handlerA = createSshAuthHandler(message => errors.push(message));
+const handlerB = createSshAuthHandler(message => errors.push(message));
+const challenge = (requestId, port, prompts = ["Password: "]) => ({ event: "challenge", requestId, host: "127.0.0.1", port, username: "fixture", name: "Generated fixture", instructions: "", prompts });
+const settle = () => new Promise(resolve => globalThis.setImmediate(resolve));
+const submit = () => latest().querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
+
+handlerA(challenge("a", 10001, ["Password: ", "OTP: "]));
+const ownedPassword = latest();
+input(ownedPassword).value = "a-password";
+handlerB(challenge("b", 10002));
+await settle();
+assert.deepEqual(answers, [{ requestId: "b", responses: null }], "only the competing request is refused");
+assert.equal(latest(), ownedPassword, "do not replace the first connection's dialogue");
+handlerB({ event: "closed", requestId: "b" });
+assert.equal(ownedPassword.open, true, "another channel's close cannot cancel this input");
+submit();
+await settle();
+const ownedOtp = latest();
+assert.match(ownedOtp.querySelector("label").textContent, /10001[\s\S]*OTP:/);
+assert.equal(input(ownedPassword).value, "");
+input(ownedOtp).value = "a-otp";
+submit();
+await settle();
+assert.deepEqual(answers.at(-1), { requestId: "a", responses: ["a-password", "a-otp"] });
+assert.equal(input(ownedOtp).value, "");
+
+handlerA(challenge("c", 10001));
+const fresh = latest();
+handlerA({ event: "closed", requestId: "a" });
+assert.equal(fresh.open, true, "late closure of a completed request leaves the fresh one alone");
+input(fresh).value = "must-not-be-sent";
+handlerA({ event: "closed", requestId: "c" });
+await settle();
+assert.equal(fresh.removed, true);
+assert.equal(input(fresh).value, "");
+assert.equal(answers.length, 2, "a retired request cannot send an answer after abort");
+
+const ordinary = promptText("Keep this editor path", "unchanged.txt");
+const ordinaryDialog = latest();
+handlerB(challenge("d", 10002));
+await settle();
+assert.deepEqual(answers.at(-1), { requestId: "d", responses: null });
+assert.equal(latest(), ordinaryDialog);
+assert.equal(input(ordinaryDialog).value, "unchanged.txt");
+handlerB({ event: "closed", requestId: "d" });
+assert.equal(ordinaryDialog.open, true);
+ordinaryDialog.dispatchEvent(new Event("cancel"));
+assert.equal(await ordinary, null);
+handlerB(challenge("e", 10002));
+input(latest()).value = "b-fresh-response";
+submit();
+await settle();
+assert.deepEqual(answers.at(-1), { requestId: "e", responses: ["b-fresh-response"] });
+assert.deepEqual(errors, []);
+log("SSH authentication channel ownership checks passed");

@@ -26,6 +26,7 @@ import { approveTerminalPaste, prepareTerminalPaste, settleTerminalWrites } from
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { focusConnectedTerminal } from "./terminal-focus";
+import { createSshAuthHandler, type SshAuthEvent } from "./ssh-authentication";
 import { parseTunnelPort } from "./tunnel-port";
 import { chooseOverwrite, confirmAction, promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionCloseStatus, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
@@ -567,10 +568,6 @@ type SshConnectResponse = {
   terminalId: string;
   host: string;
 };
-
-type SshAuthEvent =
-  | { event: "closed"; requestId: string }
-  | { event: "challenge"; requestId: string; host: string; port: number; username: string; name: string; instructions: string; prompts: string[] };
 
 type TelnetConnectRequest = {
   host: string;
@@ -2416,45 +2413,10 @@ function App() {
       return;
     }
     try {
-      const pendingAuthentication = new Map<string, AbortController>();
       const authEvents = new Channel<SshAuthEvent>();
       // Installed before IPC; this channel also owns this session's reconnect
       // prompts. A closed request cannot deliver answers to another attempt.
-      authEvents.onmessage = (event) => {
-        if (event.event === "closed") {
-          pendingAuthentication.get(event.requestId)?.abort();
-          return;
-        }
-        const controller = new AbortController();
-        pendingAuthentication.set(event.requestId, controller);
-        void (async () => {
-          const responses: string[] = [];
-          try {
-            for (const prompt of event.prompts) {
-              const response = await promptText(
-                `SSH login: ${event.username}@${event.host}:${event.port}\nServer challenge: ${event.name}\n${event.instructions}\nServer prompt: ${prompt}`,
-                "", { secret: true, signal: controller.signal },
-              );
-              if (response === null) {
-                if (!controller.signal.aborted) await invoke("ssh_authentication_answer", { requestId: event.requestId, responses: null });
-                return;
-              }
-              responses.push(response);
-            }
-            if (!controller.signal.aborted) await invoke("ssh_authentication_answer", { requestId: event.requestId, responses });
-          } catch {
-            if (!controller.signal.aborted) {
-              setConnectionError("SSH authentication could not continue. Reconnect explicitly to try again.");
-              await invoke("ssh_authentication_answer", { requestId: event.requestId, responses: null }).catch(() => undefined);
-            }
-          } finally {
-            responses.fill("");
-            responses.length = 0;
-            pendingAuthentication.delete(event.requestId);
-            controller.abort();
-          }
-        })();
-      };
+      authEvents.onmessage = createSshAuthHandler(setConnectionError);
       const sshSettings = settingsRef.current.ssh;
       const response = await invoke<SshConnectResponse>("ssh_connect", {
         authEvents,
