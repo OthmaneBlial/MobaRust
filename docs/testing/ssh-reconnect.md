@@ -147,7 +147,8 @@ The complete local `cargo xtask check` passed on macOS ARM64, including all
 104 desktop tests, workspace tests/Clippy, frontend tests/type/lint/build,
 protocol fixtures, unsigned package-layout contracts and fuzz compilation.
 
-This correction follows the v0.1.20 tag and is not in its published DMGs.
+This correction follows the v0.1.20 tag and is included in both verified
+v0.1.21 Mac DMGs. Windows/Linux installers remain v0.1.12.
 Native GUI resize/reconnect acceptance and Windows/Linux runtime evidence remain
 open. Replacing a shell on one authenticated transport is not evidence of a
 complete transport restart or sustained GUI responsiveness.
@@ -196,7 +197,8 @@ The memory-only fixtures use generated credentials, pinned host keys and
 `127.0.0.1` listeners with cleanup assertions. They do not access an OS account,
 personal SSH state, agent, Keychain or X server. Native GUI rejection/timeout
 acceptance and wider server/platform coverage remain open. The correction is on
-main after v0.1.20 and is not in its published DMGs.
+main after v0.1.20 and is included in both verified v0.1.21 Mac DMGs.
+Windows/Linux installers remain v0.1.12.
 
 ## Startup input and output backpressure on main
 
@@ -244,5 +246,6 @@ also passed after that suite.
 The fixture uses generated memory-only credentials and pinned host keys on
 `127.0.0.1`; it does not execute an OS shell or inspect personal state. This is a
 bounded protocol regression, not sustained native rendering or GUI startup
-acceptance. The correction is on main after v0.1.20, and is not in the published
-DMGs. Those native and release gates remain open.
+acceptance. The correction follows v0.1.20 and is included in both verified
+v0.1.21 Mac DMGs. Native acceptance and updated Windows/Linux installers remain
+open; package checks do not establish those gates.

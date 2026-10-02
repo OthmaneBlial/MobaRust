@@ -28,8 +28,9 @@ bounded command, initial Cancel focus, cancellation/closure/page teardown,
 concurrent/unavailable review refusal, explicit approval, and ownership stopped
 before or during review. This is helper/control-flow evidence, not a native GUI
 acceptance receipt. The [disposable native setup lab](ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
-provides generated pinned profiles for the next native check. Updated installers
-and native approval/focus/emergency-stop observations remain pending; published
+provides generated pinned profiles for the next native check. Both verified
+v0.1.21 Mac installers include this change. Native approval/focus/emergency-stop
+observations and updated Windows/Linux installers remain pending; historical
 v0.1.20 downloads do not contain this change.
 
 ### Current-source native preflight — 2026-10-03
