@@ -43,7 +43,13 @@ bundle and verified its native executable, VNC helper layout and checksum
 manifest. Its `--version` process launches were CLI checks, not GUI startup or
 rendering evidence.
 
-These are native manager checks. They do not establish GUI timing on any OS,
+The [two-session Mac debug authentication check](ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02)
+also exercised the matching frontend/native attachment API: both SSH terminals
+displayed the startup fixture banner before their typed markers, including after
+controlled reconnects. That observation does not establish the timing race under
+sustained startup output, or native Telnet/serial acceptance.
+
+The manager regressions do not establish GUI timing on every OS,
 physical serial-device acceptance, or sustained output responsiveness. A native
 follow-up should attach while a controlled server/device continues output and
 verify the complete visible sequence. Published v0.1.19 Mac installers and

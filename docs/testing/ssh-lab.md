@@ -139,9 +139,10 @@ cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
 DOM boundary checks cover password masking, plain-text server labels, abort
 cancellation and clearing the input; these are not native keyboard/focus proof.
 The native receipts below cover saved profiles, Quick connect, controlled
-reconnects and two-bastion prompt routing on Mac debug. Concurrent prompt
-ownership, broader reconnect cases and OpenSSH/PAM interoperability remain
-separate gates. The ask-each-challenge mode is included in the v0.1.19 Mac
+reconnects, two-bastion prompt routing and two-session queued prompt ownership
+on Mac debug. Native queued expiry/overflow, broader reconnect cases and
+OpenSSH/PAM interoperability remain separate gates. The ask-each-challenge mode
+is included in the v0.1.19 Mac
 previews; Windows/Linux remain v0.1.12. The concurrent frontend queue is
 post-v0.1.19 source work and is not in the published installers.
 
@@ -161,9 +162,9 @@ the first session's focused, masked reconnect password field. After entering
 that generated password, the second relay was dropped. Native window
 observation then failed with `cgWindowNotFound`; process/socket checks showed
 the owned app and both reconnect transports still alive. The overlap outcome,
-terminal echo/focus and normal Quit were not observed, so native concurrent
-acceptance remains pending. The observation failure does not establish a
-cause in MobaRust.
+terminal echo/focus and normal Quit were not observed, so this attempt did not
+establish native concurrent acceptance. The observation failure does not
+establish a cause in MobaRust.
 
 Both five-minute Rust fixture tests completed normally. The executable-matched
 app and both relays were stopped with SIGTERM; the recorded app, local shell,
@@ -173,6 +174,56 @@ app attempt also failed native window observation before any fixture listeners
 started; its owned app and shell were stopped and verified absent. This cleanup
 receipt establishes owned-process/listener release, not graceful native Quit
 or a scan proving response absence throughout the app's persisted data.
+
+### Native overlapping reconnects and shutdown — 2026-10-02
+
+The Mac ARM64 debug bundle built from `f513ead` includes both the bounded SSH
+challenge queue and startup replay correction. A fresh isolated app copy kept
+the built main executable byte-for-byte, with its own application ID, disposable
+HOME/ZDOTDIR and portable data. Native accessibility and screenshot observation
+worked before starting the fixtures. Two five-minute Rust authentication labs
+and two disposable relays bound only to `127.0.0.1`, with independently generated
+host keys/passwords/OTPs and pinned, secret-free saved profiles. Fixture metadata
+directories/files were checked as `0700`/`0600`. No personal SSH files, agents,
+accounts, Keychain credentials or system SSH service were used.
+
+Observed in the native app:
+
+- Both profiles completed their distinct masked, focused password/OTP logins.
+- With session B selected, dropping relay A opened A's reconnect password
+  field. After typing A's generated password without submitting it, dropping
+  relay B preserved A's label, masked value and focus. B waited.
+- Submitting A's password opened B's empty, focused password field. The next
+  labelled fields were A's OTP and B's OTP. Supplying each server's own distinct
+  responses recovered both sessions. B's selected-session focus returned to
+  its terminal without a click; its typed marker was echoed. Selecting and
+  focusing A's terminal also produced its own echoed marker.
+- Dropping both transports again, entering disposable text in A's active
+  field and pressing Escape cancelled A while immediately showing B's empty
+  password field. B completed password/OTP authentication and echoed another
+  marker; A remained closed. No remaining A retry prompt appeared before the
+  explicit profile reopen.
+- Reopening A created a new setup password prompt. Holding its masked response
+  while B reconnected again preserved that field. Native menu Quit released
+  the original app and local zsh PIDs; both relay transports disconnected about
+  252 seconds after fixture startup, before the servers' 300-second deadline.
+  No process exit code was captured for the LaunchServices-launched app.
+
+A subsequent bound accessibility observation returned a fresh, local-only
+workspace, and process checks found a new app PID. It was closed through native
+menu Quit again, with PID checks performed
+outside UI afterward. The app's two persisted JSON files (`sessions.json` and
+`audit.json`) contained none of the four generated responses or the cancellation
+test text. This exact-value scan is not a whole-process zeroization guarantee.
+
+Both Rust labs completed normally with exit code 0. Both app/shell cohorts,
+both servers and both relays were verified absent; all four loopback ports
+could be rebound and transient fixture/relay response metadata was removed.
+
+This establishes the stated two-session Mac debug ownership, success,
+cancellation handoff, focus/input and pending-authentication shutdown workflows.
+Native queued expiry/overflow, additional concurrency topologies, the queue in
+release copies, Windows/Linux and OpenSSH password/PAM remain separate gates.
 
 ### Native password/OTP check — 2026-10-02
 
