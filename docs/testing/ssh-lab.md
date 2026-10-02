@@ -465,11 +465,15 @@ node tools/prepare-macos-ui-lab.mjs
 
 The tool prints its owned paths, unique application ID and unchanged executable
 SHA-256. It copies the clean debug bundle into a private directory under
-`target/`, adds empty portable session data and an executable launcher that
-clears inherited environment variables before setting disposable HOME/ZDOTDIR,
-XDG paths and empty SSH agent/askpass values. Open the **printed app bundle**;
-launching its `mobarust` binary directly bypasses that launcher. This lab copy
-has modified bundle metadata and is unsigned; it is not a distributable build.
+`target/`, adds empty portable session data and a **separate launcher bundle**
+that clears inherited environment variables before setting disposable HOME/ZDOTDIR,
+XDG paths and empty SSH agent/askpass values. Open the printed **`launcherApp`**
+first, then select the running native app by its printed **`bundleId`**. The
+launcher replaces itself with the native runtime; its own bundle ID can disappear
+from the running-app inventory. Check the actual native PID/environment before
+interacting with it. Opening `app` or its `mobarust` binary directly bypasses
+the environment launcher. Both generated bundles are unsigned and are not
+distributable builds.
 The tool refuses bundle symlinks and existing portable state, preserves the
 source bundle, and starts neither an app nor a listener. An optional argument
 selects another clean built Mac app bundle.
@@ -486,9 +490,45 @@ The preparation regression executes a harmless child through the generated
 launcher: inherited HOME/agent/test variables are dropped, paths containing
 spaces/apostrophes/shell metacharacters and arguments remain literal, source
 bytes stay unchanged, private modes are checked, and unsafe source copies are
-refused without deleting previous labs. Run it with
+refused without deleting previous labs. A second regression compiles a tiny
+Foundation metadata probe with the installed Apple compiler. It launches no GUI
+and verifies the native main bundle identity through the isolated launcher,
+including a competing embedded Mach-O Info.plist. Run them with
 `node --test tools/prepare-macos-ui-lab.test.mjs`; it also runs in
 `cargo xtask check` and explicitly skips on other platforms.
+
+### Native lab bundle identity correction — 2026-10-03
+
+An isolated copy of the verified v0.1.21 ARM64 runtime retained the published
+executable SHA-256 `60c8a89adb51452890435311164bd79954f15c28b99c5e5ae11bc50545e34128`.
+Its actual process had disposable HOME/ZDOTDIR/XDG paths and an empty agent.
+Native selection failed with `cgWindowNotFound`, while a process sample showed
+AppKit's event loop running. The sample reported identifier `mobarust` and
+version 0 instead of the generated lab ID and version 0.1.21.
+
+The earlier tool named its shell wrapper as the native bundle's main executable
+but then executed the differently named `mobarust` binary. Apple's
+[executable-key documentation](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)
+and [Core Foundation source](https://github.com/apple-oss-distributions/CF/blob/main/CFBundle.c#L686)
+describe that metadata relationship and the embedded-info fallback when names
+differ. A controlled copy kept `mobarust` as the native main executable and
+launched it through a separate environment wrapper bundle. Its sample then
+reported the correct generated identifier and `0.1.21 (0.1.21)`; executable
+bytes and disposable environment stayed unchanged.
+
+The preparation tool now preserves that native executable/metadata relationship
+and exposes `launcherApp` separately. The Foundation regression reproduces the
+old helper's fallback to `fixture.embedded` and passes with the corrected helper.
+This is a lab-tool correction on main after v0.1.21, not a shipped runtime change.
+Both preparation regressions, the complete local `cargo xtask check` and
+`cargo xtask pre-push-check` passed on macOS ARM64 with the corrected helper.
+
+The control still failed native window observation. No approval, profile or
+authentication action was operated and no SSH listener was started. The startup
+marker stayed absent. Owned app/zsh PIDs were confirmed absent after SIGTERM,
+then only the generated control directory was removed. Correct bundle identity,
+environment isolation and signal cleanup do not establish GUI startup review,
+authentication, setup-output behavior or native Quit acceptance.
 
 Before entering credentials or starting fixtures, verify the owned process's
 disposable environment and working native accessibility/screenshot observation.

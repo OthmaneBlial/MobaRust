@@ -51,6 +51,18 @@ observations establish build/isolation/cleanup, not approval cancellation,
 command execution, focus behavior, SSH acceptance or graceful native Quit.
 They do not close the native startup review gate.
 
+### v0.1.21 release-copy identity control — 2026-10-03
+
+The [native lab identity control](ssh-lab.md#native-lab-bundle-identity-correction--2026-10-03)
+used the published ARM64 runtime bytes with generated local/SSH cancellation
+profiles, disposable HOME/XDG paths and no SSH agent. Moving the environment
+launcher into a separate bundle restored the process's correct app identifier
+and version without changing its runtime bytes. Native window observation still
+failed before any dialogue action. No SSH fixture/listener was started, the
+local startup marker stayed absent, and owned app/zsh signal cleanup was verified.
+This fixes a preparation-tool defect; native approval, focus, emergency-stop and
+release-copy shell-setup acceptance remain pending.
+
 ## Earlier native dialogue baseline
 
 These changes follow v0.1.17 and are included in the v0.1.18 Mac preview.

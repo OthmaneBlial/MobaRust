@@ -38,9 +38,13 @@ test('lab launcher isolates actual child environment, quotes paths and preserves
     const plist = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', join(lab.app, 'Contents/Info.plist')], { encoding: 'utf8' });
     assert.equal(plist.status, 0);
     const prepared = JSON.parse(plist.stdout);
-    assert.equal(prepared.CFBundleExecutable, 'MobaRustLabLauncher');
+    assert.equal(prepared.CFBundleExecutable, 'mobarust');
     assert.equal(prepared.CFBundleIdentifier, lab.bundleId);
     assert.equal(prepared.LSEnvironment, undefined);
+    const launcherPlist = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', join(lab.launcherApp, 'Contents/Info.plist')], { encoding: 'utf8' });
+    assert.equal(launcherPlist.status, 0);
+    assert.equal(JSON.parse(launcherPlist.stdout).CFBundleExecutable, 'MobaRustLabLauncher');
+    assert.equal(JSON.parse(launcherPlist.stdout).CFBundleIdentifier, lab.launcherBundleId);
     assert.deepEqual(JSON.parse(readFileSync(join(lab.app, 'Contents/MacOS/portable-data/sessions.json'))), { schema_version: 1, sessions: [] });
     const cli = spawnSync(process.execPath, [fileURLToPath(new URL('./prepare-macos-ui-lab.mjs', import.meta.url)), source], { encoding: 'utf8' });
     assert.equal(cli.status, 0, cli.stderr);
@@ -58,6 +62,29 @@ test('lab launcher isolates actual child environment, quotes paths and preserves
     assert.deepEqual(readdirSync(output), before);
   } finally {
     if (cliRoot) rmSync(cliRoot, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('lab launcher preserves the native main bundle identity', { skip: process.platform !== 'darwin' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'mobarust-main-bundle-test-'));
+  try {
+    const source = join(root, 'metadata fixture.app');
+    const macos = join(source, 'Contents/MacOS');
+    mkdirSync(macos, { recursive: true });
+    const binary = join(macos, 'mobarust');
+    // Foundation metadata only: this probe creates no application or window.
+    const probe = '#import <Foundation/Foundation.h>\n#include <stdio.h>\nint main(void) { @autoreleasepool { NSBundle *b = NSBundle.mainBundle; printf("%s\\n%s\\n", b.bundleIdentifier.UTF8String ?: "", [[b objectForInfoDictionaryKey:@"CFBundleExecutable"] UTF8String] ?: ""); } return 0; }\n';
+    const embedded = join(root, 'embedded.plist');
+    writeFileSync(embedded, '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>fixture.embedded</string><key>CFBundleExecutable</key><string>mobarust</string><key>CFBundleVersion</key><string>0</string></dict></plist>');
+    const compile = spawnSync('/usr/bin/clang', ['-x', 'objective-c', '-framework', 'Foundation', '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', embedded, '-o', binary, '-'], { input: probe, encoding: 'utf8' });
+    assert.equal(compile.status, 0, compile.stderr);
+    writeFileSync(join(source, 'Contents/Info.plist'), JSON.stringify({ CFBundleExecutable: 'mobarust', CFBundleIdentifier: 'fixture.metadata', CFBundlePackageType: 'APPL', CFBundleVersion: '1' }));
+    const lab = prepareMacosUiLab(source, join(root, 'output'));
+    const result = spawnSync(lab.launcher, [], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${lab.bundleId}\nmobarust\n`);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

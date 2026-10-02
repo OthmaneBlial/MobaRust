@@ -48,22 +48,29 @@ export function prepareMacosUiLab(bundle, outputDirectory) {
       XDG_DATA_HOME: join(home, 'data'), XDG_CACHE_HOME: join(home, 'cache'),
       BASH_ENV: '/dev/null', ENV: '/dev/null', SSH_AUTH_SOCK: '', SSH_AGENT_PID: '', SSH_ASKPASS: '',
     };
-    const launcher = join(dirname(binary), 'MobaRustLabLauncher');
-    writeFileSync(launcher, `#!/bin/sh\nexec /usr/bin/env -i ${Object.entries(environment).map(([key, value]) => quote(`${key}=${value}`)).join(' ')} ${quote(binary)} "$@"\n`, { flag: 'wx', mode: 0o700 });
-    chmodSync(launcher, 0o700);
     const info = join(app, 'Contents/Info.plist');
     const plist = JSON.parse(plutil(['-convert', 'json', '-o', '-', info]));
     delete plist.LSEnvironment; // LaunchServices can replace HOME/agent settings here.
-    Object.assign(plist, { CFBundleIdentifier: `com.othmane.mobarust.uilab.lab${suffix}`, CFBundleExecutable: 'MobaRustLabLauncher', CFBundleName: name, CFBundleDisplayName: name });
+    Object.assign(plist, { CFBundleIdentifier: `com.othmane.mobarust.uilab.lab${suffix}`, CFBundleExecutable: 'mobarust', CFBundleName: name, CFBundleDisplayName: name });
     writeFileSync(info, JSON.stringify(plist));
     plutil(['-convert', 'xml1', info]);
+    // Keep the runtime's main executable matched to its own bundle metadata.
+    const launcherApp = join(root, `${name} Launcher.app`);
+    mkdirSync(join(launcherApp, 'Contents/MacOS'), { recursive: true, mode: 0o700 });
+    const launcher = join(launcherApp, 'Contents/MacOS/MobaRustLabLauncher');
+    writeFileSync(launcher, `#!/bin/sh\nexec /usr/bin/env -i ${Object.entries(environment).map(([key, value]) => quote(`${key}=${value}`)).join(' ')} ${quote(binary)} "$@"\n`, { flag: 'wx', mode: 0o700 });
+    chmodSync(launcher, 0o700);
+    const launcherBundleId = `${plist.CFBundleIdentifier}.launcher`;
+    const launcherInfo = join(launcherApp, 'Contents/Info.plist');
+    writeFileSync(launcherInfo, JSON.stringify({ CFBundleIdentifier: launcherBundleId, CFBundleExecutable: 'MobaRustLabLauncher', CFBundleName: `${name} Launcher`, CFBundleDisplayName: `${name} Launcher`, CFBundlePackageType: 'APPL', CFBundleInfoDictionaryVersion: '6.0', CFBundleVersion: plist.CFBundleVersion ?? '1' }));
+    plutil(['-convert', 'xml1', launcherInfo]);
     writeFileSync(join(dirname(binary), 'portable.flag'), '', { flag: 'wx', mode: 0o600 });
     const data = join(dirname(binary), 'portable-data');
     mkdirSync(data, { mode: 0o700 });
     writeFileSync(join(data, 'sessions.json'), JSON.stringify({ schema_version: 1, sessions: [] }), { flag: 'wx', mode: 0o600 });
     const digest = sha256(binary);
     if (digest !== sha256(executable)) throw Error('Lab executable differs from its source.');
-    const receipt = { root, app, binary, launcher, home, sha256: digest, bundleId: plist.CFBundleIdentifier };
+    const receipt = { root, app, binary, launcherApp, launcher, launcherBundleId, home, sha256: digest, bundleId: plist.CFBundleIdentifier };
     writeFileSync(join(root, 'owned.json'), JSON.stringify(receipt, null, 2), { flag: 'wx', mode: 0o600 });
     return receipt;
   } catch (error) {
@@ -77,5 +84,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const receipt = prepareMacosUiLab(resolve(process.argv[2] ?? join(repo, 'target/debug/bundle/macos/MobaRust.app')), join(repo, 'target'));
   console.log(JSON.stringify(receipt, null, 2));
   console.error('Prepared an unsigned, disposable lab copy; no app or fixture was started.');
-  console.error('Launch through the app bundle, verify its process environment and native window, then start loopback fixtures.');
+  console.error('Open launcherApp to start the isolated runtime, then select the running app by bundleId. Verify its process environment and native window before starting loopback fixtures.');
 }
