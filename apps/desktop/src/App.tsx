@@ -1487,6 +1487,7 @@ function App() {
   const [localDropActive, setLocalDropActive] = useState(false);
   const [transfers, setTransfers] = useState<SshTransferEvent[]>([]);
   const [tunnels, setTunnels] = useState<SshTunnelEvent[]>([]);
+  const [tunnelDraft, setTunnelDraft] = useState<{ kind: "local" | "remote" | "dynamic"; terminalId: string } | null>(null);
   const [remoteMonitor, setRemoteMonitor] = useState<RemoteMonitorSnapshot | null>(null);
   const [remoteMonitorStatus, setRemoteMonitorStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [remoteMonitorError, setRemoteMonitorError] = useState<string | null>(null);
@@ -3177,87 +3178,15 @@ function App() {
     }
   }, []);
 
-  const startLocalForward = useCallback(async () => {
-    if (!remoteSessionId) return;
-    const targetHost = window.prompt("Remote target host", "127.0.0.1");
-    if (!targetHost?.trim()) return;
-    const targetPort = parseTunnelPort(window.prompt("Remote target port", "5432"), false);
-    if (targetPort === undefined) return;
-    if (targetPort === null) {
-      setConnectionError("Target port must be an integer between 1 and 65535.");
-      return;
-    }
-    const bindHost = window.prompt("Local bind host", "127.0.0.1");
-    if (!bindHost?.trim()) return;
-    const bindPort = parseTunnelPort(window.prompt("Local bind port (0 chooses a free port)", "0"), true);
-    if (bindPort === undefined) return;
-    if (bindPort === null) {
-      setConnectionError("Local bind port must be an integer between 0 and 65535.");
-      return;
-    }
-    try {
-      await invoke("ssh_start_local_forward", {
-        terminalId: remoteSessionId,
-        request: { bindHost: bindHost.trim(), bindPort, targetHost: targetHost.trim(), targetPort },
-      });
-      setConnectionError(null);
-      setActiveView("tunnels");
-    } catch (error) {
-      setConnectionError(String(error));
-    }
-  }, [remoteSessionId]);
-
-  const startRemoteForward = useCallback(async () => {
-    if (!remoteSessionId) return;
-    const bindHost = window.prompt("Remote bind host (on the SSH server)", "127.0.0.1");
-    if (!bindHost?.trim()) return;
-    const bindPort = parseTunnelPort(window.prompt("Remote bind port (0 chooses a free port)", "0"), true);
-    if (bindPort === undefined) return;
-    if (bindPort === null) {
-      setConnectionError("Remote bind port must be an integer between 0 and 65535.");
-      return;
-    }
-    const targetHost = window.prompt("Local target host (from this computer)", "127.0.0.1");
-    if (!targetHost?.trim()) return;
-    const targetPort = parseTunnelPort(window.prompt("Local target port", "3000"), false);
-    if (targetPort === undefined) return;
-    if (targetPort === null) {
-      setConnectionError("Local target port must be an integer between 1 and 65535.");
-      return;
-    }
-    try {
-      await invoke("ssh_start_remote_forward", {
-        terminalId: remoteSessionId,
-        request: { bindHost: bindHost.trim(), bindPort, targetHost: targetHost.trim(), targetPort },
-      });
-      setConnectionError(null);
-      setActiveView("tunnels");
-    } catch (error) {
-      setConnectionError(String(error));
-    }
-  }, [remoteSessionId]);
-
-  const startDynamicForward = useCallback(async () => {
-    if (!remoteSessionId) return;
-    const bindHost = window.prompt("SOCKS5 bind host", "127.0.0.1");
-    if (!bindHost?.trim()) return;
-    const bindPort = parseTunnelPort(window.prompt("SOCKS5 local bind port (0 chooses a free port)", "0"), true);
-    if (bindPort === undefined) return;
-    if (bindPort === null) {
-      setConnectionError("SOCKS bind port must be an integer between 0 and 65535.");
-      return;
-    }
-    try {
-      await invoke("ssh_start_dynamic_forward", {
-        terminalId: remoteSessionId,
-        request: { bindHost: bindHost.trim(), bindPort },
-      });
-      setConnectionError(null);
-      setActiveView("tunnels");
-    } catch (error) {
-      setConnectionError(String(error));
-    }
-  }, [remoteSessionId]);
+  const startTunnel = async (request: { bindHost: string; bindPort: number; targetHost?: string; targetPort?: number }) => {
+    if (!tunnelDraft) return;
+    // Keep the dialog attached to the connection chosen when it opened.
+    if (remoteSessionIdRef.current !== tunnelDraft.terminalId) throw new Error("The SSH session changed. Close this dialog and select the intended session.");
+    await invoke(`ssh_start_${tunnelDraft.kind}_forward`, { terminalId: tunnelDraft.terminalId, request });
+    setTunnelDraft(null);
+    setConnectionError(null);
+    setActiveView("tunnels");
+  };
 
   const cancelTunnel = useCallback(async (tunnelId: string) => {
     try {
@@ -4022,7 +3951,7 @@ function App() {
               {activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteListingSessionId === remoteSessionId && sftpStatus === "ready" ? remoteEntries : []} path={remoteListingSessionId === remoteSessionId ? remotePath : "."} status={remoteListingSessionId === remoteSessionId ? sftpStatus : "loading"} error={connectionError} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
               ) : activeView === "tunnels" && remoteSessionId && remoteProtocol === "ssh" ? (
-                <TunnelView tunnels={tunnels} onNewTunnel={startLocalForward} onNewDynamicForward={startDynamicForward} onNewRemoteForward={startRemoteForward} onCancelTunnel={cancelTunnel} />
+                <TunnelView tunnels={tunnels} onNewTunnel={() => setTunnelDraft({ kind: "local", terminalId: remoteSessionId })} onNewDynamicForward={() => setTunnelDraft({ kind: "dynamic", terminalId: remoteSessionId })} onNewRemoteForward={() => setTunnelDraft({ kind: "remote", terminalId: remoteSessionId })} onCancelTunnel={cancelTunnel} />
               ) : activeView === "monitor" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteMonitorView snapshot={remoteMonitor} status={remoteMonitorStatus} error={remoteMonitorError} live={remoteMonitorLive} intervalSeconds={remoteMonitorIntervalSeconds} onLiveChange={setRemoteMonitorLive} onIntervalChange={setRemoteMonitorIntervalSeconds} onRefresh={() => void collectRemoteMonitor()} />
               ) : activeView === "transfers" ? (
@@ -4036,7 +3965,7 @@ function App() {
               )}
 
               <div className="lower-grid">
-                <InfoCard icon={ShieldCheck} label="Security boundary" title="Credentials never cross into React" detail="Session records carry references. Secret material stays in the native layer." action="Read threat model" onAction={() => setHelpOpen(true)} />
+                <InfoCard icon={ShieldCheck} label="Security boundary" title="Saved secrets stay native" detail="Saved sessions use credential references. The native vault stores saved passwords and passphrases." action="Read threat model" onAction={() => setHelpOpen(true)} />
                 <InfoCard icon={ArrowUpFromLine} label="Transport" title="Backpressure is explicit" detail="PTY output is bounded before it reaches the renderer, keeping noisy jobs responsive." action="View architecture" onAction={() => setHelpOpen(true)} />
               </div>
             </div>
@@ -4049,7 +3978,7 @@ function App() {
                 <span className="machine-live">LIVE</span>
               </div>
               <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Surface" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "remote desktop" : remoteHost ? "remote shell" : "zsh"} /><Metric label="Renderer" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA framebuffer" : "xterm-256color"} /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
-              <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">The local terminal is the first real vertical slice. SSH and SFTP slots are visible so the workspace can grow without hiding unfinished protocol claims.</p></div>
+              <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">Use tabs and split panes to keep work in view. Files and SSH tunnels follow the active SSH session.</p></div>
               <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteProtocol === "telnet" ? "Telnet transport active" : remoteProtocol === "serial" ? "Serial transport active" : remoteProtocol === "rdp" ? "RDP helper active" : remoteProtocol === "vnc" ? "VNC helper active" : remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteProtocol === "telnet" ? "This legacy terminal is unencrypted; use SSH for protected administration." : remoteProtocol === "serial" ? "Serial traffic depends on the connected hardware; MobaRust does not add encryption." : remoteProtocol === "rdp" ? "The remote desktop is isolated behind the native helper boundary; certificate and gateway options remain explicit." : remoteProtocol === "vnc" ? "The VNC framebuffer and input stay in the native helper boundary; legacy VNC transport is not SSH-level encryption." : remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
             </aside>
           </div>
@@ -4061,6 +3990,7 @@ function App() {
       {paletteOpen && <CommandPalette keyboard={settings.keyboard} onClose={() => setPaletteOpen(false)} onNewTerminal={() => startNewTerminal()} onNewShell={startExplicitShell} onNewWslTerminal={openWslTerminalPicker} onQuickConnect={() => { setQuickConnectOpen(true); setPaletteOpen(false); }} onOpenFiles={openSftpView} onOpenSettings={() => { setSettingsOpen(true); setPaletteOpen(false); }} onOpenCredentials={() => { setCredentialsOpen(true); setPaletteOpen(false); }} onOpenSnippets={() => { setSnippetsOpen(true); setPaletteOpen(false); }} onOpenMacros={() => { setMacrosOpen(true); setPaletteOpen(false); }} onOpenAudit={() => { setActiveView("audit"); setPaletteOpen(false); }} onToggleSidebar={() => { setSidebarOpen((open) => !open); setPaletteOpen(false); }} onFocusPane={focusPane} />}
       {helpOpen && <HelpModal keyboard={settings.keyboard} onClose={() => setHelpOpen(false)} />}
       {quickConnectOpen && <QuickConnectDialog error={connectionError} onClose={() => { setQuickConnectOpen(false); setConnectionError(null); }} onConnectSsh={connectSsh} onConnectTelnet={connectTelnet} onConnectSerial={connectSerial} onConnectRemoteDesktop={connectRemoteDesktop} />}
+      {tunnelDraft && <TunnelDialog kind={tunnelDraft.kind} onClose={() => setTunnelDraft(null)} onStart={startTunnel} />}
       {wslTerminalOpen && <WslTerminalDialog onClose={() => setWslTerminalOpen(false)} onSelect={startWslTerminal} />}
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
@@ -4365,6 +4295,43 @@ function TransferPanel({ transfers, onCancelTransfer, onRetryTransfer }: { trans
     const retryable = transfer.state === "failed" || transfer.state === "cancelled";
     return <div className="transfer-row" key={transfer.transferId}><div className="transfer-row-icon">{transfer.state === "completed" ? <CheckCircle2 size={15} /> : transfer.state === "failed" ? <CircleX size={15} /> : <LoaderCircle className={active ? "spin" : ""} size={15} />}</div><div className="transfer-row-copy"><strong>{transfer.direction === "download" ? "↓" : "↑"} {transfer.destination.split(/[\\/]/).pop() || transfer.destination}</strong><small>{transfer.protocol.toUpperCase()} · {transfer.state} · {formatBytes(transfer.bytesTransferred)}{transfer.totalBytes ? ` / ${formatBytes(transfer.totalBytes)}` : ""}{percent === null ? "" : ` · ${percent}%`}{transfer.bytesPerSecond ? ` · ${formatBytesPerSecond(transfer.bytesPerSecond)}` : ""}{active && transfer.etaSeconds != null ? ` · ETA ${formatTransferEta(transfer.etaSeconds)}` : ""}</small><small className="transfer-paths" title={`${transfer.source} → ${transfer.destination}`}>{transfer.source} → {transfer.destination}</small>{transfer.error && <small className="transfer-error">{transfer.error}</small>}<div className="transfer-progress"><span style={{ width: `${percent ?? (active ? 8 : 100)}%` }} /></div></div>{active ? <button className="transfer-cancel" onClick={() => onCancelTransfer(transfer.transferId)} aria-label="Cancel transfer" title="Cancel transfer"><CircleX size={14} /></button> : retryable ? <button className="transfer-cancel" onClick={() => onRetryTransfer(transfer)} aria-label="Retry transfer" title="Retry transfer"><RefreshCw size={14} /></button> : null}</div>;
   })}</section>;
+}
+
+function TunnelDialog({ kind, onClose, onStart }: { kind: "local" | "remote" | "dynamic"; onClose: () => void; onStart: (request: { bindHost: string; bindPort: number; targetHost?: string; targetPort?: number }) => Promise<void> }) {
+  const [bindHost, setBindHost] = useState("127.0.0.1");
+  const [bindPort, setBindPort] = useState("0");
+  const [targetHost, setTargetHost] = useState("127.0.0.1");
+  const [targetPort, setTargetPort] = useState(kind === "remote" ? "3000" : "5432");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const title = kind === "dynamic" ? "New SOCKS5 proxy" : `New ${kind} forward`;
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const listener = parseTunnelPort(bindPort, true);
+    const target = kind === "dynamic" ? undefined : parseTunnelPort(targetPort, false);
+    if (!bindHost.trim() || listener == null || (kind !== "dynamic" && (!targetHost.trim() || target == null))) {
+      setError("Enter a bind host and port 0–65535. A target requires a host and port 1–65535.");
+      return;
+    }
+    setBusy(true); setError(null);
+    try { await onStart({ bindHost: bindHost.trim(), bindPort: listener, ...(kind === "dynamic" ? {} : { targetHost: targetHost.trim(), targetPort: target! }) }); }
+    catch (failure) { setError(String(failure)); }
+    finally { setBusy(false); }
+  };
+  return <div className="palette-backdrop" role="presentation" onMouseDown={() => { if (!busy) onClose(); }}>
+    <form className="quick-connect" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void submit(event)} onKeyDown={(event) => { if (event.key === "Escape" && !busy) onClose(); }}>
+      <div className="session-editor-heading"><div><span className="eyebrow">SSH / PORT FORWARDING</span><h2>{title}</h2><p>{kind === "remote" ? "Listen on the SSH server and reach a service from this computer." : kind === "dynamic" ? "Create a local SOCKS5 listener through this SSH session." : "Listen on this computer and reach a service from the SSH server."}</p></div><button type="button" className="icon-button" aria-label="Close tunnel dialog" disabled={busy} onClick={onClose}><X size={17} /></button></div>
+      <div className="quick-connect-grid">
+        <label>{kind === "remote" ? "Remote" : "Local"} bind host<input autoFocus required value={bindHost} onChange={(event) => setBindHost(event.target.value)} /></label>
+        <label>Bind port (0 = automatic)<input required inputMode="numeric" value={bindPort} onChange={(event) => setBindPort(event.target.value)} /></label>
+        {kind !== "dynamic" && <><label>{kind === "remote" ? "Local" : "Remote"} target host<input required value={targetHost} onChange={(event) => setTargetHost(event.target.value)} /></label><label>Target port<input required inputMode="numeric" value={targetPort} onChange={(event) => setTargetPort(event.target.value)} /></label></>}
+      </div>
+      <p className="quick-connect-hint">Loopback is the default. Choose a broader bind address only when you intend to expose the listener.</p>
+      {error && <p role="alert" className="connection-error">{error}</p>}
+      <div className="session-editor-footer"><span>Bound to the selected SSH connection</span><div><button type="button" className="outline-button" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={busy}>{busy ? "Starting…" : "Start tunnel"}</button></div></div>
+    </form>
+  </div>;
 }
 
 function TunnelView({ tunnels, onNewTunnel, onNewDynamicForward, onNewRemoteForward, onCancelTunnel }: { tunnels: SshTunnelEvent[]; onNewTunnel: () => void; onNewDynamicForward: () => void; onNewRemoteForward: () => void; onCancelTunnel: (tunnelId: string) => void }) {
