@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use mobarust_core::ConnectionState;
 use mobarust_ssh::{
-    HostKeyPolicy, Secret, SshConnectOptions, SshConnection, SshCredentials, SshError,
+    HostKeyPolicy, Secret, SshConnectOptions, SshConnection, SshCredentials, SshError, SshOutput,
 };
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::keys::{HashAlg, PrivateKey};
 use russh::server::{self, Auth, Response};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -36,6 +36,8 @@ enum Method {
 
 #[derive(Default)]
 struct Observations {
+    accepted: AtomicUsize,
+    forwarded: AtomicUsize,
     password_requests: AtomicUsize,
     challenges: AtomicUsize,
     responses: AtomicUsize,
@@ -50,6 +52,8 @@ struct Handler {
     observations: Arc<Observations>,
     release: Option<oneshot::Receiver<()>>,
     native_echo: bool,
+    forward_to: Option<SocketAddr>,
+    forwarded: JoinSet<()>,
 }
 
 impl Handler {
@@ -88,6 +92,40 @@ impl Handler {
 
 impl server::Handler for Handler {
     type Error = russh::Error;
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: russh::Channel<server::Msg>,
+        host: &str,
+        port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        while self.forwarded.try_join_next().is_some() {}
+        if self.forwarded.len() >= 8 {
+            return Ok(());
+        }
+        let Some(target) = self.forward_to else {
+            return Ok(());
+        };
+        // Never resolve or connect to caller-selected destinations in this lab.
+        if host != "127.0.0.1" || !target.ip().is_loopback() || port != u32::from(target.port()) {
+            return Ok(());
+        }
+        let Ok(Ok(mut upstream)) = tokio::time::timeout(DEADLINE, TcpStream::connect(target)).await
+        else {
+            return Ok(());
+        };
+        reply.accept().await;
+        self.observations.forwarded.fetch_add(1, Ordering::SeqCst);
+        self.forwarded.spawn(async move {
+            let mut stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
+        });
+        Ok(())
+    }
 
     async fn channel_open_session(
         &mut self,
@@ -217,6 +255,15 @@ struct Fixture {
 
 impl Fixture {
     async fn start(method: Method, stall: bool) -> Self {
+        Self::start_configured(method, stall, None, false).await
+    }
+
+    async fn start_configured(
+        method: Method,
+        stall: bool,
+        forward_to: Option<SocketAddr>,
+        native_echo: bool,
+    ) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind loopback fixture");
@@ -250,13 +297,17 @@ impl Fixture {
             otp: otp.clone(),
             observations: observations.clone(),
             release: stall.then_some(receiver),
-            native_echo: false,
+            native_echo,
+            forward_to,
+            forwarded: JoinSet::new(),
         };
+        let accepted = observations.clone();
         let worker = tokio::spawn(async move {
             let (stream, peer) = tokio::time::timeout(DEADLINE, listener.accept())
                 .await
                 .expect("fixture accept deadline")?;
             assert!(peer.ip().is_loopback());
+            accepted.accepted.fetch_add(1, Ordering::SeqCst);
             drop(listener);
             let session =
                 tokio::time::timeout(DEADLINE, server::run_stream(config, stream, handler))
@@ -327,6 +378,13 @@ impl Fixture {
             .expect("fixture listener must be released");
         drop(listener);
     }
+
+    async fn finish_unconnected(mut self) {
+        assert_eq!(self.observations.accepted.load(Ordering::SeqCst), 0);
+        self.worker.abort();
+        assert!((&mut self.worker).await.unwrap_err().is_cancelled());
+        drop(TcpListener::bind(self.address).await.unwrap());
+    }
 }
 
 /// Explicit manual GUI lab: only loopback, generated credentials and a bounded
@@ -335,16 +393,57 @@ impl Fixture {
 #[tokio::test]
 #[ignore = "manual native desktop acceptance fixture; five-minute deadline"]
 async fn native_authentication_lab() {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    native_lab(false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "manual native two-bastion challenge acceptance; five-minute deadline"]
+async fn native_jump_authentication_lab() {
+    native_lab(true).await;
+}
+
+#[cfg(unix)]
+async fn native_lab(jumps: bool) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap()
-        .join("target/authentication-native-lab");
+        .join(if jumps {
+            "target/jump-authentication-native-lab"
+        } else {
+            "target/authentication-native-lab"
+        });
     std::fs::create_dir_all(&root).unwrap();
     let directory = tempfile::tempdir_in(&root).unwrap();
+    let mut endpoints = JoinSet::new();
+    let target = native_endpoint(
+        directory.path(),
+        if jumps { "target" } else { "fixture" },
+        None,
+        &mut endpoints,
+    )
+    .await;
+    if jumps {
+        let second =
+            native_endpoint(directory.path(), "bastion2", Some(target), &mut endpoints).await;
+        native_endpoint(directory.path(), "bastion1", Some(second), &mut endpoints).await;
+    }
+    while let Some(result) = endpoints.join_next().await {
+        result.unwrap();
+    }
+}
+
+#[cfg(unix)]
+async fn native_endpoint(
+    directory: &std::path::Path,
+    name: &str,
+    forward_to: Option<SocketAddr>,
+    endpoints: &mut JoinSet<()>,
+) -> SocketAddr {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let mut seed = Zeroizing::new([0; 32]);
     seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
     seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
@@ -354,24 +453,25 @@ async fn native_authentication_lab() {
     let otp = Zeroizing::new(Uuid::new_v4().to_string());
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let address = listener.local_addr().unwrap();
-    let metadata = format!(
+    let metadata = Zeroizing::new(format!(
         "{{\"host\":\"127.0.0.1\",\"port\":{},\"fingerprint\":\"{}\",\"password\":\"{}\",\"otp\":\"{}\"}}",
         address.port(),
         fingerprint,
         password.as_str(),
         otp.as_str()
-    );
+    ));
+    let metadata_path = directory.join(format!("{name}.json"));
     std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o600)
-        .open(directory.path().join("fixture.json"))
+        .open(&metadata_path)
         .unwrap()
         .write_all(metadata.as_bytes())
         .unwrap();
     eprintln!(
         "Native authentication lab metadata: {}",
-        directory.path().join("fixture.json").display()
+        metadata_path.display()
     );
     let config = Arc::new(server::Config {
         keys: vec![key],
@@ -380,25 +480,213 @@ async fn native_authentication_lab() {
         nodelay: true,
         ..Default::default()
     });
-    let mut sessions = tokio::task::JoinSet::new();
-    let lifetime = tokio::time::sleep(Duration::from_secs(300));
-    tokio::pin!(lifetime);
-    loop {
-        tokio::select! {
-            _ = &mut lifetime => break,
-            completed = sessions.join_next(), if !sessions.is_empty() => { let _ = completed.unwrap().unwrap(); },
-            peer = listener.accept() => {
-                let (stream, peer) = peer.unwrap();
-                assert!(peer.ip().is_loopback());
-                if sessions.len() >= 8 { drop(stream); continue; }
-                let handler = Handler { method: Method::Distinct { together: false }, expected: password.clone(), otp: otp.clone(), observations: Arc::new(Observations::default()), release: None, native_echo: true };
-                let config = config.clone();
-                sessions.spawn(async move { server::run_stream(config, stream, handler).await?.await });
+    endpoints.spawn(async move {
+        let mut sessions = JoinSet::new();
+        let lifetime = tokio::time::sleep(Duration::from_secs(300));
+        tokio::pin!(lifetime);
+        loop {
+            tokio::select! {
+                _ = &mut lifetime => break,
+                completed = sessions.join_next(), if !sessions.is_empty() => {
+                    let _ = completed.unwrap().unwrap();
+                },
+                peer = listener.accept() => {
+                    let (stream, peer) = peer.unwrap();
+                    assert!(peer.ip().is_loopback());
+                    if sessions.len() >= 8 { drop(stream); continue; }
+                    let handler = Handler {
+                        method: Method::Distinct { together: false },
+                        expected: password.clone(), otp: otp.clone(),
+                        observations: Arc::new(Observations::default()), release: None,
+                        native_echo: forward_to.is_none(), forward_to,
+                        forwarded: JoinSet::new(),
+                    };
+                    let config = config.clone();
+                    sessions.spawn(async move { server::run_stream(config, stream, handler).await?.await });
+                }
+            }
+        }
+        sessions.abort_all();
+        while sessions.join_next().await.is_some() {}
+    });
+    address
+}
+
+#[tokio::test]
+async fn distinct_challenges_are_owned_by_each_hop_and_fail_closed() {
+    let method = Method::Distinct { together: false };
+    for (failure, hop) in [
+        ("none", 3),
+        ("trust", 0),
+        ("trust", 1),
+        ("trust", 2),
+        ("otp", 0),
+        ("otp", 1),
+        ("otp", 2),
+        ("cancel", 0),
+        ("cancel", 1),
+        ("cancel", 2),
+        ("drop", 0),
+        ("drop", 1),
+        ("drop", 2),
+        ("forward-host", 2),
+        ("forward-port", 2),
+    ] {
+        let target = Fixture::start_configured(method, false, None, true).await;
+        let second = Fixture::start_configured(method, false, Some(target.address), false).await;
+        let first = Fixture::start_configured(method, false, Some(second.address), false).await;
+        let fixtures = [first, second, target];
+        let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entered = Arc::new(Notify::new());
+        let mut options = Vec::new();
+        for (index, fixture) in fixtures.iter().enumerate() {
+            let mut option = fixture.options(method, true);
+            if failure == "trust" && index == hop {
+                option.host_key_policy = HostKeyPolicy::RejectUnknown;
+            }
+            let password = fixture.secret.clone();
+            let otp = if failure == "otp" && index == hop {
+                Zeroizing::new(Uuid::new_v4().to_string())
+            } else {
+                fixture.otp.clone()
+            };
+            let trace = trace.clone();
+            let entered = entered.clone();
+            option.credentials =
+                SshCredentials::keyboard_interactive_prompt("fixture", move |challenge| {
+                    assert_eq!(challenge.prompts.len(), 1);
+                    let prompt = challenge.prompts[0].as_str();
+                    assert!(matches!(prompt, "Password: " | "OTP: "));
+                    trace.lock().unwrap().push((index, prompt.to_owned()));
+                    if failure == "drop" && index == hop {
+                        entered.notify_one();
+                    }
+                    let response = if prompt == "OTP: " {
+                        otp.clone()
+                    } else {
+                        password.clone()
+                    };
+                    async move {
+                        if failure == "drop" && index == hop {
+                            std::future::pending().await
+                        } else if failure == "cancel" && index == hop {
+                            Err(SshError::AuthenticationCancelled)
+                        } else {
+                            Ok(vec![Secret::from_zeroizing(response)])
+                        }
+                    }
+                });
+            options.push(option);
+        }
+        let mut target = options.pop().unwrap();
+        if failure == "forward-host" {
+            target.host = "192.0.2.1".into(); // Refused before any outbound TCP or DNS.
+        } else if failure == "forward-port" {
+            target.port = if target.port == u16::MAX {
+                1
+            } else {
+                target.port + 1
+            };
+        }
+        let connect = SshConnection::connect_with_jump_chain(target, options);
+        let result = if failure == "drop" {
+            let attempt = tokio::spawn(connect);
+            tokio::time::timeout(DEADLINE, entered.notified())
+                .await
+                .expect("enter selected hop's responder");
+            attempt.abort();
+            assert!(
+                attempt
+                    .await
+                    .err()
+                    .expect("cancel pending hop authentication")
+                    .is_cancelled()
+            );
+            None
+        } else {
+            Some(
+                tokio::time::timeout(DEADLINE, connect)
+                    .await
+                    .expect("bounded two-bastion authentication"),
+            )
+        };
+        match (failure, result) {
+            ("drop", None) => {}
+            ("none", Some(result)) => {
+                let connection = result.expect("accept distinct responses at all three endpoints");
+                assert_eq!(connection.state(), ConnectionState::Connected);
+                tokio::time::timeout(DEADLINE, async {
+                    let mut shell = connection.open_shell(100, 30).await.unwrap();
+                    let marker = "jump authentication: été 🦀\r\n".as_bytes();
+                    shell.write(marker).await.unwrap();
+                    let expected = [
+                        b"Disposable SSH authentication echo fixture (no OS shell).\r\n".as_slice(),
+                        marker,
+                    ]
+                    .concat();
+                    let mut output = Vec::new();
+                    while output.len() < expected.len() {
+                        if let SshOutput::Stdout(data) = shell.next_output().await.unwrap().unwrap()
+                        {
+                            output.extend(data);
+                        }
+                    }
+                    assert_eq!(output, expected);
+                })
+                .await
+                .expect("echo channel round trip through both bastions");
+                connection.disconnect().await.unwrap();
+                drop(connection);
+            }
+            ("trust", Some(result)) => {
+                assert!(matches!(result, Err(SshError::HostKeyRejected { .. })))
+            }
+            ("otp", Some(result)) => {
+                assert!(matches!(result, Err(SshError::AuthenticationRejected)))
+            }
+            ("cancel", Some(result)) => {
+                assert!(matches!(result, Err(SshError::AuthenticationCancelled)))
+            }
+            (_, Some(result)) => assert!(matches!(result, Err(SshError::Channel(_)))),
+            _ => panic!("missing authentication result"),
+        }
+        let mut expected = Vec::new();
+        for (index, fixture) in fixtures.iter().enumerate() {
+            if index < hop || failure == "otp" && index == hop {
+                expected.extend([(index, "Password: ".into()), (index, "OTP: ".into())]);
+            } else if matches!(failure, "cancel" | "drop") && index == hop {
+                expected.push((index, "Password: ".into()));
+            }
+            let observation = &fixture.observations;
+            assert_eq!(
+                observation.authenticated.load(Ordering::SeqCst),
+                usize::from(index < hop)
+            );
+            assert_eq!(
+                observation.challenges.load(Ordering::SeqCst),
+                expected.iter().filter(|(owner, _)| *owner == index).count()
+            );
+            assert_eq!(
+                observation.responses.load(Ordering::SeqCst),
+                expected.iter().filter(|(owner, _)| *owner == index).count()
+                    - usize::from(matches!(failure, "cancel" | "drop") && index == hop)
+            );
+            assert_eq!(
+                observation.forwarded.load(Ordering::SeqCst),
+                usize::from(
+                    index < 2 && index < hop && !(failure.starts_with("forward-") && index == 1)
+                )
+            );
+        }
+        assert_eq!(*trace.lock().unwrap(), expected, "{failure} at hop {hop}");
+        for fixture in fixtures {
+            if fixture.observations.accepted.load(Ordering::SeqCst) == 0 {
+                fixture.finish_unconnected().await;
+            } else {
+                fixture.finish().await;
             }
         }
     }
-    sessions.abort_all();
-    while sessions.join_next().await.is_some() {}
 }
 
 #[tokio::test]

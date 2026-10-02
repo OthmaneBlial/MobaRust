@@ -44,7 +44,7 @@ The server has no inactivity timeout, so that cannot satisfy the client-socket
 cleanup assertion. Stalled authentication callbacks are explicitly released
 after timeout/cancellation to let the server observe closure.
 
-Seven tests cover:
+Eight tests cover:
 
 - Password acceptance/rejection, connected lifecycle state, explicit disconnect
   and session/socket cleanup.
@@ -58,6 +58,14 @@ Seven tests cover:
   separate rounds; wrong-OTP rejection and static-response rejection.
 - Interactive responder cancellation/drop/server disconnect, trust-before-callback, response
   count/size rejection and a 17-round server refused after 16 responses.
+- Two distinct bastions and a target, each with its own generated password/OTP
+  and host key. Fifteen chain cases check ordered prompt ownership, success,
+  wrong OTP, host-key rejection before a prompt, cancellation and dropping an
+  unanswered responder at each endpoint. Success includes a byte-matched UTF-8
+  echo-channel round trip through both bastions, explicitly labelled
+  **no OS shell**. Unconfigured forwarding host/port requests are refused before
+  TCP/DNS; all reached sessions close and all fixture ports are rebound after
+  the attempt.
 
 These are actual SSH handshakes and encrypted authentication packets, with the
 same Rust stack at both ends. They do not establish OpenSSH password/PAM/MFA
@@ -67,8 +75,8 @@ user-selected responses are not supported by this path.
 
 Verified 2026-10-02 on macOS ARM64 with Rust 1.95.0 and the
 [repository-local `russh` 0.63.3 patch](../../vendor/russh/MOBARUST_PATCH.md):
-the workspace suite passed all seven automated tests; the opt-in native fixture
-is ignored by default. The earlier static-response receipt
+the local SSH suite passes eight automated wire tests; both opt-in native
+fixtures are ignored by default. The earlier static-response receipt
 had 41 unit, five wire and 12 OpenSSH tests, with loopback IPv6 executed and the
 real Xvfb case skipped for missing prerequisites.
 The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
@@ -245,6 +253,40 @@ echo channel labelled **no OS shell**, with no SFTP or command execution. Use a
 disposable app HOME/data directory, and remove only its generated fixture
 metadata after stopping the owned test process. Never use the operator's SSH
 files, account password, agent or system SSH service.
+
+For a two-bastion native challenge check:
+
+```bash
+cargo test --locked -p mobarust-ssh --test authentication native_jump_authentication_lab -- --ignored --nocapture
+```
+
+This opt-in lab starts three independently keyed endpoints, listening only on
+`127.0.0.1:0`. The printed private metadata paths are `bastion1.json`,
+`bastion2.json` and `target.json`, under a disposable directory in
+`target/jump-authentication-native-lab`. Each endpoint has distinct generated
+password/OTP values. Configure a disposable saved target profile with two
+`jump_host_profiles` in that order; use `keyboardInteractivePrompt` and the
+matching generated pin at every endpoint. No credential reference is needed.
+
+Each bastion permits `direct-tcpip` only to the next generated loopback
+endpoint, with at most eight active forwarding workers per session. It never
+resolves a requested hostname or forwards to an arbitrary port. Completed
+workers are reaped; dropping their server session aborts remaining workers.
+There are at most eight SSH sessions per endpoint, a 180-second inactivity
+timeout and a five-minute lab lifetime. Bastions offer no shell; the target
+offers only the labelled echo channel. Generated response metadata is mode
+`0600` inside a mode `0700` temporary directory, removed on normal lab exit;
+private keys are memory-only. The serialized response buffer is zeroizing.
+
+The Mac ARM64 lab run on 2026-10-02 passed after 300.01 seconds. Its three
+loopback listeners were observed, the private metadata directory disappeared
+on exit and all three ports were rebound successfully. The GUI lab process
+was terminated separately because native window observation was unavailable;
+this run did not establish native menu Quit or jump-dialogue acceptance.
+
+The local automated chain cases and native-lab listener/cleanup checks do not
+establish native prompt labels/focus/cancellation across jump hops. That GUI
+acceptance is still pending, alongside OpenSSH/PAM and Windows/Linux evidence.
 
 ## OpenSSH coverage
 
