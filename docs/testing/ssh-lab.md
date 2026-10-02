@@ -134,8 +134,22 @@ Frontend unit tests, type checking, lint/build and the rebuilt Mac debug
 These are production-handler/DOM-boundary checks, not native simultaneous-window
 acceptance or a whole-process secret zeroization guarantee.
 
-Two native broker regressions cover bounded/one-shot answers, expired waiter
-cleanup, close-before-drop refusal, reconnect cancellation and shutdown.
+Three native broker regressions cover bounded/one-shot answers, expired waiter
+cleanup, close-before-drop refusal, reconnect cancellation and shutdown. The
+concurrency regression holds 32 independently owned IPC contexts, refuses the
+33rd without emitting a challenge, retires a middle waiter without closing its
+peers, and accepts a replacement immediately. All 32 remaining contexts receive
+their own distinct-length response pair, reject duplicate answers and release
+their registry entries. It uses the production broker with test IPC channels;
+it does not establish 32 simultaneous SSH transports or native GUI overflow.
+
+The DOM-boundary check also follows separate challenge rounds: A's password,
+B's held password, then A's queued OTP. Closing the queued OTP preserves B's
+label, typed value and recorded focus; B can submit that value and answer its
+own next OTP without opening A's retired field. Focus here is tracked by the
+minimal test DOM, not observed through an OS accessibility API. These checks
+run with `cargo xtask check-rust` and `pnpm --dir apps/desktop run test:unit`.
+
 DOM boundary checks cover password masking, plain-text server labels, abort
 cancellation and clearing the input; these are not native keyboard/focus proof.
 The native receipts below cover saved profiles, Quick connect, controlled

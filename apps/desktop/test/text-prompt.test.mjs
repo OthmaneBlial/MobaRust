@@ -22,7 +22,7 @@ class Element extends EventTarget {
   append(child) { this.children.push(child); }
   after(child) { this.afterNode = child; }
   remove() { this.removed = true; }
-  focus() {}
+  focus() { globalThis.document.activeElement = this; }
   select() {}
   showModal() { if (failOpening) throw Error("closing webview"); this.open = true; }
   close() { this.open = false; this.dispatchEvent(new Event("close")); }
@@ -236,6 +236,33 @@ input(latest()).value = "third-password";
 submit();
 await settle();
 assert.deepEqual(answers.at(-1), { requestId: "third-survivor", responses: ["third-password"] }, "retiring a middle waiter preserves the following channel");
+
+handlerA(challenge("staggered-a-password", 10001));
+handlerB(challenge("held-b-password", 10002));
+input(latest()).value = "staggered-a-password";
+submit();
+await settle();
+const heldPassword = latest();
+input(heldPassword).value = "held-b-password";
+handlerA(challenge("expired-a-otp", 10001, ["OTP: "]));
+handlerA({ event: "closed", requestId: "expired-a-otp" });
+await settle();
+assert.equal(latest(), heldPassword, "queued OTP expiry preserves the other server's active dialogue");
+assert.equal(input(heldPassword).value, "held-b-password", "queued expiry preserves typed input");
+assert.equal(globalThis.document.activeElement, input(heldPassword), "queued expiry preserves active field focus");
+const beforeHeldSubmit = answers.length;
+submit();
+await settle();
+assert.equal(answers.length, beforeHeldSubmit + 1);
+assert.deepEqual(answers.at(-1), { requestId: "held-b-password", responses: ["held-b-password"] });
+assert.equal(latest(), heldPassword, "expired A OTP never opens after B's password completes");
+handlerB(challenge("surviving-b-otp", 10002, ["OTP: "]));
+assert.match(latest().querySelector("label").textContent, /10002[\s\S]*OTP:/);
+assert.equal(input(latest()).value, "");
+input(latest()).value = "surviving-b-otp";
+submit();
+await settle();
+assert.deepEqual(answers.at(-1), { requestId: "surviving-b-otp", responses: ["surviving-b-otp"] });
 
 const invokeNormally = window.__TAURI_INTERNALS__.invoke;
 window.__TAURI_INTERNALS__.invoke = async (command, payload) => {

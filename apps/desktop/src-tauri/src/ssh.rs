@@ -4573,6 +4573,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_authentication_is_bounded_and_releases_only_the_retired_waiter() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let manager = SshManager::default();
+            let mut waiters = Vec::new();
+            for index in 0..32 {
+                let (mut context, mut events) = authentication_test_context(&manager);
+                context.port = 10_000 + index;
+                let attempt =
+                    tokio::spawn(async move { context.ask(authentication_test_challenge()).await });
+                let challenge = events.recv().await.unwrap();
+                assert_eq!(challenge["port"], 10_000 + index);
+                let id = challenge["requestId"].as_str().unwrap().to_owned();
+                waiters.push((attempt, events, id));
+            }
+            assert_eq!(manager.authentication.lock().unwrap().len(), 32);
+
+            let (overflow, mut events) = authentication_test_context(&manager);
+            assert!(matches!(
+                overflow.ask(authentication_test_challenge()).await,
+                Err(mobarust_ssh::SshError::AuthenticationCancelled)
+            ));
+            assert!(
+                matches!(
+                    events.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ),
+                "overflow must not emit a challenge or disturb an owned waiter"
+            );
+
+            let (retired, mut events, id) = waiters.remove(15);
+            retired.abort();
+            assert!(retired.await.unwrap_err().is_cancelled());
+            assert_eq!(
+                events.recv().await.unwrap(),
+                serde_json::json!({"event":"closed", "requestId":id})
+            );
+            assert_eq!(manager.authentication.lock().unwrap().len(), 31);
+            assert!(manager.answer_authentication(&id, None).is_err());
+            for (_, events, _) in &mut waiters {
+                assert!(
+                    matches!(
+                        events.try_recv(),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                    ),
+                    "another channel must not receive the retired request's closure"
+                );
+            }
+
+            let (replacement, mut events) = authentication_test_context(&manager);
+            let attempt =
+                tokio::spawn(async move { replacement.ask(authentication_test_challenge()).await });
+            let challenge = events.recv().await.unwrap();
+            waiters.push((
+                attempt,
+                events,
+                challenge["requestId"].as_str().unwrap().to_owned(),
+            ));
+            assert_eq!(manager.authentication.lock().unwrap().len(), 32);
+            for (index, (attempt, mut events, id)) in waiters.into_iter().enumerate() {
+                // Distinct lengths identify routing without exposing Secret contents.
+                let password = "p".repeat(index + 1);
+                let otp = "o".repeat(index + 33);
+                manager
+                    .answer_authentication(&id, Some(vec![password.clone(), otp.clone()]))
+                    .unwrap();
+                let answers = attempt.await.unwrap().unwrap();
+                assert_eq!(answers.len(), 2);
+                assert_eq!(answers[0].len(), password.len());
+                assert_eq!(answers[1].len(), otp.len());
+                assert_eq!(
+                    events.recv().await.unwrap(),
+                    serde_json::json!({"event":"closed", "requestId":id})
+                );
+                assert!(manager.answer_authentication(&id, None).is_err());
+            }
+            assert!(manager.authentication.lock().unwrap().is_empty());
+        })
+        .await
+        .expect("bounded concurrent authentication cleanup");
+    }
+
+    #[tokio::test]
     async fn authentication_cancel_stops_reconnect_and_close_or_shutdown_refuses_answers() {
         for action in ["cancel", "close", "shutdown"] {
             let manager = SshManager::default();
