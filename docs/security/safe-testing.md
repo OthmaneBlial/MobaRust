@@ -92,8 +92,8 @@ cargo xtask pre-push-check
 
 The license check requires the canonical Apache-2.0 heading and complete terms
 so GitHub can identify the repository license. The payload audit verifies `main`, both staged and unstaged Git whitespace checks, the ignored
-`base/` boundary, the absence of GitHub workflows other than the desktop
-`release.yml` packaging workflow, credential-like paths,
+`base/` boundary, the explicit `quality.yml` and `release.yml` workflow
+allowlist, credential-like paths,
 and private-key PEM markers in the index. It reports the local
 `origin/main...HEAD` comparison but never invokes `git push`.
 
@@ -104,6 +104,9 @@ The check deliberately keeps the normal Cargo/rustup/package cache environment,
 but redirects each child process's home and XDG configuration/data/cache
 directories to a unique temporary directory. This is an application-level
 safety boundary rather than an operating-system sandbox.
+When CARGO_HOME or RUSTUP_HOME is unset, the command explicitly retains the
+corresponding tool directory under the caller's OS profile before replacing
+HOME. This keeps rustup-installed compilers usable on clean CI runners.
 
 The isolated RDP helper check is also repository-scoped:
 

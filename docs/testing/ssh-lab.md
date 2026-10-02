@@ -48,6 +48,10 @@ and removes the temporary directory. The fixture's server-side `SetEnv`
 overrides the OS account home before the shell starts; the X11-only xauth
 wrapper forces a disposable authority file even if sshd derives an account
 path. This remains an application-level test boundary, not an OS sandbox.
+The encrypted-key fixture uses a public test passphrase and one bcrypt round
+to keep interoperability checks fast under CPU contention. This is only for
+disposable test keys and does not change how operator keys are generated or
+loaded.
 
 ## Limits and next interoperability gates
 

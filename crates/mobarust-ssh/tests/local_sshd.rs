@@ -129,13 +129,14 @@ fn encrypted_keys_authenticate_and_wrong_credentials_fail_closed() {
         wait_for_port(fixture.port).await;
         let encrypted_key = fixture.directory.path().join("encrypted_key");
         fs::copy(&fixture.client_key, &encrypted_key).expect("copy fixture key");
-        // Public test data, never an operator credential.
+        // Public test data, never an operator credential. One bcrypt round
+        // keeps this interoperability fixture independent of CPU contention.
         let passphrase = "mobarust-disposable-fixture";
         let mut keygen = Command::new("ssh-keygen");
         clear_credential_environment(&mut keygen);
         assert!(
             keygen
-                .args(["-q", "-p", "-P", "", "-N", passphrase, "-f"])
+                .args(["-q", "-p", "-a", "1", "-P", "", "-N", passphrase, "-f"])
                 .arg(&encrypted_key)
                 .stdout(Stdio::null())
                 .status()

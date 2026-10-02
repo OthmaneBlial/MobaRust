@@ -14,6 +14,7 @@ fn main() {
     let command = arguments.next().unwrap_or_else(|| "help".to_owned());
     let result = match command.as_str() {
         "check" => check(),
+        "check-rust" => check_rust(),
         "test-ssh" => test_ssh(),
         "check-fuzz" => check_fuzz(),
         "check-rdp-helper" => check_rdp_helper(),
@@ -33,6 +34,9 @@ fn main() {
         "verify-macos-signature" => verify_macos_signature_command(arguments.collect()),
         "help" | "--help" | "-h" => {
             println!("cargo xtask check    Run Rust and frontend validation locally");
+            println!(
+                "cargo xtask check-rust    Run sanitized workspace formatting, tests, and Clippy"
+            );
             println!(
                 "cargo xtask test-ssh    Run isolated SSH unit and local OpenSSH integration tests"
             );
@@ -845,9 +849,10 @@ fn pre_push_check() -> Result<(), String> {
         for entry in fs::read_dir(".github/workflows").map_err(|error| error.to_string())? {
             let entry = entry.map_err(|error| error.to_string())?;
             let name = entry.file_name();
-            if name != "release.yml" || !entry.path().is_file() {
+            if (name != "release.yml" && name != "quality.yml") || !entry.path().is_file() {
                 return Err(
-                    "only the desktop release workflow is allowed in the push audit".into(),
+                    "only the desktop release and quality workflows are allowed in the push audit"
+                        .into(),
                 );
             }
         }
@@ -1395,7 +1400,7 @@ fn test_ssh() -> Result<(), String> {
     )
 }
 
-fn check() -> Result<(), String> {
+fn check_rust() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
     stage_helpers()?;
     run_sanitized_test("cargo", ["test", "--locked", "--workspace"], None)?;
@@ -1411,8 +1416,11 @@ fn check() -> Result<(), String> {
             "warnings",
         ],
         None,
-    )?;
+    )
+}
 
+fn check() -> Result<(), String> {
+    check_rust()?;
     run(
         "pnpm",
         ["install", "--frozen-lockfile"],
@@ -1600,6 +1608,18 @@ fn run_sanitized_test<const N: usize>(
 /// configuration. Compiler and package caches remain inherited explicitly;
 /// only home-directory configuration/data/cache lookup is redirected.
 fn apply_isolated_home(command: &mut Command, isolated_home: &Path) {
+    // rustup/Cargo otherwise resolve their installed toolchain and cache via
+    // the disposable HOME when runners have not set these overrides.
+    let tool_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+    for (variable, directory) in [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")] {
+        if let Some(cache) = std::env::var_os(variable).map(PathBuf::from).or_else(|| {
+            tool_home
+                .as_ref()
+                .map(|home| PathBuf::from(home).join(directory))
+        }) {
+            command.env(variable, cache);
+        }
+    }
     command.env("CI", "true");
     command.env("HOME", isolated_home);
     command.env("XDG_CONFIG_HOME", isolated_home.join("config"));
@@ -1746,6 +1766,22 @@ fn create_sanitized_test_home() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_compiler_remains_usable_with_an_isolated_home() {
+        let home = create_sanitized_test_home().expect("create isolated compiler home");
+        let mut command = Command::new("rustc");
+        sanitize_process_environment(&mut command);
+        apply_isolated_home(&mut command, &home);
+        let output = command.arg("--version").output();
+        fs::remove_dir_all(home).expect("remove isolated compiler home");
+        let output = output.expect("launch installed compiler");
+        assert!(
+            output.status.success(),
+            "installed compiler must remain available"
+        );
+        assert!(output.stdout.starts_with(b"rustc "));
+    }
 
     #[test]
     fn checksum_manifest_is_deterministic_and_excludes_itself() {
