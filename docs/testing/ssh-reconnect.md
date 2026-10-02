@@ -197,3 +197,52 @@ The memory-only fixtures use generated credentials, pinned host keys and
 personal SSH state, agent, Keychain or X server. Native GUI rejection/timeout
 acceptance and wider server/platform coverage remain open. The correction is on
 main after v0.1.20 and is not in its published DMGs.
+
+## Startup input and output backpressure on main
+
+**2026-10-03.** After shell acceptance, configured startup input was written
+without reading output until the write finished. A peer with a small receive
+window and enough output to fill the bounded channel queue could stall the SSH
+actor before it processed further input window credit. The startup write then
+hit its setup deadline despite a healthy authenticated transport.
+
+The `startup_input_keeps_shell_output_draining` regression reproduced this
+timeout on `279d918`: the peer grants a 1 KiB input window, accepts the shell,
+then emits 256 packets of 1 KiB while the client sends an 8 KiB startup command.
+
+Shell setup now splits the existing reader/writer before startup input. A single
+pinned write remains alive while incoming output is consumed into the existing
+bounded setup buffer. Output events never recreate or replay the partial write.
+The unsplit public shell API delegates to these same halves. Shell acceptance
+and startup input retain one setup deadline; the shared 1 MiB output budget
+includes queue entries. Timeout, early exit and overflow use the same path that
+retires the reader before bounded channel-close cleanup.
+
+```sh
+cargo test --locked -p mobarust-ssh --test authentication startup_input_keeps_shell_output_draining
+cargo test --locked -p mobarust-ssh --test authentication cancelling_pending_startup_releases_the_owned_transport
+cargo xtask check
+```
+
+Both split and unsplit reader checks compare every output byte in order,
+including the initial burst, banner and echoed startup input. The peer's bounded
+input receipt equals the complete startup command plus newline exactly once.
+Separate zero-window cases verify setup timeout, EOF/exit/close before input
+completion and output overflow; no input is accepted in those cases, and failed
+startup channels are closed before transport teardown. Fixture workers finish
+and their loopback listener ports can be rebound.
+The cancellation check aborts the task owning the connection while setup is
+pending after server shell acceptance with zero input credit. No startup input
+is received; the server task finishes and its listener port can be rebound.
+
+The complete local `cargo xtask check` passed for the runtime correction on
+macOS ARM64, including all 104 desktop tests, workspace tests/Clippy, frontend
+tests/type/lint/build, protocol fixtures, package-layout contracts and fuzz
+compilation. The additional cancellation regression and final workspace Clippy
+also passed after that suite.
+
+The fixture uses generated memory-only credentials and pinned host keys on
+`127.0.0.1`; it does not execute an OS shell or inspect personal state. This is a
+bounded protocol regression, not sustained native rendering or GUI startup
+acceptance. The correction is on main after v0.1.20, and is not in the published
+DMGs. Those native and release gates remain open.

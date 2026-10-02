@@ -2,8 +2,8 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mobarust_core::ConnectionState;
@@ -33,6 +33,10 @@ enum ShellReply {
     Prelude,
     Flood,
     X11Reject,
+    StartupFlood,
+    StartupStall,
+    StartupExit,
+    StartupOverflow,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +66,7 @@ struct Observations {
     x11_requests: AtomicUsize,
     closed_channels: AtomicUsize,
     channel_closed: Notify,
+    startup_input: Mutex<Vec<u8>>,
 }
 
 struct Handler {
@@ -192,7 +197,25 @@ impl server::Handler for Handler {
                 _ => {}
             }
             session.channel_success(channel)?;
+            if matches!(self.shell_reply, ShellReply::StartupFlood) {
+                for _ in 0..256 {
+                    session.data(channel, vec![b'x'; 1024])?;
+                }
+            }
+            if matches!(self.shell_reply, ShellReply::StartupOverflow) {
+                for _ in 0..33 {
+                    session.data(channel, vec![b'x'; 32 * 1024])?;
+                }
+            }
             session.data(channel, SHELL_BANNER.to_vec())?;
+            if matches!(self.shell_reply, ShellReply::StartupStall) {
+                self.observations.entered.notify_one();
+            }
+            if matches!(self.shell_reply, ShellReply::StartupExit) {
+                session.eof(channel)?;
+                session.exit_status_request(channel, 0)?;
+                session.close(channel)?;
+            }
         }
         Ok(())
     }
@@ -207,6 +230,14 @@ impl server::Handler for Handler {
             self.observations
                 .shell_input_bytes
                 .fetch_add(data.len(), Ordering::SeqCst);
+            if matches!(self.shell_reply, ShellReply::StartupFlood) {
+                let mut input = self.observations.startup_input.lock().unwrap();
+                assert!(
+                    input.len() + data.len() <= 16 * 1024,
+                    "bounded fixture input receipt"
+                );
+                input.extend_from_slice(data);
+            }
             session.data(channel, data.to_vec())?;
         }
         Ok(())
@@ -365,7 +396,7 @@ impl Fixture {
         let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "")
             .expect("create disposable host key");
         let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
-        let config = Arc::new(server::Config {
+        let mut config = server::Config {
             keys: vec![key],
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
@@ -373,7 +404,17 @@ impl Fixture {
             inactivity_timeout: None,
             nodelay: true,
             ..Default::default()
-        });
+        };
+        if matches!(shell_reply, ShellReply::StartupFlood) {
+            config.window_size = 1024;
+        }
+        if matches!(
+            shell_reply,
+            ShellReply::StartupStall | ShellReply::StartupExit | ShellReply::StartupOverflow
+        ) {
+            config.window_size = 0;
+        }
+        let config = Arc::new(config);
         let secret = Zeroizing::new(Uuid::new_v4().to_string());
         let otp = Zeroizing::new(Uuid::new_v4().to_string());
         let observations = Arc::new(Observations::default());
@@ -621,6 +662,161 @@ async fn native_endpoint(
         while sessions.join_next().await.is_some() {}
     });
     address
+}
+
+#[tokio::test]
+async fn cancelling_pending_startup_releases_the_owned_transport() {
+    let fixture = Fixture::start_with_shell(
+        Method::Password,
+        false,
+        None,
+        true,
+        ShellReply::StartupStall,
+    )
+    .await;
+    let mut options = fixture.options(Method::Password, true);
+    options.startup_command = Some("must-not-replay".into());
+    let connection = SshConnection::connect(options).await.unwrap();
+    // Consume the authentication notification before waiting for shell setup.
+    fixture.observations.entered.notified().await;
+    let attempt = tokio::spawn(async move { connection.open_shell(80, 24).await });
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        fixture.observations.entered.notified(),
+    )
+    .await
+    .expect("server accepts the shell and advertises zero input credit");
+    assert!(!attempt.is_finished());
+    attempt.abort();
+    assert!(attempt.await.err().unwrap().is_cancelled());
+    assert_eq!(
+        fixture
+            .observations
+            .shell_input_bytes
+            .load(Ordering::SeqCst),
+        0
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn startup_input_keeps_shell_output_draining() {
+    for split in [false, true] {
+        let fixture = Fixture::start_with_shell(
+            Method::Password,
+            false,
+            None,
+            true,
+            ShellReply::StartupFlood,
+        )
+        .await;
+        let mut options = fixture.options(Method::Password, true);
+        options.timeout = Duration::from_secs(1);
+        let command = "fixture-startup-".repeat(512);
+        let expected_input = format!("{command}\n").into_bytes();
+        options.startup_command = Some(command);
+        let connection = SshConnection::connect(options).await.unwrap();
+        let mut shell = Some(
+            connection
+                .open_shell(80, 24)
+                .await
+                .expect("startup input must not deadlock the SSH actor behind unread output"),
+        );
+        let expected = [
+            vec![b'x'; 256 * 1024],
+            SHELL_BANNER.to_vec(),
+            expected_input.clone(),
+        ]
+        .concat();
+        let output = tokio::time::timeout(Duration::from_secs(1), async {
+            let (mut reader, _writer) = if split {
+                let (reader, writer) = shell.take().unwrap().split();
+                (Some(reader), Some(writer))
+            } else {
+                (None, None)
+            };
+            let mut output = Vec::new();
+            while output.len() < expected.len() {
+                let next = if let Some(reader) = &mut reader {
+                    reader.next_output().await
+                } else {
+                    shell.as_mut().unwrap().next_output().await
+                };
+                if let SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) = next.unwrap().unwrap()
+                {
+                    output.extend(bytes);
+                }
+            }
+            output
+        })
+        .await
+        .expect("startup output and echo delivery deadline");
+        assert_eq!(
+            output, expected,
+            "buffered startup and live output retain exact order"
+        );
+        assert_eq!(
+            *fixture.observations.startup_input.lock().unwrap(),
+            expected_input,
+            "partial startup input is sent once across all output events"
+        );
+        assert_eq!(
+            fixture.observations.shell_requests.load(Ordering::SeqCst),
+            1
+        );
+        connection.disconnect().await.unwrap();
+        drop(connection);
+        fixture.finish().await;
+    }
+    for reply in [
+        ShellReply::StartupStall,
+        ShellReply::StartupExit,
+        ShellReply::StartupOverflow,
+    ] {
+        let fixture = Fixture::start_with_shell(Method::Password, false, None, true, reply).await;
+        let mut options = fixture.options(Method::Password, true);
+        options.timeout = Duration::from_secs(1);
+        options.startup_command = Some("must-not-replay".into());
+        let connection = SshConnection::connect(options).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(3), connection.open_shell(80, 24))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                (reply, result),
+                (ShellReply::StartupStall, Err(SshError::Timeout))
+                    | (
+                        ShellReply::StartupExit,
+                        Err(SshError::ChannelRequestClosed {
+                            request: "startup input"
+                        })
+                    )
+                    | (
+                        ShellReply::StartupOverflow,
+                        Err(SshError::ShellSetupOutputTooLarge)
+                    )
+            ),
+            "startup write must observe deadline, shell exit and output limits"
+        );
+        if !matches!(reply, ShellReply::StartupExit) {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                fixture.observations.channel_closed.notified(),
+            )
+            .await
+            .expect("failed startup closes its channel before disconnect");
+        }
+        assert_eq!(
+            fixture
+                .observations
+                .shell_input_bytes
+                .load(Ordering::SeqCst),
+            0
+        );
+        connection.disconnect().await.unwrap();
+        drop(connection);
+        fixture.finish().await;
+    }
 }
 
 #[tokio::test]

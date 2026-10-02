@@ -99,6 +99,9 @@ Main also checks shell/X11 request acceptance before returning an SSH shell or
 sending startup input. Loopback regressions cover rejection, silence, early
 closure, bounded setup output and ordered pre-acceptance bytes;
 [native GUI and wider server acceptance remain pending](docs/testing/ssh-reconnect.md#shell-request-acceptance-on-main).
+Startup input now drains bounded output while waiting for SSH window credit;
+a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
+[Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
 
 **Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
 
