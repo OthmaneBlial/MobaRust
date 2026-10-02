@@ -326,9 +326,62 @@ directory regression failed with `0755` before the fix, then passed with
 
 These observations cover sequential native hop routing, second-hop cancellation,
 target trust-before-prompt, successful authentication and active-chain Quit on
-Mac debug. Concurrent dialogue ownership and stale-answer UI races, automatic
-terminal focus, OpenSSH/PAM, Windows/Linux and published-installer behavior
-remain separate acceptance gates.
+Mac debug. The follow-up focus receipt below covers keyboard input after login
+and reconnect. Concurrent dialogue ownership and stale-answer UI races,
+OpenSSH/PAM, Windows/Linux and published-installer behavior remain separate
+acceptance gates.
+
+### SSH terminal focus after login/reconnect — 2026-10-02
+
+The earlier authentication receipts required clicking the connected terminal.
+The frontend now requests focus after the selected SSH session becomes ready
+and again after Quick connect's optional save dialogue closes. A deferred
+request checks the same terminal instance, current selection and connected
+status; removed/hidden panes, open modal dialogues and another active text
+field refuse the request. Background reconnects do not select their terminal.
+The DOM boundary regression checks deferred ownership changes, hidden/removed
+hosts, modal/editable-field refusal and the already-focused terminal input.
+
+A newly built, unsigned debug bundle on macOS ARM64 (base `7f0e5f2` plus this
+focus change) passed `cargo xtask package-check`. An executable-matched isolated
+copy used disposable HOME/ZDOTDIR and portable data, default settings, and the
+generated two-bastion Rust fixture with `0700` directory/`0600` metadata files.
+The target offered only the labelled **no OS shell** echo channel.
+
+Observed through native UI control:
+
+- Saved two-bastion login kept all six password/OTP prompts masked and focused.
+  After the final Enter, accessibility reported the selected SSH terminal input
+  as focused. `AUTO_FOCUS_CHAIN_OK` was typed without clicking the terminal and
+  echoed by the target.
+- Direct Quick connect used the target's generated pin and ask-each-challenge
+  mode. Its save dialogue kept the name field selected while open. Saving
+  `Quick focus lab` then focused the new terminal automatically;
+  `AUTO_FOCUS_QUICK_OK` was typed/echoed without a terminal click. The saved
+  profile had no credential reference or response value.
+- A dedicated `127.0.0.1` TCP relay interrupted only its owned SSH sockets.
+  Fresh password/OTP authentication restored the same selected terminal and
+  focused its input. `AUTO_FOCUS_RECONNECT_OK` was typed/echoed without clicking.
+  A second interruption happened with the local zsh terminal selected and
+  focused; after the background SSH login completed, the local terminal kept
+  both selection and input focus. The relay accepted exactly three connections.
+- None of the six generated responses appeared in the two persisted
+  profile/audit JSON files. Default settings had no persisted file. Native
+  application-menu Quit removed the recorded app/zsh PIDs and all SSH/relay
+  connections while the three server listeners and relay listener remained.
+  The UI-launched app has no process exit-code receipt. The owned relay was
+  subsequently stopped and reaped.
+- The Rust lab passed after 300.02 seconds, removed its metadata directory and
+  released all three endpoint ports. Those ports and the relay port rebound
+  successfully; all recorded app, zsh, server and relay PIDs were absent.
+
+This establishes saved-profile/Quick-connect and one selected/background
+reconnect focus path on Mac debug. Other editable/modal focus guards remain
+automated DOM-boundary evidence; arbitrary window/tab races, other platforms,
+PAM/OpenSSH factors and published-installer behavior are not established.
+Frontend unit tests, type checking, lint/build and the full local
+`cargo xtask check` passed with this change. Published v0.1.18 installers remain
+unchanged.
 
 ## OpenSSH coverage
 

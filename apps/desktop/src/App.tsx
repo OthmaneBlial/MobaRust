@@ -25,6 +25,7 @@ import { shouldConfirmTerminalPaste } from "./terminal-paste";
 import { approveTerminalPaste, prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
+import { focusConnectedTerminal } from "./terminal-focus";
 import { parseTunnelPort } from "./tunnel-port";
 import { chooseOverwrite, confirmAction, promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionCloseStatus, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
@@ -1711,6 +1712,16 @@ function App() {
       .catch(() => undefined);
   }, []);
 
+  const requestTerminalFocus = useCallback((workspaceId: string) => {
+    const instance = terminalInstancesRef.current.get(workspaceId);
+    if (!instance) return;
+    focusConnectedTerminal(instance.terminal, () =>
+      selectedTerminalIdRef.current === workspaceId
+      && terminalInstancesRef.current.get(workspaceId) === instance
+      && terminalAuditStateRef.current.get(workspaceId) === "connected",
+    );
+  }, []);
+
   const handleTerminalStatus = useCallback((workspaceId: string, status: TerminalStatus) => {
     setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, status } : terminal));
     const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
@@ -1720,10 +1731,11 @@ function App() {
     // SSH reconnects can keep the same native ID. Invalidate old approvals.
     if (previous !== status) terminalGenerationsRef.current.set(workspaceId, (terminalGenerationsRef.current.get(workspaceId) ?? 0) + 1);
     if (!protocol || previous === status) return;
+    if (protocol === "SSH" && status === "connected") requestTerminalFocus(workspaceId);
     if (status === "connected") recordAudit("connectionSucceeded", protocol);
     if (status === "error") recordAudit("connectionFailed", protocol);
     if (status === "closed") recordAudit("disconnected", protocol);
-  }, [recordAudit]);
+  }, [recordAudit, requestTerminalFocus]);
 
   const handleTerminalTitle = useCallback((workspaceId: string, title: string) => {
     const safeTitle = sanitizeTerminalTitle(title);
@@ -2467,6 +2479,7 @@ function App() {
       if (offerSave) {
         const suggestedName = `${request.username}@${response.host}`;
         const name = await promptText("Save this SSH session as", suggestedName);
+        requestTerminalFocus(terminal.id);
         if (name?.trim()) {
           try {
             await invoke("session_save_ssh", { payload: { name: name.trim(), request } });
@@ -2480,7 +2493,7 @@ function App() {
       recordAudit("connectionFailed", "SSH");
       setConnectionError(String(error));
     }
-  }, [recordAudit, refreshSavedSessions]);
+  }, [recordAudit, refreshSavedSessions, requestTerminalFocus]);
 
   const connectTelnet = useCallback(async (request: TelnetConnectRequest, offerSave = true) => {
     setConnectionError(null);
