@@ -960,12 +960,11 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
           onNativeTerminalId(workspaceId, remoteSessionId);
           const attachCommand = remoteProtocol === "ssh" ? "ssh_attach" : remoteProtocol === "telnet" ? "telnet_attach" : "serial_attach";
           const closeCommand = remoteProtocol === "ssh" ? "ssh_close" : remoteProtocol === "telnet" ? "telnet_close" : "serial_close";
-          const pendingOutput = await invoke<string[]>(attachCommand, { terminalId: remoteSessionId });
+          await invoke(attachCommand, { terminalId: remoteSessionId });
           if (disposed) {
             void invoke(closeCommand, { terminalId: remoteSessionId }).catch(() => undefined);
             return;
           }
-          pendingOutput.forEach((data) => terminal.write(data));
           onStatusChange(workspaceId, "connected");
           fit();
           return;

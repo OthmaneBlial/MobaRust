@@ -59,9 +59,9 @@ struct SerialSessionEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SerialOutputEvent {
-    terminal_id: String,
-    data: String,
+pub(crate) struct SerialOutputEvent {
+    pub(crate) terminal_id: String,
+    pub(crate) data: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -196,7 +196,11 @@ impl SerialManager {
             .map_err(|_| SerialManagerError::Closed)
     }
 
-    pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SerialManagerError> {
+    pub fn attach(
+        &self,
+        terminal_id: &str,
+        mut emit: impl FnMut(String),
+    ) -> Result<(), SerialManagerError> {
         let mut sessions = self
             .sessions
             .lock()
@@ -204,8 +208,13 @@ impl SerialManager {
         let state = sessions
             .get_mut(terminal_id)
             .ok_or_else(|| SerialManagerError::MissingSession(terminal_id.to_owned()))?;
+        // Emit the backlog under the session lock before enabling live output.
+        // Returning it separately races newer events against the IPC response.
+        for data in std::mem::take(&mut state.pending_output) {
+            emit(data);
+        }
         state.attached = true;
-        Ok(std::mem::take(&mut state.pending_output))
+        Ok(())
     }
 
     fn sender(&self, terminal_id: &str) -> Result<mpsc::Sender<SerialCommand>, SerialManagerError> {
@@ -391,6 +400,49 @@ mod tests {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
     use tokio::sync::{Semaphore, oneshot};
+
+    #[test]
+    fn attach_replays_pending_output_before_live_output() {
+        let manager = SerialManager::default();
+        let chunks = vec!["\x1b[3".to_owned(), "2mready ☃\x1b[0m\r\n".to_owned()];
+        let (sender, _commands) = tokio::sync::mpsc::channel(super::COMMAND_CAPACITY);
+        manager.sessions.lock().unwrap().insert(
+            "fixture".into(),
+            super::SerialSessionStateData {
+                sender,
+                attached: false,
+                pending_output: chunks.clone(),
+            },
+        );
+        let mut emitted = Vec::new();
+        manager
+            .attach("fixture", |data| {
+                assert!(
+                    matches!(
+                        manager.sessions.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ),
+                    "live publishers cannot enter while the backlog is being emitted"
+                );
+                emitted.push(data);
+            })
+            .unwrap();
+        assert_eq!(
+            emitted, chunks,
+            "preserve fragmented ANSI and Unicode output in order"
+        );
+        let sessions = manager.sessions.lock().unwrap();
+        assert!(sessions["fixture"].attached);
+        assert!(sessions["fixture"].pending_output.is_empty());
+        drop(sessions);
+        manager
+            .attach("fixture", |_| panic!("backlog must not be replayed twice"))
+            .unwrap();
+        assert!(matches!(
+            manager.attach("missing", |_| panic!("missing session cannot emit")),
+            Err(SerialManagerError::MissingSession(_))
+        ));
+    }
 
     #[tokio::test]
     async fn oversized_serial_write_is_rejected_before_session_lookup() {

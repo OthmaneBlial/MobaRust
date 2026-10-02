@@ -88,6 +88,10 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [x] Record installed bash/zsh/fish variants and explicit skips on Unix; Linux zsh/fish runtime coverage remains pending.
 - [ ] Exercise native GUI focus, paste, split-pane lifecycle, and application shutdown on Windows, macOS, and Linux.
 
+Main after v0.1.19 fixes startup output ordering across SSH, Telnet and serial
+attachment. Native manager regressions verify replay under the publication lock;
+[GUI timing and sustained output acceptance remain pending](docs/testing/terminal-attachment.md).
+
 **Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
 
 ### 3. Expand SSH interoperability evidence

@@ -54,9 +54,9 @@ struct TelnetSessionEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TelnetOutputEvent {
-    terminal_id: String,
-    data: String,
+pub(crate) struct TelnetOutputEvent {
+    pub(crate) terminal_id: String,
+    pub(crate) data: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -180,7 +180,11 @@ impl TelnetManager {
             .map_err(|_| TelnetManagerError::Closed)
     }
 
-    pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, TelnetManagerError> {
+    pub fn attach(
+        &self,
+        terminal_id: &str,
+        mut emit: impl FnMut(String),
+    ) -> Result<(), TelnetManagerError> {
         let mut sessions = self
             .sessions
             .lock()
@@ -188,8 +192,13 @@ impl TelnetManager {
         let state = sessions
             .get_mut(terminal_id)
             .ok_or_else(|| TelnetManagerError::MissingSession(terminal_id.to_owned()))?;
+        // Emit the backlog under the session lock before enabling live output.
+        // Returning it separately races newer events against the IPC response.
+        for data in std::mem::take(&mut state.pending_output) {
+            emit(data);
+        }
         state.attached = true;
-        Ok(std::mem::take(&mut state.pending_output))
+        Ok(())
     }
 
     fn sender(&self, terminal_id: &str) -> Result<mpsc::Sender<TelnetCommand>, TelnetManagerError> {
@@ -385,6 +394,49 @@ fn default_rows() -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{TelnetManager, TelnetManagerError};
+
+    #[test]
+    fn attach_replays_pending_output_before_live_output() {
+        let manager = TelnetManager::default();
+        let chunks = vec!["\x1b[3".to_owned(), "2mready ☃\x1b[0m\r\n".to_owned()];
+        let (sender, _commands) = tokio::sync::mpsc::channel(super::COMMAND_CAPACITY);
+        manager.sessions.lock().unwrap().insert(
+            "fixture".into(),
+            super::TelnetSessionStateData {
+                sender,
+                attached: false,
+                pending_output: chunks.clone(),
+            },
+        );
+        let mut emitted = Vec::new();
+        manager
+            .attach("fixture", |data| {
+                assert!(
+                    matches!(
+                        manager.sessions.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ),
+                    "live publishers cannot enter while the backlog is being emitted"
+                );
+                emitted.push(data);
+            })
+            .unwrap();
+        assert_eq!(
+            emitted, chunks,
+            "preserve fragmented ANSI and Unicode output in order"
+        );
+        let sessions = manager.sessions.lock().unwrap();
+        assert!(sessions["fixture"].attached);
+        assert!(sessions["fixture"].pending_output.is_empty());
+        drop(sessions);
+        manager
+            .attach("fixture", |_| panic!("backlog must not be replayed twice"))
+            .unwrap();
+        assert!(matches!(
+            manager.attach("missing", |_| panic!("missing session cannot emit")),
+            Err(TelnetManagerError::MissingSession(_))
+        ));
+    }
 
     #[tokio::test]
     async fn oversized_telnet_write_is_rejected_before_session_lookup() {

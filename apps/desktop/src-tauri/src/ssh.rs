@@ -301,9 +301,9 @@ struct SshTransferEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SshOutputEvent {
-    terminal_id: String,
-    data: String,
+pub(crate) struct SshOutputEvent {
+    pub(crate) terminal_id: String,
+    pub(crate) data: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -902,13 +902,22 @@ impl SshManager {
         signalled.map_err(|_| SshManagerError::Closed)
     }
 
-    pub fn attach(&self, terminal_id: &str) -> Result<Vec<String>, SshManagerError> {
+    pub fn attach(
+        &self,
+        terminal_id: &str,
+        mut emit: impl FnMut(String),
+    ) -> Result<(), SshManagerError> {
         let mut sessions = self.sessions.lock().map_err(|_| SshManagerError::Closed)?;
         let state = sessions
             .get_mut(terminal_id)
             .ok_or_else(|| SshManagerError::MissingSession(terminal_id.to_owned()))?;
+        // Emit the backlog under the session lock before enabling live output.
+        // Returning it separately races newer events against the IPC response.
+        for data in std::mem::take(&mut state.pending_output) {
+            emit(data);
+        }
         state.attached = true;
-        Ok(std::mem::take(&mut state.pending_output))
+        Ok(())
     }
 
     pub async fn list_directory(
@@ -4088,6 +4097,48 @@ mod tests {
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
     use tokio::sync::{oneshot, watch};
+
+    #[test]
+    fn attach_replays_pending_output_before_live_output() {
+        let manager = SshManager::default();
+        let chunks = vec!["\x1b[3".to_owned(), "2mready ☃\x1b[0m\r\n".to_owned()];
+        let _commands = queue_test_session(&manager, "fixture");
+        manager
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut("fixture")
+            .unwrap()
+            .pending_output = chunks.clone();
+        let mut emitted = Vec::new();
+        manager
+            .attach("fixture", |data| {
+                assert!(
+                    matches!(
+                        manager.sessions.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ),
+                    "live publishers cannot enter while the backlog is being emitted"
+                );
+                emitted.push(data);
+            })
+            .unwrap();
+        assert_eq!(
+            emitted, chunks,
+            "preserve fragmented ANSI and Unicode output in order"
+        );
+        let sessions = manager.sessions.lock().unwrap();
+        assert!(sessions["fixture"].attached);
+        assert!(sessions["fixture"].pending_output.is_empty());
+        drop(sessions);
+        manager
+            .attach("fixture", |_| panic!("backlog must not be replayed twice"))
+            .unwrap();
+        assert!(matches!(
+            manager.attach("missing", |_| panic!("missing session cannot emit")),
+            Err(SshManagerError::MissingSession(_))
+        ));
+    }
 
     #[test]
     fn file_paths_preserve_significant_whitespace() {

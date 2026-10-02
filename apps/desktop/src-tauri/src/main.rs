@@ -1328,9 +1328,21 @@ async fn ssh_close(manager: State<'_, SshManager>, terminal_id: String) -> Resul
 }
 
 #[tauri::command]
-fn ssh_attach(manager: State<'_, SshManager>, terminal_id: String) -> Result<Vec<String>, String> {
+fn ssh_attach(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    terminal_id: String,
+) -> Result<(), String> {
     manager
-        .attach(&terminal_id)
+        .attach(&terminal_id, |data| {
+            let _ = app.emit(
+                "ssh://output",
+                ssh::SshOutputEvent {
+                    terminal_id: terminal_id.clone(),
+                    data,
+                },
+            );
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -1616,11 +1628,20 @@ async fn telnet_resize(
 
 #[tauri::command]
 fn telnet_attach(
+    app: tauri::AppHandle,
     manager: State<'_, TelnetManager>,
     terminal_id: String,
-) -> Result<Vec<String>, String> {
+) -> Result<(), String> {
     manager
-        .attach(&terminal_id)
+        .attach(&terminal_id, |data| {
+            let _ = app.emit(
+                "telnet://output",
+                telnet::TelnetOutputEvent {
+                    terminal_id: terminal_id.clone(),
+                    data,
+                },
+            );
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -1682,11 +1703,20 @@ async fn serial_write(
 
 #[tauri::command]
 fn serial_attach(
+    app: tauri::AppHandle,
     manager: State<'_, SerialManager>,
     terminal_id: String,
-) -> Result<Vec<String>, String> {
+) -> Result<(), String> {
     manager
-        .attach(&terminal_id)
+        .attach(&terminal_id, |data| {
+            let _ = app.emit(
+                "serial://output",
+                serial::SerialOutputEvent {
+                    terminal_id: terminal_id.clone(),
+                    data,
+                },
+            );
+        })
         .map_err(|error| error.to_string())
 }
 
