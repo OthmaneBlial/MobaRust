@@ -164,3 +164,63 @@ the running isolated app or Finder; no SSH fixture was started. That app and
 its owned shell were terminated for lab cleanup, which is not normal UI Quit
 acceptance. Native large-list checks remain pending. Published v0.1.29
 installers do not include this correction; GitHub workflows remain disabled.
+
+## Uncertain remote forwarding retires its transport — 2026-10-03
+
+Cancelling a pending global forwarding request previously dropped only its
+reply future. The server could still approve and allocate a listener, while
+the desktop removed the local control. Likewise, an unconfirmed revocation
+left the SSH connection usable despite uncertainty about its server listener.
+
+On main after v0.1.29, both SDK forwarding calls use a pending-request guard.
+Dropping a polled future, exceeding the unchanged 12-second deadline or
+receiving an unconfirmed result retires that SSH transport. Malformed port
+allocations also retain the guard. Confirmed approval disarms it; explicit
+approval refusal disarms it because the server rejected the listener. Only
+confirmed revocation disarms the cancellation guard. Invalid caller arguments
+are rejected before it is armed. The typed `RemoteForwardUncertain` error
+explains the connection closure and instructs the operator to reconnect.
+
+The existing repository-local SSH client wraps its owned packet task in the
+already available futures `Abortable`. Its handle can signal retirement
+without waiting to enqueue DISCONNECT behind normal protocol messages.
+This drops the owned transport when the task is polled; the SDK also retires
+its local lifecycle state. It does not introduce a detached cleanup task,
+extend either deadline or silently retry a forwarding request.
+
+This fallback affects all work on that SSH connection. It cannot force a
+noncompliant server to release listeners that the server deliberately keeps
+outside the connection lifecycle. Server-side teardown remains required;
+native recovery, routed transports and broader server interoperability need
+their own acceptance evidence.
+
+The encrypted, memory-only loopback regression reproduced the old dropped
+approval remaining live at a named two-second transport-close deadline.
+It now exercises dropped explicit/allocated approval, dropped revocation,
+rejected revocation and both real production 12-second deadlines. The peer
+owns actual `127.0.0.1` listeners, withholds replies deterministically, then
+allows its packet loop to observe the retired transport. Each case joins the
+server and rebinds its SSH and forwarding endpoints. A separate case proves
+explicit refusal and invalid caller ports preserve the healthy connection;
+the existing repeated explicit/allocated Start/Stop checks still pass.
+
+The desktop session-owner regression also checks that cancellation during
+pending remote approval retires the SDK connection before transport cleanup.
+That peer rejects approval and creates no listener; it complements the SDK
+late-allocation cases. Native UI acceptance remains pending. Published
+v0.1.29 installers do not include this later correction; workflows stay disabled.
+
+```sh
+cargo test --locked -p mobarust-ssh --test forwarding
+cargo test --locked -p mobarust tunnel_workers_are_owned_and_joined_before_transport_cleanup
+cargo xtask check
+```
+
+The full local `cargo xtask check` passed on macOS ARM64 / Apple M2 in 272.52
+seconds, including 113 desktop tests, all four forwarding regressions, workspace
+tests/Clippy, frontend unit/type/lint/build checks, protocol/helpers, release/lab
+tooling, package contracts and fuzz compilation. The optional real Xvfb case
+retained its explicit prerequisite skip. An earlier full run timed out waiting
+for the explicit X11 fixture's channel; the same source and deadline passed
+standalone and in the full parallel rerun. No X11 code or timeout was changed,
+and the cause of that earlier timing failure is not established.

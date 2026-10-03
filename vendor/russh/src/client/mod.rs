@@ -300,6 +300,7 @@ pub struct Handle<H: Handler> {
     sender: Sender<Msg>,
     receiver: UnboundedReceiver<Reply>,
     join: russh_util::runtime::JoinHandle<Result<(), H::Error>>,
+    transport_abort: futures::future::AbortHandle,
     channel_buffer_size: usize,
 }
 
@@ -310,6 +311,12 @@ impl<H: Handler> Drop for Handle<H> {
 }
 
 impl<H: Handler> Handle<H> {
+    /// Retire the owned packet task without waiting behind protocol queues.
+    /// Its transport is dropped when the aborted task is next polled.
+    pub fn abort_transport(&self) {
+        self.transport_abort.abort();
+    }
+
     pub fn is_closed(&self) -> bool {
         self.sender.is_closed()
     }
@@ -1152,7 +1159,15 @@ where
     );
     session.begin_rekey()?;
     let (kex_done_signal, kex_done_signal_rx) = oneshot::channel();
-    let join = russh_util::runtime::spawn(session.run(stream, handler, Some(kex_done_signal)));
+    let (transport_abort, registration) = futures::future::AbortHandle::new_pair();
+    let join = russh_util::runtime::spawn(async move {
+        futures::future::Abortable::new(
+            session.run(stream, handler, Some(kex_done_signal)),
+            registration,
+        )
+        .await
+        .unwrap_or_else(|_| Err(H::Error::from(crate::Error::Disconnect)))
+    });
 
     if let Err(err) = kex_done_signal_rx.await {
         // kex_done_signal Sender is dropped when the session
@@ -1166,6 +1181,7 @@ where
         sender: handle_sender,
         receiver: handle_receiver,
         join,
+        transport_abort,
         channel_buffer_size,
     })
 }

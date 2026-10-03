@@ -84,6 +84,10 @@ pub enum SshError {
     #[error("SSH connection timed out")]
     Timeout,
     #[error(
+        "remote listener state is uncertain; SSH connection closed for cleanup. Reconnect before starting another tunnel."
+    )]
+    RemoteForwardUncertain,
+    #[error(
         "SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting."
     )]
     StartupInputTimeout,
@@ -791,6 +795,25 @@ pub struct SshConnection {
     environment: Vec<(String, String)>,
     startup_directory: Option<String>,
     startup_command: Option<String>,
+}
+
+// A global forward request can take effect even if its reply future is dropped.
+// Until approval/revocation is confirmed, transport retirement is the fallback
+// that makes an unknown server listener belong to a closing SSH connection.
+struct PendingRemoteForward<'a> {
+    connection: &'a SshConnection,
+    armed: bool,
+}
+
+impl Drop for PendingRemoteForward<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.connection.handle.abort_transport();
+            let mut lifecycle = lock_lifecycle(&self.connection.lifecycle);
+            let _ = lifecycle.apply(ConnectionEvent::DisconnectRequested);
+            let _ = lifecycle.apply(ConnectionEvent::Disconnected);
+        }
+    }
 }
 
 /// Performs a one-shot SSH handshake to observe the server host key, then
@@ -1595,6 +1618,8 @@ impl SshConnection {
     /// Requests the SSH server to listen on a remote endpoint and returns its
     /// actual port, including when an explicit port was requested. A returned
     /// forwarded channel becomes available through `next_forwarded_channel`.
+    /// Dropping a polled request or receiving an uncertain reply retires this
+    /// SSH transport; server-managed listener cleanup then follows its teardown.
     pub async fn request_remote_forward(
         &self,
         address: impl Into<String>,
@@ -1605,39 +1630,63 @@ impl SshConnection {
         if port > u32::from(u16::MAX) {
             return Err(SshError::InvalidOptions);
         }
-        let allocated = tokio::time::timeout(
+        let mut pending = PendingRemoteForward {
+            connection: self,
+            armed: true,
+        };
+        let allocated = match tokio::time::timeout(
             Duration::from_secs(12),
             self.handle.tcpip_forward(address, port),
         )
         .await
-        .map_err(|_| SshError::Timeout)?
-        .map_err(SshError::Channel)?;
+        {
+            Ok(Ok(port)) => port,
+            Ok(Err(russh::Error::RequestDenied)) => {
+                pending.armed = false;
+                return Err(SshError::Channel(russh::Error::RequestDenied));
+            }
+            _ => return Err(SshError::RemoteForwardUncertain),
+        };
         // Success for an explicit port has an empty RFC 4254 reply; russh
         // represents it as zero. Keep the requested port for later cancellation.
         let bound = u16::try_from(if allocated == 0 { port } else { allocated })
-            .map_err(|_| SshError::InvalidOptions)?;
-        if bound == 0 {
-            return Err(SshError::InvalidOptions);
-        }
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or(SshError::RemoteForwardUncertain)?;
+        pending.armed = false;
         Ok(bound)
     }
 
+    /// Revoke a server listener. Unconfirmed revocation closes this transport.
     pub async fn cancel_remote_forward(
         &self,
         address: impl Into<String>,
         port: u32,
     ) -> Result<(), SshError> {
         let address = address.into();
-        if address.trim().is_empty() || address.contains('\0') || port == 0 {
+        if address.trim().is_empty()
+            || address.contains('\0')
+            || port == 0
+            || port > u32::from(u16::MAX)
+        {
             return Err(SshError::InvalidOptions);
         }
-        tokio::time::timeout(
+        let mut pending = PendingRemoteForward {
+            connection: self,
+            armed: true,
+        };
+        match tokio::time::timeout(
             Duration::from_secs(12),
             self.handle.cancel_tcpip_forward(address, port),
         )
         .await
-        .map_err(|_| SshError::Timeout)?
-        .map_err(SshError::Channel)
+        {
+            Ok(Ok(())) => {
+                pending.armed = false;
+                Ok(())
+            }
+            _ => Err(SshError::RemoteForwardUncertain),
+        }
     }
 
     pub async fn next_forwarded_channel(&self) -> Option<SshForwardedChannel> {

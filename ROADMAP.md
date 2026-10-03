@@ -238,8 +238,12 @@ sustained-traffic or real remote-listener revocation gates.
 A later [explicit-port correction](docs/testing/tunnel-lifecycle.md#explicit-remote-ports-remain-cancellable--2026-10-03)
 keeps the actual remote endpoint when a successful server response omits its
 port. SDK and disposable localhost OpenSSH checks verify cancellation releases
-the listener before disconnect. Native Stop/Close/Quit, unresolved approval and
-timeout/revocation-failure recovery remain separate acceptance gates.
+the listener before disconnect. A subsequent SDK guard retires the SSH
+transport when a polled approval/revocation is dropped, times out or cannot
+be confirmed. Loopback checks cover late approval, rejected revocation and
+both production deadlines; normal refusal and successful Stop preserve the
+connection. Native Stop/Close/Quit and wider server/platform recovery remain
+separate acceptance gates. [Cleanup contract](docs/testing/tunnel-lifecycle.md#uncertain-remote-forwarding-retires-its-transport--2026-10-03).
 
 On main, [operation history retention](docs/testing/live-operation-history.md)
 keeps live tunnel/transfer rows and their Stop/Cancel controls available while

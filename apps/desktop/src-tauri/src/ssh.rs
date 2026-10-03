@@ -2850,7 +2850,7 @@ async fn run_remote_forward(
     let remote_port = tokio::select! {
         changed = request_cancel.changed() => {
             let message = if changed.is_err() || *request_cancel.borrow() {
-                "remote forward cancelled before the server listener was ready".to_owned()
+                "remote forward cancelled before the server listener was ready; reconnect if the SSH connection closed for listener cleanup".to_owned()
             } else {
                 "remote forward cancellation channel closed".to_owned()
             };

@@ -35,6 +35,16 @@ run with `cargo xtask test-ssh` and `cargo xtask check`. Remove these changes on
 when the concurrent stream and existing authentication regressions pass with
 an upstream replacement.
 
+The client handle additionally owns an `AbortHandle` for its packet task.
+`abort_transport` wakes an existing `Abortable` wrapper and drops the owned
+transport when that task is polled, without queuing a disconnect behind
+ordinary protocol messages. MobaRust uses this only when a remote-forward
+approval or revocation is unconfirmed: dropping a polled request, exceeding
+its deadline, malformed allocation or failed revocation retires that SSH
+connection. Confirmed forwarding and explicit approval refusal preserve the
+transport. Loopback regression: `cargo test --locked -p mobarust-ssh --test forwarding`.
+No upstream equivalent or upstream test-suite result is claimed.
+
 The workspace excludes this dependency from its own test targets, and its
 library test/doctest targets are disabled in the local manifest. Upstream
 examples, benchmarks, external tests, development dependencies, library/client

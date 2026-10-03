@@ -685,7 +685,11 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                         .expect("joined tunnel must release its listener before transport cleanup"),
                 );
             }
-            assert!(!server.is_finished());
+            if kind != "remote" {
+                assert!(!server.is_finished());
+            } else {
+                assert_eq!(connection.state(), mobarust_core::ConnectionState::Disconnected);
+            }
             connection.disconnect().await.unwrap();
             drop(connection);
             let result = server.await.unwrap();
