@@ -138,3 +138,12 @@ Quit cleanup for this Mac source candidate. It does not establish blocked-input
 GUI responsiveness, shortcut/focus acceptance, arbitrary descendant cleanup,
 Windows/Linux behavior, sustained output or installer acceptance. Those gates
 remain open; the focused manager regressions above retain their separate scope.
+
+### Pane targeting follow-up on main
+
+Terminal groups and xterm inputs now include the pane's displayed name in their
+accessible labels. Name changes update the input label without recreating the
+terminal. A theme-aware outline follows actual keyboard focus inside each pane,
+making the input destination visible when working with splits. TypeScript and
+lint checks cover this source change; updated native focus acceptance and
+published installers remain separate.
