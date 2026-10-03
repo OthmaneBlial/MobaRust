@@ -1,5 +1,36 @@
 # Dependency audit record
 
+## v0.1.27 release preparation audit — 2026-10-03
+
+A fresh workspace scan refreshed RustSec to commit
+`ef6173cbc5c50ec8166f9a5b28f07834144373ee` (1,290 advisories). The
+638-package workspace reports zero vulnerabilities and retains
+`RUSTSEC-2024-0370` (unmaintained proc-macro-error) and `RUSTSEC-2024-0429`
+(glib unsoundness) warnings. No-fetch checks against the same database report
+no vulnerabilities or warnings for VNC (82 packages) or fuzz (52 packages).
+The excluded RDP candidate (374 packages) still fails on `RUSTSEC-2023-0071`
+with unmaintained warnings `RUSTSEC-2023-0089` and `RUSTSEC-2025-0134`.
+No finding was suppressed; RDP remains outside normal installers.
+
+Semantic comparison of all four lockfiles confirms only local package versions
+changed from 0.1.26 to 0.1.27; third-party versions, sources, checksums and
+features are unchanged. This preparation includes the explicit UTF-8 and
+Windows-1252 Open workflow already verified on the
+[Mac source candidate](../testing/native-workflow.md#explicit-legacy-open-native-acceptance--2026-10-03).
+The version-aligned `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed on macOS ARM64: workspace tests/Clippy, frontend tests/type checks/lint/
+build, release/lab tooling, RDP/VNC loopback fixtures, packaging contracts and
+fuzz compilation. Coverage includes 108 desktop tests, 43 SSH unit tests,
+15 authentication cases, 25 OpenSSH cases, 22 SFTP boundary cases and 15
+editor/transfer fault cases. Four manual SSH labs remain opt-in; the real X11
+server case reported its missing-prerequisite skip. The first attempt stopped
+when the disk filled before workspace tests ran; after removing only this
+repository's regenerable incremental compiler cache, the same complete command
+passed without relaxing any assertion or timeout.
+
+Installers, native release-copy acceptance and publication remain separate gates.
+Public Mac downloads remain v0.1.26.
+
 ## v0.1.26 release preparation audit — 2026-10-03
 
 A fresh workspace scan refreshed RustSec to commit
