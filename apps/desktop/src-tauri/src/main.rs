@@ -1768,9 +1768,13 @@ fn terminal_spawn(
 }
 
 #[tauri::command]
-fn terminal_attach(manager: State<'_, TerminalManager>, terminal_id: String) -> Result<(), String> {
+async fn terminal_attach(
+    manager: State<'_, TerminalManager>,
+    terminal_id: String,
+) -> Result<(), String> {
     manager
         .attach(&terminal_id)
+        .await
         .map_err(|error| error.to_string())
 }
 

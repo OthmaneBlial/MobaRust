@@ -146,7 +146,12 @@ struct TerminalSession {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Arc<tokio::sync::Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
-    start: Mutex<Option<mpsc::Sender<()>>>,
+    start: Mutex<Option<TerminalStart>>,
+}
+
+struct TerminalStart {
+    ready: mpsc::Sender<()>,
+    startup_command: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -232,30 +237,23 @@ impl TerminalManager {
                 return Err(TerminalError::Open(anyhow::anyhow!(error)));
             }
         };
-        let mut writer = match pair.master.take_writer() {
+        let writer = match pair.master.take_writer() {
             Ok(writer) => writer,
             Err(error) => {
                 let _ = cleanup_child(child.as_mut());
                 return Err(TerminalError::Open(anyhow::anyhow!(error)));
             }
         };
-        if let Some(startup_command) = startup_command {
-            let startup_result = writer
-                .write_all(startup_command.as_bytes())
-                .and_then(|()| writer.write_all(b"\r"))
-                .and_then(|()| writer.flush());
-            if let Err(error) = startup_result {
-                let _ = cleanup_child(child.as_mut());
-                return Err(TerminalError::Io(error));
-            }
-        }
         let id = Uuid::new_v4().to_string();
         let (start, ready) = mpsc::channel();
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
             child: Mutex::new(child),
-            start: Mutex::new(Some(start)),
+            start: Mutex::new(Some(TerminalStart {
+                ready: start,
+                startup_command,
+            })),
         });
 
         let mut sessions = match self.sessions.lock() {
@@ -293,7 +291,7 @@ impl TerminalManager {
         Ok(id)
     }
 
-    pub fn attach(&self, id: &str) -> Result<(), TerminalError> {
+    pub async fn attach(&self, id: &str) -> Result<(), TerminalError> {
         let session = self.session(id)?;
         let start = session
             .start
@@ -301,10 +299,20 @@ impl TerminalManager {
             .map_err(|_| TerminalError::LockPoisoned)?
             .take()
             .ok_or(TerminalError::AlreadyAttached)?;
-        if start.send(()).is_err() {
+        if start.ready.send(()).is_err() {
             let _ = self.take_session(id);
             let _ = cleanup_session(&session);
             return Err(TerminalError::Io(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        // Start the output reader before sending saved input. The ID is
+        // already published, so Close can interrupt a blocked startup write.
+        if let Some(command) = start.startup_command {
+            let mut data = command.into_bytes();
+            data.push(b'\r');
+            if let Err(error) = self.write(id, data).await {
+                let _ = self.close(id);
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -841,8 +849,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn attaching_then_closing_a_running_pty_reaps_the_fixture_child() {
+    #[tokio::test]
+    async fn attaching_then_closing_a_running_pty_reaps_the_fixture_child() {
         let system = portable_pty::native_pty_system();
         let pair = system
             .openpty(PtySize {
@@ -869,16 +877,22 @@ mod tests {
                     master: Mutex::new(pair.master),
                     writer: Arc::new(tokio::sync::Mutex::new(writer)),
                     child: Mutex::new(child),
-                    start: Mutex::new(Some(start)),
+                    start: Mutex::new(Some(TerminalStart {
+                        ready: start,
+                        startup_command: None,
+                    })),
                 }),
             );
 
-        manager.attach("cleanup-fixture").expect("attach fixture");
+        manager
+            .attach("cleanup-fixture")
+            .await
+            .expect("attach fixture");
         ready
             .recv_timeout(Duration::from_secs(1))
             .expect("release reader after attach");
         assert!(matches!(
-            manager.attach("cleanup-fixture"),
+            manager.attach("cleanup-fixture").await,
             Err(TerminalError::AlreadyAttached)
         ));
         manager
@@ -953,6 +967,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_non_reading_pty_does_not_block_async_input_or_close() {
+        assert_non_reading_pty_responsive(false).await;
+        assert_non_reading_pty_responsive(true).await;
+    }
+
+    #[cfg(unix)]
+    async fn assert_non_reading_pty_responsive(startup: bool) {
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -972,11 +992,15 @@ mod tests {
         command.args(["-c", "stty raw -echo; printf READY; exec sleep 10"]);
         let child = pair.slave.spawn_command(command).expect("spawn fixture");
         drop(pair.slave);
+        let (start, attached) = mpsc::channel();
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
             child: Mutex::new(child),
-            start: Mutex::new(None),
+            start: Mutex::new(startup.then(|| TerminalStart {
+                ready: start,
+                startup_command: Some("x".repeat(mobarust_core::MAX_SESSION_STARTUP_COMMAND_BYTES)),
+            })),
         });
         let manager = TerminalManager::default();
         manager
@@ -991,19 +1015,58 @@ mod tests {
             let _ = ready_tx.send(result);
         });
         let ready = ready_rx.recv_timeout(Duration::from_secs(2));
+        // PTY input capacities differ by OS. Fill this disposable input pipe
+        // without blocking before testing a valid 16 KiB startup command.
+        let pressured = if startup {
+            let fd = session.master.lock().unwrap().as_raw_fd().unwrap();
+            // SAFETY: the descriptor belongs to this live, private test PTY.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            let nonblocking = flags >= 0
+                && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0;
+            let mut full = false;
+            if nonblocking {
+                let mut writer = session.writer.try_lock().unwrap();
+                for _ in 0..1024 {
+                    match writer.write(&[b'x'; 1024]) {
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            full = true;
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Ok(size) if size > 0 => {}
+                        _ => break,
+                    }
+                }
+            }
+            // Restore the original flags before any production write runs.
+            let restored = nonblocking && unsafe { libc::fcntl(fd, libc::F_SETFL, flags) } == 0;
+            full && restored
+        } else {
+            true
+        };
         let write_manager = manager.clone();
         let write = tokio::spawn(async move {
-            write_manager
-                .write(
-                    "non-reader",
-                    vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES],
-                )
-                .await
+            if startup {
+                write_manager.attach("non-reader").await
+            } else {
+                write_manager
+                    .write(
+                        "non-reader",
+                        vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES],
+                    )
+                    .await
+            }
         });
         let started = std::time::Instant::now();
         tokio::time::sleep(Duration::from_millis(100)).await;
         let responsive = started.elapsed() < Duration::from_secs(2);
         let blocked = !write.is_finished();
+        let attached_before_write_finished = !startup || attached.try_recv().is_ok();
+        let repeat_rejected = !startup
+            || matches!(
+                manager.attach("non-reader").await,
+                Err(TerminalError::AlreadyAttached)
+            );
         let busy = manager.write("non-reader", b"tail".to_vec()).await;
         // Cleanup before asserting: close never needs the input writer lock.
         let close = manager.close("non-reader");
@@ -1012,8 +1075,20 @@ mod tests {
         drop(session);
         reader_thread.join().expect("join fixture readiness reader");
         assert!(matches!(ready, Ok(Ok(bytes)) if bytes == *b"READY"));
+        assert!(
+            pressured,
+            "startup fixture must fill and restore its input pipe"
+        );
         assert!(responsive, "blocked write stalled the async runtime");
         assert!(blocked, "fixture must actually stop reading PTY input");
+        assert!(
+            attached_before_write_finished,
+            "release output before startup input"
+        );
+        assert!(
+            repeat_rejected,
+            "startup must not be replayed by another attach"
+        );
         assert!(matches!(busy, Err(TerminalError::InputBusy)));
         close.expect("close non-reading child");
         assert!(matches!(closed, Ok(Some(_))), "child must be reaped");

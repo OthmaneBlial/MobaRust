@@ -805,6 +805,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
     let unlistenState: UnlistenFn | undefined;
     let unlistenX11: UnlistenFn | undefined;
     let hasReportedRemoteError = false;
+    let terminalClosed = false;
     const releaseListeners = () => {
       unlistenOutput?.();
       unlistenClosed?.();
@@ -927,6 +928,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         });
         unlistenClosed = await listen<TerminalClosedEvent>(closedEvent, (event) => {
           if (event.payload.terminalId !== terminalIdRef.current) return;
+          terminalClosed = true;
           const error = remoteSessionCloseError(remoteProtocol, event.payload.reason);
           if (error && !hasReportedRemoteError) terminal.writeln(`\r\n\x1b[38;5;203m${error}\x1b[0m`);
           onStatusChange(workspaceId, remoteSessionCloseStatus(remoteProtocol, event.payload.reason));
@@ -982,9 +984,9 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         }
         terminalIdRef.current = terminalId;
         onNativeTerminalId(workspaceId, terminalId);
-        onStatusChange(workspaceId, "connected");
         fit();
         await invoke("terminal_attach", { terminalId });
+        if (!disposed && !terminalClosed) onStatusChange(workspaceId, "connected");
       } catch {
         if (disposed) {
           releaseListeners();
@@ -999,7 +1001,7 @@ function TerminalViewport({ colorTheme, workspaceId, instanceKey, remoteSessionI
         onStatusChange(workspaceId, "error");
         const message = remoteProtocol
           ? `Unable to initialize the ${remoteProtocol.toUpperCase()} terminal session.`
-          : "Unable to start the local PTY.";
+          : "Unable to start the local PTY. Close this pane and retry; check the saved shell and startup settings.";
         terminal.writeln(`\r\n\x1b[38;5;203m${message}\x1b[0m`);
       }
     };
@@ -1797,6 +1799,7 @@ function App() {
   const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string, beforeSend?: () => void) => {
     const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
     if (!terminal) return Promise.reject(new Error("terminal target no longer exists"));
+    if (terminalAuditStateRef.current.get(workspaceId) !== "connected") return Promise.reject(new Error("terminal is not ready; input was not sent"));
     if (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") {
       return Promise.reject(new Error("broadcast text input is not available for remote desktop sessions"));
     }

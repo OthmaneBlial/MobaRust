@@ -132,6 +132,8 @@ At that v0.1.17 milestone, the SSH lab had **42 unit tests, eight Rust authentic
 Main also bounds and orders pending input, cancels stale queued actions, and
 moves local PTY writes off the UI thread. [Input-pressure regression scope](docs/testing/terminal-input.md)
 does not close the native GUI or Windows ConPTY acceptance gates.
+Saved local startup input now uses that worker after attachment, with the
+terminal ID available for Close while startup is pending.
 
 The v0.1.20 Mac preview includes startup output ordering corrections across SSH, Telnet and serial
 attachment. Native manager regressions verify replay under the publication lock;
