@@ -226,7 +226,10 @@ gate above; v0.1.26 ships the encoding-selector wire fix and passed the stated
 release-copy conversion checks. Windows/Linux execution remains pending.
 The v0.1.26 GUI Open still requires UTF-8. Newer source now provides an explicit
 UTF-8/Windows-1252 **Open text as** choice through the existing bounded reader;
-native acceptance and shipping remain the next editor gates. [Behavior and
+the production ARM64 candidate passed native legacy Open/Save/reopen, UTF-8
+conversion and normal Quit with exact bytes/modes and complete fixture cleanup.
+[Native receipt](docs/testing/native-workflow.md#explicit-legacy-open-native-acceptance--2026-10-03).
+Shipping and Windows/Linux acceptance remain the next gates. [Behavior and
 regressions](docs/adr/0022-bounded-remote-text-editor.md#explicit-legacy-encoding-open-on-main--2026-10-03).
 Public v0.1.25 retains its selector defect.
 

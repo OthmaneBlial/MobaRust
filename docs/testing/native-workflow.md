@@ -1,5 +1,44 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## Explicit legacy Open native acceptance — 2026-10-03
+
+A production ARM64 candidate from source `4a7625cdfd8fb0e1e05a583c99a1662f154953ae`
+passed the new input-encoding workflow. It reports version 0.1.26 but is a
+newer source build, not the public v0.1.26 installer. Its clean packaged runtime
+SHA-256 was `b935084008e083700c6351069659abd5461ee371fd3173b103aa35821ddb3ac9`.
+Only the disposable app copy received lab metadata/state and an ad hoc signature.
+The offline build, package layout, signature and isolated CLI checks passed.
+
+- Default UTF-8 Open visibly refused the existing five-byte Windows-1252 file,
+  preserving its bytes and mode `0640` without creating editor parts.
+- Selecting Windows-1252 in **Open text as** and clicking Edit opened `café`
+  plus newline correctly. The editor showed Windows-1252, clean state and
+  disabled Save; the earlier UTF-8 error cleared.
+- Editing and saving `café · €` plus newline wrote exactly nine Windows-1252
+  bytes with mode `0640`. Close/reopen loaded those bytes correctly and cleanly.
+- Changing **Save encoding** to UTF-8 marked the document dirty. Save wrote
+  exactly 13 UTF-8 bytes with `0640`; selecting UTF-8 in the browser and
+  reopening loaded the same text with the correct encoding and clean state.
+- Neighboring generated files were unchanged and no editor parts remained.
+  Native screenshot inspection showed the toolbar controls wrapping within
+  the tested window and the input-encoding control visible.
+- Normal native menu Quit with the clean editor, SSH and local PTY active
+  reaped the owned app, local child, server session children and connections.
+  After the owned stop marker, the manual harness exited successfully, removed
+  its private root and daemon, and its loopback port was reusable.
+
+Actual process HOME/ZDOTDIR/XDG isolation and empty agent settings were checked
+before connection and again before Quit. The SSH server listened only on
+`127.0.0.1`; all profiles, keys and files were generated for this lab. No
+personal SSH files, agent, Remote Login or firewall/router settings changed.
+The version-aligned full local suite passed before the build, including 108
+desktop tests and the [explicit-open regressions](../adr/0022-bounded-remote-text-editor.md#explicit-legacy-encoding-open-on-main--2026-10-03).
+
+This is short macOS ARM64 source-candidate acceptance. Public v0.1.26 still
+opens UTF-8 only. Updated installers, Windows/Linux, warning focus, uncertain
+promotion recovery, listing-limit refusals and sustained use remain separate.
+The existing walkthrough remains the real v0.1.17 recording.
+
 ## v0.1.26 ARM64 release-copy editor acceptance — 2026-10-03
 
 A disposable app copy came from the verified v0.1.26 ARM64 DMG, source/tag

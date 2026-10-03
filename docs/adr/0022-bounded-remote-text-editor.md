@@ -275,7 +275,14 @@ isolated RDP/VNC fixtures, package-layout contracts and fuzz compilation.
 The four manual SSH labs remain opt-in; real Xvfb reported its prerequisite
 skip. Both GitHub workflows remain disabled; no timeout or assertion was relaxed.
 
-The new selector is source work after the public v0.1.26 release. Native GUI
-acceptance and new installers are separate gates; the v0.1.26 downloads still
-open UTF-8 only. Bounds, symlink/file-type refusal, byte conflicts and lossy-write
-refusal use the existing reader/writer rather than a parallel implementation.
+The subsequently built ARM64 production candidate from `4a7625c` passed
+native default-UTF-8 refusal, explicit Windows-1252 Open, legacy Save/reopen,
+UTF-8 conversion/reopen, byte/mode checks and normal Quit with active SSH/local
+PTY. Its owned fixture root/daemon were removed and its loopback port was
+reusable. [Native receipt and limits](../testing/native-workflow.md#explicit-legacy-open-native-acceptance--2026-10-03).
+
+The new selector is source work after the public v0.1.26 release. Updated
+installers and Windows/Linux native acceptance remain separate gates; the
+v0.1.26 downloads still open UTF-8 only. Bounds, symlink/file-type refusal,
+byte conflicts and lossy-write refusal use the existing reader/writer rather
+than a parallel implementation.
