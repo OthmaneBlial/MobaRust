@@ -3912,13 +3912,8 @@ fn validate_remote_directory_path(path: &str) -> Result<String, SshManagerError>
 }
 
 fn validate_remote_mutation_path(path: &str) -> Result<String, SshManagerError> {
-    let path = validate_remote_directory_path(path)?;
-    if path == "." || path == "/" {
-        return Err(SshManagerError::InvalidRequest(
-            "remote root cannot be modified through this command".into(),
-        ));
-    }
-    Ok(path)
+    mobarust_ssh::validate_remote_mutation_path(path)
+        .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))
 }
 
 fn validate_local_file_path(path: &str) -> Result<PathBuf, SshManagerError> {
@@ -4207,6 +4202,90 @@ mod tests {
         assert!(validate_remote_file_path("   ").is_err());
         assert!(validate_remote_file_path("/").is_err());
         assert!(validate_remote_mutation_path("/").is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_mutations_require_named_paths_before_session_lookup() {
+        let manager = SshManager::default();
+        let mut failures = Vec::new();
+        for path in [
+            "",
+            " \t ",
+            "/srv/nul\0name",
+            "/",
+            ".",
+            "//",
+            "///",
+            "./",
+            "././",
+            "..",
+            "../",
+            "../../",
+            "/./",
+            "/..",
+            "/../",
+            "/./.././",
+            "/srv/.",
+            "/srv/./",
+            "/srv/..",
+            "/srv/..///",
+            "folder/.",
+            "folder/..",
+        ] {
+            for (operation, result) in [
+                (
+                    "rename-from",
+                    manager
+                        .rename_remote("missing", path.into(), "report".into())
+                        .await,
+                ),
+                (
+                    "rename-to",
+                    manager
+                        .rename_remote("missing", "report".into(), path.into())
+                        .await,
+                ),
+                (
+                    "delete",
+                    manager.delete_remote("missing", path.into()).await,
+                ),
+                (
+                    "mkdir",
+                    manager
+                        .create_remote_directory("missing", path.into())
+                        .await,
+                ),
+                (
+                    "permissions",
+                    manager
+                        .set_remote_permissions("missing", path.into(), 0o600)
+                        .await,
+                ),
+            ] {
+                if !matches!(result, Err(SshManagerError::InvalidRequest(_))) {
+                    failures.push(format!("{operation}: {path:?}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "mutation aliases reached session lookup: {failures:?}"
+        );
+        for (path, expected) in [
+            ("/srv/report ", "/srv/report "),
+            (" ./report ", " ./report "),
+            ("./report", "./report"),
+            ("../report", "../report"),
+            ("/srv/../report", "/srv/../report"),
+            (".notes", ".notes"),
+            ("...", "..."),
+            ("résumé file", "résumé file"),
+            ("/srv/folder/", "/srv/folder"),
+            ("/srv/folder///", "/srv/folder"),
+            ("/srv//report", "/srv//report"),
+        ] {
+            assert_eq!(validate_remote_mutation_path(path).unwrap(), expected);
+        }
     }
 
     #[test]

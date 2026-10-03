@@ -51,6 +51,8 @@ struct State {
     post_promotion_reads: usize,
     writes: usize,
     renames: usize,
+    setstats: usize,
+    lstats: usize,
     cancel_on_close: Option<oneshot::Sender<()>>,
     opens: usize,
     reads: usize,
@@ -82,6 +84,7 @@ impl russh_sftp::server::Handler for Sftp {
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let mut state = self.state.lock().unwrap();
+        state.lstats += 1;
         if state.promoted && path == TARGET {
             state.post_promotion_reads += 1;
             if state.fault == Fault::RereadDenied {
@@ -230,6 +233,21 @@ impl russh_sftp::server::Handler for Sftp {
         Ok(ok(id))
     }
 
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let mut state = self.state.lock().unwrap();
+        state.setstats += 1;
+        let file = state.files.get_mut(&path).ok_or(StatusCode::NoSuchFile)?;
+        let permissions = attrs.permissions.unwrap();
+        assert!(permissions <= 0o7777);
+        file.mode = (file.mode & 0o170000) | permissions;
+        Ok(ok(id))
+    }
+
     async fn fsetstat(
         &mut self,
         id: u32,
@@ -369,6 +387,8 @@ impl Fixture {
             post_promotion_reads: 0,
             writes: 0,
             renames: 0,
+            setstats: 0,
+            lstats: 0,
             cancel_on_close: None,
             opens: 0,
             reads: 0,
@@ -437,6 +457,102 @@ impl Drop for Fixture {
         if let Some(worker) = self.worker.take() {
             worker.abort();
         }
+    }
+}
+
+#[tokio::test]
+async fn remote_permission_guards_refuse_unknown_types_and_preserve_special_modes() {
+    let mut failures = Vec::new();
+    for mode in [None, Some(0), Some(0o120777), Some(0o170600)] {
+        for suffix in ["", "///"] {
+            let fixture = Fixture::connect(
+                if mode.is_none() {
+                    Fault::MissingTypeMetadata
+                } else {
+                    Fault::None
+                },
+                true,
+            )
+            .await;
+            if let Some(mode) = mode {
+                fixture
+                    .state
+                    .lock()
+                    .unwrap()
+                    .files
+                    .get_mut(TARGET)
+                    .unwrap()
+                    .mode = mode;
+            }
+            let sftp = fixture.connection.open_sftp().await.unwrap();
+            let result = sftp
+                .set_permissions(format!("{TARGET}{suffix}"), 0o600)
+                .await;
+            let refused = if mode == Some(0o120777) {
+                matches!(result, Err(SshError::RemotePermissionsTargetSymlink))
+            } else {
+                matches!(result, Err(SshError::RemotePermissionsTargetUnsupported))
+            };
+            {
+                let state = fixture.state.lock().unwrap();
+                if !refused
+                    || state.setstats != 0
+                    || state.files[TARGET].mode != mode.unwrap_or(0o100640)
+                {
+                    failures.push(format!(
+                        "mode={mode:?}, suffix={suffix:?}, result={result:?}, SETSTAT={}",
+                        state.setstats
+                    ));
+                }
+                assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+                assert_eq!((state.opens, state.reads), (0, 0));
+            }
+            sftp.close().await.unwrap();
+            fixture.finish().await;
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unsafe permission changes: {failures:?}"
+    );
+
+    for kind in [0o100000, 0o040000, 0o010000, 0o020000, 0o060000, 0o140000] {
+        let fixture = Fixture::connect(Fault::None, true).await;
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .files
+            .get_mut(TARGET)
+            .unwrap()
+            .mode = kind;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        // A mode-000 entry remains repairable without opening its contents.
+        sftp.set_permissions(format!("{TARGET}///"), 0o640)
+            .await
+            .unwrap();
+        for alias in ["/", "//", ".", "./", "..", "/srv/..///"] {
+            assert!(matches!(
+                sftp.set_permissions(alias, 0o600).await,
+                Err(SshError::InvalidRemoteMutationPath)
+            ));
+            assert!(matches!(
+                sftp.remove_path(alias).await,
+                Err(SshError::InvalidRemoteMutationPath)
+            ));
+        }
+        assert!(sftp.set_permissions(TARGET, 0o10000).await.is_err());
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[TARGET].mode, kind | 0o640);
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert_eq!(
+                (state.lstats, state.setstats, state.opens, state.reads),
+                (1, 1, 0, 0)
+            );
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
     }
 }
 

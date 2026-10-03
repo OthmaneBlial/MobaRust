@@ -3243,6 +3243,10 @@ function App() {
     if (!remoteSessionId) return;
     const stillConnected = pinRemoteFileConnection(remoteSessionId);
     if (!stillConnected()) return;
+    if (entry.isSymlink) {
+      setConnectionError("Select the link target explicitly to change its permissions.");
+      return;
+    }
     const current = entry.permissions == null ? "644" : (entry.permissions & 0o7777).toString(8).padStart(3, "0");
     const value = await promptText(`Set POSIX mode for ${quoteRemotePromptPath(entry.path)} (octal 0000–7777)`, current);
     if (value === null || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;

@@ -1186,6 +1186,8 @@ fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
             "empty-directory",
             "file-link",
             "directory-link",
+            "directory-link-slash",
+            "directory-link-slashes",
             "dangling-link",
             "socket",
         ] {
@@ -1203,7 +1205,9 @@ fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
                     std::os::unix::fs::symlink(
                         match kind {
                             "file-link" => &victim,
-                            "directory-link" => &directory,
+                            "directory-link"
+                            | "directory-link-slash"
+                            | "directory-link-slashes" => &directory,
                             _ => &missing,
                         },
                         &selected,
@@ -1212,7 +1216,15 @@ fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
                     None
                 }
             };
-            match sftp.remove_path(selected.to_str().unwrap()).await {
+            let suffix = match kind {
+                "directory-link-slash" => "/",
+                "directory-link-slashes" => "///",
+                _ => "",
+            };
+            match sftp
+                .remove_path(format!("{}{suffix}", selected.display()))
+                .await
+            {
                 Ok(()) => assert!(
                     matches!(
                         fs::symlink_metadata(&selected),
@@ -1245,6 +1257,103 @@ fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
         sftp.close().await.unwrap();
         connection.disconnect().await.unwrap();
         assert!(failures.is_empty(), "entry deletion failures: {failures:?}");
+    });
+}
+
+#[test]
+fn remote_permission_changes_require_an_explicit_non_link_target() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let victim = fixture.directory.path().join("permission-victim");
+        let directory = fixture.directory.path().join("permission-directory");
+        let missing = fixture.directory.path().join("permission-missing");
+        let selected = fixture.directory.path().join("permission-link");
+        fs::write(&victim, b"unchanged permission target").unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("child"), b"unchanged permission child").unwrap();
+        let mut failures = Vec::new();
+        for (kind, target, suffix) in [
+            ("file", &victim, ""),
+            ("directory", &directory, ""),
+            ("directory-slash", &directory, "/"),
+            ("directory-slashes", &directory, "///"),
+            ("dangling", &missing, ""),
+        ] {
+            fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            std::os::unix::fs::symlink(target, &selected).unwrap();
+            let result = sftp
+                .set_permissions(format!("{}{suffix}", selected.display()), 0o777)
+                .await;
+            let file_mode = fs::metadata(&victim).unwrap().permissions().mode() & 0o7777;
+            let directory_mode = fs::metadata(&directory).unwrap().permissions().mode() & 0o7777;
+            if !matches!(result, Err(SshError::RemotePermissionsTargetSymlink))
+                || file_mode != 0o600
+                || directory_mode != 0o700
+            {
+                failures.push(format!(
+                    "{kind}: {result:?}, file={file_mode:o}, directory={directory_mode:o}"
+                ));
+            }
+            assert_eq!(fs::read_link(&selected).unwrap(), *target);
+            assert_eq!(fs::read(&victim).unwrap(), b"unchanged permission target");
+            assert_eq!(
+                fs::read(directory.join("child")).unwrap(),
+                b"unchanged permission child"
+            );
+            assert!(!missing.exists());
+            fs::remove_file(&selected).unwrap();
+        }
+        // Chmod does not require reading a mode-000 file or opening a socket.
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o000)).unwrap();
+        sftp.set_permissions(victim.to_str().unwrap(), 0o640)
+            .await
+            .unwrap();
+        sftp.set_permissions(format!("{}///", directory.display()), 0o750)
+            .await
+            .unwrap();
+        let socket_path = fixture.directory.path().join("permission-socket");
+        let socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        sftp.set_permissions(socket_path.to_str().unwrap(), 0o700)
+            .await
+            .unwrap();
+        assert!(
+            sftp.set_permissions(victim.to_str().unwrap(), 0o10000)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            sftp.set_permissions(missing.to_str().unwrap(), 0o600).await,
+            Err(SshError::SftpPathMissing)
+        ));
+        assert_eq!(
+            fs::metadata(&victim).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o7777,
+            0o750
+        );
+        assert_eq!(
+            fs::metadata(&socket_path).unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        assert_eq!(fs::read(&victim).unwrap(), b"unchanged permission target");
+        assert_eq!(
+            fs::read(directory.join("child")).unwrap(),
+            b"unchanged permission child"
+        );
+        drop(socket);
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+        assert!(
+            failures.is_empty(),
+            "permission target failures: {failures:?}"
+        );
     });
 }
 

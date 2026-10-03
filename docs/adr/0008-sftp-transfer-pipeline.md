@@ -91,7 +91,13 @@ bounded POSIX permission changes) use separate native SFTP jobs as well. They ar
 session loop, so a slow directory operation cannot stop the shell reader from
 forwarding terminal output. Delete inspects no-follow remote metadata in Rust
 instead of trusting a frontend-provided file type: final-path links are unlinked,
-and only real empty directories use RMDIR. Literal `/` and `.` mutation paths are rejected.
+and only real empty directories use RMDIR. Native mutations require a named final
+entry: root aliases and final `.`/`..` components refuse before session lookup.
+Trailing slashes are removed before no-follow inspection; significant whitespace
+and interior/leading components remain unchanged. Permission changes use fresh
+LSTAT type metadata, refuse final symlinks and unknown types, and require explicit
+selection of a link's target. Known special entries remain chmod-capable without
+opening their contents.
 The confirmation names symbolic links and explains the empty-directory limit.
 
 ## Rationale
@@ -366,3 +372,65 @@ remain pending. The LSTAT and removal requests are separate: concurrent path
 replacement, ancestor links and a dishonest server remain limitations. This
 does not add recursive deletion or change literal root-path validation. Published
 v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged.
+
+## Named mutations and explicit permission targets — 2026-10-03
+
+The native guard previously refused only literal `/` and `.`. A regression
+against the actual empty-session manager reproduced 85 aliases reaching session
+lookup across rename source/destination, Delete, mkdir and chmod. No remote
+request or real root mutation is needed to exercise that boundary.
+
+The shared path helper now rejects empty/NUL paths, slash-only roots and a final
+`.` or `..` component. It removes trailing slash separators before mutation,
+preserving filenames with significant whitespace, Unicode, repeated interior
+separators and relative parent prefixes. It intentionally does not collapse
+`..`: ancestor symlink traversal belongs to the server's namespace. The native
+operations all use this helper; library `remove_path` and `set_permissions` also
+enforce it directly. Low-level SFTP rename/create/remove APIs retain their
+caller-controlled semantics.
+
+The chmod baseline changed a real file/directory symlink's target mode, including
+directory links with `/` and `///` suffixes. Dangling links returned missing-path
+instead of the link-specific refusal. The memory peer also recorded SETSTAT
+requests for all eight missing/zero/link/unknown-type selections. The existing
+Delete regression reproduced refusal for both directory-link slash suffixes.
+
+Chmod now bounds the mode and validates the path before any request, performs
+LSTAT, then sends SETSTAT only for known regular/directory/FIFO/character/block/
+Unix-socket types. Missing or unknown types refuse; final links return an
+instruction to select the target explicitly. The frontend gives that instruction
+before its mode prompt when a listing identifies a link; Rust revalidates live
+metadata regardless of the listing. Upload promotion's regular-part mode restore
+uses the same guard. No file OPEN is required to repair an owned mode-000 entry.
+
+```text
+cargo test --locked --workspace ssh::tests::remote_mutations_require_named_paths_before_session_lookup -- --exact --show-output
+cargo test --locked -p mobarust-ssh --test remote_editor remote_permission_guards -- --show-output
+cargo test --locked -p mobarust-ssh --test local_sshd remote_permission_changes -- --show-output
+cargo test --locked -p mobarust-ssh --test local_sshd deleting_remote_entries -- --show-output
+cargo xtask check
+```
+
+The checks cover refusal before session lookup, zero SETSTAT/OPEN/READ for unsafe
+metadata, preserved bytes/modes/links, mode-000 recovery, normal directory/socket
+chmod and typed missing-path/invalid-mode refusals. In-memory positive controls
+preserve all six supported type masks without opening an entry. Root aliases
+never reach a real server; all OpenSSH paths belong to an owned loopback fixture.
+
+The final full local `cargo xtask check` exited successfully on macOS ARM64:
+107 desktop tests, 42 SSH unit tests, 15 authenticated fixture tests (three
+manual probes ignored), all 25 OpenSSH cases (29.90 seconds), 14 SFTP fault
+tests, 20 packet/offset checks, three metadata checks and five private SDK tests
+passed. Workspace tests/Clippy, frontend tests/typecheck/lint/build,
+release/isolated-launcher tests, RDP/VNC helper checks, unsigned package-layout
+checks and fuzz-target compilation also passed. The first full attempt stopped
+at a test-only octal-literal lint; the equivalent `0o000` correction passed the
+rerun without relaxing assertions. The real X11 server fixture explicitly
+skipped its unavailable Xvfb/safe-socket prerequisite; external X11 acceptance
+remains unverified.
+
+This is a final-entry policy, not a filesystem sandbox: a named path can itself
+alias a directory through an ancestor link or server mount. LSTAT and SETSTAT/
+REMOVE remain separate requests, so concurrent swaps and dishonest metadata are
+not prevented. Native dialogue/connection lifecycle acceptance, Windows/Linux
+metadata and updated installers remain pending. Published previews are unchanged.

@@ -167,6 +167,14 @@ pub enum SshError {
     #[error("download source type is missing or unsupported; choose a regular file")]
     RemoteDownloadSourceUnsupported,
     #[error(
+        "remote mutation must name a file or directory; root and dot references are not allowed"
+    )]
+    InvalidRemoteMutationPath,
+    #[error("select the link target explicitly to change its permissions")]
+    RemotePermissionsTargetSymlink,
+    #[error("permissions target type is missing or unsupported; refresh and choose a known entry")]
+    RemotePermissionsTargetUnsupported,
+    #[error(
         "operation failed and a temporary remote file could not be removed; inspect the destination folder for a hidden .mobarust-* file"
     )]
     RemoteTemporaryCleanupFailed,
@@ -194,6 +202,20 @@ pub enum SshError {
     X11Display(#[from] X11DisplayError),
     #[error("X11 display connection failed: {0}")]
     X11Transport(String),
+}
+
+/// Require a named final entry for remote mutations. Strip trailing separators
+/// so LSTAT still inspects the link itself; preserve spaces and parent prefixes.
+/// This does not resolve ancestor symlinks or normalize the server's namespace.
+pub fn validate_remote_mutation_path(path: &str) -> Result<String, SshError> {
+    if path.trim().is_empty() || path.contains('\0') {
+        return Err(SshError::InvalidRemoteMutationPath);
+    }
+    let path = path.trim_end_matches('/');
+    if matches!(path.rsplit('/').next(), Some("" | "." | "..")) {
+        return Err(SshError::InvalidRemoteMutationPath);
+    }
+    Ok(path.to_owned())
 }
 
 /// Validate a host name or address used by an SSH forwarding channel.
@@ -2558,9 +2580,9 @@ impl SftpConnection {
         }
     }
 
-    /// Change only the permission bits of a remote path. The caller validates
-    /// the path and the bounded POSIX mode before this operation reaches the
-    /// SFTP server; no shell command is involved.
+    /// Change permission bits only for a named entry with a known non-link type.
+    /// LSTAT precedes SETSTAT without opening the entry, so mode-000 files and
+    /// special entries remain repairable. Separate requests cannot prevent swaps.
     pub async fn set_permissions(
         &self,
         path: impl Into<String>,
@@ -2570,6 +2592,19 @@ impl SftpConnection {
             return Err(SshError::Sftp(
                 "remote permissions must be an octal mode between 0000 and 7777".into(),
             ));
+        }
+        let path = validate_remote_mutation_path(&path.into())?;
+        let existing = self
+            .session
+            .symlink_metadata(&path)
+            .await
+            .map_err(map_sftp_error)?;
+        match existing.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK) {
+            Some(SFTP_SYMLINK_TYPE) => return Err(SshError::RemotePermissionsTargetSymlink),
+            Some(
+                0o010000 | 0o020000 | SFTP_DIRECTORY_TYPE | 0o060000 | SFTP_REGULAR_TYPE | 0o140000,
+            ) => {}
+            _ => return Err(SshError::RemotePermissionsTargetUnsupported),
         }
         let mut metadata = russh_sftp::client::fs::Metadata::empty();
         metadata.permissions = Some(permissions);
@@ -2921,7 +2956,7 @@ impl SftpConnection {
     /// Remove one entry or an empty directory, never recursively. Final-path
     /// symlinks, including dangling/directory links, are unlinked themselves.
     pub async fn remove_path(&self, path: impl Into<String>) -> Result<(), SshError> {
-        let path = path.into();
+        let path = validate_remote_mutation_path(&path.into())?;
         if self.is_real_directory(&path).await? {
             self.remove_dir(path).await
         } else {

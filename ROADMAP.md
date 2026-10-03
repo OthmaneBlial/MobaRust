@@ -165,6 +165,12 @@ SFTP downloads now require regular STAT/FSTAT types before file reads, reject
 unsafe sources and observe cancellation/close replies. [Source and shutdown checks](docs/adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
 also cover direct-upload cancellation and failed pending WRITE replies.
 Native/recursive acceptance and new installers remain pending; this does not close a checklist gate.
+Native rename, Delete, mkdir and chmod now require a named final entry before
+session lookup. The shared guard handles root/dot aliases and trailing slashes;
+chmod also refuses live final symlinks or unknown types without opening contents.
+[Path and permission regressions](docs/adr/0008-sftp-transfer-pipeline.md#named-mutations-and-explicit-permission-targets--2026-10-03)
+preserve targets and retain mode-000/special-entry repair. Native and wider-platform
+acceptance and new installers remain pending; the checklist is unchanged.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
