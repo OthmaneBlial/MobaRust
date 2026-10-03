@@ -221,6 +221,13 @@ session. Excess work receives an explicit busy failure; input and independent
 resize remain available. Native saturation/Retry, many-session/IPC pressure
 and wider-platform checks remain pending; published installers are unchanged.
 
+Finite actions and transfer/tunnel starts also use [immediate command queue
+admission](docs/testing/transfer-lifecycle.md#immediate-command-queue-admission-after-v0129--2026-10-03):
+a full queue refuses explicitly before cancellation controls are registered,
+instead of retaining callers waiting for capacity. Terminal input keeps
+backpressure. Listener binding, active tunnel counts and total IPC/process
+memory remain separate concerns; the checklist is unchanged.
+
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.

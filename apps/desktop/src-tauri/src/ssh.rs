@@ -29,6 +29,8 @@ use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
 const SESSION_OPERATION_LIMIT: usize = 32;
+const COMMAND_QUEUE_BUSY: &str =
+    "SSH command queue is full; wait for queued actions to finish, then retry explicitly";
 const SESSION_OPERATION_BUSY: &str =
     "SSH session is busy; wait for an operation to finish, then retry explicitly";
 const QUEUED_COMMAND_CANCELLED: &str =
@@ -941,10 +943,8 @@ impl SshManager {
     ) -> Result<Vec<mobarust_ssh::RemoteEntry>, SshManagerError> {
         let path = validate_remote_directory_path(&path)?;
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::ListDirectory { path, reply })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::ListDirectory { path, reply });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -959,14 +959,12 @@ impl SshManager {
     ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
         let path = validate_remote_file_path(&path)?;
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::OpenTextFile {
-                path,
-                encoding,
-                reply,
-            })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::OpenTextFile {
+            path,
+            encoding,
+            reply,
+        });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -978,10 +976,8 @@ impl SshManager {
         terminal_id: &str,
     ) -> Result<mobarust_ssh::RemoteMonitorSnapshot, SshManagerError> {
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::CollectMonitor { reply })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::CollectMonitor { reply });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -1008,16 +1004,14 @@ impl SshManager {
             ));
         }
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::SaveTextFile {
-                path,
-                expected_revision,
-                content,
-                encoding,
-                reply,
-            })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::SaveTextFile {
+            path,
+            expected_revision,
+            content,
+            encoding,
+            reply,
+        });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -1039,16 +1033,14 @@ impl SshManager {
             ));
         }
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::SaveTextFileAs {
-                path,
-                content,
-                encoding,
-                overwrite,
-                reply,
-            })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::SaveTextFileAs {
+            path,
+            content,
+            encoding,
+            overwrite,
+            reply,
+        });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -1112,10 +1104,8 @@ impl SshManager {
         operation: SshFileOperation,
     ) -> Result<(), SshManagerError> {
         let (reply, response) = oneshot::channel();
-        self.sender(terminal_id)?
-            .send(SshCommand::FileOperation { operation, reply })
-            .await
-            .map_err(|_| SshManagerError::Closed)?;
+        let sender = self.sender(terminal_id)?;
+        Self::reserve_command(&sender)?.send(SshCommand::FileOperation { operation, reply });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -1153,6 +1143,7 @@ impl SshManager {
             .local_addr()
             .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?
             .port();
+        let permit = Self::reserve_command(&sender)?;
         let tunnel_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = watch::channel(false);
         {
@@ -1194,14 +1185,7 @@ impl SshManager {
                 cancel: cancel_receiver,
             },
         };
-        if let Err(error) = sender.send(command).await {
-            self.reject_queued_command(
-                error.0,
-                |event| self.emit_transfer(&app, event),
-                |event| self.emit_tunnel(&app, event),
-            );
-            return Err(SshManagerError::Closed);
-        }
+        permit.send(command);
         Ok(SshTunnelResponse {
             tunnel_id,
             bind_host,
@@ -1231,6 +1215,7 @@ impl SshManager {
             .local_addr()
             .map_err(|error| SshManagerError::InvalidRequest(error.to_string()))?
             .port();
+        let permit = Self::reserve_command(&sender)?;
         let tunnel_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = watch::channel(false);
         {
@@ -1253,14 +1238,7 @@ impl SshManager {
             cancel: cancel_receiver,
         };
         self.emit_tunnel(&app, job.event(TunnelState::Listening, 0, 0, None));
-        if let Err(error) = sender.send(SshCommand::StartDynamicForward { job }).await {
-            self.reject_queued_command(
-                error.0,
-                |event| self.emit_transfer(&app, event),
-                |event| self.emit_tunnel(&app, event),
-            );
-            return Err(SshManagerError::Closed);
-        }
+        permit.send(SshCommand::StartDynamicForward { job });
         Ok(SshTunnelResponse {
             tunnel_id,
             bind_host,
@@ -1287,6 +1265,7 @@ impl SshManager {
         validate_tunnel_host(&bind_host, "remote bind host")?;
         validate_tunnel_host(&target_host, "remote forward target host")?;
         let sender = self.sender(&terminal_id)?;
+        let permit = Self::reserve_command(&sender)?;
         let tunnel_id = Uuid::new_v4().to_string();
         {
             let mut remote_forwards = self
@@ -1335,14 +1314,7 @@ impl SshManager {
             target_port: request.target_port,
             cancel: cancel_receiver,
         };
-        if sender
-            .send(SshCommand::StartRemoteForward { job, reply })
-            .await
-            .is_err()
-        {
-            self.finish_tunnel(&tunnel_id);
-            return Err(SshManagerError::Closed);
-        }
+        permit.send(SshCommand::StartRemoteForward { job, reply });
         response
             .await
             .map_err(|_| SshManagerError::Closed)?
@@ -1398,6 +1370,7 @@ impl SshManager {
                 "SCP transfer manager supports single files only; use SFTP for directories".into(),
             ));
         }
+        let permit = Self::reserve_command(&sender)?;
         let transfer_id = Uuid::new_v4().to_string();
         let (cancel, cancel_receiver) = oneshot::channel();
         let job = TransferJob {
@@ -1434,14 +1407,7 @@ impl SshManager {
             job,
             cancel: cancel_receiver,
         };
-        if let Err(error) = sender.send(command).await {
-            self.reject_queued_command(
-                error.0,
-                |event| self.emit_transfer(&app, event),
-                |event| self.emit_tunnel(&app, event),
-            );
-            return Err(SshManagerError::Closed);
-        }
+        permit.send(command);
 
         Ok(SshTransferResponse { transfer_id })
     }
@@ -1472,6 +1438,19 @@ impl SshManager {
             return Err(SshManagerError::Closed);
         }
         Ok(state.sender.clone())
+    }
+
+    fn reserve_command(
+        sender: &mpsc::Sender<SshCommand>,
+    ) -> Result<mpsc::Permit<'_, SshCommand>, SshManagerError> {
+        // No suspended queue producer retains a finite action outside the bound.
+        // Reserve before registering controls, then send without another await.
+        sender.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                SshManagerError::InvalidRequest(COMMAND_QUEUE_BUSY.into())
+            }
+            mpsc::error::TrySendError::Closed(_) => SshManagerError::Closed,
+        })
     }
 
     fn ensure_current_sender(
@@ -4957,6 +4936,127 @@ mod tests {
             .send_replace(true);
         assert!(matches!(
             manager.sender("closing"),
+            Err(SshManagerError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn full_command_queue_refuses_actions_without_waiting_or_registering_controls() {
+        use super::{COMMAND_CAPACITY, SshCommand, SshRemoteForwardRequest};
+        use mobarust_ssh::RemoteTextEncoding;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        async fn busy<T>(request: impl Future<Output = Result<T, SshManagerError>>) {
+            let result = tokio::time::timeout(Duration::from_secs(1), request)
+                .await
+                .expect("full queues must refuse actions without waiting");
+            assert!(
+                matches!(result, Err(SshManagerError::InvalidRequest(ref reason))
+                if reason == "SSH command queue is full; wait for queued actions to finish, then retry explicitly")
+            );
+        }
+
+        let manager = SshManager::default();
+        let mut commands = queue_test_session(&manager, "full");
+        let size = manager.sessions.lock().unwrap()["full"].size.subscribe();
+        for _ in 0..COMMAND_CAPACITY {
+            manager.write("full", "accepted".into()).await.unwrap();
+        }
+        busy(manager.list_directory("full", "/".into())).await;
+        busy(manager.open_remote_text_file("full", "/file".into(), RemoteTextEncoding::Utf8)).await;
+        busy(manager.collect_remote_monitor("full")).await;
+        busy(manager.save_remote_text_file(
+            "full",
+            "/file".into(),
+            "revision".into(),
+            "content".into(),
+            RemoteTextEncoding::Utf8,
+        ))
+        .await;
+        busy(manager.save_remote_text_file_as(
+            "full",
+            "/file".into(),
+            "content".into(),
+            RemoteTextEncoding::Utf8,
+            false,
+        ))
+        .await;
+        busy(manager.rename_remote("full", "/old".into(), "/new".into())).await;
+        busy(manager.delete_remote("full", "/file".into())).await;
+        busy(manager.create_remote_directory("full", "/directory".into())).await;
+        busy(manager.set_remote_permissions("full", "/file".into(), 0o600)).await;
+        busy(manager.start_remote_forward(
+            "full".into(),
+            SshRemoteForwardRequest {
+                bind_host: "127.0.0.1".into(),
+                bind_port: 0,
+                target_host: "127.0.0.1".into(),
+                target_port: 22,
+            },
+        ))
+        .await;
+        assert!(manager.transfers.lock().unwrap().is_empty());
+        assert!(manager.tunnels.lock().unwrap().is_empty());
+        assert!(manager.remote_forwards.lock().unwrap().is_empty());
+        assert_eq!(commands.len(), COMMAND_CAPACITY);
+
+        // Terminal input keeps backpressure rather than dropping keystrokes.
+        let mut write = Box::pin(manager.write("full", "pending-input".into()));
+        poll_fn(|cx| {
+            assert!(write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        manager.resize("full", 120, 40).await.unwrap();
+        assert_eq!(*size.borrow(), (120, 40));
+        assert!(
+            matches!(commands.recv().await, Some(SshCommand::Write(bytes)) if bytes == b"accepted")
+        );
+        write.await.unwrap();
+        for index in 0..COMMAND_CAPACITY {
+            match commands.recv().await.unwrap() {
+                SshCommand::Write(bytes) => assert_eq!(
+                    bytes,
+                    if index + 1 == COMMAND_CAPACITY {
+                        b"pending-input".as_slice()
+                    } else {
+                        b"accepted".as_slice()
+                    }
+                ),
+                _ => panic!("refused actions must never be queued for later execution"),
+            }
+        }
+        let (result, ()) = tokio::join!(manager.list_directory("full", "/retry".into()), async {
+            match commands.recv().await.unwrap() {
+                SshCommand::ListDirectory { path, reply } => {
+                    assert_eq!(path, "/retry");
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                _ => panic!("explicit retry should enqueue only the new action"),
+            }
+        });
+        assert!(result.unwrap().is_empty());
+        commands.close();
+        assert!(matches!(
+            manager.list_directory("full", "/".into()).await,
+            Err(SshManagerError::Closed)
+        ));
+        // Reservations themselves count toward capacity, and dropping an
+        // unused permit frees it without creating a command or control.
+        let fresh = manager.reopen_command_queue("full").unwrap();
+        let sender = manager.sender("full").unwrap();
+        let mut permits = (0..COMMAND_CAPACITY)
+            .map(|_| SshManager::reserve_command(&sender).unwrap())
+            .collect::<Vec<_>>();
+        busy(manager.list_directory("full", "/".into())).await;
+        assert!(fresh.is_empty());
+        drop(permits.pop());
+        assert!(SshManager::reserve_command(&sender).is_ok());
+        drop(permits);
+        drop(fresh);
+        assert!(matches!(
+            SshManager::reserve_command(&sender),
             Err(SshManagerError::Closed)
         ));
     }

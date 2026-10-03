@@ -264,3 +264,56 @@ acceptance or a whole-process memory bound. Producer/IPC pressure, many-session
 workloads, native Retry/focus and Windows/Linux require separate validation.
 Published v0.1.29 installers retain their tagged behavior; this later change
 is not included in them. GitHub workflows remain disabled.
+
+## Immediate command queue admission after v0.1.29 — 2026-10-03
+
+A bounded channel does not bound producers waiting on `send`: every suspended
+request can retain its editor content, and transfer/tunnel requests previously
+registered cancellation controls before waiting for queue space. On main after
+v0.1.29, finite file/monitor actions and transfer/tunnel starts reserve one of
+the existing 64 command slots with `try_reserve`. A full queue returns the
+static error, “SSH command queue is full; wait for queued actions to finish,
+then retry explicitly.” A closed queue retains its closed-session error.
+
+Transfer and tunnel controls are registered only after reservation. Sending
+uses the permit without another await, so cancellation cannot strand a control
+while waiting for queue capacity. A refused start creates no queued transfer
+or listening tunnel event. Local/SOCKS starts still bind their provisional
+listener first; a failed reservation drops it. Listener binding and name
+resolution are separate from this queue bound, and no permit is held across
+their await. Existing sender-generation checks and retirement drain still
+prevent an old permit from replaying work on a replacement connection.
+
+Terminal writes retain their existing backpressure so queue saturation does
+not discard accepted keystrokes. Resize retains its separate watch channel.
+The 32-worker session cap and three-transfer global execution limit are
+unchanged. There is no automatic replay of refused file mutations or saves.
+
+```sh
+cargo test --locked -p mobarust full_command_queue_refuses_actions_without_waiting_or_registering_controls
+cargo test --locked -p mobarust retired_queue_settles_old_permits_and_does_not_replay_input
+cargo test --locked -p mobarust finite_session_operations_settle_before_transport_cleanup
+cargo xtask check
+```
+
+The new regression first failed on the original implementation because a
+directory request waited outside the full queue. With the correction, all six
+finite command paths (including each public file-mutation entry point) and a
+remote-forward start refuse immediately. It also checks empty control maps,
+no deferred execution, explicit retry, preserved terminal input ordering,
+independent resize, reservation capacity/drop and closed-queue behavior.
+Transfer and local/SOCKS start ordering was inspected in the production paths;
+those `AppHandle` entry points were not driven by this manager regression.
+
+The full local `cargo xtask check` passed on macOS ARM64 / Apple M2 in 167.60
+seconds, including 111 desktop tests, the existing queue-retirement and
+encrypted worker/drain regressions, workspace tests/Clippy, frontend tests,
+type checking/lint/build, protocol/helper cases, release/lab tooling, package
+contracts and fuzz compilation. The optional real Xvfb case retained its
+prerequisite skip; no new native saturation or installer claim follows.
+
+This closes waiting-for-queue retention for these actions, not every source of
+resource pressure. Terminal write producers, IPC deserialization, concurrent
+listener binding, active tunnel counts, many-session workloads and native
+saturation/Retry acceptance still need separate bounds or evidence. Published
+v0.1.29 installers do not include this source change; workflows remain disabled.
