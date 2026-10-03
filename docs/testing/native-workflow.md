@@ -1,5 +1,24 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## v0.1.22 release-copy observation attempt — 2026-10-03
+
+A disposable ARM64 app copy was prepared from the verified v0.1.22 DMG.
+Only that copy received a unique bundle identity, portable empty state and an
+ad hoc test signature. Its running PID had the generated HOME/ZDOTDIR/XDG
+paths and empty SSH-agent variables. The release image was detached before
+launch, and no SSH or VNC fixture was started.
+
+CUA listed the app as running, but selecting its native surface failed with
+`cgWindowNotFound`; no accessibility or screenshot acceptance was obtained.
+This observation failure does not establish an application defect or working
+GUI behavior. The owned app and its local shell child were terminated and
+verified absent, then the disposable copy was removed. This was cleanup by
+signal, not evidence of normal menu Quit. Release GUI, clean-install and
+fullscreen acceptance remain pending; the earlier results below retain their
+original version and scope.
+
+## v0.1.17 observed workflows
+
 MobaRust 0.1.17 production builds, macOS ARM64, with a separate portable app
 copy and disposable HOME. No installed personal app, SSH agent, Keychain
 entries, personal keys, remote hosts or hardware were used.
