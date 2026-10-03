@@ -189,6 +189,13 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 - [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
 - [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.
 
+On `main` after v0.1.24, [remote-editor encoding conversion](docs/adr/0022-bounded-remote-text-editor.md#encoding-conversion-regression--2026-10-03)
+uses byte-level conflict checks for Save and Save as, so Windows-1252 → UTF-8
+conversion works without weakening revision refusal. A real loopback OpenSSH
+regression covers conversion, unchanged targets after refusals, permissions
+and cleanup. Native acceptance and updated installers remain pending; this
+does not close the complete UI recovery gate above.
+
 **Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The [v0.1.17 demo provenance](docs/release/desktop-demo.md) and [native lab receipt](docs/testing/native-workflow.md) record the tested scope. Broader failure recovery remains open.
 
 ## Experimental work and beta gates

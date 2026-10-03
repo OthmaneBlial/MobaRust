@@ -4378,7 +4378,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
   const saveAs = async () => {
     const target = await promptText("Remote target path", document.path);
     if (!target?.trim() || target === document.path) return;
-    const overwrite = await chooseOverwrite("Choose how an existing remote target should be handled. Replacement is atomic; Create only refuses an existing target.");
+    const overwrite = await chooseOverwrite("Choose how an existing remote target should be handled. Replace promotes a complete file with a recovery copy; Create only refuses an existing target.");
     if (overwrite === null) return;
     setBusy(true);
     setError(null);

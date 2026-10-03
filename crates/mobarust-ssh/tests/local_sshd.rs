@@ -114,6 +114,101 @@ fn fixture_shell_uses_only_the_disposable_home() {
 }
 
 #[test]
+fn remote_editor_encoding_changes_preserve_byte_conflicts_and_permissions() {
+    let runtime = tokio::runtime::Runtime::new().expect("create editor test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let path = fixture.directory.path().join("encoding.txt");
+        let remote_path = path.to_string_lossy();
+        let text = "café · €\n";
+        let legacy_bytes = b"caf\xe9 \xb7 \x80\n";
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let opened = sftp.read_text_document(remote_path.as_ref()).await.unwrap();
+        let legacy = sftp
+            .save_text_document_with_encoding(
+                remote_path.as_ref(),
+                &opened.revision,
+                text,
+                RemoteTextEncoding::Windows1252,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
+        assert_eq!(legacy.content, text);
+        assert_eq!(legacy.encoding, RemoteTextEncoding::Windows1252);
+        assert!(matches!(
+            sftp.read_text_document(remote_path.as_ref()).await,
+            Err(SshError::RemoteFileNotUtf8)
+        ));
+
+        let converted = sftp
+            .save_text_document_with_encoding(
+                remote_path.as_ref(),
+                &legacy.revision,
+                text,
+                RemoteTextEncoding::Utf8,
+            )
+            .await
+            .expect("convert existing Windows-1252 bytes to UTF-8");
+        assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+        assert_eq!(converted.content, text);
+        assert_eq!(converted.encoding, RemoteTextEncoding::Utf8);
+        assert_eq!(converted.size, text.len() as u64);
+        assert_eq!(converted.permissions.map(|mode| mode & 0o7777), Some(0o640));
+
+        // A concurrent change must be a byte conflict, even if the new bytes
+        // cannot be decoded using the selected output encoding.
+        fs::write(&path, b"changed\xff").unwrap();
+        assert!(matches!(
+            sftp.save_text_document_with_encoding(
+                remote_path.as_ref(),
+                &converted.revision,
+                text,
+                RemoteTextEncoding::Utf8
+            )
+            .await,
+            Err(SshError::RemoteConflict)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"changed\xff");
+        assert!(matches!(
+            sftp.save_text_document_with_encoding(
+                remote_path.as_ref(),
+                &converted.revision,
+                "😀",
+                RemoteTextEncoding::Windows1252
+            )
+            .await,
+            Err(SshError::RemoteTextEncodingUnsupported)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"changed\xff");
+
+        // Save as checks the target's bytes independently of the output
+        // encoding, but still requires explicit replacement permission.
+        fs::write(&path, legacy_bytes).unwrap();
+        assert!(matches!(
+            sftp.save_text_document_as(remote_path.as_ref(), text, RemoteTextEncoding::Utf8, false)
+                .await,
+            Err(SshError::RemoteTargetExists)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
+        let replaced = sftp
+            .save_text_document_as(remote_path.as_ref(), text, RemoteTextEncoding::Utf8, true)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+        assert_eq!(replaced.content, text);
+        assert_eq!(replaced.permissions.map(|mode| mode & 0o7777), Some(0o640));
+        assert_no_remote_editor_artifacts(&sftp, fixture.directory.path().to_str().unwrap()).await;
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn ipv6_loopback_verifies_known_hosts_and_runs_a_shell() {
     if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err() {
         eprintln!("skipping IPv6 OpenSSH fixture: IPv6 loopback is unavailable");
@@ -1415,7 +1510,7 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
         let saved = sftp
             .save_text_document(&editor_path, &document.revision, "after\n")
             .await
-            .expect("atomically save remote text document");
+            .expect("save remote text document with a recovery copy");
         assert_eq!(saved.content, "after\n");
         assert_eq!(saved.permissions.map(|mode| mode & 0o7777), Some(0o640));
         let saved_entries = sftp

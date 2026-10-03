@@ -2553,9 +2553,30 @@ impl SftpConnection {
         encoding: RemoteTextEncoding,
     ) -> Result<RemoteTextDocument, SshError> {
         let path = path.into();
+        let (bytes, metadata) = self.read_editor_bytes(&path).await?;
+        let revision = text_revision(&bytes);
+        let content = decode_remote_text(&bytes, encoding)?;
+        Ok(RemoteTextDocument {
+            path,
+            revision,
+            size: bytes.len() as u64,
+            modified_unix_seconds: metadata.mtime.map(u64::from),
+            permissions: metadata.permissions,
+            content,
+            encoding,
+        })
+    }
+
+    // Revisions describe original bytes, independently of the encoding chosen
+    // for new content. Decoding here would prevent encoding conversions and
+    // hide conflicts when a concurrent writer introduces non-text bytes.
+    async fn read_editor_bytes(
+        &self,
+        path: &str,
+    ) -> Result<(Vec<u8>, russh_sftp::client::fs::Metadata), SshError> {
         let metadata = self
             .session
-            .symlink_metadata(&path)
+            .symlink_metadata(path)
             .await
             .map_err(map_sftp_error)?;
         match metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK) {
@@ -2569,7 +2590,7 @@ impl SftpConnection {
         if metadata.len() > MAX_REMOTE_EDITOR_BYTES as u64 {
             return Err(SshError::RemoteFileTooLarge);
         }
-        let mut file = self.session.open(&path).await.map_err(map_sftp_error)?;
+        let mut file = self.session.open(path).await.map_err(map_sftp_error)?;
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         let mut limited = (&mut file).take((MAX_REMOTE_EDITOR_BYTES + 1) as u64);
         let result = limited
@@ -2582,17 +2603,7 @@ impl SftpConnection {
         if bytes.len() > MAX_REMOTE_EDITOR_BYTES {
             return Err(SshError::RemoteFileTooLarge);
         }
-        let revision = text_revision(&bytes);
-        let content = decode_remote_text(&bytes, encoding)?;
-        Ok(RemoteTextDocument {
-            path,
-            revision,
-            size: metadata.len(),
-            modified_unix_seconds: metadata.mtime.map(u64::from),
-            permissions: metadata.permissions,
-            content,
-            encoding,
-        })
+        Ok((bytes, metadata))
     }
 
     /// Replace a document through a remote temporary file after rechecking
@@ -2627,10 +2638,9 @@ impl SftpConnection {
             return Err(SshError::RemoteFileTooLarge);
         }
         let path = path.into();
-        let current = self
-            .read_text_document_with_encoding(path.clone(), encoding)
-            .await?;
-        if current.revision != expected_revision {
+        let (bytes, current_metadata) = self.read_editor_bytes(&path).await?;
+        let current_revision = text_revision(&bytes);
+        if current_revision != expected_revision {
             return Err(SshError::RemoteConflict);
         }
         let temporary = format!(
@@ -2642,7 +2652,7 @@ impl SftpConnection {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(error);
         }
-        if let Some(permissions) = current.permissions {
+        if let Some(permissions) = current_metadata.permissions {
             let mut metadata = russh_sftp::client::fs::Metadata::empty();
             metadata.permissions = Some(permissions);
             let file = match self.session.open(&temporary).await {
@@ -2667,17 +2677,14 @@ impl SftpConnection {
         // The file may have changed while the complete temporary copy was
         // being written. Recheck immediately before moving the original so a
         // slow editor save cannot overwrite a concurrent remote update.
-        let latest = match self
-            .read_text_document_with_encoding(path.clone(), encoding)
-            .await
-        {
-            Ok(document) => document,
+        let (latest_bytes, _) = match self.read_editor_bytes(&path).await {
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 self.cleanup_temporary_file(&temporary).await?;
                 return Err(error);
             }
         };
-        if latest.revision != current.revision {
+        if text_revision(&latest_bytes) != current_revision {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(SshError::RemoteConflict);
         }
@@ -2727,10 +2734,7 @@ impl SftpConnection {
             if !overwrite {
                 return Err(SshError::RemoteTargetExists);
             }
-            Some(
-                self.read_text_document_with_encoding(path.clone(), encoding)
-                    .await?,
-            )
+            Some(self.read_editor_bytes(&path).await?)
         } else {
             None
         };
@@ -2761,11 +2765,8 @@ impl SftpConnection {
                     self.cleanup_temporary_file(&temporary).await?;
                     return Err(SshError::RemoteTargetExists);
                 }
-                existing = match self
-                    .read_text_document_with_encoding(path.clone(), encoding)
-                    .await
-                {
-                    Ok(document) => Some(document),
+                existing = match self.read_editor_bytes(&path).await {
+                    Ok(snapshot) => Some(snapshot),
                     Err(error) => {
                         self.cleanup_temporary_file(&temporary).await?;
                         return Err(error);
@@ -2774,8 +2775,8 @@ impl SftpConnection {
             }
         }
 
-        if let Some(document) = &existing {
-            if let Some(permissions) = document.permissions {
+        if let Some((original_bytes, metadata)) = &existing {
+            if let Some(permissions) = metadata.permissions {
                 let mut metadata = russh_sftp::client::fs::Metadata::empty();
                 metadata.permissions = Some(permissions);
                 let file = match self.session.open(&temporary).await {
@@ -2797,20 +2798,14 @@ impl SftpConnection {
                 }
             }
 
-            let latest = match self
-                .read_text_document_with_encoding(path.clone(), encoding)
-                .await
-            {
-                Ok(document) => document,
+            let (latest_bytes, _) = match self.read_editor_bytes(&path).await {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
                     self.cleanup_temporary_file(&temporary).await?;
                     return Err(error);
                 }
             };
-            if existing
-                .as_ref()
-                .is_some_and(|document| latest.revision != document.revision)
-            {
+            if text_revision(&latest_bytes) != text_revision(original_bytes) {
                 self.cleanup_temporary_file(&temporary).await?;
                 return Err(SshError::RemoteConflict);
             }
