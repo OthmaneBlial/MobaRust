@@ -6,13 +6,13 @@ The latest [native SSH setup lab](docs/testing/ssh-lab.md#repeatable-native-shel
 provides disposable import profiles for startup output pressure, shell rejection
 and stalled input. Its automated endpoint/profile/cleanup regression passes;
 the native attempt lost window observation before connecting, so GUI acceptance
-remains pending. Both verified v0.1.21 Mac installers include the runtime fixes;
-Windows/Linux remain v0.1.12. No completion checkbox changed.
+remains pending. Both verified v0.1.22 Mac installers include the runtime fixes;
+Windows/Linux remain v0.1.12. Native acceptance remains pending.
 
 On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
 now covers saved/imported SSH profiles as well as local profiles. It shows the
 full command and destination, explains automatic reconnect repetition, and
-refuses a stopped macro's pending startup. Both v0.1.21 Mac downloads include
+refuses a stopped macro's pending startup. Both v0.1.22 Mac downloads include
 the review. Native acceptance and updated Windows/Linux downloads remain pending.
 
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
@@ -21,14 +21,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.21; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.22; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.21.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.22.md).
 
 ## Completed in the current improvement cycle
 

@@ -6,7 +6,7 @@
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.21-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.21)
+[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.22-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.22)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
@@ -91,28 +91,26 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 
 | Platform | Download | Available version |
 | --- | --- | --- |
-| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.21/MobaRust-0.1.21-macos-arm64.dmg) | **0.1.21** |
-| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.21/MobaRust-0.1.21-macos-x64.dmg) | **0.1.21** |
+| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.22/MobaRust-0.1.22-macos-arm64.dmg) | **0.1.22** |
+| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.22/MobaRust-0.1.22-macos-x64.dmg) | **0.1.22** |
 | 🪟 **Windows · x64** | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
 | 🐧 **Ubuntu / Debian · x64** | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
 | 🐧 **Other Linux · x64** | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
 
 **Preview distribution:** no publisher signing; macOS is ad hoc signed and not notarized. Windows/Linux installers are older and do not include the latest `main` changes. RDP is excluded from normal installers.
 
-[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.21) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
+[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.22) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
 
 On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install ./MobaRust-0.1.12-linux-x64.deb`. AppImage prerequisites vary by distribution. Checksums verify downloaded bytes; they do not establish publisher identity.
 
-## 🚀 What's new — 0.1.21
+## 🚀 What's new — 0.1.22
 
-- **Review startup commands:** saved/imported SSH profiles show the full command and destination before connecting, including a notice when reconnect will repeat it.
-- **Accepted SSH setup:** shell/X11 rejection and timeout stop setup before configured startup input is sent.
-- **Startup under pressure:** SSH keeps reading output while sending startup input, preserving byte order and partial write progress within bounded limits.
-- **Reconnect geometry:** replacement shells use the latest terminal size without replaying queued input from the lost connection.
+- **Interrupted transfers:** SFTP/SCP fail within bounded operation deadlines; the lab verifies original/partial-file handling and a byte-matched 16 MiB retry.
+- **Concurrent jump-host streams:** large terminal output and SFTP share a routed connection without encrypted writes starving inbound packets.
+- **Complete shell output:** process exit preserves stdout/stderr sent before output EOF, including the final tail.
+- **Real IPv6/rekey evidence:** 8 MiB PTY output plus upload/download through two distinct IPv6 bastions, per-hop trust rejection and cleanup.
 
-Both Mac DMGs include these changes, the earlier concurrent authentication queue and Full-HD VNC renderer. Windows/Linux remain v0.1.12. Native startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.21.md).
-
-**On main, for the next preview:** locally validated fixes for interrupted SFTP/SCP transfers, concurrent streams through jump hosts and terminal output sent after process exit. The lab verifies [16 MiB interruption/retry](docs/testing/interrupted-transfers.md) and [8 MiB output plus file transfers through two IPv6 bastions](docs/testing/routed-ipv6-streams.md), including frequent rekeying. Published installers remain unchanged.
+Both Mac DMGs include these changes, the earlier startup review/reconnect corrections, concurrent authentication queue and Full-HD VNC renderer. Windows/Linux remain v0.1.12. Native startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.22.md).
 
 ## 🧭 Progress, without invented percentages
 
@@ -120,11 +118,11 @@ Both Mac DMGs include these changes, the earlier concurrent authentication queue
 
 | Area | Verified so far | Next acceptance gate |
 | --- | --- | --- |
-| ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.21, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.21 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
+| ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.22, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.22 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
-| 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.21 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
-| 🟡 **Distribution** | Mac ARM64/x64 0.1.21 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
+| 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.22 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
+| 🟡 **Distribution** | Mac ARM64/x64 0.1.22 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
 **Next priorities:** native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers → daily workflow polish.

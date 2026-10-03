@@ -84,5 +84,6 @@ remains separate. An unreachable server can prevent remote part cleanup, and
 cleanup retains its own request deadline. No distributed transaction or remote
 cleanup guarantee is claimed.
 
-The correction is on `main` after v0.1.21; published installers are unchanged.
+The correction is included in the v0.1.22 Mac preview. Windows/Linux downloads
+remain v0.1.12 and do not contain these changes.
 GitHub Actions remain disabled.

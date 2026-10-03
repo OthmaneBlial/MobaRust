@@ -119,5 +119,6 @@ The shared client correction applies to both address families; this particular
 large concurrent workload exercises IPv6. No upstream fix or upstream test-suite
 result is claimed.
 
-The source changes are after v0.1.21; published installers are unchanged.
+These runtime changes are included in the v0.1.22 Mac preview. Windows/Linux
+downloads remain v0.1.12 and do not contain them.
 GitHub Actions remain disabled.
