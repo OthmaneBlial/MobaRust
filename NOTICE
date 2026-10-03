@@ -6,3 +6,6 @@ The complete license text is available in the LICENSE file.
 
 Repository-local russh 0.63.3: Apache-2.0, Pierre-Étienne Meunier and contributors.
 Source and modifications: vendor/russh/MOBARUST_PATCH.md.
+
+Repository-local russh-sftp 2.4.0: Apache-2.0.
+Source and modifications: vendor/russh-sftp/MOBARUST_PATCH.md.
