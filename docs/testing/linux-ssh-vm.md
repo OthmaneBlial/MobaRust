@@ -139,3 +139,46 @@ The successful seed ISO SHA-256 was
 the retained local serial log SHA-256 was
 `41b032aa4556a6ab2dd84c1797ee268f03a53cfd14b11a3f50a825e328d377f1`.
 Raw logs and generated credential state are not published.
+
+## Native GNU desktop attempt: incomplete
+
+An additional attempt at source
+`fdf66793369dcd29508f238b2577f3486ad0fa51` prepared a native Ubuntu ARM64
+desktop test runner with the [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/),
+zsh and fish. Its VM also had no network adapter, host forwarding or shared
+host directories. Host downloads supplied a read-only ISO; normal guest APT
+verification accepted the three Ubuntu repositories without errors or warnings.
+All 57 supplied metadata files and 351 resolved package archives
+(222,119,078 bytes) matched their manifest checksums. Package installation
+and the native Rust 1.95.0 compiler's `aarch64-unknown-linux-gnu` version probe
+succeeded. The locked export contained 625 registry packages.
+
+The intended command was:
+
+```bash
+cargo test --locked -p mobarust terminal::tests:: \
+  --config profile.dev.debug=0 --config profile.test.debug=0 \
+  -- --test-threads=1 --nocapture
+```
+
+The first invocation stopped before compilation because an exported public
+dependency file retained mode `0640` and was unreadable by the disposable
+guest account. Correcting only the public dependency tree's read permissions
+allowed normal checksum verification and dependency compilation to begin.
+No checksum check, source, lockfile or cryptographic feature was bypassed.
+
+The corrected run then stopped at the host disk guard. This Mac started with
+8.9 GiB available; at the guard observation only 683,122,688 bytes remained.
+The watcher terminated the owned QEMU process. Its exit status 0 does not
+establish test success: there was no final success marker, no linked desktop
+test executable and **no PTY tests ran**. This attempt adds no passing tests
+to the seven-harness receipt above and does not establish a desktop, GUI or
+installer pass. Further native builds need additional measured disk/memory
+headroom or a separate dedicated runner; the roadmap checklist is unchanged.
+
+All attempt VM processes were confirmed absent before their disposable disks,
+seed directories/ISOs and writable firmware were removed, including generated
+guest credential state. Only this lab's redundant public downloads were
+removed for space; system swap, unrelated caches and personal files were
+untouched. Nonsecret local receipts, signed metadata and the compiler manifest
+were retained. GitHub workflows remain disabled.
