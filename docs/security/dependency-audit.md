@@ -185,6 +185,24 @@ frontend checks, protocol fixtures, package-layout contracts and fuzz compilatio
 The real Xvfb check reports its prerequisite skip. Native GUI and cross-platform
 runtime acceptance remain pending; no roadmap checkbox was closed by this patch.
 
+## v0.1.24 release preparation audit — 2026-10-03
+
+A fresh `cargo audit --json` lookup reports RustSec commit
+`f8dee89e1b2f2f1eaf548312df7655fe5202a302`, containing 1,288 advisories.
+The version-aligned workspace (638 packages) reports zero vulnerabilities and
+retains `RUSTSEC-2024-0370` (`proc-macro-error`, unmaintained) and
+`RUSTSEC-2024-0429` (`glib`, unsoundness). Checks of the VNC helper (82 packages)
+and fuzz lockfile (52 packages) against the same refreshed database report no
+vulnerability or warning. The isolated RDP helper (374 packages) still reports
+`RUSTSEC-2023-0071` (`rsa`) plus unmaintained `atomic-polyfill` and
+`rustls-pemfile`; it remains excluded from normal installers. No advisory was
+suppressed. Semantic comparison of all four lockfiles confirms that only local
+package versions changed from 0.1.23 to 0.1.24; third-party entries are unchanged.
+
+The SFTP corrections have focused regression evidence. Advisory scanning of the
+baseline dependency version does not independently review the local source patch.
+This audit does not establish installer publication or native GUI acceptance.
+
 ## v0.1.22 release recheck — 2026-10-03
 
 `cargo audit --json` refreshed RustSec to commit

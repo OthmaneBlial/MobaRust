@@ -27,6 +27,17 @@ of real PTY output and transfers byte-matched files through two distinct bastion
 - optional Xvfb and an existing real `/tmp/.X11-unix` directory for the real
   X11-server test. That test reports a skip when its prerequisites are absent.
 
+On Apple Silicon, prefer native `arm64` xauth on PATH. The fixture selects the
+first `xauth` it finds. The [Homebrew xauth formula](https://formulae.brew.sh/formula/xauth)
+provides a standalone native client tool; it does not start an X server. For an
+explicit runner setup:
+
+```sh
+brew install xauth
+command -v xauth
+lipo -archs "$(command -v xauth)"
+```
+
 Tests do not create users, set account passwords, install dependencies, or
 enable Remote Login. A missing prerequisite is a lab setup failure; configure
 a dedicated test runner rather than granting the tests system permissions.
@@ -803,6 +814,23 @@ five-second channel and bridge deadlines and all bridge assertions are unchanged
 The final v0.1.23 source, without the temporary profiler, passed the complete
 local `cargo xtask check`, including this X11 case. The intermittent cause is
 still unproven and no native GUI acceptance is inferred from that pass.
+
+During v0.1.24 preparation, the first full check failed at both the five-second
+X11 wait (xauth had input EOF but no exit marker) and the 60-second frequent-rekey
+8 MiB routed-transfer deadline. A same-default-runtime diagnostic SSH run passed.
+It measured eight workers per test runtime and a sampled peak of 77 native test
+process threads. Sampling only a test-owned xauth process showed Rosetta/dyld
+startup; `/opt/X11/bin/xauth` here contains Intel architectures only. A two-worker
+experiment reduced the sampled peak to 28 threads but still failed both gates;
+it was removed. No thread cap, payload reduction, deadline extension or assertion
+change remains in source.
+
+A native `/opt/homebrew/bin/xauth` (arm64, 1.1.5) was then installed explicitly
+with four small client-library dependencies. A private Unix-display add/remove
+probe returned zero in 0.94 seconds with a generated, unrecorded cookie and a
+0600 authority file in a disposable HOME. The test itself never installs tools.
+This narrows an external-helper architecture/startup issue; it does not prove the
+cause of every prior failure or represent an X11 product/runtime correction.
 
 This is backend protocol evidence. Native file-browser/editor acceptance,
 external server implementations and Windows/Linux runtime checks remain open.
