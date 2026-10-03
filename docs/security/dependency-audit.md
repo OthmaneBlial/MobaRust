@@ -202,6 +202,9 @@ package versions changed from 0.1.23 to 0.1.24; third-party entries are unchange
 The SFTP corrections have focused regression evidence. Advisory scanning of the
 baseline dependency version does not independently review the local source patch.
 This audit does not establish installer publication or native GUI acceptance.
+The separate [v0.1.24 release receipt](../release/v0.1.24.md) records both verified
+Mac DMGs and anonymously downloaded, byte-matched public files. Native GUI and
+Windows/Linux acceptance remain open.
 
 ## v0.1.22 release recheck — 2026-10-03
 

@@ -832,6 +832,12 @@ probe returned zero in 0.94 seconds with a generated, unrecorded cookie and a
 This narrows an external-helper architecture/startup issue; it does not prove the
 cause of every prior failure or represent an X11 product/runtime correction.
 
+The version-aligned v0.1.24 source then passed the complete local
+`cargo xtask check` with the original runtime scheduling, payload assertions and
+deadlines. All 16 OpenSSH cases passed, including X11 and frequent rekey; the
+OpenSSH suite took 58.84 seconds. This single full recheck does not establish
+repeatable timing, sustained throughput or native GUI acceptance.
+
 This is backend protocol evidence. Native file-browser/editor acceptance,
 external server implementations and Windows/Linux runtime checks remain open.
 Both [v0.1.23 Mac previews](../release/v0.1.23.md) include this later source

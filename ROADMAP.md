@@ -6,14 +6,16 @@ The latest [native SSH setup lab](docs/testing/ssh-lab.md#repeatable-native-shel
 provides disposable import profiles for startup output pressure, shell rejection
 and stalled input. Its automated endpoint/profile/cleanup regression passes;
 the native attempt lost window observation before connecting, so GUI acceptance
-remains pending. Both verified v0.1.23 Mac installers include the runtime fixes;
+remains pending. Both verified v0.1.24 Mac installers include the runtime fixes;
 Windows/Linux remain v0.1.12. Native acceptance remains pending.
 
 On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
 now covers saved/imported SSH profiles as well as local profiles. It shows the
 full command and destination, explains automatic reconnect repetition, and
-refuses a stopped macro's pending startup. Both v0.1.23 Mac downloads include
+refuses a stopped macro's pending startup. Both v0.1.24 Mac downloads include
 the review. Native acceptance and updated Windows/Linux downloads remain pending.
+
+**Checklist completion: 56 of 76 items (73.7%, rounded to 74%).** Items differ in scope; this is not a production-readiness score.
 
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
 
@@ -21,14 +23,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.23; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.24; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.23.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.24.md).
 
 ## Completed in the current improvement cycle
 
@@ -79,7 +81,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [x] Defer normal app exit until SSH sessions drain; reject new work during shutdown and route macOS menu Quit through cleanup. Verify native menu Quit during a 32 MiB SFTP upload and window close during download, preserving originals and removing parts on macOS ARM64. [Receipt and remaining exit gates](docs/testing/transfer-lifecycle.md#application-shutdown-correction--2026-10-02).
 - [x] Retire native SSH command queues on loss/closure, cancel queued file/tunnel actions visibly, and give a reconnected shell a fresh queue under the same terminal ID. Verify close refusal, late permits, no input replay, fresh delivery and loopback listener release with deterministic regressions; GUI loss/race acceptance remains pending. [Checks and limits](docs/testing/queued-ssh-commands.md).
-- [ ] Align these corrections across the installer cohort: both checked v0.1.23 Mac DMGs include them; Windows/Linux remain v0.1.12. Published older DMGs remain unchanged.
+- [ ] Align these corrections across the installer cohort: both checked v0.1.24 Mac DMGs include them; Windows/Linux remain v0.1.12. Published older DMGs remain unchanged.
 
 ## Next, in priority order
 
@@ -129,17 +131,18 @@ After v0.1.23, the shared file reader also preserves unconsumed bytes when a
 cancelled read resumes with a smaller buffer, retires old read state on position
 changes/closure and clamps negotiated READ sizes to the client packet budget.
 [In-memory regression evidence](docs/security/dependency-audit.md#sftp-file-read-cancellation-and-negotiated-limits--2026-10-03)
-does not establish native editor/transfer acceptance or a new installer cohort.
+does not establish native editor/transfer acceptance. Both verified
+[v0.1.24 Mac previews](docs/release/v0.1.24.md) contain the reader and negotiated-limit fixes.
 Dropped SFTP request futures now release their reply slots immediately, including
 file-write and file-drop close acknowledgments. Late ordinary replies after
 cancellation/timeout no longer close the usable SFTP stream; initialization and
 malformed-frame errors still fail closed. [Request ownership and wire regression
 checks](docs/security/dependency-audit.md#sftp-request-lifetime-and-late-replies--2026-10-03)
-are source after v0.1.23, pending installers and native acceptance.
+are included in both v0.1.24 Mac installers; native acceptance remains pending.
 The shared SFTP file writer also splits uploads to fit both data and encoded
 packet limits, and refuses nonempty writes with no payload room or a closed
 handle. [Byte-matched chunk and refusal checks](docs/security/dependency-audit.md#sftp-file-write-packet-budgets-and-closed-handles--2026-10-03)
-are source after v0.1.23; native upload acceptance and installers remain pending.
+are included in both v0.1.24 Mac installers; native upload acceptance remains pending.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
@@ -168,7 +171,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.23 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.24 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
