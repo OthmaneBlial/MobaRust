@@ -12,13 +12,16 @@ use mobarust_vault::{CredentialId, CredentialLookup, VaultError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::fs::{self, OpenOptions};
-use tokio::io::copy_bidirectional;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
@@ -43,6 +46,7 @@ const DEFAULT_SSH_RECONNECT_ATTEMPTS: u8 = 3;
 const DEFAULT_SSH_CONNECT_TIMEOUT_MS: u64 = 12_000;
 const SSH_STABLE_SHELL_DURATION: Duration = Duration::from_secs(30);
 const X11_CHANNEL_LIMIT: usize = 8;
+const TUNNEL_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2634,6 +2638,70 @@ async fn run_file_operation(
     close_result.map_err(|error| error.to_string())
 }
 
+// Count accepted payload writes, not reads or protocol handshakes. The shared
+// total survives copy errors/cancellation and is sampled by the owning runner.
+struct TunnelStream<S> {
+    stream: S,
+    bytes: Arc<AtomicU64>,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for TunnelStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(cx, buffer)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for TunnelStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.stream).poll_write(cx, buffer) {
+            Poll::Ready(Ok(written)) => {
+                let _ = this
+                    .bytes
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bytes| {
+                        Some(bytes.saturating_add(written as u64))
+                    });
+                Poll::Ready(Ok(written))
+            }
+            result => result,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
+}
+
+async fn copy_tunnel_traffic(
+    local: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    remote: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    bytes: Arc<AtomicU64>,
+) -> std::io::Result<(u64, u64)> {
+    copy_bidirectional(
+        &mut TunnelStream {
+            stream: local,
+            bytes: Arc::clone(&bytes),
+        },
+        &mut TunnelStream {
+            stream: remote,
+            bytes,
+        },
+    )
+    .await
+}
+
 async fn run_local_forward(
     mut emit_tunnel: impl FnMut(SshTunnelEvent),
     manager: SshManager,
@@ -2642,32 +2710,46 @@ async fn run_local_forward(
 ) {
     const MAX_CONNECTIONS: usize = 16;
     let mut connections = 0_usize;
-    let mut bytes_forwarded = 0_u64;
-    let mut failed = false;
+    let bytes_forwarded = Arc::new(AtomicU64::new(0));
+    let mut last_progress_bytes = 0;
+    let mut progress = tokio::time::interval(TUNNEL_PROGRESS_INTERVAL);
+    progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut failure = None;
     let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
 
-    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+    emit_tunnel(job.event(
+        TunnelState::Running,
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        None,
+    ));
 
     loop {
         tokio::select! {
+            _ = progress.tick() => {
+                let bytes = bytes_forwarded.load(Ordering::Relaxed);
+                if bytes != last_progress_bytes {
+                    last_progress_bytes = bytes;
+                    emit_tunnel(job.event(TunnelState::Running, connections, bytes, None));
+                }
+            }
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     break;
                 }
             }
             worker = workers.join_next(), if !workers.is_empty() => {
                 if let Some(result) = worker {
                     match result {
-                        Ok(Ok((uploaded, downloaded))) => {
-                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        Ok(Ok(_)) => {
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                         }
                         Ok(Err(error)) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error)));
                         }
                         Err(error) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error.to_string())));
                         }
                     }
                 }
@@ -2677,7 +2759,7 @@ async fn run_local_forward(
                     Ok((mut local, _peer)) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(local);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("tunnel connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some("tunnel connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
@@ -2685,6 +2767,7 @@ async fn run_local_forward(
                         let target_host = job.target_host.clone();
                         let target_port = job.target_port;
                         let mut cancel = job.cancel.clone();
+                        let bytes = Arc::clone(&bytes_forwarded);
                         workers.spawn(async move {
                             let mut remote = connection
                                 .open_direct_tcpip(target_host, u32::from(target_port))
@@ -2692,14 +2775,13 @@ async fn run_local_forward(
                                 .map_err(|error| error.to_string())?;
                             tokio::select! {
                                 _ = cancel.changed() => Err("tunnel connection cancelled".into()),
-                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                                copied = copy_tunnel_traffic(&mut local, &mut remote, bytes) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     }
                     Err(error) => {
-                        failed = true;
-                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("local tunnel listener failed: {error}"))));
+                        failure = Some(format!("local tunnel listener failed: {error}"));
                         break;
                     }
                 }
@@ -2708,9 +2790,16 @@ async fn run_local_forward(
     }
 
     workers.shutdown().await;
-    if !failed {
-        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
-    }
+    emit_tunnel(job.event(
+        if failure.is_some() {
+            TunnelState::Failed
+        } else {
+            TunnelState::Stopped
+        },
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        failure,
+    ));
     manager.finish_tunnel(&job.tunnel_id);
 }
 
@@ -2722,32 +2811,46 @@ async fn run_dynamic_forward(
 ) {
     const MAX_CONNECTIONS: usize = 16;
     let mut connections = 0_usize;
-    let mut bytes_forwarded = 0_u64;
-    let mut failed = false;
+    let bytes_forwarded = Arc::new(AtomicU64::new(0));
+    let mut last_progress_bytes = 0;
+    let mut progress = tokio::time::interval(TUNNEL_PROGRESS_INTERVAL);
+    progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut failure = None;
     let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
 
-    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+    emit_tunnel(job.event(
+        TunnelState::Running,
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        None,
+    ));
 
     loop {
         tokio::select! {
+            _ = progress.tick() => {
+                let bytes = bytes_forwarded.load(Ordering::Relaxed);
+                if bytes != last_progress_bytes {
+                    last_progress_bytes = bytes;
+                    emit_tunnel(job.event(TunnelState::Running, connections, bytes, None));
+                }
+            }
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     break;
                 }
             }
             worker = workers.join_next(), if !workers.is_empty() => {
                 if let Some(result) = worker {
                     match result {
-                        Ok(Ok((uploaded, downloaded))) => {
-                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        Ok(Ok(_)) => {
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                         }
                         Ok(Err(error)) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error)));
                         }
                         Err(error) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error.to_string())));
                         }
                     }
                 }
@@ -2757,12 +2860,13 @@ async fn run_dynamic_forward(
                     Ok((mut local, _peer)) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(local);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("SOCKS connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some("SOCKS connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
                         let connection = Arc::clone(&connection);
                         let mut cancel = job.cancel.clone();
+                        let bytes = Arc::clone(&bytes_forwarded);
                         workers.spawn(async move {
                             let request = tokio::select! {
                                 _ = cancel.changed() => {
@@ -2810,14 +2914,13 @@ async fn run_dynamic_forward(
                                 .map_err(|error| error.to_string())?;
                             tokio::select! {
                                 _ = cancel.changed() => Err("SOCKS connection cancelled".into()),
-                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                                copied = copy_tunnel_traffic(&mut local, &mut remote, bytes) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     }
                     Err(error) => {
-                        failed = true;
-                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("SOCKS listener failed: {error}"))));
+                        failure = Some(format!("SOCKS listener failed: {error}"));
                         break;
                     }
                 }
@@ -2826,9 +2929,16 @@ async fn run_dynamic_forward(
     }
 
     workers.shutdown().await;
-    if !failed {
-        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
-    }
+    emit_tunnel(job.event(
+        if failure.is_some() {
+            TunnelState::Failed
+        } else {
+            TunnelState::Stopped
+        },
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        failure,
+    ));
     manager.finish_tunnel(&job.tunnel_id);
 }
 
@@ -2841,8 +2951,11 @@ async fn run_remote_forward(
 ) {
     const MAX_CONNECTIONS: usize = 16;
     let mut connections = 0_usize;
-    let mut bytes_forwarded = 0_u64;
-    let mut failed = false;
+    let bytes_forwarded = Arc::new(AtomicU64::new(0));
+    let mut last_progress_bytes = 0;
+    let mut progress = tokio::time::interval(TUNNEL_PROGRESS_INTERVAL);
+    progress.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut failure = None;
     let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
     let requested_port = job.bind_port;
     let mut request_cancel = job.cancel.clone();
@@ -2873,7 +2986,12 @@ async fn run_remote_forward(
     };
     job.bind_port = remote_port;
 
-    emit_tunnel(job.event(TunnelState::Listening, connections, bytes_forwarded, None));
+    emit_tunnel(job.event(
+        TunnelState::Listening,
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        None,
+    ));
     let response = SshTunnelResponse {
         tunnel_id: job.tunnel_id.clone(),
         bind_host: job.bind_host.clone(),
@@ -2886,28 +3004,39 @@ async fn run_remote_forward(
         manager.finish_tunnel(&job.tunnel_id);
         return;
     }
-    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+    emit_tunnel(job.event(
+        TunnelState::Running,
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        None,
+    ));
 
     loop {
         tokio::select! {
+            _ = progress.tick() => {
+                let bytes = bytes_forwarded.load(Ordering::Relaxed);
+                if bytes != last_progress_bytes {
+                    last_progress_bytes = bytes;
+                    emit_tunnel(job.event(TunnelState::Running, connections, bytes, None));
+                }
+            }
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     break;
                 }
             }
             worker = workers.join_next(), if !workers.is_empty() => {
                 if let Some(result) = worker {
                     match result {
-                        Ok(Ok((uploaded, downloaded))) => {
-                            bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        Ok(Ok(_)) => {
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                         }
                         Ok(Err(error)) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error)));
                         }
                         Err(error) => {
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some(error.to_string())));
                         }
                     }
                 }
@@ -2917,13 +3046,14 @@ async fn run_remote_forward(
                     Some(channel) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(channel);
-                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("remote tunnel connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), Some("remote tunnel connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
                         let target_host = job.target_host.clone();
                         let target_port = job.target_port;
                         let mut cancel = job.cancel.clone();
+                        let bytes = Arc::clone(&bytes_forwarded);
                         workers.spawn(async move {
                             let mut local = tokio::select! {
                                 _ = cancel.changed() => return Err("remote tunnel connection cancelled".into()),
@@ -2941,14 +3071,13 @@ async fn run_remote_forward(
                             let mut remote = channel.into_stream();
                             tokio::select! {
                                 _ = cancel.changed() => Err("remote tunnel connection cancelled".into()),
-                                copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
+                                copied = copy_tunnel_traffic(&mut local, &mut remote, bytes) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded.load(Ordering::Relaxed), None));
                     }
                     None => {
-                        failed = true;
-                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some("SSH connection closed while remote forwarding was active".into())));
+                        failure = Some("SSH connection closed while remote forwarding was active".into());
                         break;
                     }
                 }
@@ -2961,17 +3090,18 @@ async fn run_remote_forward(
         .cancel_remote_forward(job.bind_host.clone(), u32::from(remote_port))
         .await
     {
-        failed = true;
-        emit_tunnel(job.event(
-            TunnelState::Failed,
-            connections,
-            bytes_forwarded,
-            Some(format!("could not cancel remote listener: {error}")),
-        ));
+        failure = Some(format!("could not cancel remote listener: {error}"));
     }
-    if !failed {
-        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
-    }
+    emit_tunnel(job.event(
+        if failure.is_some() {
+            TunnelState::Failed
+        } else {
+            TunnelState::Stopped
+        },
+        connections,
+        bytes_forwarded.load(Ordering::Relaxed),
+        failure,
+    ));
     manager.finish_tunnel(&job.tunnel_id);
 }
 

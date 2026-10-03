@@ -8,9 +8,11 @@ transport retirement for uncertain forwards and retained live Stop/Cancel
 controls. Both architectures passed package checks and anonymous downloaded
 byte comparison. The ARM64 installer copy passed [21 live tunnel controls,
 shared 32-job admission and native Stop/Close/Quit](docs/testing/native-tunnels-v0.1.30.md).
-The same check exposed under-reported active/cancelled byte counts, which are
-next to fix. Broader native workloads and platform gates remain open; the
-checklist is unchanged.
+The same check exposed under-reported active/cancelled byte counts. A
+[source fix](docs/testing/tunnel-lifecycle.md) now retains live and partial
+payload totals across all three modes; the full local suite passed. Native
+counter acceptance and its next installer remain pending. Broader workloads
+and platform gates remain open; the checklist is unchanged.
 
 The earlier [v0.1.29 Mac previews](docs/release/v0.1.29.md) stop automatic reconnect
 retries after uncertain startup delivery. A disposable copy of the verified

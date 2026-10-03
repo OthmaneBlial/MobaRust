@@ -110,7 +110,7 @@ On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install .
 - **Keep live controls:** active tunnel and transfer rows retain Stop/Cancel. Only finished history is capped.
 - **Locally checked release:** the full suite passed, including 113 desktop tests, four forwarding cases and 25 OpenSSH cases. Both Mac packages passed mounted layout, architecture, signature and CLI checks.
 
-All four published assets matched anonymous downloads byte for byte. The ARM64 copy passed 21 live controls, shared 32-job refusal/recovery and native Stop/Close/Quit with byte-matched traffic. **Known issue:** active/cancelled tunnel byte counts can display 0 B; a fix is next. Broader workloads and Windows/Linux acceptance remain open. Their downloads remain v0.1.12; the walkthrough remains v0.1.17. [Native checks](docs/testing/native-tunnels-v0.1.30.md) · [Release limits](docs/release/v0.1.30.md).
+All four published assets matched anonymous downloads byte for byte. The ARM64 copy passed 21 live controls, shared 32-job refusal/recovery and native Stop/Close/Quit with byte-matched traffic. **Known issue in v0.1.30:** active/cancelled tunnel byte counts can display 0 B. A [source fix](docs/testing/tunnel-lifecycle.md) passed local checks; native validation and its next preview are pending. Broader workloads and Windows/Linux acceptance remain open. Their downloads remain v0.1.12; the walkthrough remains v0.1.17. [Native checks](docs/testing/native-tunnels-v0.1.30.md) · [Release limits](docs/release/v0.1.30.md).
 
 ## 🧭 Progress and next steps
 
@@ -126,7 +126,7 @@ All four published assets matched anonymous downloads byte for byte. The ARM64 c
 | 🟡 **Distribution** | Mac ARM64/x64 0.1.30 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
-**Next priorities:** accurate live tunnel counters → sustained failure/recovery and transfer-control acceptance → current Windows/Linux installers → signing and notarization. Wider SSH authentication/recovery remains open.
+**Next priorities:** native counter validation and the next preview → sustained failure/recovery and transfer-control acceptance → current Windows/Linux installers → signing and notarization. Wider SSH authentication/recovery remains open.
 
 [📍 Detailed roadmap & completion criteria](ROADMAP.md) · [Platform evidence](docs/testing/hardware-interoperability.md) · [SSH lab](docs/testing/ssh-lab.md) · [Benchmark receipt](benchmarks/2026-10-02-local.md)
 

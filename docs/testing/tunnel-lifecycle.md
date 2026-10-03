@@ -224,3 +224,56 @@ retained its explicit prerequisite skip. An earlier full run timed out waiting
 for the explicit X11 fixture's channel; the same source and deadline passed
 standalone and in the full parallel rerun. No X11 code or timeout was changed,
 and the cause of that earlier timing failure is not established.
+
+
+## Live payload counters after v0.1.30 — 2026-10-03
+
+The [v0.1.30 native acceptance](native-tunnels-v0.1.30.md) exposed 0 B rows
+while open clients had completed byte-matched echoes. The three desktop
+runners added `copy_bidirectional` totals only after successful completion;
+long-lived copies emitted no progress, and cancellation/errors discarded
+partial totals.
+
+On main after v0.1.30, a shared stream wrapper counts only successful payload
+writes in both directions. SOCKS greeting/reply bytes are excluded. Counters
+saturate rather than wrap and survive copy errors, cancellation and aborted
+children. The existing bidirectional copy implementation, session ownership,
+16-client limit and joined cleanup remain in use. Each runner samples changed
+counts at 250 ms intervals, skipping missed ticks; idle samples emit nothing.
+Connection/completion/state events also carry current totals. Final Stopped or
+Failed events are emitted after child shutdown, retaining the final snapshot.
+Accepted stream writes are not a remote application acknowledgement.
+
+The existing encrypted, memory-only ownership fixture now covers 11 cases.
+Local, SOCKS5 and remote traffic each carry an exact 32 KiB echo and report
+65,536 payload bytes while both clients remain open. Cancellation retains that
+count. Additional successful-completion cases check that totals are not added
+twice. The remote traffic peer owns one OS-assigned `127.0.0.1` listener and
+joins its listener/channel worker on Cancel; this complements the original
+pending-approval rejection case. Client/target EOF, control cleanup and listener
+rebinding remain checked before transport teardown. Generated credentials and
+pinned host keys stay in memory; caller-selected destinations are refused.
+
+The executed regression failed before the fix at the live local-traffic
+counter assertion, after owned fixture cleanup. Both targeted tests pass after
+the fix, including a bounded in-memory copy-error case that retains accepted
+partial writes and excludes unwritten bytes. A first test-edit compile failed
+on a duplicated fixture field, which was corrected before that executed
+regression.
+
+The complete local `cargo xtask check` passed on macOS ARM64 / Apple M2 in
+294.11 seconds, including 114 desktop tests, the four SDK forwarding cases,
+25 OpenSSH cases, workspace tests/Clippy, frontend unit/type/lint/build checks,
+protocol/helpers, release/lab tools, package contracts and fuzz compilation.
+The optional real Xvfb case retained its prerequisite skip.
+
+```sh
+cargo test --locked -p mobarust ssh::backpressure_tests::tunnel_ -- --nocapture
+cargo xtask check
+```
+
+This is source/backend evidence. The published v0.1.30 Mac packages retain
+the counter defect; native acceptance of this new candidate and its next
+installer remain pending. These short checks do not prove sustained throughput,
+cancellation amid saturated writes, broad server or Windows/Linux acceptance.
+GitHub workflows remain disabled; the 57/76 roadmap checklist is unchanged.
