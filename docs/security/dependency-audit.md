@@ -244,6 +244,19 @@ dependency version/features are unchanged and published downloads do not
 contain this source correction. This is not an independent audit or new
 RustSec advisory claim.
 
+## SFTP file-I/O status preservation after v0.1.24 — 2026-10-03
+
+The file adapter flattened READ/FSTAT/WRITE/fsync/CLOSE failures into strings,
+discarding the status code. An authenticated SFTP fixture reproduced a close
+permission denial being reported as generic SFTP I/O failure. The local SDK
+now retains the structured client error inside `io::Error`; MobaRust recovers
+its existing typed/redacted status classification without inspecting server text.
+Read/write denial, close denial across transfer/editor callers, cancellation
+during close and the existing 19 packet/offset regressions pass locally.
+[Commands, ownership checks and limits](../adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
+remain separate from native/cross-platform acceptance. Versions/features and
+published downloads are unchanged; this is not a new advisory or independent audit.
+
 ## v0.1.24 release preparation audit — 2026-10-03
 
 A fresh `cargo audit --json` lookup reports RustSec commit

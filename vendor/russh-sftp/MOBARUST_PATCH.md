@@ -41,6 +41,9 @@ except the six files below and line-ending normalization.
   Use checked unsigned seek arithmetic, retire failed end-seek futures before
   reporting their error, and bound READ/WRITE by representable offset space.
   Out-of-range positions fail before another data request; empty I/O stays empty.
+  Preserve structured client errors through file READ/FSTAT/WRITE/fsync/CLOSE
+  I/O wrappers instead of flattening them to server strings. MobaRust recovers
+  the status code for its existing redacted classification.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
 - `src/protocol/file_attrs.rs`: compare the complete POSIX type field rather
@@ -92,5 +95,8 @@ v0.1.24, pending new installers and native acceptance.
 The [metadata and upload regressions](../../docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
 use generated types, owned Unix filesystem entries and disposable loopback SSH;
 they do not establish Windows metadata or native GUI acceptance.
+Subsequent [private-part and close-denial checks](../../docs/adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
+verify typed file-I/O errors through authenticated loopback SSH/SFTP. These
+source changes are also after v0.1.24, pending new installers.
 Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
 neither of the first two cohorts.

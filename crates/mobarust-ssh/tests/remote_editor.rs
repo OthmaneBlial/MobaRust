@@ -30,6 +30,9 @@ enum Fault {
     RereadDenied,
     ConcurrentWrite,
     BackupCleanupDenied,
+    UploadCloseDenied,
+    UploadWriteDenied,
+    DownloadReadDenied,
 }
 
 #[derive(Clone)]
@@ -45,6 +48,7 @@ struct State {
     post_promotion_reads: usize,
     writes: usize,
     renames: usize,
+    cancel_on_close: Option<oneshot::Sender<()>>,
 }
 
 struct Sftp {
@@ -101,6 +105,7 @@ impl russh_sftp::server::Handler for Sftp {
         let mut state = self.state.lock().unwrap();
         if flags.contains(OpenFlags::CREATE) {
             assert!(flags.contains(OpenFlags::EXCLUDE));
+            assert_eq!(attrs.permissions, Some(0o600));
             if state.files.contains_key(&filename) {
                 return Err(StatusCode::Failure);
             }
@@ -121,7 +126,16 @@ impl russh_sftp::server::Handler for Sftp {
         })
     }
 
-    async fn close(&mut self, id: u32, _handle: String) -> Result<Status, Self::Error> {
+    async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
+        let mut state = self.state.lock().unwrap();
+        if state.fault == Fault::UploadCloseDenied && handle != TARGET {
+            return Err(StatusCode::PermissionDenied);
+        }
+        if handle != TARGET
+            && let Some(sender) = state.cancel_on_close.take()
+        {
+            sender.send(()).unwrap();
+        }
         Ok(ok(id))
     }
 
@@ -133,6 +147,9 @@ impl russh_sftp::server::Handler for Sftp {
         len: u32,
     ) -> Result<Data, Self::Error> {
         let state = self.state.lock().unwrap();
+        if state.fault == Fault::DownloadReadDenied {
+            return Err(StatusCode::PermissionDenied);
+        }
         let file = state.files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
         let start = usize::try_from(offset).unwrap();
         if start >= file.bytes.len() {
@@ -154,6 +171,9 @@ impl russh_sftp::server::Handler for Sftp {
     ) -> Result<Status, Self::Error> {
         let mut state = self.state.lock().unwrap();
         state.writes += 1;
+        if state.fault == Fault::UploadWriteDenied {
+            return Err(StatusCode::PermissionDenied);
+        }
         let file = state.files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?;
         let start = usize::try_from(offset).unwrap();
         let end = start + data.len();
@@ -302,6 +322,7 @@ impl Fixture {
             post_promotion_reads: 0,
             writes: 0,
             renames: 0,
+            cancel_on_close: None,
         }));
         let (ended, receiver) = oneshot::channel();
         let handler = Ssh {
@@ -532,6 +553,110 @@ async fn upload_promotion_refuses_unknown_special_and_directory_types_before_ren
                 "refuse unsafe types before any rename request"
             );
             assert_eq!(state.files.len(), 1, "no unexpected backup");
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn temporary_upload_close_failures_clean_owned_parts_before_promotion() {
+    for operation in ["copy", "reserve", "editor"] {
+        let fixture = Fixture::connect(Fault::UploadCloseDenied, true).await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        const PART: &str = "/private-upload.part";
+        let (_sender, mut cancel) = oneshot::channel();
+        let result = match operation {
+            "copy" => {
+                let mut source = &b"private bytes"[..];
+                sftp.upload_temporary_from_with_cancel(&mut source, PART, &mut cancel, |_| {})
+                    .await
+                    .map(|_| ())
+            }
+            "reserve" => sftp.prepare_upload_temporary(PART, &mut cancel).await,
+            _ => {
+                let opened = sftp.read_text_document(TARGET).await.unwrap();
+                sftp.save_text_document(TARGET, &opened.revision, WRITTEN)
+                    .await
+                    .map(|_| ())
+            }
+        };
+        let error = result.expect_err("failed close must refuse promotion");
+        assert!(
+            matches!(error, SshError::SftpPermissionDenied),
+            "{operation}: {error}"
+        );
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert_eq!(state.files.len(), 1, "owned part was removed");
+            assert_eq!(state.renames, 0, "failed close must precede promotion");
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn cancellation_during_temporary_close_cleans_the_owned_part() {
+    for reserve_only in [false, true] {
+        let fixture = Fixture::connect(Fault::None, true).await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let (sender, mut cancel) = oneshot::channel();
+        fixture.state.lock().unwrap().cancel_on_close = Some(sender);
+        const PART: &str = "/private-upload.part";
+        let result = if reserve_only {
+            sftp.prepare_upload_temporary(PART, &mut cancel).await
+        } else {
+            let mut source = &b"private bytes"[..];
+            sftp.upload_temporary_from_with_cancel(&mut source, PART, &mut cancel, |_| {})
+                .await
+                .map(|_| ())
+        };
+        assert!(matches!(result, Err(SshError::Cancelled)));
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert_eq!(state.files.len(), 1, "owned part was removed");
+            assert_eq!(state.renames, 0);
+            assert!(state.cancel_on_close.is_none());
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn file_read_and_write_denials_keep_their_status_and_preserve_originals() {
+    for fault in [Fault::DownloadReadDenied, Fault::UploadWriteDenied] {
+        let fixture = Fixture::connect(fault, true).await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let mut downloaded = Vec::new();
+        let result = if fault == Fault::DownloadReadDenied {
+            sftp.download_to(TARGET, &mut downloaded).await
+        } else {
+            let (_sender, mut cancel) = oneshot::channel();
+            let mut source = &b"private bytes"[..];
+            sftp.upload_temporary_from_with_cancel(
+                &mut source,
+                "/private-upload.part",
+                &mut cancel,
+                |_| {},
+            )
+            .await
+        };
+        let error = result.expect_err("server denied file I/O");
+        assert!(
+            matches!(error, SshError::SftpPermissionDenied),
+            "{fault:?}: {error}"
+        );
+        assert_eq!(error.to_string(), "SFTP permission denied");
+        assert!(downloaded.is_empty());
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert_eq!(state.files.len(), 1, "no owned upload part remains");
+            assert_eq!(state.renames, 0);
         }
         sftp.close().await.unwrap();
         fixture.finish().await;

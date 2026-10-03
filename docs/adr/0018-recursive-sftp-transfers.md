@@ -33,6 +33,10 @@ On main after v0.1.24, each uploaded file uses the shared no-follow destination
 guard: explicit overwrite replaces a final-path link itself; real directories,
 special files and absent type metadata refuse. Destination directory links
 remain refused. [Protocol checks and native limits](0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03).
+Per-file uploads now use the shared exclusive/private creation and owned-failure
+cleanup helper; local downloads use shared create-new/private Unix mode defaults.
+[Part ownership and close-boundary checks](0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
+do not establish whole-tree atomicity or native acceptance.
 Recursive downloads also refuse existing local subdirectory symlinks before
 creating files. A concurrent local process can still swap an ancestor after
 that check; directory-handle-relative operations would be needed to close

@@ -153,6 +153,11 @@ and shares a no-follow upload destination guard across SCP, SFTP and recursive
 files. [Metadata, link replacement and unsafe-type regressions](docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
 verify mode preservation and refusal before rename. Native collision workflows,
 other-platform metadata and new installers remain pending; the checklist stays 56/76.
+The six desktop transfer paths now share private part creation: SFTP uses
+exclusive mode-`0600` files, SCP first reserves an exclusive part and sends
+`C0600`, and Unix downloads request mode `0600`. [Ownership, mode and close-boundary regressions](docs/adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
+cover occupied paths, denial and cancellation without promoting partial data.
+Native/recursive acceptance, Windows ACL evidence and new installers remain pending.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

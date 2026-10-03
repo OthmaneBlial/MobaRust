@@ -1159,6 +1159,271 @@ fn idle_shell_survives_the_connection_timeout_without_keepalives() {
 }
 
 #[test]
+fn sftp_transfer_parts_are_private_during_copy_and_cleaned_on_errors() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let temporary = fixture.directory.path().join("private-upload.part");
+        let part = temporary.to_str().unwrap();
+        let payload = vec![b'P'; 128 * 1024];
+        let (_sender, mut cancel) = oneshot::channel();
+        let mut source = &payload[..];
+        let mut progress = 0;
+        assert_eq!(
+            sftp.upload_temporary_from_with_cancel(&mut source, part, &mut cancel, |bytes| {
+                assert_eq!(
+                    fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+                    0o600
+                );
+                progress = bytes;
+            })
+            .await
+            .unwrap(),
+            payload.len() as u64
+        );
+        assert_eq!(progress, payload.len() as u64);
+        assert_eq!(fs::read(&temporary).unwrap(), payload);
+        sftp.remove_file(part).await.unwrap();
+
+        let (sender, mut cancel) = oneshot::channel();
+        sender.send(()).unwrap();
+        let mut source = &payload[..];
+        assert!(matches!(
+            sftp.upload_temporary_from_with_cancel(&mut source, part, &mut cancel, |_| {})
+                .await,
+            Err(SshError::Cancelled)
+        ));
+        assert!(!temporary.exists());
+
+        let (sender, mut cancel) = oneshot::channel();
+        let mut sender = Some(sender);
+        let mut source = &payload[..];
+        assert!(matches!(
+            sftp.upload_temporary_from_with_cancel(&mut source, part, &mut cancel, |_| {
+                assert_eq!(
+                    fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+                    0o600
+                );
+                if let Some(sender) = sender.take() {
+                    sender.send(()).unwrap();
+                }
+            })
+            .await,
+            Err(SshError::Cancelled)
+        ));
+        assert!(!temporary.exists());
+
+        let original = fixture.directory.path().join("read-failure-source");
+        fs::write(&original, b"original source").unwrap();
+        let mut source = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&original)
+            .await
+            .unwrap();
+        let (_sender, mut cancel) = oneshot::channel();
+        assert!(matches!(
+            sftp.upload_temporary_from_with_cancel(&mut source, part, &mut cancel, |_| {})
+                .await,
+            Err(SshError::LocalIo(_))
+        ));
+        assert!(!temporary.exists());
+        assert_eq!(fs::read(&original).unwrap(), b"original source");
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
+fn sftp_transfer_parts_refuse_unowned_paths_without_truncation() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let victim = fixture.directory.path().join("victim");
+        let directory = fixture.directory.path().join("victim-directory");
+        let missing = fixture.directory.path().join("missing-victim");
+        fs::write(&victim, b"unchanged victim").unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("child"), b"unchanged child").unwrap();
+        let occupied = fixture.directory.path().join("occupied.part");
+        for kind in [
+            "regular",
+            "file-link",
+            "directory-link",
+            "dangling-link",
+            "directory",
+        ] {
+            match kind {
+                "regular" => fs::write(&occupied, b"unowned original").unwrap(),
+                "directory" => fs::create_dir(&occupied).unwrap(),
+                _ => std::os::unix::fs::symlink(
+                    match kind {
+                        "file-link" => &victim,
+                        "directory-link" => &directory,
+                        _ => &missing,
+                    },
+                    &occupied,
+                )
+                .unwrap(),
+            }
+            let old_mode = fs::symlink_metadata(&occupied)
+                .unwrap()
+                .permissions()
+                .mode();
+            let (_sender, mut cancel) = oneshot::channel();
+            assert!(
+                sftp.prepare_upload_temporary(occupied.to_str().unwrap(), &mut cancel)
+                    .await
+                    .is_err(),
+                "SCP reservation must refuse {kind}"
+            );
+            let mut source = &b"replacement"[..];
+            assert!(
+                sftp.upload_temporary_from_with_cancel(
+                    &mut source,
+                    occupied.to_str().unwrap(),
+                    &mut cancel,
+                    |_| {}
+                )
+                .await
+                .is_err(),
+                "{kind}"
+            );
+            for reserve_only in [false, true] {
+                let (sender, mut cancel) = oneshot::channel();
+                sender.send(()).unwrap();
+                let result = if reserve_only {
+                    sftp.prepare_upload_temporary(occupied.to_str().unwrap(), &mut cancel)
+                        .await
+                } else {
+                    sftp.upload_temporary_from_with_cancel(
+                        &mut source,
+                        occupied.to_str().unwrap(),
+                        &mut cancel,
+                        |_| {},
+                    )
+                    .await
+                    .map(|_| ())
+                };
+                assert!(matches!(result, Err(SshError::Cancelled)));
+            }
+            assert_eq!(
+                fs::symlink_metadata(&occupied)
+                    .unwrap()
+                    .permissions()
+                    .mode(),
+                old_mode
+            );
+            if kind == "regular" {
+                assert_eq!(fs::read(&occupied).unwrap(), b"unowned original");
+            } else if kind != "directory" {
+                let expected = match kind {
+                    "file-link" => &victim,
+                    "directory-link" => &directory,
+                    _ => &missing,
+                };
+                assert_eq!(fs::read_link(&occupied).unwrap(), *expected);
+            }
+            assert_eq!(fs::read(&victim).unwrap(), b"unchanged victim");
+            assert_eq!(
+                fs::read(directory.join("child")).unwrap(),
+                b"unchanged child"
+            );
+            assert!(!missing.exists());
+            if kind == "directory" {
+                fs::remove_dir(&occupied).unwrap();
+            } else {
+                fs::remove_file(&occupied).unwrap();
+            }
+        }
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
+fn scp_transfer_parts_are_private_during_copy() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let temporary = fixture.directory.path().join("private-scp.part");
+        let payload = vec![b'S'; 128 * 1024];
+        let (_sender, mut cancel) = oneshot::channel();
+        let mut source = &payload[..];
+        assert_eq!(
+            connection
+                .scp_upload_with_cancel(
+                    temporary.to_str().unwrap(),
+                    payload.len() as u64,
+                    &mut source,
+                    &mut cancel,
+                    |_| {
+                        assert_eq!(
+                            fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+                            0o600
+                        );
+                    }
+                )
+                .await
+                .unwrap(),
+            payload.len() as u64
+        );
+        assert_eq!(fs::read(&temporary).unwrap(), payload);
+        let sftp = connection.open_sftp().await.unwrap();
+        sftp.remove_file(temporary.to_str().unwrap()).await.unwrap();
+        let (_sender, mut cancel) = oneshot::channel();
+        sftp.prepare_upload_temporary(temporary.to_str().unwrap(), &mut cancel)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        let mut source = &payload[..];
+        connection
+            .scp_upload_with_cancel(
+                temporary.to_str().unwrap(),
+                payload.len() as u64,
+                &mut source,
+                &mut cancel,
+                |_| {
+                    assert_eq!(
+                        fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+                        0o600
+                    );
+                },
+            )
+            .await
+            .unwrap();
+        let destination = fixture.directory.path().join("scp-original");
+        fs::write(&destination, b"old contents").unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o640)).unwrap();
+        sftp.promote_uploaded_file(
+            temporary.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), payload);
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+        assert!(!temporary.exists());
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn upload_replacement_replaces_links_without_following_their_targets() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {

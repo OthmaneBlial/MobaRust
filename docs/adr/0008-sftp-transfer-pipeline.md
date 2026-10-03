@@ -55,6 +55,11 @@ check. Directories and missing/unsupported type metadata refuse before
 promotion. Explicit overwrite replaces a final-path symlink itself, including
 directory and dangling links, without inheriting its mode or opening its target.
 The same check runs again before fallback backup creation.
+Transfer SFTP parts and editor parts now share exclusive creation requesting
+mode `0600`. Native SCP first reserves an exclusive private SFTP part, then
+streams real legacy SCP data using `C0600`. Local download parts share
+create-new semantics and request mode `0600` on Unix. A new final file retains
+that mode; replacing an existing remote regular file still restores its mode.
 Single-file SFTP and SCP uploads reject selected local symlinks, including
 dangling links, before opening a remote transfer. On Unix, file uploads also
 open with `O_NOFOLLOW` and check the opened handle is a regular file, preventing
@@ -183,3 +188,67 @@ metadata conversion is unobserved. Ancestor/final-path swaps between requests,
 a malicious server and lost rename replies remain limitations. Published
 v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged; no broader roadmap
 gate is closed by these regressions.
+
+## Private transfer parts and close acknowledgements — 2026-10-03
+
+The three OpenSSH baselines reproduced SFTP/SCP parts at mode `0644` and a
+temporary SFTP upload accepting an occupied regular file. The local download
+creation baseline also reproduced `0644`. These files belonged to disposable
+private fixtures; this demonstrates unsafe defaults, not an observed disclosure.
+An initial desktop baseline build exhausted disk space; after reclaiming only
+obsolete repository compiler output, the unchanged baseline ran and failed its
+mode assertion. Source and validation receipts were retained.
+
+The desktop SFTP paths now use an exclusive temporary-upload API, leaving the
+general library create/truncate upload API available for intentional direct
+writes. SCP reserves its part through the same exclusive opener before its
+legacy sink is invoked. A failed or unacknowledged create never establishes
+cleanup ownership. Once creation is acknowledged, copy, close and cancellation
+failures clean the owned part. Callers clean only a successfully handed-off part.
+The editor uses the same private copy/close helper.
+
+Both copy and reservation await close, then check cancellation before returning
+ownership. A deterministic wire fixture reproduced cancellation queued by the
+server's close handler being returned as success; the corrected methods report
+cancellation and remove the owned part. Another fixture reproduced a known
+close permission denial becoming generic SFTP I/O failure. The SDK now retains
+structured errors through READ, FSTAT, WRITE, fsync and CLOSE; MobaRust maps the
+status code while keeping server text out of its displayed error.
+
+```text
+cargo test --locked -p mobarust-ssh --test local_sshd transfer_parts_ -- --show-output
+cargo test --locked -p mobarust-ssh --test remote_editor
+cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo test --locked -p mobarust ssh::tests::download_parts_are_private_and_exclusive -- --exact
+cargo xtask check
+```
+
+The OpenSSH cases inspect mode during real 128 KiB copies, compare exact bytes,
+refuse existing regular files, directories and file/directory/dangling links
+through copy and reservation, preserve link targets/modes, and check queued
+cancellation plus source-read failure cleanup. A reserved SCP copy promotes to
+an existing mode-`0640` file without losing its mode. The local factory case
+checks private creation and refusal without truncating an occupied file/link.
+Scripted encrypted SSH/SFTP cases check read/write denial, close denial through
+copy/reservation/editor Save, and cancellation during close through both transfer
+methods; original bytes remain unchanged and no promotion rename is sent.
+
+The final `cargo xtask check` exited successfully with 106 desktop tests,
+42 SSH unit tests, 15 authenticated fixture tests (three manual probes ignored),
+22 OpenSSH cases, seven scripted SFTP fault tests, 19 public packet/offset
+checks, three metadata checks and five private SDK checks. OpenSSH completed
+in 22.21 seconds. Workspace tests, Clippy, frontend tests/typecheck/lint/build,
+release/isolated-launcher tests, RDP/VNC helper checks, package-layout checks
+and fuzz-target compilation also passed. The real X11 server fixture explicitly
+skipped because Xvfb or a safe system socket directory was unavailable; this
+is not an external X server acceptance claim.
+
+These are macOS ARM64 source/protocol and local-filesystem checks. All six
+desktop transfer paths use the shared creation primitives, but full native
+transfer/recursive workflow acceptance and new installers remain pending.
+Windows inherits filesystem ACLs; this does not establish private Windows ACLs.
+Servers must honor requested permissions/exclusivity. Legacy SCP reopens the
+reserved pathname, and ancestor/final-path swaps remain possible between
+requests. Lost create replies can leave an unconfirmed private part for manual
+inspection; ambiguous ownership is never guessed merely to remove it. Published
+v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged.

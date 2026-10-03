@@ -3129,12 +3129,7 @@ where
     }
 
     let temporary = local_part_path(destination)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .await
-        .map_err(SshError::LocalIo)?;
+    let mut file = create_local_download_file(&temporary).await?;
     let copied = match connection
         .scp_download_with_cancel(remote_path, &mut file, cancel, |bytes, total| {
             on_progress(bytes, Some(total));
@@ -3207,6 +3202,10 @@ where
     }
 
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
+    if let Err(error) = sftp.prepare_upload_temporary(&temporary, cancel).await {
+        let _ = sftp.close().await;
+        return Err(error);
+    }
     let copied = match connection
         .scp_upload_with_cancel(&temporary, source_size, &mut file, cancel, |bytes| {
             on_progress(bytes, Some(source_size))
@@ -3288,14 +3287,12 @@ where
     }
 
     let temporary = local_part_path(destination)?;
-    let mut file = match OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .await
-    {
+    let mut file = match create_local_download_file(&temporary).await {
         Ok(file) => file,
-        Err(error) => return Err(SshError::LocalIo(error)),
+        Err(error) => {
+            let _ = sftp.close().await;
+            return Err(error);
+        }
     };
     let copied = match sftp
         .download_to_with_cancel(remote_path, &mut file, cancel, |bytes| {
@@ -3395,16 +3392,14 @@ where
 
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
     let copied = match sftp
-        .upload_from_with_cancel(&mut file, &temporary, cancel, |bytes| {
+        .upload_temporary_from_with_cancel(&mut file, &temporary, cancel, |bytes| {
             on_progress(bytes, Some(source_size));
         })
         .await
     {
         Ok(copied) => copied,
         Err(error) => {
-            let cleanup = sftp.cleanup_temporary_file(&temporary).await;
             let _ = sftp.close().await;
-            cleanup?;
             return Err(error);
         }
     };
@@ -3635,12 +3630,7 @@ where
         ensure_local_download_directory(parent).await?;
     }
     let temporary = local_part_path(destination)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .await
-        .map_err(SshError::LocalIo)?;
+    let mut file = create_local_download_file(&temporary).await?;
     let copied = match sftp
         .download_to_with_cancel(remote_path, &mut file, progress.cancel, |bytes| {
             (progress.on_progress)(
@@ -3806,21 +3796,14 @@ where
     }
     let temporary = remote_part_path(remote_path, &Uuid::new_v4().to_string())?;
     let mut file = open_local_upload_file(source).await?;
-    let copied = match sftp
-        .upload_from_with_cancel(&mut file, &temporary, progress.cancel, |bytes| {
+    let copied = sftp
+        .upload_temporary_from_with_cancel(&mut file, &temporary, progress.cancel, |bytes| {
             (progress.on_progress)(
                 progress.base.saturating_add(bytes),
                 progress.total.map(|total| total.max(total_size)),
             );
         })
-        .await
-    {
-        Ok(copied) => copied,
-        Err(error) => {
-            sftp.cleanup_temporary_file(&temporary).await?;
-            return Err(error);
-        }
-    };
+        .await?;
     if !overwrite && upload_destination_exists(sftp, remote_path, &temporary).await? {
         sftp.cleanup_temporary_file(&temporary).await?;
         return Err(SshError::Sftp(
@@ -3978,6 +3961,14 @@ fn local_part_path(destination: &Path) -> Result<PathBuf, SshError> {
         .ok_or_else(|| SshError::Sftp("download destination must include a file name".into()))?
         .to_string_lossy();
     Ok(destination.with_file_name(format!(".{name}.mobarust-{}.part", Uuid::new_v4())))
+}
+
+async fn create_local_download_file(temporary: &Path) -> Result<fs::File, SshError> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(temporary).await.map_err(SshError::LocalIo)
 }
 
 async fn remove_partial_download(file: fs::File, temporary: &Path) -> Result<(), SshError> {
@@ -4371,6 +4362,30 @@ mod tests {
                 .is_err()
         );
         assert!(!temporary.exists());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_parts_are_private_and_exclusive() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        use tokio::io::AsyncWriteExt;
+        let directory = tempdir().unwrap();
+        let temporary = directory.path().join("private-download.part");
+        let mut file = super::create_local_download_file(&temporary).await.unwrap();
+        assert_eq!(
+            fs::metadata(&temporary).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        file.write_all(b"private bytes").await.unwrap();
+        file.sync_all().await.unwrap();
+        drop(file);
+        assert!(super::create_local_download_file(&temporary).await.is_err());
+        assert_eq!(fs::read(&temporary).unwrap(), b"private bytes");
+        let link = directory.path().join("occupied-link.part");
+        symlink(&temporary, &link).unwrap();
+        assert!(super::create_local_download_file(&link).await.is_err());
+        assert_eq!(fs::read_link(&link).unwrap(), temporary);
+        assert_eq!(fs::read(&temporary).unwrap(), b"private bytes");
     }
 
     #[tokio::test]

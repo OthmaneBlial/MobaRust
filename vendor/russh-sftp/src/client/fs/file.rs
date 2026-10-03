@@ -120,9 +120,9 @@ fn check_write_result(
             "write channel closed",
         )),
         Ok(Ok(Packet::Status(s))) if s.status_code == StatusCode::Ok => Ok(()),
-        Ok(Ok(Packet::Status(s))) => Err(io::Error::other(s.error_message)),
-        Ok(Ok(_)) => Err(io::Error::other("unexpected response packet")),
-        Ok(Err(e)) => Err(io::Error::other(e.to_string())),
+        Ok(Ok(Packet::Status(s))) => Err(io::Error::other(Error::Status(s))),
+        Ok(Ok(_)) => Err(io::Error::other(Error::UnexpectedPacket)),
+        Ok(Err(e)) => Err(io::Error::other(e)),
     }
 }
 
@@ -226,7 +226,7 @@ impl AsyncRead for File {
                             Err(Error::Status(status)) if status.status_code == StatusCode::Eof => {
                                 Ok(None)
                             }
-                            Err(e) => Err(io::Error::other(e.to_string())),
+                            Err(e) => Err(io::Error::other(e)),
                         }
                     }))
                 }
@@ -272,10 +272,7 @@ impl AsyncSeek for File {
                 let file_handle = self.handle.clone();
 
                 Box::pin(async move {
-                    let result = session
-                        .fstat(file_handle)
-                        .await
-                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    let result = session.fstat(file_handle).await.map_err(io::Error::other)?;
                     match result.attrs.size {
                         Some(size) => seek_position(size, pos),
                         None => Err(io::Error::other("file size unknown")),
@@ -364,7 +361,7 @@ impl AsyncWrite for File {
                 self.state.write_acks.push_back(rx);
                 Poll::Ready(Ok(len))
             }
-            Err(e) => Poll::Ready(Err(io::Error::other(e.to_string()))),
+            Err(e) => Poll::Ready(Err(io::Error::other(e))),
         }
     }
 
@@ -386,7 +383,7 @@ impl AsyncWrite for File {
                         .fsync(file_handle)
                         .await
                         .map(|_| ())
-                        .map_err(|e| io::Error::other(e.to_string()))
+                        .map_err(io::Error::other)
                 }))
             }
         })
@@ -412,10 +409,7 @@ impl AsyncWrite for File {
                 let file_handle = self.handle.clone();
 
                 self.state.f_shutdown.get_or_insert(Box::pin(async move {
-                    session
-                        .close(file_handle)
-                        .await
-                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    session.close(file_handle).await.map_err(io::Error::other)?;
                     Ok(())
                 }))
             }

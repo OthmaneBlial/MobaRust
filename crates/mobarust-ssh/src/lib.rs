@@ -1398,7 +1398,7 @@ impl SshConnection {
         };
         channel.read_ack_with_cancel(cancel).await?;
         channel
-            .write_bytes_with_cancel(format!("C0644 {size} {file_name}\n").into_bytes(), cancel)
+            .write_bytes_with_cancel(format!("C0600 {size} {file_name}\n").into_bytes(), cancel)
             .await?;
         channel.read_ack_with_cancel(cancel).await?;
 
@@ -2003,6 +2003,12 @@ fn map_sftp_error(error: russh_sftp::client::error::Error) -> SshError {
 }
 
 fn map_sftp_io_error(error: io::Error) -> SshError {
+    if let Some(source) = error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<russh_sftp::client::error::Error>())
+    {
+        return map_sftp_error(source.clone());
+    }
     match error.kind() {
         io::ErrorKind::NotFound => SshError::SftpPathMissing,
         io::ErrorKind::PermissionDenied => SshError::SftpPermissionDenied,
@@ -2875,32 +2881,11 @@ impl SftpConnection {
     }
 
     async fn upload_editor_temporary(&self, path: &str, bytes: &[u8]) -> Result<(), SshError> {
-        use russh_sftp::protocol::OpenFlags;
-        let mut attributes = russh_sftp::client::fs::Metadata::empty();
-        attributes.permissions = Some(0o600);
-        // An acknowledged exclusive create establishes ownership. If it fails,
-        // never truncate or clean up a path that may belong to someone else.
-        let mut file = self
-            .session
-            .open_with_flags_and_attributes(
-                path,
-                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
-                attributes,
-            )
-            .await
-            .map_err(map_sftp_error)?;
         let mut source = bytes;
         let (_cancel_sender, mut cancel) = oneshot::channel();
-        let write_result =
-            copy_with_cancel(&mut source, &mut file, &mut cancel, |_| {}, self, false)
-                .await
-                .map(|_| ());
-        let close_result = self.file_io(file.close()).await;
-        if let Err(error) = write_result.and(close_result) {
-            self.cleanup_temporary_file(path).await?;
-            return Err(error);
-        }
-        Ok(())
+        self.upload_temporary_from_with_cancel(&mut source, path, &mut cancel, |_| {})
+            .await
+            .map(|_| ())
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
@@ -2973,13 +2958,8 @@ impl SftpConnection {
             ));
         }
         let result = async {
-            if cancel.as_mut().is_some_and(|receiver| {
-                !matches!(
-                    receiver.try_recv(),
-                    Err(oneshot::error::TryRecvError::Empty)
-                )
-            }) {
-                return Err(SshError::Cancelled);
+            if let Some(cancel) = cancel.as_deref_mut() {
+                check_transfer_cancelled(cancel)?;
             }
             if !overwrite && self.try_exists(destination).await? {
                 return Err(SshError::Sftp(
@@ -2992,13 +2972,8 @@ impl SftpConnection {
             {
                 self.set_permissions(temporary, permissions).await?;
             }
-            if cancel.as_mut().is_some_and(|receiver| {
-                !matches!(
-                    receiver.try_recv(),
-                    Err(oneshot::error::TryRecvError::Empty)
-                )
-            }) {
-                return Err(SshError::Cancelled);
+            if let Some(cancel) = cancel.as_deref_mut() {
+                check_transfer_cancelled(cancel)?;
             }
             let initial_error = match self.rename(temporary, destination).await {
                 Ok(()) => return Ok(()),
@@ -3101,6 +3076,71 @@ impl SftpConnection {
         Ok(copied)
     }
 
+    async fn open_upload_temporary(
+        &self,
+        path: &str,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<russh_sftp::client::fs::File, SshError> {
+        use russh_sftp::protocol::OpenFlags;
+        check_transfer_cancelled(cancel)?;
+        let mut attributes = russh_sftp::client::fs::Metadata::empty();
+        attributes.permissions = Some(0o600);
+        // Only an acknowledged exclusive create establishes ownership. Never
+        // truncate or clean up an occupied path or a creation with no reply.
+        self.session
+            .open_with_flags_and_attributes(
+                path,
+                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                attributes,
+            )
+            .await
+            .map_err(map_sftp_error)
+    }
+
+    /// Reserve a private, exclusive temporary path before legacy SCP writes.
+    /// On success the caller owns cleanup; on creation failure it owns nothing.
+    pub async fn prepare_upload_temporary(
+        &self,
+        path: &str,
+        cancel: &mut oneshot::Receiver<()>,
+    ) -> Result<(), SshError> {
+        let file = self.open_upload_temporary(path, cancel).await?;
+        let result = self
+            .file_io(file.close())
+            .await
+            .and_then(|()| check_transfer_cancelled(cancel));
+        if result.is_err() {
+            self.cleanup_temporary_file(path).await?;
+        }
+        result
+    }
+
+    /// Stream into a private, exclusive temporary path and await its close.
+    /// This method cleans owned parts on failure; callers must not clean paths
+    /// whose creation failed. A successful result transfers cleanup ownership.
+    pub async fn upload_temporary_from_with_cancel<R, F>(
+        &self,
+        source: &mut R,
+        path: &str,
+        cancel: &mut oneshot::Receiver<()>,
+        on_progress: F,
+    ) -> Result<u64, SshError>
+    where
+        R: AsyncRead + Unpin,
+        F: FnMut(u64),
+    {
+        let mut file = self.open_upload_temporary(path, cancel).await?;
+        let copied = copy_with_cancel(source, &mut file, cancel, on_progress, self, false).await;
+        let closed = self.file_io(file.close()).await;
+        let result = copied
+            .and_then(|bytes| closed.map(|_| bytes))
+            .and_then(|bytes| check_transfer_cancelled(cancel).map(|()| bytes));
+        if result.is_err() {
+            self.cleanup_temporary_file(path).await?;
+        }
+        result
+    }
+
     pub async fn remove_file(&self, path: impl Into<String>) -> Result<(), SshError> {
         self.session.remove_file(path).await.map_err(map_sftp_error)
     }
@@ -3189,6 +3229,13 @@ fn next_editor_temp_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn check_transfer_cancelled(cancel: &mut oneshot::Receiver<()>) -> Result<(), SshError> {
+    match cancel.try_recv() {
+        Err(oneshot::error::TryRecvError::Empty) => Ok(()),
+        _ => Err(SshError::Cancelled),
+    }
 }
 
 async fn copy_with_cancel<R, W, F>(
@@ -3972,6 +4019,35 @@ mod tests {
         assert!(matches!(
             map_sftp_io_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
             SshError::SftpConnectionLost
+        ));
+        for (status_code, expected) in [
+            (
+                russh_sftp::protocol::StatusCode::NoSuchFile,
+                "SFTP remote path was not found",
+            ),
+            (
+                russh_sftp::protocol::StatusCode::PermissionDenied,
+                "SFTP permission denied",
+            ),
+            (
+                russh_sftp::protocol::StatusCode::ConnectionLost,
+                "SFTP connection was lost",
+            ),
+            (
+                russh_sftp::protocol::StatusCode::BadMessage,
+                "SFTP protocol operation failed",
+            ),
+        ] {
+            let source = russh_sftp::client::error::Error::Status(status(status_code));
+            let error = map_sftp_io_error(std::io::Error::other(source));
+            assert_eq!(error.to_string(), expected);
+            assert!(!error.to_string().contains("sensitive remote path"));
+        }
+        assert!(matches!(
+            map_sftp_io_error(std::io::Error::other(
+                russh_sftp::client::error::Error::Timeout
+            )),
+            SshError::Timeout
         ));
     }
 
