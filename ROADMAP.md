@@ -125,6 +125,11 @@ native file-browser/editor acceptance.
 These accepted-operation, SFTP setup and response-bound corrections are packaged
 in both verified [v0.1.23 Mac previews](docs/release/v0.1.23.md). Windows/Linux
 remain v0.1.12; the newer package checks do not close native workflow gates.
+After v0.1.23, the shared file reader also preserves unconsumed bytes when a
+cancelled read resumes with a smaller buffer, retires old read state on position
+changes/closure and clamps negotiated READ sizes to the client packet budget.
+[In-memory regression evidence](docs/security/dependency-audit.md#sftp-file-read-cancellation-and-negotiated-limits--2026-10-03)
+does not establish native editor/transfer acceptance or a new installer cohort.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

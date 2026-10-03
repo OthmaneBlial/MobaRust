@@ -67,7 +67,7 @@ impl SftpSession {
             session.set_limits(limits);
             features.limits = Some(limits);
             if let Some(plen) = limits.packet_len {
-                features.max_packet_len = (plen as u32).min(max_packet_len);
+                features.max_packet_len = plen.min(u64::from(max_packet_len)) as u32;
             }
         }
 

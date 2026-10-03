@@ -1,9 +1,11 @@
 //! Bounded in-memory peers; no sockets, credentials or filesystem operations.
 
-use std::time::Duration;
+use std::{future::poll_fn, pin::Pin, task::Poll, time::Duration};
 
-use russh_sftp::client::{Config, RawSftpSession};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use russh_sftp::client::{Config, RawSftpSession, SftpSession, fs::File};
+use tokio::io::{
+    AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt, DuplexStream, ReadBuf,
+};
 
 const DEADLINE: Duration = Duration::from_secs(2);
 
@@ -176,4 +178,355 @@ async fn failed_reader_retires_a_backpressured_writer() {
         .expect("blocked write does not retain the stream")
         .unwrap();
     assert!(tail.len() <= 64);
+}
+
+async fn request(peer: &mut DuplexStream) -> Vec<u8> {
+    let length = peer.read_u32().await.unwrap();
+    assert!(length <= 256, "fixture request stays small");
+    let mut packet = vec![0; length as usize];
+    peer.read_exact(&mut packet).await.unwrap();
+    packet
+}
+
+async fn reply(peer: &mut DuplexStream, kind: u8, id: &[u8], data: &[u8]) {
+    let mut payload = vec![kind];
+    payload.extend_from_slice(id);
+    payload.extend_from_slice(data);
+    peer.write_u32(payload.len() as u32).await.unwrap();
+    peer.write_all(&payload).await.unwrap();
+}
+
+async fn data_reply(peer: &mut DuplexStream, req: &[u8], data: &[u8]) {
+    let mut payload = (data.len() as u32).to_be_bytes().to_vec();
+    payload.extend_from_slice(data);
+    reply(peer, 103, &req[1..5], &payload).await;
+}
+
+async fn status_reply(peer: &mut DuplexStream, req: &[u8], code: u32) {
+    let mut payload = code.to_be_bytes().to_vec();
+    payload.extend_from_slice(&[0; 8]); // Empty message and language tag.
+    reply(peer, 101, &req[1..5], &payload).await;
+}
+
+fn read_request(req: &[u8], offset: u64, length: u32) {
+    assert_eq!(req[0], 5);
+    assert_eq!(&req[req.len() - 12..req.len() - 4], &offset.to_be_bytes());
+    assert_eq!(&req[req.len() - 4..], &length.to_be_bytes());
+}
+
+async fn memory_file(limits: Option<(u64, u64)>) -> (SftpSession, File, DuplexStream) {
+    memory_file_with_config(limits, 128, "fixture").await
+}
+
+async fn memory_file_with_config(
+    limits: Option<(u64, u64)>,
+    max_packet_len: u32,
+    file_handle: &str,
+) -> (SftpSession, File, DuplexStream) {
+    let (stream, mut peer) = tokio::io::duplex(1024);
+    let server = async {
+        read_init(&mut peer).await;
+        let mut extensions = Vec::new();
+        if limits.is_some() {
+            let name = b"limits@openssh.com";
+            extensions.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            extensions.extend_from_slice(name);
+            extensions.extend_from_slice(&1_u32.to_be_bytes());
+            extensions.push(b'1');
+        }
+        reply(&mut peer, 2, &3_u32.to_be_bytes(), &extensions).await;
+        if let Some((packet, read)) = limits {
+            let req = request(&mut peer).await;
+            assert_eq!(req[0], 200);
+            let mut payload = Vec::new();
+            for value in [packet, read, 0, 0] {
+                payload.extend_from_slice(&value.to_be_bytes());
+            }
+            reply(&mut peer, 201, &req[1..5], &payload).await;
+        }
+        let open = request(&mut peer).await;
+        assert_eq!(open[0], 3);
+        let mut handle = (file_handle.len() as u32).to_be_bytes().to_vec();
+        handle.extend_from_slice(file_handle.as_bytes());
+        reply(&mut peer, 102, &open[1..5], &handle).await;
+        peer
+    };
+    let client = async {
+        let session = SftpSession::new_with_config(
+            stream,
+            Config {
+                max_packet_len,
+                request_timeout_secs: 30,
+                ..Config::default()
+            },
+        )
+        .await
+        .unwrap();
+        let flags = russh_sftp::protocol::OpenFlags::READ | russh_sftp::protocol::OpenFlags::WRITE;
+        let file = session.open_with_flags("fixture", flags).await.unwrap();
+        (session, file)
+    };
+    let ((session, file), peer) =
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    (session, file, peer)
+}
+
+async fn close_peer(peer: &mut DuplexStream) {
+    let close = request(peer).await;
+    assert_eq!(close[0], 4, "no unexpected extra read or write");
+    status_reply(peer, &close, 0).await;
+    let mut tail = Vec::new();
+    peer.read_to_end(&mut tail).await.unwrap();
+    assert!(tail.is_empty());
+}
+
+async fn file_position(file: &mut File) -> u64 {
+    // poll_complete without start_seek queries the current position without
+    // introducing a seek that could discard the read buffer under test.
+    poll_fn(|cx| Pin::new(&mut *file).poll_complete(cx))
+        .await
+        .unwrap()
+}
+
+async fn cancel_pending_read(file: &mut File, observed: tokio::sync::oneshot::Receiver<()>) {
+    let mut original = [0; 4];
+    let read = file.read(&mut original);
+    tokio::pin!(read);
+    tokio::select! {
+        _ = observed => {}
+        result = &mut read => panic!("peer has not replied: {result:?}"),
+    }
+}
+
+async fn empty_file_io(file: &mut File) {
+    let mut empty = [];
+    let mut buf = ReadBuf::new(&mut empty);
+    poll_fn(|cx| {
+        assert!(matches!(
+            Pin::new(&mut *file).poll_read(cx, &mut buf),
+            Poll::Ready(Ok(()))
+        ));
+        Poll::Ready(())
+    })
+    .await;
+    assert_eq!(file.write(&[]).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cancelled_file_read_resumes_in_smaller_buffers_without_losing_bytes() {
+    let (session, mut file, mut peer) = memory_file(None).await;
+    let (observed, observation) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let server = async {
+        let req = request(&mut peer).await;
+        read_request(&req, 0, 4);
+        observed.send(()).unwrap();
+        released.await.unwrap();
+        data_reply(&mut peer, &req, b"abcd").await;
+        let req = request(&mut peer).await;
+        read_request(&req, 4, 4);
+        status_reply(&mut peer, &req, 1).await;
+        close_peer(&mut peer).await;
+    };
+    let client = async {
+        cancel_pending_read(&mut file, observation).await;
+        release.send(()).unwrap();
+        let mut one = [0];
+        assert_eq!(file.read(&mut one).await.unwrap(), 1);
+        assert_eq!(&one, b"a");
+        assert_eq!(file_position(&mut file).await, 1);
+        empty_file_io(&mut file).await;
+        assert_eq!(file_position(&mut file).await, 1);
+        let mut two = [0; 2];
+        file.read_exact(&mut two).await.unwrap();
+        assert_eq!(&two, b"bc");
+        assert_eq!(file_position(&mut file).await, 3);
+        let mut four = [0; 4];
+        assert_eq!(file.read(&mut four).await.unwrap(), 1);
+        assert_eq!(four[0], b'd');
+        assert_eq!(file_position(&mut file).await, 4);
+        assert_eq!(file.read(&mut four).await.unwrap(), 0);
+        file.close().await.unwrap();
+        session.close().await.unwrap();
+    };
+    tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+        .await
+        .expect("smaller reads consume the original reply exactly once");
+}
+
+#[tokio::test]
+async fn empty_file_read_does_not_start_or_consume_a_request() {
+    let (session, mut file, mut peer) = memory_file(None).await;
+    let client = async {
+        empty_file_io(&mut file).await;
+        assert_eq!(file_position(&mut file).await, 0);
+        file.close().await.unwrap();
+        session.close().await.unwrap();
+    };
+    tokio::time::timeout(DEADLINE, async {
+        tokio::join!(client, close_peer(&mut peer))
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn negotiated_file_reads_fit_both_client_and_server_packet_limits() {
+    for (packet, read, expected) in [
+        (256, 512, 119),
+        (64, 512, 55),
+        (256, 8, 8),
+        (1_u64 << 32, 512, 119),
+    ] {
+        let (session, mut file, mut peer) = memory_file(Some((packet, read))).await;
+        let server = async {
+            let req = request(&mut peer).await;
+            read_request(&req, 0, expected);
+            data_reply(&mut peer, &req, &vec![b'x'; expected as usize]).await;
+            close_peer(&mut peer).await;
+        };
+        let client = async {
+            let mut buffer = [0; 256];
+            assert_eq!(file.read(&mut buffer).await.unwrap(), expected as usize);
+            assert!(buffer[..expected as usize].iter().all(|byte| *byte == b'x'));
+            file.close().await.unwrap();
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn file_read_refuses_a_packet_budget_without_room_for_data() {
+    // A nine-byte HANDLE with an empty opaque handle fits this deliberately
+    // tiny configuration; DATA has the same overhead and no payload budget.
+    let (session, mut file, mut peer) = memory_file_with_config(None, 9, "").await;
+    let server = async {
+        let close = request(&mut peer).await;
+        assert_eq!(close[0], 4, "zero-length READ must not look like file EOF");
+        let mut tail = Vec::new();
+        peer.read_to_end(&mut tail).await.unwrap();
+        assert!(tail.is_empty());
+    };
+    let client = async {
+        let mut byte = [0];
+        assert_eq!(
+            file.read(&mut byte).await.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        // STATUS cannot fit either. Retire the fixture stream rather than
+        // inventing a successful handle-close reply above the configured cap.
+        drop(file);
+        session.close().await.unwrap();
+    };
+    tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn seek_and_write_retire_pending_and_buffered_read_data() {
+    for (seek, buffered) in [(true, false), (true, true), (false, false), (false, true)] {
+        let (session, mut file, mut peer) = memory_file(None).await;
+        let (observed, observation) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let position = if seek {
+            8
+        } else if buffered {
+            3
+        } else {
+            2
+        };
+        let server = async {
+            let req = request(&mut peer).await;
+            read_request(&req, 0, 4);
+            observed.send(()).unwrap();
+            released.await.unwrap();
+            data_reply(&mut peer, &req, b"abcd").await;
+            if !seek {
+                let write = request(&mut peer).await;
+                assert_eq!(write[0], 6);
+                let offset = 9 + 7; // type/id, handle length, handle.
+                assert_eq!(
+                    &write[offset..offset + 8],
+                    &(if buffered { 1_u64 } else { 0 }).to_be_bytes()
+                );
+                assert_eq!(&write[offset + 12..], b"XY");
+                status_reply(&mut peer, &write, 0).await;
+            }
+            let req = request(&mut peer).await;
+            read_request(&req, position, 2);
+            data_reply(&mut peer, &req, b"ne").await;
+            close_peer(&mut peer).await;
+        };
+        let client = async {
+            cancel_pending_read(&mut file, observation).await;
+            empty_file_io(&mut file).await;
+            release.send(()).unwrap();
+            if buffered {
+                let mut one = [0];
+                file.read_exact(&mut one).await.unwrap();
+                assert_eq!(&one, b"a");
+            }
+            if seek {
+                assert_eq!(
+                    file.seek(std::io::SeekFrom::Start(position)).await.unwrap(),
+                    position
+                );
+            } else {
+                file.write_all(b"XY").await.unwrap();
+                file.flush().await.unwrap();
+            }
+            let mut two = [0; 2];
+            file.read_exact(&mut two).await.unwrap();
+            assert_eq!(&two, b"ne");
+            assert_eq!(file_position(&mut file).await, position + 2);
+            file.close().await.unwrap();
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn shutdown_retires_pending_and_buffered_file_reads() {
+    for buffered in [false, true] {
+        let (session, mut file, mut peer) = memory_file(None).await;
+        let (observed, observation) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = async {
+            let req = request(&mut peer).await;
+            read_request(&req, 0, 4);
+            observed.send(()).unwrap();
+            released.await.unwrap();
+            data_reply(&mut peer, &req, b"abcd").await;
+            close_peer(&mut peer).await;
+        };
+        let client = async {
+            cancel_pending_read(&mut file, observation).await;
+            release.send(()).unwrap();
+            if buffered {
+                let mut one = [0];
+                file.read_exact(&mut one).await.unwrap();
+                assert_eq!(&one, b"a");
+            }
+            file.shutdown().await.unwrap();
+            let mut two = [0; 2];
+            assert_eq!(
+                file.read(&mut two).await.unwrap_err().kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            drop(file);
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    }
 }

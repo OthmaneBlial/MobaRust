@@ -1,5 +1,55 @@
 # Dependency audit record
 
+## SFTP file-read cancellation and negotiated limits — 2026-10-03
+
+After v0.1.23, a small in-memory peer reproduced the high-level file reader
+panicking when a cancelled four-byte read resumed into a one-byte buffer.
+Seeking with the retained request produced the same overflow into a two-byte
+buffer. An empty read incorrectly waited for a response, and a server-advertised
+512-byte read limit made a 128-byte-configured client request 256 DATA bytes
+instead of its 119-byte payload budget. No large allocation or socket was used.
+
+The shared vendored file reader now keeps at most one response in a standard
+`Cursor<Vec<u8>>`, copies only what fits and advances position by the delivered
+bytes. Consuming a reply frees that buffer. Successful seek and accepted write
+discard pending/buffered read state; handle-close completion discards it and
+subsequent reads fail with a static closed-file error. Empty reads/writes leave
+pending and buffered data untouched. Requested DATA is capped by the server's
+read limit and the effective packet payload budget; a zero payload budget fails
+explicitly rather than returning false EOF. The server's 64-bit packet limit is
+clamped before narrowing to the client's 32-bit configuration.
+
+```sh
+cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo xtask check
+```
+
+All 11 focused checks pass. The new file cases verify exact byte order/offsets,
+empty I/O, pending/buffered seek and write, acknowledged closure, client/server
+limit combinations, a 64-bit limit above `u32::MAX`, and a tiny budget that leaves
+no room for DATA. The closure case first caught the intermediate buffered reader
+returning bytes after shutdown; it now fails closed. Test peers use bounded
+in-memory pipes and tiny legal replies. No dependency version, feature or lockfile
+changed; the patch record now identifies five changed production files.
+
+An initial complete check failed at the existing X11 fixture's five-second
+channel wait, with xauth reporting `finished=0`. The unchanged X11 case passed
+on recheck. No X11 deadline or assertion was changed; its intermittent cause
+remains unproven and this is not an X11 runtime correction.
+
+The final unchanged-source `cargo xtask check` completed successfully on macOS
+ARM64 / Apple M2: workspace tests and Clippy, frontend tests/type checking/lint/
+build, release/lab tooling, isolated RDP/VNC fixtures, package-layout contracts
+and fuzz compilation. It includes 105 desktop tests, 42 SSH unit tests, 15
+automated authentication cases, these 11 boundary checks and 16 OpenSSH cases.
+Three manual labs remain ignored; real Xvfb reports its prerequisite skip.
+
+This is public-API regression evidence, not native cancellation/retry acceptance
+or an independent security audit. These later source changes are not in the
+v0.1.23 Mac or v0.1.12 Windows/Linux installers. Wire-request bookkeeping still
+retires on reply, timeout or stream closure; immediate removal for every dropped
+request future remains a separate audit target. GitHub CI remains disabled.
+
 ## SFTP inbound response bounds on main — 2026-10-03
 
 The workspace now uses a [repository-local russh-sftp 2.4.0 copy](../../vendor/russh-sftp/MOBARUST_PATCH.md).

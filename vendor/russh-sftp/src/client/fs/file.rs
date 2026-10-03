@@ -26,6 +26,7 @@ const WRITE_OVERHEAD_LENGTH: u32 = 21;
 
 struct FileState {
     f_read: StateFn<Option<Vec<u8>>>,
+    read_buffer: io::Cursor<Vec<u8>>,
     f_seek: StateFn<u64>,
     f_flush: StateFn<()>,
     f_shutdown: StateFn<()>,
@@ -60,6 +61,7 @@ impl File {
             handle,
             state: FileState {
                 f_read: None,
+                read_buffer: io::Cursor::default(),
                 f_seek: None,
                 f_flush: None,
                 f_shutdown: None,
@@ -155,57 +157,81 @@ impl Drop for File {
 
 impl AsyncRead for File {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let poll = Pin::new(match self.state.f_read.as_mut() {
-            Some(f) => f,
-            None => {
-                let session = self.session.clone();
-                let max_read_len = self
-                    .features
-                    .limits
-                    .and_then(|l| l.read_len)
-                    .unwrap_or_else(|| {
-                        self.features
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        let file = self.get_mut();
+        if file.closed {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SFTP file is closed",
+            )));
+        }
+        if file.state.read_buffer.position() == file.state.read_buffer.get_ref().len() as u64 {
+            let poll = Pin::new(match file.state.f_read.as_mut() {
+                Some(f) => f,
+                None => {
+                    let session = file.session.clone();
+                    let packet_read_len =
+                        file.features
                             .max_packet_len
-                            .saturating_sub(READ_OVERHEAD_LENGTH) as u64
-                    }) as usize;
-
-                let file_handle = self.handle.clone();
-
-                let offset = self.pos;
-                let len = usize::min(buf.remaining(), max_read_len);
-
-                self.state.f_read.get_or_insert(Box::pin(async move {
-                    let result = session.read(file_handle, offset, len as u32).await;
-                    match result {
-                        Ok(data) => Ok(Some(data.data)),
-                        Err(Error::Status(status)) if status.status_code == StatusCode::Eof => {
-                            Ok(None)
-                        }
-                        Err(e) => Err(io::Error::other(e.to_string())),
+                            .saturating_sub(READ_OVERHEAD_LENGTH) as u64;
+                    let max_read_len = file
+                        .features
+                        .limits
+                        .and_then(|l| l.read_len)
+                        .unwrap_or(packet_read_len)
+                        .min(packet_read_len) as usize;
+                    if max_read_len == 0 {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "SFTP packet limit leaves no room for file data",
+                        )));
                     }
-                }))
-            }
-        })
-        .poll(cx);
 
-        if poll.is_ready() {
-            self.state.f_read = None;
-        }
+                    let file_handle = file.handle.clone();
 
-        match poll {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(None)) => Poll::Ready(Ok(())),
-            Poll::Ready(Ok(Some(data))) => {
-                self.pos += data.len() as u64;
-                buf.put_slice(&data[..]);
-                Poll::Ready(Ok(()))
+                    let offset = file.pos;
+                    let len = usize::min(buf.remaining(), max_read_len);
+
+                    file.state.f_read.get_or_insert(Box::pin(async move {
+                        let result = session.read(file_handle, offset, len as u32).await;
+                        match result {
+                            Ok(data) => Ok(Some(data.data)),
+                            Err(Error::Status(status)) if status.status_code == StatusCode::Eof => {
+                                Ok(None)
+                            }
+                            Err(e) => Err(io::Error::other(e.to_string())),
+                        }
+                    }))
+                }
+            })
+            .poll(cx);
+
+            if poll.is_ready() {
+                file.state.f_read = None;
+            }
+
+            match ready!(poll)? {
+                None => return Poll::Ready(Ok(())),
+                Some(data) => {
+                    // A cancelled caller can resume with less space than the
+                    // original request. Retain its unconsumed reply, not its buffer.
+                    file.state.read_buffer = io::Cursor::new(data);
+                }
             }
         }
+        let filled = buf.filled().len();
+        ready!(Pin::new(&mut file.state.read_buffer).poll_read(cx, buf))?;
+        file.pos += (buf.filled().len() - filled) as u64;
+        if file.state.read_buffer.position() == file.state.read_buffer.get_ref().len() as u64 {
+            file.state.read_buffer = io::Cursor::default();
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -262,6 +288,8 @@ impl AsyncSeek for File {
             Some(f) => {
                 self.pos = ready!(Pin::new(f).poll(cx))?;
                 self.state.f_seek = None;
+                self.state.f_read = None;
+                self.state.read_buffer = io::Cursor::default();
                 Poll::Ready(Ok(self.pos))
             }
         }
@@ -274,6 +302,9 @@ impl AsyncWrite for File {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
         if self.state.write_acks.len() >= self.features.max_concurrent_writes {
             if let Some(poll) = poll_oldest_write(&mut self.state.write_acks, cx) {
                 ready!(poll)?;
@@ -296,6 +327,8 @@ impl AsyncWrite for File {
 
         match self.session.write_nowait(handle, offset, data) {
             Ok(rx) => {
+                self.state.f_read = None;
+                self.state.read_buffer = io::Cursor::default();
                 self.pos += len as u64;
                 self.state.write_acks.push_back(rx);
                 Poll::Ready(Ok(len))
@@ -361,6 +394,8 @@ impl AsyncWrite for File {
         if poll.is_ready() {
             self.state.f_shutdown = None;
             self.closed = true;
+            self.state.f_read = None;
+            self.state.read_buffer = io::Cursor::default();
         }
 
         poll
