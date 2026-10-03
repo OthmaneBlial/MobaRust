@@ -116,3 +116,51 @@ approval and opens no real remote listener. Real remote listener revocation,
 broader OpenSSH/server compatibility and Windows/Linux/native acceptance remain
 open. No production application logic or published installer changed in this
 test milestone; the earlier source fixes remain absent from v0.1.29 installers.
+
+## Explicit remote ports remain cancellable — 2026-10-03
+
+On main after v0.1.29, the SSH adapter preserves an explicitly requested port
+when the server's successful forwarding response has no port payload. The
+underlying client reports that empty response as zero; previously, the adapter
+returned zero to the desktop runner. Its displayed endpoint then used zero,
+and the cancellation adapter rejected that value instead of asking the server
+to release the actual listener. Automatically allocated ports use the port
+returned by the server. Requests above 65535 are rejected before dispatch, and
+a successful allocation cannot produce a zero-port response to the caller.
+
+The new encrypted loopback regression reproduced the original explicit-port
+failure before the fix. It checks both explicit and automatically allocated
+ports: the server owns the listener, Cancel releases it before SSH disconnect,
+and the same transport can start and cancel another forward. Invalid-port
+requests never reach the server. Generated keys/passwords stay in memory;
+the fixture accepts only `127.0.0.1` and its preselected port, does no DNS, and
+joins its server task before rebinding the owned SSH endpoint.
+
+The existing disposable OpenSSH workflow also requests an explicit loopback
+port, checks the returned endpoint and listener ownership, cancels it, and
+rebinds it before disconnecting. Its targeted check passed locally on macOS
+ARM64; the portable regression passed as well.
+
+The complete local `cargo xtask check` passed in 234.37 seconds on macOS ARM64
+/ Apple M2: 113 desktop tests, the new forwarding regression, workspace tests
+and Clippy, frontend unit/type/lint/build checks, protocol/helpers, release/lab
+tooling, package contracts and fuzz compilation. The optional real Xvfb case
+retained its prerequisite skip. An earlier full run failed with `AddrInUse`
+at the active-TCP target rebind. That fixture now retains its target listener
+until its connection task has completed, reducing its port handoff window;
+the targeted cleanup check and the corrected parallel full run passed.
+
+```sh
+cargo test --locked -p mobarust-ssh --test forwarding
+cargo test --locked -p mobarust-ssh --test local_sshd connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell -- --exact --nocapture
+cargo xtask check
+```
+
+This is SDK and localhost OpenSSH listener-revocation evidence. It does not
+prove native Stop/Close/Quit acceptance, cancellation during unresolved remote
+approval, timeout/revocation-failure recovery or broad server/platform support.
+The attempted native live-history check could not access a window for either
+the running isolated app or Finder; no SSH fixture was started. That app and
+its owned shell were terminated for lab cleanup, which is not normal UI Quit
+acceptance. Native large-list checks remain pending. Published v0.1.29
+installers do not include this correction; GitHub workflows remain disabled.

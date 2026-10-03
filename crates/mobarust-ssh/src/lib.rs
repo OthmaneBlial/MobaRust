@@ -1592,7 +1592,8 @@ impl SshConnection {
         Ok(channel.into_stream())
     }
 
-    /// Requests the SSH server to listen on a remote endpoint. A returned
+    /// Requests the SSH server to listen on a remote endpoint and returns its
+    /// actual port, including when an explicit port was requested. A returned
     /// forwarded channel becomes available through `next_forwarded_channel`.
     pub async fn request_remote_forward(
         &self,
@@ -1601,14 +1602,24 @@ impl SshConnection {
     ) -> Result<u16, SshError> {
         let address = address.into();
         validate_forward_host(&address)?;
-        let port = tokio::time::timeout(
+        if port > u32::from(u16::MAX) {
+            return Err(SshError::InvalidOptions);
+        }
+        let allocated = tokio::time::timeout(
             Duration::from_secs(12),
             self.handle.tcpip_forward(address, port),
         )
         .await
         .map_err(|_| SshError::Timeout)?
         .map_err(SshError::Channel)?;
-        u16::try_from(port).map_err(|_| SshError::InvalidOptions)
+        // Success for an explicit port has an empty RFC 4254 reply; russh
+        // represents it as zero. Keep the requested port for later cancellation.
+        let bound = u16::try_from(if allocated == 0 { port } else { allocated })
+            .map_err(|_| SshError::InvalidOptions)?;
+        if bound == 0 {
+            return Err(SshError::InvalidOptions);
+        }
+        Ok(bound)
     }
 
     pub async fn cancel_remote_forward(

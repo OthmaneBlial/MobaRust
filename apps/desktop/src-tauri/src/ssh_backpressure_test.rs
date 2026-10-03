@@ -440,13 +440,13 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
             let target_task = target.map(|listener| tokio::spawn(async move {
                 let (mut stream, peer) = listener.accept().await.unwrap();
                 assert!(peer.ip().is_loopback());
-                drop(listener);
                 let mut received = vec![0; expected.len()];
                 stream.read_exact(&mut received).await.unwrap();
                 assert_eq!(received, expected);
                 stream.write_all(&received).await.unwrap();
                 assert_eq!(stream.read(&mut [0]).await.unwrap(), 0,
                     "tunnel cancellation must close the upstream TCP socket before transport cleanup");
+                listener
             }));
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -659,7 +659,9 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
             }
             drop(client);
             if let Some(target) = target_task {
-                target.await.unwrap();
+                // Retain this port until the connection task has actually
+                // completed; parallel ephemeral fixtures may otherwise take it.
+                drop(target.await.unwrap());
                 drop(TcpListener::bind(target_address.unwrap()).await.expect("owned TCP target listener released"));
             }
             if kind == "remote" {

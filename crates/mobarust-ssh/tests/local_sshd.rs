@@ -2610,6 +2610,21 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
             .expect("join remote-forward client");
         target_task.await.expect("join remote-forward target");
 
+        let reservation = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let requested_port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let bound_port = connection
+            .request_remote_forward("127.0.0.1", u32::from(requested_port))
+            .await
+            .expect("request explicit-port OpenSSH remote forward");
+        assert_eq!(bound_port, requested_port);
+        assert!(TcpListener::bind(("127.0.0.1", bound_port)).await.is_err());
+        connection
+            .cancel_remote_forward("127.0.0.1", u32::from(bound_port))
+            .await
+            .expect("cancel explicit-port OpenSSH listener before disconnect");
+        drop(TcpListener::bind(("127.0.0.1", bound_port)).await.unwrap());
+
         let (first_disconnect, second_disconnect) =
             tokio::join!(connection.disconnect(), connection.disconnect());
         first_disconnect.expect("disconnect SSH fixture");

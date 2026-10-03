@@ -235,6 +235,12 @@ cleanup. Loopback admission, byte-matched local/SOCKS TCP roundtrips and
 pending handshake/channel-open cleanup checks do not close native
 sustained-traffic or real remote-listener revocation gates.
 
+A later [explicit-port correction](docs/testing/tunnel-lifecycle.md#explicit-remote-ports-remain-cancellable--2026-10-03)
+keeps the actual remote endpoint when a successful server response omits its
+port. SDK and disposable localhost OpenSSH checks verify cancellation releases
+the listener before disconnect. Native Stop/Close/Quit, unresolved approval and
+timeout/revocation-failure recovery remain separate acceptance gates.
+
 On main, [operation history retention](docs/testing/live-operation-history.md)
 keeps live tunnel/transfer rows and their Stop/Cancel controls available while
 bounding only finished history. Reducer checks do not close native large-list,
