@@ -42,5 +42,5 @@ These checks are not an independent security audit or native GUI acceptance.
 
 Remove this copy when an upstream release addresses these same boundaries and
 the regressions pass unchanged. Advisory tools check the baseline version;
-they do not review this local patch. Published v0.1.22 Mac and v0.1.12
-Windows/Linux installers do not contain this change.
+they do not review this local patch. Both [v0.1.23 Mac previews](../../docs/release/v0.1.23.md) include this change.
+Older Mac downloads and v0.1.12 Windows/Linux installers do not contain it.

@@ -214,7 +214,9 @@ the detached implementation with `save was detached from session cleanup`.
 The corrected regression and complete local `cargo xtask check` passed on macOS
 ARM64 / Apple M2, including all 105 desktop tests, workspace tests/Clippy, frontend
 checks, release tooling, protocol fixtures, package contracts and fuzz compilation.
-GitHub CI remains disabled. No new native bundle or installer was built for this fix.
+GitHub CI remains disabled. Both [v0.1.23 Mac previews](../release/v0.1.23.md)
+subsequently packaged this correction; their package checks are separate from
+native editor Save/Quit acceptance.
 
 This is backend worker-ownership evidence. Native Quit/Close during an editor
 save, actual promotion/rollback failures and Windows/Linux acceptance remain

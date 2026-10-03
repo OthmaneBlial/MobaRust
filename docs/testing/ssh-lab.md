@@ -806,8 +806,9 @@ still unproven and no native GUI acceptance is inferred from that pass.
 
 This is backend protocol evidence. Native file-browser/editor acceptance,
 external server implementations and Windows/Linux runtime checks remain open.
-Published v0.1.22 Mac and v0.1.12 Windows/Linux installers do not contain this
-later source correction. GitHub CI remains disabled.
+Both [v0.1.23 Mac previews](../release/v0.1.23.md) include this later source
+correction. Older Mac and v0.1.12 Windows/Linux installers do not contain it.
+GitHub CI remains disabled.
 
 ## Limits and next interoperability gates
 

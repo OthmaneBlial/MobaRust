@@ -17,8 +17,9 @@ and a header-only response leaving INIT pending beyond the two-second regression
 deadline. A separate check reproduced acceptance of five DATA bytes for a
 four-byte request. These are small in-memory tests; no excessive allocation or
 public network listener was used. Provenance and changed-file scope are recorded
-with the patch. This is source after v0.1.22, not a correction present in the
-published installers or a new RustSec advisory claim.
+with the patch. This source correction is included in both [v0.1.23 Mac previews](../release/v0.1.23.md);
+older Mac and v0.1.12 Windows/Linux installers do not include it. It is not a
+new RustSec advisory claim.
 
 `cargo audit --no-fetch --json` checks the resulting lockfile against the
 cached 1,288-advisory database: zero reported vulnerabilities, with the same

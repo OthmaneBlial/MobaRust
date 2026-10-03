@@ -6,7 +6,7 @@
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.22-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.22)
+[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.23-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.23)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
@@ -91,26 +91,26 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 
 | Platform | Download | Available version |
 | --- | --- | --- |
-| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.22/MobaRust-0.1.22-macos-arm64.dmg) | **0.1.22** |
-| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.22/MobaRust-0.1.22-macos-x64.dmg) | **0.1.22** |
+| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.23/MobaRust-0.1.23-macos-arm64.dmg) | **0.1.23** |
+| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.23/MobaRust-0.1.23-macos-x64.dmg) | **0.1.23** |
 | 🪟 **Windows · x64** | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
 | 🐧 **Ubuntu / Debian · x64** | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
 | 🐧 **Other Linux · x64** | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
 
 **Preview distribution:** no publisher signing; macOS is ad hoc signed and not notarized. Windows/Linux installers are older and do not include the latest `main` changes. RDP is excluded from normal installers.
 
-[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.22) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
+[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.23) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
 
 On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install ./MobaRust-0.1.12-linux-x64.deb`. AppImage prerequisites vary by distribution. Checksums verify downloaded bytes; they do not establish publisher identity.
 
-## 🚀 What's new — 0.1.22
+## 🚀 What's new — 0.1.23
 
-- **Interrupted transfers:** SFTP/SCP fail within bounded operation deadlines; the lab verifies original/partial-file handling and a byte-matched 16 MiB retry.
-- **Concurrent jump-host streams:** large terminal output and SFTP share a routed connection without encrypted writes starving inbound packets.
-- **Complete shell output:** process exit preserves stdout/stderr sent before output EOF, including the final tail.
-- **Real IPv6/rekey evidence:** 8 MiB PTY output plus upload/download through two distinct IPv6 bastions, per-hop trust rejection and cleanup.
+- **Bound SFTP responses:** enforce the configured 256 KiB payload limit before allocation, reject malformed/excess data and settle failed streams without losing the SSH transport.
+- **Wait for SFTP acceptance:** both file and listing channels require the server's subsystem reply, with bounded setup and cancellation cleanup.
+- **Finish accepted file operations:** editor saves, file actions and monitor work settle under their existing deadlines before SSH disconnect.
+- **Keep the evidence honest:** all local checks passed; intermittent X11 fixture setup is documented and remains unexplained.
 
-Both Mac DMGs include these changes, the earlier startup review/reconnect corrections, concurrent authentication queue and Full-HD VNC renderer. Windows/Linux remain v0.1.12. Native startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.22.md).
+Both Mac DMGs include these changes, the earlier SSH stream/transfer recovery fixes, startup review/reconnect corrections, concurrent authentication queue and Full-HD VNC renderer. Windows/Linux remain v0.1.12. Native startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.23.md).
 
 ## 🧭 Progress, without invented percentages
 
@@ -118,11 +118,11 @@ Both Mac DMGs include these changes, the earlier startup review/reconnect correc
 
 | Area | Verified so far | Next acceptance gate |
 | --- | --- | --- |
-| ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.22, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.22 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
+| ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.23, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.23 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
-| 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.22 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
-| 🟡 **Distribution** | Mac ARM64/x64 0.1.22 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
+| 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.23 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
+| 🟡 **Distribution** | Mac ARM64/x64 0.1.23 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
 **Next priorities:** native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers → daily workflow polish.
