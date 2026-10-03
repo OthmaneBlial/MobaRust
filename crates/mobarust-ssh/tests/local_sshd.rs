@@ -1249,6 +1249,113 @@ fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
 }
 
 #[test]
+fn download_source_guards_keep_regular_files_and_file_symlinks_working() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let source = fixture.directory.path().join("résumé source.txt");
+        let payload = vec![b'D'; 128 * 1024];
+        fs::write(&source, &payload).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o640)).unwrap();
+        let link = fixture.directory.path().join("file-link");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        for path in [&source, &link] {
+            assert_eq!(
+                sftp.file_info(path.to_str().unwrap()).await.unwrap(),
+                (Some(payload.len() as u64), false)
+            );
+            let mut downloaded = Vec::new();
+            assert_eq!(
+                sftp.download_to(path.to_str().unwrap(), &mut downloaded)
+                    .await
+                    .unwrap(),
+                payload.len() as u64
+            );
+            assert_eq!(downloaded, payload);
+            downloaded.clear();
+            let (_sender, mut cancel) = oneshot::channel();
+            let mut progress = 0;
+            assert_eq!(
+                sftp.download_to_with_cancel(
+                    path.to_str().unwrap(),
+                    &mut downloaded,
+                    &mut cancel,
+                    |bytes| progress = bytes
+                )
+                .await
+                .unwrap(),
+                payload.len() as u64
+            );
+            assert_eq!(downloaded, payload);
+            assert_eq!(progress, payload.len() as u64);
+            let (sender, mut cancel) = oneshot::channel();
+            sender.send(()).unwrap();
+            downloaded.clear();
+            assert!(matches!(
+                sftp.download_to_with_cancel(
+                    path.to_str().unwrap(),
+                    &mut downloaded,
+                    &mut cancel,
+                    |_| {}
+                )
+                .await,
+                Err(SshError::Cancelled)
+            ));
+            assert!(downloaded.is_empty());
+        }
+        let directory = fixture.directory.path().join("download-directory");
+        fs::create_dir(&directory).unwrap();
+        let directory_link = fixture.directory.path().join("directory-link");
+        std::os::unix::fs::symlink(&directory, &directory_link).unwrap();
+        for path in [&directory, &directory_link] {
+            assert!(sftp.file_info(path.to_str().unwrap()).await.unwrap().1);
+            let mut downloaded = Vec::new();
+            assert!(matches!(
+                sftp.download_to(path.to_str().unwrap(), &mut downloaded)
+                    .await,
+                Err(SshError::RemoteDownloadSourceDirectory)
+            ));
+            assert!(downloaded.is_empty());
+        }
+        let missing = fixture.directory.path().join("missing-download-target");
+        let dangling = fixture.directory.path().join("dangling-link");
+        std::os::unix::fs::symlink(&missing, &dangling).unwrap();
+        let mut downloaded = Vec::new();
+        assert!(matches!(
+            sftp.download_to(dangling.to_str().unwrap(), &mut downloaded)
+                .await,
+            Err(SshError::SftpPathMissing)
+        ));
+        let socket = fixture.directory.path().join("download-socket");
+        let _socket = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(matches!(
+            sftp.file_info(socket.to_str().unwrap()).await,
+            Err(SshError::RemoteDownloadSourceUnsupported)
+        ));
+        assert!(matches!(
+            sftp.download_to(socket.to_str().unwrap(), &mut downloaded)
+                .await,
+            Err(SshError::RemoteDownloadSourceUnsupported)
+        ));
+        assert!(downloaded.is_empty());
+        assert_eq!(fs::read(&source).unwrap(), payload);
+        assert_eq!(
+            fs::metadata(&source).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), source);
+        assert_eq!(fs::read_link(&directory_link).unwrap(), directory);
+        assert_eq!(fs::read_link(&dangling).unwrap(), missing);
+        assert!(!missing.exists());
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn sftp_transfer_parts_are_private_during_copy_and_cleaned_on_errors() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {

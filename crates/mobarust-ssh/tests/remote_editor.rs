@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 const TARGET: &str = "/document.txt";
+const DIRECT_UPLOAD: &str = "/direct-upload.txt";
 const ORIGINAL: &[u8] = b"original";
 const WRITTEN: &str = "saved café\n";
 const EXTERNAL: &[u8] = b"another writer after promotion";
@@ -33,6 +34,8 @@ enum Fault {
     UploadCloseDenied,
     UploadWriteDenied,
     DownloadReadDenied,
+    DownloadCloseDenied,
+    DownloadHandleMetadataDenied,
 }
 
 #[derive(Clone)]
@@ -49,6 +52,12 @@ struct State {
     writes: usize,
     renames: usize,
     cancel_on_close: Option<oneshot::Sender<()>>,
+    opens: usize,
+    reads: usize,
+    closes: usize,
+    handle_mode: Option<u32>,
+    close_started: Option<oneshot::Sender<()>>,
+    close_gate: Option<oneshot::Receiver<()>>,
 }
 
 struct Sftp {
@@ -95,6 +104,17 @@ impl russh_sftp::server::Handler for Sftp {
         self.lstat(id, path).await
     }
 
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        if self.state.lock().unwrap().fault == Fault::DownloadHandleMetadataDenied {
+            return Err(StatusCode::PermissionDenied);
+        }
+        let mut attrs = self.lstat(id, handle).await?;
+        if let Some(mode) = self.state.lock().unwrap().handle_mode {
+            attrs.attrs.permissions = Some(mode);
+        }
+        Ok(attrs)
+    }
+
     async fn open(
         &mut self,
         id: u32,
@@ -103,7 +123,23 @@ impl russh_sftp::server::Handler for Sftp {
         attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let mut state = self.state.lock().unwrap();
-        if flags.contains(OpenFlags::CREATE) {
+        state.opens += 1;
+        if filename == DIRECT_UPLOAD {
+            assert_eq!(
+                flags.bits(),
+                (OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE).bits()
+            );
+            assert!(attrs.permissions.is_none());
+            state
+                .files
+                .entry(filename.clone())
+                .or_insert_with(|| File {
+                    bytes: Vec::new(),
+                    mode: 0o100644,
+                })
+                .bytes
+                .clear();
+        } else if flags.contains(OpenFlags::CREATE) {
             assert!(flags.contains(OpenFlags::EXCLUDE));
             assert_eq!(attrs.permissions, Some(0o600));
             if state.files.contains_key(&filename) {
@@ -127,14 +163,24 @@ impl russh_sftp::server::Handler for Sftp {
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
-        let mut state = self.state.lock().unwrap();
-        if state.fault == Fault::UploadCloseDenied && handle != TARGET {
-            return Err(StatusCode::PermissionDenied);
-        }
-        if handle != TARGET
-            && let Some(sender) = state.cancel_on_close.take()
-        {
-            sender.send(()).unwrap();
+        let gate = {
+            let mut state = self.state.lock().unwrap();
+            state.closes += 1;
+            if (state.fault == Fault::UploadCloseDenied && handle != TARGET)
+                || (state.fault == Fault::DownloadCloseDenied && handle == TARGET)
+            {
+                return Err(StatusCode::PermissionDenied);
+            }
+            if let Some(sender) = state.cancel_on_close.take() {
+                sender.send(()).unwrap();
+            }
+            if let Some(sender) = state.close_started.take() {
+                sender.send(()).unwrap();
+            }
+            state.close_gate.take()
+        };
+        if let Some(gate) = gate {
+            gate.await.unwrap();
         }
         Ok(ok(id))
     }
@@ -146,7 +192,8 @@ impl russh_sftp::server::Handler for Sftp {
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.reads += 1;
         if state.fault == Fault::DownloadReadDenied {
             return Err(StatusCode::PermissionDenied);
         }
@@ -323,6 +370,12 @@ impl Fixture {
             writes: 0,
             renames: 0,
             cancel_on_close: None,
+            opens: 0,
+            reads: 0,
+            closes: 0,
+            handle_mode: None,
+            close_started: None,
+            close_gate: None,
         }));
         let (ended, receiver) = oneshot::channel();
         let handler = Ssh {
@@ -657,6 +710,299 @@ async fn file_read_and_write_denials_keep_their_status_and_preserve_originals() 
             assert_eq!(state.files[TARGET].bytes, ORIGINAL);
             assert_eq!(state.files.len(), 1, "no owned upload part remains");
             assert_eq!(state.renames, 0);
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn download_sources_refuse_unsafe_types_before_open_or_destination_writes() {
+    let mut failures = Vec::new();
+    for (mode, cancellable) in [
+        None,
+        Some(0),
+        Some(0o010600),
+        Some(0o020600),
+        Some(0o040755),
+        Some(0o060600),
+        Some(0o120777),
+        Some(0o140600),
+        Some(0o170600),
+    ]
+    .into_iter()
+    .flat_map(|mode| [false, true].map(|cancellable| (mode, cancellable)))
+    {
+        let fixture = Fixture::connect(
+            if mode.is_none() {
+                Fault::MissingTypeMetadata
+            } else {
+                Fault::None
+            },
+            true,
+        )
+        .await;
+        if let Some(mode) = mode {
+            fixture
+                .state
+                .lock()
+                .unwrap()
+                .files
+                .get_mut(TARGET)
+                .unwrap()
+                .mode = mode;
+        }
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let info = sftp.file_info(TARGET).await;
+        let is_directory = mode == Some(0o040755);
+        let info_valid = if is_directory {
+            matches!(info, Ok((Some(8), true)))
+        } else {
+            matches!(info, Err(SshError::RemoteDownloadSourceUnsupported))
+        };
+        let mut downloaded = b"untouched destination".to_vec();
+        let mut progress = 0;
+        let result = if cancellable {
+            let (_sender, mut cancel) = oneshot::channel();
+            sftp.download_to_with_cancel(TARGET, &mut downloaded, &mut cancel, |bytes| {
+                progress = bytes
+            })
+            .await
+        } else {
+            sftp.download_to(TARGET, &mut downloaded).await
+        };
+        let result_valid = if is_directory {
+            matches!(result, Err(SshError::RemoteDownloadSourceDirectory))
+        } else {
+            matches!(result, Err(SshError::RemoteDownloadSourceUnsupported))
+        };
+        {
+            let state = fixture.state.lock().unwrap();
+            if !info_valid
+                || !result_valid
+                || state.opens != 0
+                || state.reads != 0
+                || downloaded != b"untouched destination"
+                || progress != 0
+            {
+                failures.push(format!(
+                    "mode={mode:?}, cancellable={cancellable}, opens={}, reads={}",
+                    state.opens, state.reads
+                ));
+            }
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert_eq!(state.renames, 0);
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+    assert!(
+        failures.is_empty(),
+        "unsafe download sources accepted: {failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn download_rechecks_the_open_handle_type_and_closes_without_reading() {
+    let mut failures = Vec::new();
+    for mode in [
+        0, 0o010600, 0o020600, 0o040755, 0o060600, 0o120777, 0o140600, 0o170600,
+    ] {
+        let fixture = Fixture::connect(Fault::None, true).await;
+        fixture.state.lock().unwrap().handle_mode = Some(mode);
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let mut downloaded = Vec::new();
+        let result = sftp.download_to(TARGET, &mut downloaded).await;
+        {
+            let state = fixture.state.lock().unwrap();
+            if !matches!(result, Err(SshError::RemoteDownloadSourceUnsupported))
+                || state.opens != 1
+                || state.reads != 0
+                || state.closes != 1
+                || !downloaded.is_empty()
+            {
+                failures.push(format!(
+                    "mode={mode:o}, opens={}, reads={}, closes={}",
+                    state.opens, state.reads, state.closes
+                ));
+            }
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+    assert!(failures.is_empty(), "unsafe handles read: {failures:?}");
+}
+
+#[tokio::test]
+async fn download_close_denial_and_cancellation_do_not_return_success() {
+    for cancelled in [false, true] {
+        let fixture = Fixture::connect(
+            if cancelled {
+                Fault::None
+            } else {
+                Fault::DownloadCloseDenied
+            },
+            true,
+        )
+        .await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let (sender, mut cancel) = oneshot::channel();
+        let mut sender = Some(sender);
+        if cancelled {
+            fixture.state.lock().unwrap().cancel_on_close = sender.take();
+        }
+        let mut downloaded = Vec::new();
+        let result = sftp
+            .download_to_with_cancel(TARGET, &mut downloaded, &mut cancel, |_| {})
+            .await;
+        assert_eq!(downloaded, ORIGINAL);
+        assert_eq!(fixture.state.lock().unwrap().closes, 1);
+        if cancelled {
+            assert!(
+                matches!(result, Err(SshError::Cancelled)),
+                "cancellation during close must refuse completion"
+            );
+        } else {
+            assert!(matches!(result, Err(SshError::SftpPermissionDenied)));
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn file_copy_failures_wait_for_close_acknowledgement() {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    for fault in [
+        Fault::DownloadReadDenied,
+        Fault::DownloadHandleMetadataDenied,
+        Fault::UploadWriteDenied,
+    ] {
+        let fixture = Fixture::connect(fault, true).await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let (started, received) = oneshot::channel();
+        let (release, gate) = oneshot::channel();
+        {
+            let mut state = fixture.state.lock().unwrap();
+            state.close_started = Some(started);
+            state.close_gate = Some(gate);
+        }
+        let mut downloaded = Vec::new();
+        let upload_bytes = vec![b'U'; 128 * 1024];
+        let mut copied = Box::pin(async {
+            if fault == Fault::UploadWriteDenied {
+                sftp.upload_from(&upload_bytes[..], DIRECT_UPLOAD).await
+            } else {
+                sftp.download_to(TARGET, &mut downloaded).await
+            }
+        });
+        tokio::time::timeout(DEADLINE, async {
+            tokio::select! {
+                result = &mut copied => panic!("{fault:?} returned before CLOSE acknowledgement: {result:?}; writes={}", fixture.state.lock().unwrap().writes),
+                result = received => result.unwrap(),
+            }
+        }).await.unwrap();
+        assert!(poll_fn(|cx| Poll::Ready(copied.as_mut().poll(cx).is_pending())).await);
+        release.send(()).unwrap();
+        assert!(matches!(copied.await, Err(SshError::SftpPermissionDenied)));
+        assert!(downloaded.is_empty());
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.closes, 1);
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            if fault == Fault::DownloadHandleMetadataDenied {
+                assert_eq!(state.reads, 0);
+            }
+            if fault == Fault::UploadWriteDenied {
+                assert!(
+                    state.writes >= 2,
+                    "exercise multiple failed WRITE acknowledgements"
+                );
+                assert!(state.files[DIRECT_UPLOAD].bytes.is_empty());
+            }
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn direct_upload_queued_cancellation_does_not_create_or_truncate() {
+    for existing in [false, true] {
+        let fixture = Fixture::connect(Fault::None, true).await;
+        if existing {
+            fixture.state.lock().unwrap().files.insert(
+                DIRECT_UPLOAD.into(),
+                File {
+                    bytes: ORIGINAL.to_vec(),
+                    mode: 0o100640,
+                },
+            );
+        }
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let (sender, mut cancel) = oneshot::channel();
+        sender.send(()).unwrap();
+        let mut source = &b"new bytes"[..];
+        assert!(matches!(
+            sftp.upload_from_with_cancel(&mut source, DIRECT_UPLOAD, &mut cancel, |_| {})
+                .await,
+            Err(SshError::Cancelled)
+        ));
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(
+                state.opens, 0,
+                "queued cancellation must precede CREATE/TRUNCATE"
+            );
+            if existing {
+                assert_eq!(state.files[DIRECT_UPLOAD].bytes, ORIGINAL);
+                assert_eq!(state.files[DIRECT_UPLOAD].mode, 0o100640);
+            } else {
+                assert!(!state.files.contains_key(DIRECT_UPLOAD));
+            }
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn direct_upload_close_denial_and_cancellation_do_not_return_success() {
+    for cancelled in [false, true] {
+        let fixture = Fixture::connect(
+            if cancelled {
+                Fault::None
+            } else {
+                Fault::UploadCloseDenied
+            },
+            true,
+        )
+        .await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let (sender, mut cancel) = oneshot::channel();
+        let mut sender = Some(sender);
+        if cancelled {
+            fixture.state.lock().unwrap().cancel_on_close = sender.take();
+        }
+        let mut source = &b"written bytes"[..];
+        let result = sftp
+            .upload_from_with_cancel(&mut source, DIRECT_UPLOAD, &mut cancel, |_| {})
+            .await;
+        assert_eq!(fixture.state.lock().unwrap().closes, 1);
+        if cancelled {
+            assert!(
+                matches!(result, Err(SshError::Cancelled)),
+                "direct upload must observe cancellation during close"
+            );
+        } else {
+            assert!(matches!(result, Err(SshError::SftpPermissionDenied)));
+        }
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[DIRECT_UPLOAD].bytes, b"written bytes");
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
         }
         sftp.close().await.unwrap();
         fixture.finish().await;

@@ -161,6 +161,10 @@ Native/recursive acceptance, Windows ACL evidence and new installers remain pend
 Delete now unlinks final-path symlinks and refuses nonempty directories;
 [owned OpenSSH entry checks](docs/adr/0008-sftp-transfer-pipeline.md#no-follow-entry-deletion--2026-10-03)
 preserve link targets. Native dialog and other-platform acceptance remain pending.
+SFTP downloads now require regular STAT/FSTAT types before file reads, reject
+unsafe sources and observe cancellation/close replies. [Source and shutdown checks](docs/adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
+also cover direct-upload cancellation and failed pending WRITE replies.
+Native/recursive acceptance and new installers remain pending; this does not close a checklist gate.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

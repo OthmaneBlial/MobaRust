@@ -44,6 +44,9 @@ except the six files below and line-ending normalization.
   Preserve structured client errors through file READ/FSTAT/WRITE/fsync/CLOSE
   I/O wrappers instead of flattening them to server strings. MobaRust recovers
   the status code for its existing redacted classification.
+  During shutdown, retain the first pending WRITE failure while retiring the
+  remaining replies and awaiting CLOSE, rather than falling back to an
+  unacknowledged drop-close after the first error.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
 - `src/protocol/file_attrs.rs`: compare the complete POSIX type field rather
@@ -98,5 +101,9 @@ they do not establish Windows metadata or native GUI acceptance.
 Subsequent [private-part and close-denial checks](../../docs/adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
 verify typed file-I/O errors through authenticated loopback SSH/SFTP. These
 source changes are also after v0.1.24, pending new installers.
+The subsequent [guarded-download and shutdown receipt](../../docs/adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
+adds a two-WRITE-failure close gate and a raw in-memory SDK check preserving the
+first error across successful/failed CLOSE replies. This is still the same six
+patched production files, without version/feature changes or native certification.
 Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
 neither of the first two cohorts.

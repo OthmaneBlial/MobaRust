@@ -162,6 +162,10 @@ pub enum SshError {
     RemoteUploadDestinationDirectory,
     #[error("upload destination type is missing or unsupported; choose an unused file path")]
     RemoteUploadDestinationUnsupported,
+    #[error("download source is a directory; enable recursive SFTP transfer")]
+    RemoteDownloadSourceDirectory,
+    #[error("download source type is missing or unsupported; choose a regular file")]
+    RemoteDownloadSourceUnsupported,
     #[error(
         "operation failed and a temporary remote file could not be removed; inspect the destination folder for a hidden .mobarust-* file"
     )]
@@ -2507,12 +2511,18 @@ impl SftpConnection {
         Ok(entries)
     }
 
+    /// Inspect a download source, following a file/directory symlink as STAT
+    /// normally does. Special files and missing type metadata fail closed.
     pub async fn file_info(
         &self,
         path: impl Into<String>,
     ) -> Result<(Option<u64>, bool), SshError> {
         let metadata = self.session.metadata(path).await.map_err(map_sftp_error)?;
-        Ok((metadata.size, metadata.is_dir()))
+        match metadata.file_type() {
+            russh_sftp::protocol::FileType::File => Ok((metadata.size, false)),
+            russh_sftp::protocol::FileType::Dir => Ok((metadata.size, true)),
+            _ => Err(SshError::RemoteDownloadSourceUnsupported),
+        }
     }
 
     pub async fn is_real_directory(&self, path: impl Into<String>) -> Result<bool, SshError> {
@@ -3018,6 +3028,8 @@ impl SftpConnection {
         result
     }
 
+    /// Stream a regular source into a caller-owned writer. An error can follow
+    /// partial or complete writes; the caller decides commit and cleanup.
     pub async fn download_to<R>(
         &self,
         remote_path: impl Into<String>,
@@ -3042,17 +3054,35 @@ impl SftpConnection {
         W: AsyncWrite + Unpin,
         F: FnMut(u64),
     {
+        check_transfer_cancelled(cancel)?;
+        let remote_path = remote_path.into();
+        if self.file_info(&remote_path).await?.1 {
+            return Err(SshError::RemoteDownloadSourceDirectory);
+        }
+        check_transfer_cancelled(cancel)?;
         let mut file = self
             .session
-            .open(remote_path)
+            .open(&remote_path)
             .await
             .map_err(map_sftp_error)?;
-        let copied =
-            copy_with_cancel(&mut file, destination, cancel, on_progress, self, true).await?;
-        self.file_io(file.close()).await?;
-        Ok(copied)
+        // Recheck the opened handle before READ, independently of the path
+        // preflight. Await CLOSE on every result, including metadata/copy errors.
+        let copied = async {
+            let metadata = file.metadata().await.map_err(map_sftp_error)?;
+            if metadata.file_type() != russh_sftp::protocol::FileType::File {
+                return Err(SshError::RemoteDownloadSourceUnsupported);
+            }
+            copy_with_cancel(&mut file, destination, cancel, on_progress, self, true).await
+        }
+        .await;
+        let closed = self.file_io(file.close()).await;
+        copied
+            .and_then(|bytes| closed.map(|_| bytes))
+            .and_then(|bytes| check_transfer_cancelled(cancel).map(|()| bytes))
     }
 
+    /// Write directly using CREATE/TRUNCATE, without rollback on failure.
+    /// Native transfers use the private temporary-upload API instead.
     pub async fn upload_from<R>(
         &self,
         mut source: R,
@@ -3077,14 +3107,17 @@ impl SftpConnection {
         R: AsyncRead + Unpin,
         F: FnMut(u64),
     {
+        check_transfer_cancelled(cancel)?;
         let mut file = self
             .session
             .create(remote_path)
             .await
             .map_err(map_sftp_error)?;
-        let copied = copy_with_cancel(source, &mut file, cancel, on_progress, self, false).await?;
-        self.file_io(file.shutdown()).await?;
-        Ok(copied)
+        let copied = copy_with_cancel(source, &mut file, cancel, on_progress, self, false).await;
+        let closed = self.file_io(file.close()).await;
+        copied
+            .and_then(|bytes| closed.map(|_| bytes))
+            .and_then(|bytes| check_transfer_cancelled(cancel).map(|()| bytes))
     }
 
     async fn open_upload_temporary(

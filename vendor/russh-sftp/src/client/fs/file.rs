@@ -35,6 +35,7 @@ struct FileState {
     f_seek: StateFn<u64>,
     f_flush: StateFn<()>,
     f_shutdown: StateFn<()>,
+    shutdown_error: Option<io::Error>,
     write_acks: VecDeque<PendingRequest>,
 }
 
@@ -70,6 +71,7 @@ impl File {
                 f_seek: None,
                 f_flush: None,
                 f_shutdown: None,
+                shutdown_error: None,
                 write_acks: VecDeque::with_capacity(features.max_concurrent_writes),
             },
             pos: 0,
@@ -400,9 +402,17 @@ impl AsyncWrite for File {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        ready!(poll_drain_writes(&mut self.state.write_acks, cx))?;
+        // A failed WRITE must not bypass the CLOSE acknowledgement. Retain the
+        // first failure across polls while retiring all outstanding writes.
+        while let Some(poll) = poll_oldest_write(&mut self.state.write_acks, cx) {
+            if let Err(error) = ready!(poll) {
+                if self.state.shutdown_error.is_none() {
+                    self.state.shutdown_error = Some(error);
+                }
+            }
+        }
 
-        let poll = Pin::new(match self.state.f_shutdown.as_mut() {
+        let result = ready!(Pin::new(match self.state.f_shutdown.as_mut() {
             Some(f) => f,
             None => {
                 let session = self.session.clone();
@@ -414,15 +424,12 @@ impl AsyncWrite for File {
                 }))
             }
         })
-        .poll(cx);
+        .poll(cx));
 
-        if poll.is_ready() {
-            self.state.f_shutdown = None;
-            self.closed = true;
-            self.state.f_read = None;
-            self.state.read_buffer = io::Cursor::default();
-        }
-
-        poll
+        self.state.f_shutdown = None;
+        self.closed = true;
+        self.state.f_read = None;
+        self.state.read_buffer = io::Cursor::default();
+        Poll::Ready(self.state.shutdown_error.take().map_or(result, Err))
     }
 }

@@ -55,6 +55,13 @@ check. Directories and missing/unsupported type metadata refuse before
 promotion. Explicit overwrite replaces a final-path symlink itself, including
 directory and dangling links, without inheriting its mode or opening its target.
 The same check runs again before fallback backup creation.
+SFTP download preflight accepts regular files and directories for planning;
+unknown/special types refuse. Each file copy requires regular type metadata
+from both STAT and its opened handle's FSTAT before reading. Ordinary single-file
+symlinks still follow their regular target; directory reads require recursion.
+Every native SFTP download result attempts session close, including preflight
+failures. File close and local commit decide completion; a later session-close
+error does not relabel committed files as failed.
 Transfer SFTP parts and editor parts now share exclusive creation requesting
 mode `0600`. Native SCP first reserves an exclusive private SFTP part, then
 streams real legacy SCP data using `C0600`. Local download parts share
@@ -254,6 +261,72 @@ reserved pathname, and ancestor/final-path swaps remain possible between
 requests. Lost create replies can leave an unconfirmed private part for manual
 inspection; ambiguous ownership is never guessed merely to remove it. Published
 v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged.
+
+## Guarded downloads and acknowledged shutdown — 2026-10-03
+
+Four authenticated wire baselines reproduced unsupported source/handle types
+being read, cancellation during CLOSE returning success, and a READ failure
+returning before the CLOSE acknowledgement. They exercised both public download
+entry points. Source rejection now precedes OPEN; FSTAT checks the opened handle
+before READ. A directory remains valid for native recursive planning, while
+the file-copy API returns its typed directory error. Unknown types return an
+actionable constant message without server text.
+
+Tracing the sibling direct-upload API reproduced queued cancellation creating
+or truncating its destination, cancellation during CLOSE returning success,
+and WRITE failure returning before the close reply. It now checks cancellation
+before CREATE and awaits close on copy failure. Its intentional CREATE/TRUNCATE
+semantics remain: a failure after creation can leave partial direct output.
+Native uploads continue to use their private, owned temporary parts.
+
+A 128 KiB case then reproduced a lower-level shutdown gap with two failed WRITE
+replies: the SDK returned at the next pending write error and relied on an
+unawaited drop-close. Shutdown now drains outstanding replies, retains the
+first error across polls and awaits CLOSE before returning it. An independent
+in-memory SDK case supplies different errors for two writes and successful or
+failed CLOSE replies; the first write status survives, the close occurs once,
+and further nonempty writes refuse. No dependency version or feature changed.
+
+```text
+cargo test --locked -p mobarust-ssh --test remote_editor --test sftp_bounds
+cargo test --locked -p mobarust-ssh --test local_sshd download_source_guards_keep_regular_files_and_file_symlinks_working -- --exact --show-output
+cargo xtask check
+```
+
+Targeted checks pass: 13 authenticated SFTP fault cases and 20 bounded SDK
+packet/state cases. Rejection checks cover 18 source-type/API combinations with
+zero OPEN/READ, no progress and an untouched provided writer, plus eight changed
+handle types with an acknowledged close and no READ. Gated READ/FSTAT/WRITE
+denial cases prove the method stays pending until the close reply; cancellation
+and permission-denied close cases return errors. Direct queued-cancel cases
+preserve occupied bytes/mode or leave a new path absent. Existing editor and
+private-upload cases still pass.
+
+The real macOS ARM64 OpenSSH case byte-matches regular and file-link copies
+through both APIs, checks progress and queued cancellation, and verifies typed
+directory/directory-link, dangling-link and Unix-socket rejection. Original
+bytes, modes and link targets stay unchanged. Keys, HOME and endpoints belong
+to disposable loopback fixtures. The native download code now has one final
+session-close attempt for both single-file and directory results; close errors
+after committed data preserve that result rather than reporting a false failure.
+
+The final `cargo xtask check` exited successfully with 106 desktop
+tests, 42 SSH unit tests, 15 authenticated fixture tests (three manual probes
+ignored), all 24 OpenSSH cases (23.13 seconds), 13 SFTP fault tests, 20 packet/state
+checks, three metadata checks and five private SDK checks. Workspace tests,
+Clippy, frontend tests/typecheck/lint/build, release/isolated-launcher checks,
+RDP/VNC helper tests, unsigned package-layout checks and fuzz-target compilation
+also passed. The real X11 server fixture explicitly skipped its unavailable
+Xvfb/safe-socket prerequisite; external X11 acceptance remains unverified.
+
+Native transfer/recursive workflow and Windows/Linux server acceptance remain
+pending. STAT/FSTAT type metadata is now required; servers omitting it refuse.
+Concurrent swaps before OPEN can still block that request, and FSTAT is not an
+atomic source snapshot. Request timeouts, ambiguous replies and dishonest
+servers remain limits. Close/copy errors may occur after bytes reached a
+caller-owned writer; atomic cleanup belongs to the native temporary-file flow.
+SCP download behavior and published v0.1.24 Mac/v0.1.12 Windows/Linux artifacts
+are unchanged. Native acceptance and new installers remain pending.
 
 ## No-follow entry deletion — 2026-10-03
 

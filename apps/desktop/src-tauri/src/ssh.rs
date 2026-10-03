@@ -3238,88 +3238,74 @@ where
     F: FnMut(u64, Option<u64>),
 {
     let sftp = connection.open_sftp().await?;
-    let (total, is_directory) = sftp.file_info(remote_path).await?;
-    if is_directory {
-        if !recursive {
-            return Err(SshError::Sftp(
-                "download source is a directory; enable recursive transfer".into(),
-            ));
+    let result = async {
+        let (total, is_directory) = sftp.file_info(remote_path).await?;
+        if is_directory {
+            if !recursive {
+                return Err(SshError::RemoteDownloadSourceDirectory);
+            }
+            return download_directory(
+                &sftp,
+                remote_path,
+                destination,
+                overwrite,
+                cancel,
+                &mut on_progress,
+            )
+            .await;
         }
-        let result = download_directory(
-            &sftp,
-            remote_path,
-            destination,
-            overwrite,
-            cancel,
-            &mut on_progress,
-        )
-        .await;
-        let close_result = sftp.close().await;
-        let copied = result?;
-        close_result?;
-        return Ok(copied);
-    }
-    let destination_metadata = fs::metadata(destination).await;
-    match destination_metadata {
-        Ok(metadata) if metadata.is_dir() => {
-            return Err(SshError::Sftp("download destination is a directory".into()));
+        let destination_metadata = fs::metadata(destination).await;
+        match destination_metadata {
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(SshError::Sftp("download destination is a directory".into()));
+            }
+            Ok(_) if !overwrite => {
+                return Err(SshError::Sftp(
+                    "download destination already exists; enable overwrite explicitly".into(),
+                ));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(SshError::LocalIo(error));
+            }
+            _ => {}
         }
-        Ok(_) if !overwrite => {
-            return Err(SshError::Sftp(
-                "download destination already exists; enable overwrite explicitly".into(),
-            ));
-        }
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+
+        let temporary = local_part_path(destination)?;
+        let mut file = create_local_download_file(&temporary).await?;
+        let copied = match sftp
+            .download_to_with_cancel(remote_path, &mut file, cancel, |bytes| {
+                on_progress(bytes, total);
+            })
+            .await
+        {
+            Ok(copied) => copied,
+            Err(error) => {
+                remove_partial_download(file, &temporary).await?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = file.sync_all().await {
+            remove_partial_download(file, &temporary).await?;
             return Err(SshError::LocalIo(error));
         }
-        _ => {}
-    }
-
-    let temporary = local_part_path(destination)?;
-    let mut file = match create_local_download_file(&temporary).await {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = sftp.close().await;
+        drop(file);
+        if !overwrite && download_destination_exists(destination, &temporary).await? {
+            remove_partial_download_path(&temporary).await?;
+            return Err(SshError::Sftp(
+                "download destination appeared during transfer".into(),
+            ));
+        }
+        if let Err(error) = commit_local_file(&temporary, destination, overwrite, cancel) {
+            remove_partial_download_path(&temporary).await?;
             return Err(error);
         }
-    };
-    let copied = match sftp
-        .download_to_with_cancel(remote_path, &mut file, cancel, |bytes| {
-            on_progress(bytes, total);
-        })
-        .await
-    {
-        Ok(copied) => copied,
-        Err(error) => {
-            let cleanup = remove_partial_download(file, &temporary).await;
-            let _ = sftp.close().await;
-            cleanup?;
-            return Err(error);
-        }
-    };
-    if let Err(error) = file.sync_all().await {
-        let cleanup = remove_partial_download(file, &temporary).await;
-        let _ = sftp.close().await;
-        cleanup?;
-        return Err(SshError::LocalIo(error));
+        Ok(copied)
     }
-    drop(file);
-    if !overwrite && download_destination_exists(destination, &temporary).await? {
-        let cleanup = remove_partial_download_path(&temporary).await;
-        let _ = sftp.close().await;
-        cleanup?;
-        return Err(SshError::Sftp(
-            "download destination appeared during transfer".into(),
-        ));
-    }
-    if let Err(error) = commit_local_file(&temporary, destination, overwrite, cancel) {
-        let cleanup = remove_partial_download_path(&temporary).await;
-        let _ = sftp.close().await;
-        cleanup?;
-        return Err(error);
-    }
+    .await;
+    // File closes and local commits decide the transfer result. Session-close
+    // failure after a commit must not relabel completed files as failed.
     let _ = sftp.close().await;
-    Ok(copied)
+    result
 }
 
 async fn run_upload<F>(

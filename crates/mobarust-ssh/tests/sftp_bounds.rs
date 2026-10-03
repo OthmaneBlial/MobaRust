@@ -853,6 +853,55 @@ async fn file_write_refuses_a_budget_without_room_for_data() {
 }
 
 #[tokio::test]
+async fn shutdown_drains_failed_writes_and_keeps_the_first_status_after_close() {
+    for close_status in [0, 4] {
+        let (session, mut file, mut peer) = memory_file(None).await;
+        let server = async {
+            let first = request(&mut peer).await;
+            let second = request(&mut peer).await;
+            assert_eq!(first[0], 6);
+            assert_eq!(second[0], 6);
+            assert_eq!(&first[28..], b"one");
+            assert_eq!(&second[28..], b"two");
+            status_reply(&mut peer, &first, 3).await;
+            status_reply(&mut peer, &second, 4).await;
+            let close = request(&mut peer).await;
+            assert_eq!(close[0], 4, "failed writes still require CLOSE");
+            status_reply(&mut peer, &close, close_status).await;
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(
+                tail.is_empty(),
+                "no duplicated close or data after shutdown"
+            );
+        };
+        let client = async {
+            file.write_all(b"one").await.unwrap();
+            file.write_all(b"two").await.unwrap();
+            let error = file.shutdown().await.unwrap_err();
+            let source = error
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<russh_sftp::client::error::Error>()
+                .unwrap();
+            assert!(
+                matches!(source, russh_sftp::client::error::Error::Status(status)
+                if status.status_code == russh_sftp::protocol::StatusCode::PermissionDenied)
+            );
+            assert_eq!(
+                file.write(b"x").await.unwrap_err().kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            drop(file);
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn closed_file_refuses_nonempty_writes_without_changing_position() {
     let (session, mut file, mut peer) = memory_file(None).await;
     tokio::time::timeout(DEADLINE, async {

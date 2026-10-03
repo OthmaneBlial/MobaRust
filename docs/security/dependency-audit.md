@@ -257,6 +257,19 @@ during close and the existing 19 packet/offset regressions pass locally.
 remain separate from native/cross-platform acceptance. Versions/features and
 published downloads are unchanged; this is not a new advisory or independent audit.
 
+## SFTP failed-write shutdown after v0.1.24 — 2026-10-03
+
+A 128 KiB authenticated fixture reproduced shutdown returning before the close
+acknowledgement after two failed WRITE replies. The file adapter now retains
+the first shutdown write error across polls, retires remaining replies and
+awaits CLOSE before returning that error. A raw in-memory case uses different
+write errors and both successful/failed CLOSE replies to verify error retention,
+one close and refusal of later nonempty writes. All 20 packet/state checks and
+13 authenticated fault tests pass locally. [Receipt and limits](../adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
+separate this source correction from native/cross-platform acceptance and public
+installers. Versions/features remain unchanged; this is not a new RustSec
+advisory or an independent audit.
+
 ## v0.1.24 release preparation audit — 2026-10-03
 
 A fresh `cargo audit --json` lookup reports RustSec commit
