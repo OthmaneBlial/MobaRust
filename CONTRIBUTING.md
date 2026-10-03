@@ -61,7 +61,7 @@ remain visible in CI logs. The full local command additionally checks
 experimental helpers and fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
 external-server interoperability. Quality never publishes installers.
 
-The [Windows GNU compile receipt](docs/testing/windows-cross-check.md) records
+The [Windows GNU compile/link receipt](docs/testing/windows-cross-check.md) records
 current source checks from macOS, the cross-tool prerequisites and isolation
 boundary. Cross-compilation does not replace native Windows tests or installers.
 

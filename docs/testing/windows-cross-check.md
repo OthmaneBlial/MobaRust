@@ -1,4 +1,4 @@
-# Windows GNU compile receipt — 2026-10-03
+# Windows GNU compile and link receipt — 2026-10-03
 
 Current source `549b3066234f2e7775ed0350b421897f8a9d5ab7` passed locked
 Windows x64 GNU compile checks on a macOS host. This is source portability
@@ -39,6 +39,31 @@ PowerShell/cmd ConPTY fixtures. It does **not** link or run those tests.
 The separate VNC and experimental RDP helper workspaces are not included in
 `--workspace`; the third command checks VNC explicitly. Experimental RDP was
 not cross-checked and remains excluded from normal app bundles.
+
+## Desktop executable link check
+
+The documentation-only child commit
+`bf4249d76e8eba6a3cbf0795d4c451c0d34a225a` then passed this additional check
+in 719.27 seconds, with the same application source and lockfiles:
+
+```bash
+cargo build --locked -p mobarust --target x86_64-pc-windows-gnu \
+  --config profile.dev.debug=0
+```
+
+The local artifact was `target/x86_64-pc-windows-gnu/debug/mobarust.exe`,
+82,025,687 bytes, SHA-256
+`c7c73f7f73471108f27a1c28d5f6e6e036fcf4df5e6fabe2cb21015cd8252b54`.
+`file` and MinGW `objdump -p` identified a PE32+ x86-64 executable with a
+Windows console subsystem. The PE security directory was empty; this build
+has no Authenticode signature. Its import table includes `WebView2Loader.dll`.
+
+This unoptimized development build disables debug symbols to limit disk use.
+It proves that the desktop Rust executable links with this GNU toolchain.
+It does not package the frontend, helper or required DLLs into an installer,
+run the CLI version path, execute tests, or establish GUI/runtime behavior.
+The executable stays in ignored local build output; no release asset was
+created or replaced.
 
 ## Isolation and reproducibility
 
