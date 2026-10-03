@@ -1,5 +1,42 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## Post-v0.1.25 native editor acceptance — 2026-10-03
+
+A local production ARM64 candidate from runtime source `982f297` passed the
+complete editor recovery/Save as workflow after the wire fix in `05e80d9`.
+It still reports version 0.1.25, but is a newer source build, not the published
+v0.1.25 installer. Its clean built executable SHA-256 was
+`cfceeae9d6b96f791a39f4dbd2c727045f537ab95810245f8c89ed63a84ff1c6`.
+Only the disposable copy received lab metadata/state and an ad hoc signature.
+
+- Opening UTF-8 showed the correct selector, a clean buffer and disabled Save.
+  Native menu navigation selected Windows-1252; Save wrote exact bytes
+  `63 61 66 e9 20 b7 20 80 0a` for `café · €` plus newline, preserving `0640`.
+  Selecting UTF-8 and saving wrote the exact 13-byte UTF-8 representation.
+  Each successful receipt retained the selected encoding and cleared dirty state.
+- An emoji in Windows-1252 was visibly refused without changing the original
+  bytes/mode; the local buffer remained available for correction.
+- New Windows-1252 Save as wrote exact bytes with `0600`. Create only preserved
+  an occupied legacy file and retained the source buffer/path. Explicit Replace
+  converted that target to exact UTF-8 bytes, preserved `0640`, rebound the
+  editor path and cleared dirty state.
+- A controlled external update triggered conflict refusal, preserving its bytes
+  and mode plus the local buffer. Cancel retained the edit. Confirmed discard,
+  close and reopen loaded the external revision; a subsequent accented UTF-8
+  Save succeeded with exact bytes and `0640`.
+- Native menu Quit with SSH and the local PTY active released the owned app,
+  local child, server session children and established connections. The manual
+  harness then exited successfully, removed its root and reaped its daemon;
+  the loopback port was reusable. No editor parts/backups remained.
+
+The isolated PID's HOME/ZDOTDIR/XDG and empty agent settings were checked before
+connection and again before Quit. All operations used generated files/credentials
+and the [disposable loopback lab](ssh-lab.md#disposable-native-file-editor-lab--2026-10-03).
+The full local suite passed before the candidate build. This closes the stated
+macOS conflict/Save as workflow gate; warning focus, lost promotion replies,
+malicious path races, sustained use, Windows/Linux and updated installers remain
+separate. Public v0.1.25 retains its selector defect.
+
 ## v0.1.25 release-copy editor check — 2026-10-03
 
 A fresh disposable copy of the verified ARM64 DMG runtime (source `534c1ef`)
@@ -33,10 +70,10 @@ An unexpected process change during keyboard automation also required stopping
 the owned direct relaunch and restarting through the isolated launcher. See
 [lab isolation and relaunch limits](ssh-lab.md#disposable-native-file-editor-lab--2026-10-03).
 
-This establishes these short macOS ARM64 workflows, not native encoding
+This establishes these short macOS ARM64 release workflows, not native encoding
 acceptance, saved-with-warning focus, uncertain rename recovery, clean
-installation, sustained use or Windows/Linux behavior. The editor roadmap gate
-remains open pending the rebuilt encoding-selector check.
+installation, sustained use or Windows/Linux behavior. At this check the editor
+gate stayed open; the newer candidate receipt above records its subsequent closure.
 
 ## v0.1.24 release-copy observation attempt — 2026-10-03
 

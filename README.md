@@ -110,16 +110,17 @@ On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install .
 - **Explicit file actions:** Delete unlinks final symlinks; rename, Delete, mkdir and chmod require named entries. Chmod refuses final symlinks and unknown types.
 - **Reliable SFTP shutdown:** checked offsets, drained WRITE replies and one acknowledged CLOSE retire handles without duplicate requests. The full local check passed, including 25 OpenSSH cases and 22 in-memory boundary checks.
 
-Both Mac DMGs include these fixes. All four published assets were downloaded anonymously and matched the verified local bytes. Windows/Linux remain v0.1.12. Native editor/save, startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.25.md).
+Both Mac DMGs include these fixes; all four published assets matched the verified local bytes. **Known v0.1.25 issue:** Windows-1252 Save fails before writing. The correction on main passed a rebuilt Mac native workflow and is awaiting a new installer. Windows/Linux remain v0.1.12; broader native acceptance remains pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.25.md).
 
 ## 🧭 Progress and next steps
 
-**Updated 2026-10-03.** The roadmap has **56 of 76 checked items (74%)**. This is checklist completion, not production readiness: implementation, tests, downloadable binaries and hardware evidence are separate milestones.
+**Updated 2026-10-03.** The roadmap has **57 of 76 checked items (75%)**. This is checklist completion, not production readiness: implementation, tests, downloadable binaries and hardware evidence are separate milestones.
 
 | Area | Verified so far | Next acceptance gate |
 | --- | --- | --- |
 | ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.25, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.25 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
+| ✅ **Editor recovery** | Rebuilt Mac candidate passed conflict/reopen recovery, both Save as policies, encoding conversion and byte/mode checks. [Receipt](docs/testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03). | Ship the selector fix; Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
 | 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.25 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
 | 🟡 **Distribution** | Mac ARM64/x64 0.1.25 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |

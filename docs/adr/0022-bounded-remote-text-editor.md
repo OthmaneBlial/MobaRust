@@ -217,3 +217,12 @@ also passed on macOS ARM64: workspace tests/Clippy, frontend checks/build,
 release/lab tooling, isolated RDP/VNC fixtures, package-layout checks and
 fuzz-target compilation. Real Xvfb reported its prerequisite skip. Both
 GitHub workflows were verified `disabled_manually`.
+
+The subsequently rebuilt production ARM64 candidate (`982f297`, still locally
+versioned 0.1.25) passed native UTF-8 → Windows-1252 → UTF-8 Save, lossy refusal,
+new legacy Save as, occupied-target refusal, explicit UTF-8 replacement,
+conflict/discard/reopen recovery and normal Quit with active SSH/local PTY.
+Fixture byte/mode checks followed each native action, and the owned daemon/root
+were removed with the loopback port reusable.
+[Native receipt and remaining limits](../testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03).
+This source candidate does not replace the published v0.1.25 artifacts.

@@ -15,7 +15,7 @@ full command and destination, explains automatic reconnect repetition, and
 refuses a stopped macro's pending startup. Both v0.1.25 Mac downloads include
 the review. Native acceptance and updated Windows/Linux downloads remain pending.
 
-**Checklist completion: 56 of 76 items (73.7%, rounded to 74%).** Items differ in scope; this is not a production-readiness score.
+**Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
 
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
 
@@ -152,7 +152,7 @@ Source after v0.1.24 also corrects overlapping SFTP file-type classification
 and shares a no-follow upload destination guard across SCP, SFTP and recursive
 files. [Metadata, link replacement and unsafe-type regressions](docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
 verify mode preservation and refusal before rename. Native collision workflows,
-other-platform metadata and updated Windows/Linux installers remain pending; the checklist stays 56/76.
+other-platform metadata and updated Windows/Linux installers remain pending.
 The six desktop transfer paths now share private part creation: SFTP uses
 exclusive mode-`0600` files, SCP first reserves an exclusive part and sends
 `C0600`, and Unix downloads request mode `0600`. [Ownership, mode and close-boundary regressions](docs/adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
@@ -214,21 +214,23 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.
-- [ ] Verify remote-editor conflict recovery and save-as behavior through a complete UI workflow.
+- [x] Verify macOS ARM64 remote-editor conflict/discard/reopen recovery and both Save as policies through a complete native UI workflow, including exact UTF-8/Windows-1252 bytes, modes and shutdown. [Source-candidate receipt](docs/testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03); Windows/Linux acceptance and shipping the selector fix remain separate.
 - [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.
 
 On `main` after v0.1.24, [remote-editor encoding conversion](docs/adr/0022-bounded-remote-text-editor.md#encoding-conversion-regression--2026-10-03)
 uses byte-level conflict checks for Save and Save as, so Windows-1252 → UTF-8
 conversion works without weakening revision refusal. A real loopback OpenSSH
 regression covers conversion, unchanged targets after refusals, permissions
-and cleanup. Native acceptance and updated Windows/Linux installers remain pending; this
-does not close the complete UI recovery gate above.
+and cleanup. The newer Mac source candidate closes the specific UI recovery
+gate above; Windows/Linux execution and shipping the encoding-selector wire fix
+remain pending. Public v0.1.25 retains that selector defect.
 
 The [editor temporary ownership check](docs/adr/0022-bounded-remote-text-editor.md#temporary-ownership-regression--2026-10-03)
 also refuses existing temporary files/links without truncating or removing
 them. New editor files are created with mode `0600`, and replacement retains
 the original mode. A loopback OpenSSH regression verifies both Save paths;
-native acceptance and Windows/Linux downloads remain separate.
+the Mac candidate adds normal Save as acceptance, while deliberate temporary
+collisions through the GUI and Windows/Linux downloads remain separate.
 
 [Committed-save receipts](docs/adr/0022-bounded-remote-text-editor.md#committed-save-receipt-regressions--2026-10-03)
 now retain the acknowledged editor buffer/revision without a follow-up read.
@@ -248,14 +250,14 @@ remain pending.
 | **X11** | Opt-in SSH channel bridge to an explicitly selected external display; loopback tests and optional Xvfb fixture | Run real external X-server cases on Linux, macOS, and Windows; verify authentication, DISPLAY setup, cancellation, and cleanup. |
 | **Serial** | Native configuration, refresh, sessions, and Unix pseudo-terminal lifecycle/device-loss tests | Test dedicated physical adapters, drivers/permissions, baud/parity/flow control, removal, and explicit reconnection per OS. |
 
-Both [verified v0.1.25 Mac previews](docs/release/v0.1.25.md) include the editor, transfer, named-mutation and SDK handle corrections described above. All four published files were downloaded anonymously and byte-matched. This closes the Mac packaging step only; native workflows and Windows/Linux alignment remain pending, and the checklist stays 56/76.
+Both [verified v0.1.25 Mac previews](docs/release/v0.1.25.md) include the earlier editor, transfer, named-mutation and SDK handle corrections. All four published files were downloaded anonymously and byte-matched. The newer encoding wire fix is source-only; broader native workflows and Windows/Linux alignment remain pending.
 
 On main after v0.1.25, [directory listing guards](docs/adr/0008-sftp-transfer-pipeline.md#bounded-directory-listings--2026-10-03)
 bound filtered entries, cumulative text and the READDIR phase in the shared
 browser/recursive-planning reader. Local protocol regressions cover refusal,
 acknowledged close and same-connection recovery. Published installers do not
-include this newer guard; native and cross-platform acceptance remain open,
-and the checklist stays 56/76.
+include this newer guard; native limit/refusal and cross-platform acceptance
+remain open. The Mac editor candidate exercised an ordinary directory listing.
 
 ## Implemented foundation
 
