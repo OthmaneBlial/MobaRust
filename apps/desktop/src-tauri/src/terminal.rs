@@ -28,6 +28,10 @@ pub enum TerminalError {
     LockPoisoned,
     #[error("terminal I/O failed")]
     Io(#[source] std::io::Error),
+    #[error("terminal input is busy; check the terminal before retrying")]
+    InputBusy,
+    #[error("terminal input worker failed; check the terminal before retrying")]
+    InputWorker,
     #[error("terminal resize failed")]
     Resize(#[source] anyhow::Error),
     #[error("terminal process cleanup failed")]
@@ -140,7 +144,7 @@ struct TerminalClosed {
 
 struct TerminalSession {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<tokio::sync::Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     start: Mutex<Option<mpsc::Sender<()>>>,
 }
@@ -249,7 +253,7 @@ impl TerminalManager {
         let (start, ready) = mpsc::channel();
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            writer: Arc::new(tokio::sync::Mutex::new(writer)),
             child: Mutex::new(child),
             start: Mutex::new(Some(start)),
         });
@@ -305,15 +309,20 @@ impl TerminalManager {
         Ok(())
     }
 
-    pub fn write(&self, id: &str, data: &[u8]) -> Result<(), TerminalError> {
-        validate_terminal_input(data)?;
+    pub async fn write(&self, id: &str, data: Vec<u8>) -> Result<(), TerminalError> {
+        validate_terminal_input(&data)?;
         let session = self.session(id)?;
-        let mut writer = session
-            .writer
-            .lock()
-            .map_err(|_| TerminalError::LockPoisoned)?;
-        writer.write_all(data).map_err(TerminalError::Io)?;
-        writer.flush().map_err(TerminalError::Io)
+        // Reserve before spawning: even direct IPC callers cannot accumulate
+        // blocking tasks behind a non-reading child. The frontend orders input.
+        let mut writer = Arc::clone(&session.writer)
+            .try_lock_owned()
+            .map_err(|_| TerminalError::InputBusy)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            writer.write_all(&data).map_err(TerminalError::Io)?;
+            writer.flush().map_err(TerminalError::Io)
+        })
+        .await
+        .map_err(|_| TerminalError::InputWorker)?
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), TerminalError> {
@@ -858,7 +867,7 @@ mod tests {
                 "cleanup-fixture".into(),
                 Arc::new(TerminalSession {
                     master: Mutex::new(pair.master),
-                    writer: Mutex::new(writer),
+                    writer: Arc::new(tokio::sync::Mutex::new(writer)),
                     child: Mutex::new(child),
                     start: Mutex::new(Some(start)),
                 }),
@@ -912,7 +921,7 @@ mod tests {
                 "stream-cleanup-fixture".into(),
                 Arc::new(TerminalSession {
                     master: Mutex::new(pair.master),
-                    writer: Mutex::new(writer),
+                    writer: Arc::new(tokio::sync::Mutex::new(writer)),
                     child: Mutex::new(child),
                     start: Mutex::new(None),
                 }),
@@ -928,15 +937,90 @@ mod tests {
         );
     }
 
-    #[test]
-    fn oversized_terminal_write_is_rejected_before_session_lookup() {
+    #[tokio::test]
+    async fn oversized_terminal_write_is_rejected_before_session_lookup() {
         let data = vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES + 1];
         let error = TerminalManager::default()
-            .write("missing", &data)
+            .write("missing", data)
+            .await
             .expect_err("oversized terminal input must be rejected");
         assert!(matches!(
             error,
             TerminalError::Input(TerminalInputError::TooLarge)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_non_reading_pty_does_not_block_async_input_or_close() {
+        let pair = portable_pty::native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open non-reading fixture");
+        let writer = pair.master.take_writer().expect("take fixture writer");
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .expect("clone fixture reader");
+        let mut command = CommandBuilder::new("/bin/sh");
+        // Disable line discipline dropping/echo before filling the input pipe.
+        // The fixture also expires on its own if the test fails during setup.
+        command.args(["-c", "stty raw -echo; printf READY; exec sleep 10"]);
+        let child = pair.slave.spawn_command(command).expect("spawn fixture");
+        drop(pair.slave);
+        let session = Arc::new(TerminalSession {
+            master: Mutex::new(pair.master),
+            writer: Arc::new(tokio::sync::Mutex::new(writer)),
+            child: Mutex::new(child),
+            start: Mutex::new(None),
+        });
+        let manager = TerminalManager::default();
+        manager
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("non-reader".into(), Arc::clone(&session));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let reader_thread = thread::spawn(move || {
+            let mut ready = [0; 5];
+            let result = reader.read_exact(&mut ready).map(|()| ready);
+            let _ = ready_tx.send(result);
+        });
+        let ready = ready_rx.recv_timeout(Duration::from_secs(2));
+        let write_manager = manager.clone();
+        let write = tokio::spawn(async move {
+            write_manager
+                .write(
+                    "non-reader",
+                    vec![b'x'; mobarust_core::MAX_TERMINAL_INPUT_BYTES],
+                )
+                .await
+        });
+        let started = std::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let responsive = started.elapsed() < Duration::from_secs(2);
+        let blocked = !write.is_finished();
+        let busy = manager.write("non-reader", b"tail".to_vec()).await;
+        // Cleanup before asserting: close never needs the input writer lock.
+        let close = manager.close("non-reader");
+        let closed = session.child.lock().unwrap().try_wait();
+        let completion = tokio::time::timeout(Duration::from_secs(2), write).await;
+        drop(session);
+        reader_thread.join().expect("join fixture readiness reader");
+        assert!(matches!(ready, Ok(Ok(bytes)) if bytes == *b"READY"));
+        assert!(responsive, "blocked write stalled the async runtime");
+        assert!(blocked, "fixture must actually stop reading PTY input");
+        assert!(matches!(busy, Err(TerminalError::InputBusy)));
+        close.expect("close non-reading child");
+        assert!(matches!(closed, Ok(Some(_))), "child must be reaped");
+        assert!(matches!(completion, Ok(Ok(Err(TerminalError::Io(_))))));
+        assert!(matches!(
+            manager.session("non-reader"),
+            Err(TerminalError::Missing(_))
         ));
     }
 

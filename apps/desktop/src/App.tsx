@@ -22,7 +22,7 @@ import {
 import { formatSessionEnvironment, parseSessionEnvironment } from "./session-environment";
 import { createTerminalHttpLinkProvider } from "./terminal-links";
 import { shouldConfirmTerminalPaste } from "./terminal-paste";
-import { approveTerminalPaste, prepareTerminalPaste, settleTerminalWrites } from "./terminal-input";
+import { approveTerminalPaste, prepareTerminalPaste, settleTerminalWrites, TerminalInputQueue } from "./terminal-input";
 import { sanitizeTerminalTitle } from "./terminal-title";
 import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { focusConnectedTerminal } from "./terminal-focus";
@@ -1547,6 +1547,7 @@ function App() {
   const networkScanIdRef = useRef<string | null>(null);
   const networkDiagnosticRunRef = useRef<NetworkDiagnosticRun>({ generation: 0, currentId: null, finishedId: null, ignoredId: null, starting: false, cancelRequested: false });
   const nativeTerminalIdsRef = useRef(new Map<string, string>());
+  const terminalInputQueueRef = useRef(new TerminalInputQueue());
   const terminalInstancesRef = useRef(new Map<string, { terminal: Terminal; searchAddon: SearchAddon }>());
   const selectedTerminalIdRef = useRef("");
   const terminalTabsRef = useRef(terminalTabs);
@@ -1793,14 +1794,21 @@ function App() {
     if (workspaceId === selectedTerminalIdRef.current) setTerminalSearchResult({ resultIndex, resultCount });
   }, []);
 
-  const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string) => {
+  const writeTerminalInput = useCallback((workspaceId: string, terminalId: string, data: string, beforeSend?: () => void) => {
     const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
     if (!terminal) return Promise.reject(new Error("terminal target no longer exists"));
     if (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") {
       return Promise.reject(new Error("broadcast text input is not available for remote desktop sessions"));
     }
     const command = terminal.remoteProtocol === "ssh" ? "ssh_write" : terminal.remoteProtocol === "telnet" ? "telnet_write" : terminal.remoteProtocol === "serial" ? "serial_write" : "terminal_write";
-    return invoke(command, { terminalId, data });
+    const lifecycle = pinMacroTargets([workspaceId], nativeTerminalIdsRef.current, terminalGenerationsRef.current);
+    return terminalInputQueueRef.current.enqueue(terminalId, data, () => {
+      beforeSend?.();
+      if (!lifecycle || lifecycle[0].nativeId !== terminalId || !macroTargetsStillBound(lifecycle, nativeTerminalIdsRef.current, terminalGenerationsRef.current)) {
+        return Promise.reject(new Error("terminal changed or closed; queued input was not sent"));
+      }
+      return invoke(command, { terminalId, data });
+    });
   }, []);
 
   const recordTerminalInput = useCallback((workspaceId: string, data: string) => {
@@ -1879,7 +1887,12 @@ function App() {
       recordTerminalInput(workspaceId, prepareTerminalPaste(data, source!.modes.bracketedPasteMode && source!.options.ignoreBracketedPasteMode !== true));
       await settleTerminalWrites([...targets].map(([id, target]) => {
         const terminal = terminals.get(id)!;
-        return writeTerminalInput(id, target, prepareTerminalPaste(data, terminal.modes.bracketedPasteMode && terminal.options.ignoreBracketedPasteMode !== true));
+        return writeTerminalInput(id, target, prepareTerminalPaste(data, terminal.modes.bracketedPasteMode && terminal.options.ignoreBracketedPasteMode !== true), () => {
+          const current = currentTargets();
+          if (current?.size !== targets.size || [...targets].some(([workspace, native]) => current.get(workspace) !== native)) {
+            throw new Error("paste targets changed; queued input was not sent");
+          }
+        });
       }));
     } catch (error) {
       setConnectionError(`Terminal paste failed: ${String(error)}. Some selected terminals may have received it; check before retrying.`);
@@ -2772,10 +2785,14 @@ function App() {
   }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
   const writeToExplicitTargets = useCallback(async (targets: MacroTargetBinding[], data: string) => {
-    if (!macroTargetsStillBound(targets, nativeTerminalIdsRef.current, terminalGenerationsRef.current)) {
-      throw new Error("a selected terminal changed or closed during the macro; this action was not sent");
-    }
-    await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId, data)));
+    const beforeSend = () => {
+      if (macroCancelRef.current) throw new Error("cancelled");
+      if (!macroTargetsStillBound(targets, nativeTerminalIdsRef.current, terminalGenerationsRef.current)) {
+        throw new Error("a selected terminal changed or closed during the macro; this action was not sent");
+      }
+    };
+    beforeSend();
+    await settleTerminalWrites(targets.map((target) => writeTerminalInput(target.workspaceId, target.nativeId, data, beforeSend)));
   }, [writeTerminalInput]);
 
   const runMacro = useCallback(async (record: MacroRecord, targetIds: string[]) => {

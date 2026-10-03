@@ -55,6 +55,11 @@ same event stream as live text, under the session lock before live publication
 is enabled. The frontend registers its listener before requesting attachment;
 it does not replay a separate IPC response. [Ordering checks and limits](testing/terminal-attachment.md).
 
+Terminal keyboard, paste and macro input shares a bounded FIFO per native ID.
+Local PTY writes reserve one writer before running on a blocking worker;
+queued actions recheck lifecycle bindings before dispatch. [Input recovery and
+validation scope](testing/terminal-input.md).
+
 Session closure uses a separate cancellation signal, observes in-flight
 setup/reconnect work, and cleans up owned transfers/tunnels. EOF on a shell
 does not discard a later exit status; normal shell exits and transport loss

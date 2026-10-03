@@ -129,6 +129,10 @@ At that v0.1.17 milestone, the SSH lab had **42 unit tests, eight Rust authentic
 - [x] Record installed bash/zsh/fish variants and explicit skips on Unix; Linux zsh/fish runtime coverage remains pending.
 - [ ] Exercise native GUI focus, paste, split-pane lifecycle, and application shutdown on Windows, macOS, and Linux.
 
+Main also bounds and orders pending input, cancels stale queued actions, and
+moves local PTY writes off the UI thread. [Input-pressure regression scope](docs/testing/terminal-input.md)
+does not close the native GUI or Windows ConPTY acceptance gates.
+
 The v0.1.20 Mac preview includes startup output ordering corrections across SSH, Telnet and serial
 attachment. Native manager regressions verify replay under the publication lock;
 [GUI timing and sustained output acceptance remain pending](docs/testing/terminal-attachment.md).

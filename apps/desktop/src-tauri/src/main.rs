@@ -1787,13 +1787,14 @@ async fn terminal_list_wsl() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn terminal_write(
+async fn terminal_write(
     manager: State<'_, TerminalManager>,
     terminal_id: String,
     data: String,
 ) -> Result<(), String> {
     manager
-        .write(&terminal_id, data.as_bytes())
+        .write(&terminal_id, data.into_bytes())
+        .await
         .map_err(|error| error.to_string())
 }
 
