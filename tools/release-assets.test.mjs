@@ -19,7 +19,7 @@ function fixture(run) {
     cwd, encoding: 'utf8', env: { ...process.env, GITHUB_REF_NAME: 'v0.1.0' },
   });
   try {
-    put('apps/desktop/src-tauri/tauri.conf.json', '{"version":"0.1.0"}');
+    put('apps/desktop/src-tauri/tauri.conf.json', '{"productName":"MobaRust","version":"0.1.0"}');
     put('apps/desktop/package.json', '{"version":"0.1.0"}');
     put('Cargo.toml', '[workspace.package]\nversion = "0.1.0"\n');
     run({ cwd, put, invoke });
@@ -36,9 +36,9 @@ test('release rejects inconsistent versions', () => fixture(({ put, invoke }) =>
 
 test('Linux release requires both installers and hashes the delivered bytes', () => fixture(({ cwd, put, invoke }) => {
   put('apps/desktop/src-tauri/helpers/mobarust-vnc-helper', 'helper');
-  put('target/release/bundle/deb/test.deb', 'debian-package');
+  put('target/release/bundle/deb/MobaRust_0.1.0_amd64.deb', 'debian-package');
   assert.notEqual(invoke('collect', 'linux-x64').status, 0);
-  put('target/release/bundle/appimage/test.AppImage', 'appimage-package');
+  put('target/release/bundle/appimage/MobaRust_0.1.0_amd64.AppImage', 'appimage-package');
   assert.equal(invoke('collect', 'linux-x64').status, 0);
   const manifest = readFileSync(join(cwd, 'target/release-assets/SHA256SUMS-linux-x64.txt'), 'utf8');
   for (const line of manifest.trim().split('\n')) {
@@ -49,6 +49,42 @@ test('Linux release requires both installers and hashes the delivered bytes', ()
   put('apps/desktop/src-tauri/helpers/mobarust-rdp-helper', 'must-not-ship');
   assert.notEqual(invoke('collect', 'linux-x64').status, 0);
 }));
+
+test('Windows collector preserves installer bytes and hashes the delivered file', () => fixture(({ cwd, put, invoke }) => {
+  put('apps/desktop/src-tauri/helpers/mobarust-vnc-helper.exe', 'helper');
+  put('target/release/bundle/nsis/MobaRust_0.1.0_x64-setup.exe', 'windows-package');
+  assert.equal(invoke('collect', 'windows-x64').status, 0);
+  const name = 'MobaRust-0.1.0-windows-x64.exe';
+  assert.equal(readFileSync(join(cwd, 'target/release-assets', name), 'utf8'), 'windows-package');
+  assert.equal(readFileSync(join(cwd, 'target/release-assets/SHA256SUMS-windows-x64.txt'), 'utf8'),
+    `${createHash('sha256').update('windows-package').digest('hex')}  ${name}\n`);
+}));
+
+test('collector rejects source product, version and architecture mismatches before writing', () => {
+  const packages = {
+    'windows-x64': ['MobaRust_0.1.0_x64-setup.exe'],
+    'linux-x64': ['MobaRust_0.1.0_amd64.deb', 'MobaRust_0.1.0_amd64.AppImage'],
+    'macos-arm64': ['MobaRust_0.1.0_aarch64.dmg'],
+    'macos-x64': ['MobaRust_0.1.0_x64.dmg'],
+  };
+  for (const [platform, names] of Object.entries(packages)) {
+    for (const name of names) {
+      const wrongArch = name.replace(/amd64|aarch64|x64/, platform === 'macos-arm64' ? 'x64'
+        : name.endsWith('.dmg') || name.endsWith('.AppImage') ? 'aarch64' : 'arm64');
+      for (const wrongName of [name.replace('0.1.0', '0.0.9'), name.replace('MobaRust', 'OtherApp'), wrongArch]) {
+        fixture(({ cwd, put, invoke }) => {
+          put(`apps/desktop/src-tauri/helpers/mobarust-vnc-helper${platform === 'windows-x64' ? '.exe' : ''}`, 'helper');
+          for (const original of names) put(`target/release/bundle/${original === name ? wrongName : original}`, 'package-bytes');
+          const result = invoke('collect', platform);
+          assert.notEqual(result.status, 0, `${platform} must refuse ${wrongName}`);
+          assert.match(result.stderr, /Installer name does not match/);
+          assert.equal(existsSync(join(cwd, 'target/release-assets')), false);
+          assert.equal(readFileSync(join(cwd, 'target/release/bundle', wrongName), 'utf8'), 'package-bytes');
+        });
+      }
+    }
+  }
+});
 
 test('macOS collector rejects an ARM DMG labeled as Intel', () => fixture(({ cwd, put, invoke }) => {
   put('apps/desktop/src-tauri/helpers/mobarust-vnc-helper', 'helper');

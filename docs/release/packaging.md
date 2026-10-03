@@ -68,6 +68,22 @@ output: EXE for Windows, DMG for macOS, and both DEB and AppImage for Linux.
 Two DEBs or two AppImages cannot substitute for the Linux pair or overwrite
 the same canonical output with duplicate checksum entries. These collection
 checks do not establish the package's contents or runtime behavior.
+The source installer names must also match the configured product and version
+and the requested architecture before canonical release names are assigned.
+For MobaRust, the current Tauri filename patterns are:
+
+| Target | Source installer names |
+| --- | --- |
+| Windows x64 | `MobaRust_<version>_x64-setup.exe` |
+| Linux x64 | `MobaRust_<version>_amd64.deb` and `MobaRust_<version>_amd64.AppImage` |
+| macOS ARM64 | `MobaRust_<version>_aarch64.dmg` |
+| macOS x64 | `MobaRust_<version>_x64.dmg` |
+
+These match Tauri 2.12.1's [NSIS](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs),
+[Debian](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/linux/debian.rs)
+and [AppImage](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/linux/appimage/linuxdeploy.rs)
+output rules. Filename checks reject accidental stale or wrong-target inputs;
+mounted package metadata and executable architecture checks remain separate.
 
 `cargo xtask package-check` builds an unsigned current-platform debug app
 bundle and verifies that the Tauri resource step completes. The bundle

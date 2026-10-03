@@ -24,9 +24,14 @@ if (process.argv[2] === 'check-version') {
   if (extensions.some(ext => files.filter(path => path.endsWith(ext)).length !== 1)) {
     throw new Error(`Expected exactly one installer per format: ${extensions.join(', ')}`);
   }
-  if (platform.startsWith('macos-')) {
-    const arch = platform === 'macos-arm64' ? 'aarch64' : 'x64';
-    if (basename(files[0]) !== `MobaRust_${config.version}_${arch}.dmg`) throw new Error(`Wrong macOS installer architecture for ${platform}`);
+  const stem = `${config.productName}_${config.version}`;
+  const expectedNames = platform === 'windows-x64' ? [`${stem}_x64-setup.exe`]
+    : platform === 'linux-x64' ? [`${stem}_amd64.deb`, `${stem}_amd64.AppImage`]
+      : [`${stem}_${platform === 'macos-arm64' ? 'aarch64' : 'x64'}.dmg`];
+  for (const path of files) {
+    if (!expectedNames.includes(basename(path))) {
+      throw new Error(`Installer name does not match ${platform} product, version or architecture: ${basename(path)}`);
+    }
   }
   const out = process.argv[5] ?? 'target/release-assets';
   if (existsSync(out)) {
