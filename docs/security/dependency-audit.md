@@ -1,5 +1,24 @@
 # Dependency audit record
 
+## v0.1.30 release preparation audit — 2026-10-03
+
+The refreshed RustSec database remains at
+`ef6173cbc5c50ec8166f9a5b28f07834144373ee` (1,290 advisories). The shipping
+workspace reports zero vulnerabilities with its existing proc-macro-error/glib
+warnings. VNC and fuzz report no vulnerabilities or warnings. The excluded RDP
+candidate still fails on `RUSTSEC-2023-0071` with two unmaintained warnings;
+no finding was suppressed, and RDP remains outside normal installers.
+
+Only 15 local package version entries changed from 0.1.29 to 0.1.30 across the
+four lockfiles. Comparing parsed lockfiles confirms third-party versions,
+sources, checksums and features are unchanged. The local SSH fork's packet-task
+retirement change is documented in its [patch record](../../vendor/russh/MOBARUST_PATCH.md)
+and [forwarding checks](../testing/tunnel-lifecycle.md#uncertain-remote-forwarding-retires-its-transport--2026-10-03).
+The audit does not certify that source change. The version-aligned
+`cargo xtask check` passed in 536.78 seconds, including the SSH forwarding
+regressions. Installer verification and public-download verification are
+still pending.
+
 ## v0.1.29 release preparation audit — 2026-10-03
 
 The refreshed RustSec database remains at
