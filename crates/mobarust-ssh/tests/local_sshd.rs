@@ -1769,7 +1769,9 @@ exit
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => {
-                    panic!("wait for SSH X11 channel: {}", String::from_utf8_lossy(&shell_output));
+                    let xauth = fs::read_to_string(fixture.directory.path().join("xauth-progress"))
+                        .unwrap_or_else(|_| "not invoked".to_owned());
+                    panic!("wait for SSH X11 channel; xauth={xauth}: {}", String::from_utf8_lossy(&shell_output));
                 }
             }
         };
@@ -2023,12 +2025,31 @@ impl LocalSshd {
             // This test-only wrapper always writes the fixture authority file.
             let wrapper = directory.path().join("fixture-xauth");
             let authority = directory.path().join(".Xauthority");
+            let progress = directory.path().join("xauth-progress");
+            // Relay commands unchanged; record stages, never displays or cookies.
             fs::write(
                 &wrapper,
                 format!(
-                    "#!/bin/sh\nexec '{}' -q -f '{}' -\n",
-                    xauth.to_string_lossy().replace('\'', "'\\''"),
-                    authority.to_string_lossy().replace('\'', "'\\''"),
+                    r#"#!/bin/sh
+umask 077
+progress='{progress}'
+printf 'started\n' >> "$progress"
+{{ while IFS= read -r xauth_line; do
+case "$xauth_line" in
+'remove unix:'*|'add unix:'*) printf 'unix-command\n' >> "$progress";;
+*) printf 'other-command\n' >> "$progress";;
+esac
+printf '%s\n' "$xauth_line"
+done
+printf 'input-ended\n' >> "$progress"
+}} | '{xauth}' -q -f '{authority}' -
+xauth_result=$?
+printf 'finished=%s\n' "$xauth_result" >> "$progress"
+exit "$xauth_result"
+"#,
+                    progress = progress.to_string_lossy().replace('\'', "'\\''"),
+                    xauth = xauth.to_string_lossy().replace('\'', "'\\''"),
+                    authority = authority.to_string_lossy().replace('\'', "'\\''"),
                 ),
             )?;
             fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700))?;

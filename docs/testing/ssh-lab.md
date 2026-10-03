@@ -791,6 +791,19 @@ after shell input was echoed. The same-source isolated case passed in 2.32 secon
 and the unchanged full rerun passed. Its cause is unproven; no X11 assertion or
 deadline was relaxed, and this is not an X11 correction or native GUI receipt.
 
+During v0.1.23 preparation, the same five-second fixture wait failed again.
+A diagnostic run recorded `xauth` starting without an exit marker before the
+deadline; direct isolated xauth probes completed normally. This narrows the
+observed setup stage without proving the cause. The fixture wrapper now relays
+the original commands unchanged and records only start, command class, input
+EOF and exit status in its private disposable directory. Failure output includes
+these stages, never the display name or generated cookie. The diagnostic SSH
+suite passed; this is observability evidence, not an X11 runtime fix. The
+five-second channel and bridge deadlines and all bridge assertions are unchanged.
+The final v0.1.23 source, without the temporary profiler, passed the complete
+local `cargo xtask check`, including this X11 case. The intermittent cause is
+still unproven and no native GUI acceptance is inferred from that pass.
+
 This is backend protocol evidence. Native file-browser/editor acceptance,
 external server implementations and Windows/Linux runtime checks remain open.
 Published v0.1.22 Mac and v0.1.12 Windows/Linux installers do not contain this
