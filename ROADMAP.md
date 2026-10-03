@@ -4,16 +4,20 @@
 
 The latest [native SSH setup lab](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
 provides disposable import profiles for startup output pressure, shell rejection
-and stalled input. Its automated endpoint/profile/cleanup regression passes;
-the native attempt lost window observation before connecting, so GUI acceptance
-remains pending. Both verified v0.1.25 Mac installers include the runtime fixes;
-Windows/Linux remain v0.1.12. Native acceptance remains pending.
+and stalled input. The v0.1.27 ARM64 release-copy check observed startup review,
+Escape cancellation before networking, two-factor authentication and a connected
+terminal with startup echo. The server received the 8,193-byte input exactly
+once. Native shell refusal, stalled input and graceful Quit in this lab remain
+unverified; Windows/Linux remain v0.1.12.
 
 On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
 now covers saved/imported SSH profiles as well as local profiles. It shows the
 full command and destination, explains automatic reconnect repetition, and
-refuses a stopped macro's pending startup. Both v0.1.25 Mac downloads include
-the review. Native acceptance and updated Windows/Linux downloads remain pending.
+refuses a stopped macro's pending startup. A subsequent layout correction on
+main keeps long commands in a keyboard-scrollable region with the destination
+and controls visible. Frontend tests and browser checks passed; the correction
+is not yet in the v0.1.27 downloads. Broader native acceptance and updated
+Windows/Linux downloads remain pending.
 
 **Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
 

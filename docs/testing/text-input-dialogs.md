@@ -33,6 +33,32 @@ v0.1.21 Mac installers include this change. Native approval/focus/emergency-stop
 observations and updated Windows/Linux installers remain pending; historical
 v0.1.20 downloads do not contain this change.
 
+### Long startup review layout on main — 2026-10-03
+
+The v0.1.27 native setup check exposed a long-command layout problem: initial
+Cancel focus scrolled the whole dialogue past its destination and reconnect
+warning. Chrome reproduced it with the production helper and stylesheet: at
+1280×574, the heading was above the viewport and the dialogue had scrolled
+2,143 pixels before any review action.
+
+On main, startup commands now occupy a separate, labelled, keyboard-focusable
+scroll region. The destination and reconnect warning remain above it; the
+heading and action buttons stay outside the scrolling content. Other shared
+confirmations likewise scroll their body without moving the heading or footer.
+The complete command remains literal text, including Unicode and markup-looking
+input. Initial Cancel focus, Enter/Escape cancellation, explicit Continue and
+the stopped-owner checks are preserved.
+
+The frontend unit suite, TypeScript, ESLint and production build passed. An
+ignored loopback harness imported the actual helper and stylesheet. Chrome
+observed visible context/controls at 1280×574 and the app's minimum 1100×680
+size, keyboard Page Down scrolling, Cancel on Enter, Escape cancellation,
+explicit approval and light/dark rendering. Unicode path entry, read-only
+multiline text, password-field cancellation and Create only remained usable.
+These are browser layout/control observations, not native WebKit acceptance.
+The v0.1.27 installers retain the earlier layout; a new packaged native recheck
+and updated downloads remain pending.
+
 ### Current-source native preflight — 2026-10-03
 
 `cargo xtask package-check` rebuilt source `f3ad8e0` with the startup review

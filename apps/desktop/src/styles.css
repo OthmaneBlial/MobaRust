@@ -437,10 +437,15 @@ button:not(:disabled) { cursor: pointer; }
 .view-tabs button:focus-visible { outline: 2px solid var(--amber); outline-offset: -3px; }
 
 /* HTML dialogs share the workstation palette and native modal behavior. */
-.text-prompt { color: var(--text); background: var(--panel); max-height: calc(100dvh - 40px); overflow-y: auto; }
+.text-prompt { color: var(--text); background: var(--panel); max-height: calc(100dvh - 40px); overflow: hidden; }
+.text-prompt form { display: flex; flex-direction: column; max-height: calc(100dvh - 86px); }
+.text-prompt :is(.quick-connect-heading, .quick-connect-footer) { flex: 0 0 auto; }
 .text-prompt::backdrop { background: rgba(5, 8, 7, .72); backdrop-filter: blur(5px); }
 .text-prompt h2 { font-size: 18px; }
-.text-prompt-label { display: flex; flex-direction: column; gap: 12px; padding: 18px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.text-prompt-label { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 18px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.text-prompt-context { flex-shrink: 0; max-height: 25dvh; }
+.text-prompt-review { min-height: 0; overflow: auto; margin: 0 0 18px; padding: 12px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.text-prompt :is(.text-prompt-label, .text-prompt-review):focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
 .text-prompt-label :is(input, textarea) { width: 100%; padding: 10px; border: 1px solid var(--line-strong); outline: 0; color: var(--text); background: var(--bg); font-family: var(--mono); font-size: 12px; resize: vertical; }
 .text-prompt-label :is(input, textarea):focus { border-color: var(--amber); }
 .text-prompt button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }

@@ -74,6 +74,7 @@ assert.equal(await recovered, null);
 
 const denied = confirmAction("Do not execute without approval");
 assert.equal(input(latest()), undefined, "confirmation must not invent a text field");
+assert.equal(latest().querySelector("label").tabIndex, 0, "long confirmations remain keyboard-scrollable");
 latest().dispatchEvent(new Event("cancel", { cancelable: true }));
 assert.equal(await denied, false);
 const approved = confirmAction("Explicit approval");
@@ -90,7 +91,12 @@ const startupCommand = '<script>not markup</script>; printf "été 🦀"';
 for (const action of ["cancel", "close", "button", "pagehide", "submit"]) {
   const startup = confirmSessionStartup(startupCommand, "SSH fixture@127.0.0.1:10001", true);
   const current = latest();
-  assert.equal(current.querySelector("label").textContent, `Send this profile's startup command to SSH fixture@127.0.0.1:10001? It will also run again after automatic SSH reconnects.\n\n${startupCommand}`);
+  assert.equal(current.querySelector("label").textContent, "Send this profile's startup command to SSH fixture@127.0.0.1:10001? It will also run again after automatic SSH reconnects.");
+  const review = current.querySelector("label").afterNode;
+  assert.equal(review.textContent, startupCommand, "command stays literal and separate from the destination");
+  assert.equal(review.tabIndex, 0, "the full command can be reviewed with the keyboard");
+  assert.equal(review.attributes.role, "region");
+  assert.equal(review.attributes["aria-label"], "Startup command");
   assert.equal(globalThis.document.activeElement, current.querySelector('button[type="button"]'), "startup approval initially focuses Cancel");
   assert.equal(await confirmSessionStartup("another command", "another host"), false, "a pending review must not queue an unreviewed startup");
   if (action === "submit") current.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
@@ -101,7 +107,8 @@ for (const action of ["cancel", "close", "button", "pagehide", "submit"]) {
 }
 const longStartupCommand = "x".repeat(16 * 1024);
 const localStartup = confirmSessionStartup(longStartupCommand, "the new local shell");
-assert.equal(latest().querySelector("label").textContent, `Send this profile's startup command to the new local shell?\n\n${longStartupCommand}`, "review must preserve the full bounded command");
+assert.equal(latest().querySelector("label").textContent, "Send this profile's startup command to the new local shell?");
+assert.equal(latest().querySelector("label").afterNode.textContent, longStartupCommand, "review must preserve the full bounded command");
 latest().dispatchEvent(new Event("cancel"));
 assert.equal(await localStartup, false);
 for (const phase of ["before", "during", "unchanged"]) {

@@ -13,7 +13,7 @@ export async function confirmAction(message: string): Promise<boolean> {
 /** Review configured shell input before opening a local or SSH session. */
 export async function confirmSessionStartup(command: string | undefined, destination: string, reconnect = false, stillAllowed: () => boolean = () => true): Promise<boolean> {
   if (!stillAllowed()) return false;
-  if (command?.trim() && !await confirmAction(`Send this profile's startup command to ${destination}?${reconnect ? " It will also run again after automatic SSH reconnects." : ""}\n\n${command}`)) return false;
+  if (command?.trim() && await openDialogue(`Send this profile's startup command to ${destination}?${reconnect ? " It will also run again after automatic SSH reconnects." : ""}`, undefined, { reviewText: command }) === null) return false;
   return stillAllowed();
 }
 
@@ -23,7 +23,7 @@ export async function chooseOverwrite(message: string): Promise<boolean | null> 
   return choice === null ? null : choice === "yes";
 }
 
-function openDialogue(message: string, initialValue: string | undefined, options: { multiline?: boolean; readOnly?: boolean; createOnly?: boolean; secret?: boolean; signal?: AbortSignal } = {}): Promise<string | null> {
+function openDialogue(message: string, initialValue: string | undefined, options: { multiline?: boolean; readOnly?: boolean; createOnly?: boolean; secret?: boolean; signal?: AbortSignal; reviewText?: string } = {}): Promise<string | null> {
   if (pending || options.signal?.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
@@ -53,6 +53,20 @@ function openDialogue(message: string, initialValue: string | undefined, options
     } else {
       dialog.querySelector("h2")!.textContent = "Confirm action";
       if (options.createOnly) dialog.querySelector('button[type="submit"]')!.textContent = "Replace";
+      // Confirmation text may be long. Keep it keyboard-scrollable without
+      // moving the default Cancel focus or scrolling the heading/footer away.
+      label.tabIndex = 0;
+    }
+    if (options.reviewText !== undefined) {
+      dialog.querySelector("h2")!.textContent = "Review startup command";
+      const review = document.createElement("pre");
+      review.className = "text-prompt-review";
+      review.textContent = options.reviewText;
+      review.tabIndex = 0;
+      review.setAttribute("role", "region");
+      review.setAttribute("aria-label", "Startup command");
+      label.after(review);
+      label.className = "text-prompt-label text-prompt-context";
     }
     if (options.readOnly) {
       dialog.querySelector("h2")!.textContent = "Copy text";

@@ -168,6 +168,37 @@ with SIGTERM; the five-minute fixture completed, removed its metadata, and all
 four recorded app/shell/cargo/fixture PIDs were absent. This does **not** establish
 GUI startup/backpressure/rejection acceptance or normal native Quit. Those
 gates remain open, as do updated installer and Windows/Linux observations.
+
+#### v0.1.27 ARM64 release-copy partial acceptance — 2026-10-03
+
+A fresh disposable copy used the verified ARM64 DMG runtime from release source
+`8384eb5`. Before importing the three generated pinned profiles, the actual
+app process was checked for isolated HOME/ZDOTDIR/XDG paths and an empty SSH
+agent socket. The fixture used only its three OS-assigned `127.0.0.1` listeners,
+in-memory host keys and disposable factors; it ran no OS shell.
+
+The native review named the startup endpoint and explained automatic reconnect
+repetition. Escape cancelled the first review, and no established connection
+to any of the three fixture endpoints existed afterward. On a new explicit
+connection, Continue was followed by separate masked password and OTP prompts.
+The connected SSH terminal and startup echo were visible. The fixture reported
+`shell_requests=1, input_bytes=8193, startup_exact_once=true`.
+
+Native window observation then failed with `cgWindowNotFound` while the app was
+still running, before the shell-refusal and stalled-input cases were operated.
+Rebinding the live app and resetting UI control did not restore observation.
+The owned app was stopped with SIGTERM and its local PTY child was confirmed
+absent. The fixture reached its five-minute deadline with exit 0, removed its
+private metadata and released all three ports for rebinding. Its counter receipt
+does not establish whether native close, shutdown or inactivity ended the SSH
+session. Normal native Quit was not verified in this attempt.
+
+A second isolated release copy lost window observation before any fixture or
+SSH connection was started; its owned app and child were also cleaned up.
+The observation failure's cause is unproven. This partial receipt closes neither
+native shell-refusal/stalled-input acceptance nor broad reconnect/emergency-stop
+acceptance. The long review exposed a [layout issue corrected on main](text-input-dialogs.md#long-startup-review-layout-on-main),
+which requires a new packaged native recheck.
 GitHub workflows remain disabled.
 
 ### Ask each challenge on main
