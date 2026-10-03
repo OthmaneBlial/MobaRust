@@ -24,6 +24,8 @@ struct Peer {
     pause_operation: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     operation_channels:
         Option<std::collections::HashMap<russh::ChannelId, russh::Channel<server::Msg>>>,
+    forward_to: Option<std::net::SocketAddr>,
+    forwarded: tokio::task::JoinSet<()>,
 }
 
 struct DeniedSftp(Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>);
@@ -50,6 +52,48 @@ impl russh_sftp::server::Handler for DeniedSftp {
 
 impl server::Handler for Peer {
     type Error = russh::Error;
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: russh::Channel<server::Msg>,
+        host: &str,
+        port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some((entered, release)) = self.pause_operation.take() {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
+        while self.forwarded.try_join_next().is_some() {}
+        if self.forwarded.len() >= 8 {
+            return Ok(());
+        }
+        let Some(target) = self.forward_to else {
+            return Ok(());
+        };
+        // This fixture can reach only its own preselected loopback endpoint.
+        // Never resolve or connect to a caller-selected address.
+        if host != "127.0.0.1" || !target.ip().is_loopback() || port != u32::from(target.port()) {
+            return Ok(());
+        }
+        let Ok(Ok(mut upstream)) = tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(target),
+        )
+        .await
+        else {
+            return Ok(());
+        };
+        reply.accept().await;
+        self.forwarded.spawn(async move {
+            let mut stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
+        });
+        Ok(())
+    }
 
     async fn tcpip_forward(
         &mut self,
@@ -218,7 +262,8 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 pause_first: (action == "resume").then_some((first, resumed)), ready: Some(ready),
                 geometry: (action == "resume").then_some(geometry),
                 pause_replacement_pty: (action == "resume").then_some((pty_entered, pty_resumed)),
-                pause_operation: None, operation_channels: None };
+                pause_operation: None, operation_channels: None,
+                forward_to: None, forwarded: tokio::task::JoinSet::new() };
             let config = Arc::new(server::Config {
                 keys: vec![key], window_size: if action == "resume" { 1024 } else { 0 }, maximum_packet_size: 1024,
                 auth_rejection_time: Duration::ZERO, auth_rejection_time_initial: Some(Duration::ZERO),
@@ -385,7 +430,24 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
     use tokio::task::JoinSet;
 
     tokio::time::timeout(Duration::from_secs(10), async {
-        for kind in ["local", "socks", "remote"] {
+        for kind in ["local", "socks", "remote", "local-traffic", "socks-traffic", "socks-handshake", "local-open-pending"] {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let traffic = kind.ends_with("-traffic");
+            let target = if traffic { Some(TcpListener::bind(("127.0.0.1", 0)).await.unwrap()) } else { None };
+            let target_address = target.as_ref().map(|listener| listener.local_addr().unwrap());
+            let payload = (0..32768).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+            let expected = payload.clone();
+            let target_task = target.map(|listener| tokio::spawn(async move {
+                let (mut stream, peer) = listener.accept().await.unwrap();
+                assert!(peer.ip().is_loopback());
+                drop(listener);
+                let mut received = vec![0; expected.len()];
+                stream.read_exact(&mut received).await.unwrap();
+                assert_eq!(received, expected);
+                stream.write_all(&received).await.unwrap();
+                assert_eq!(stream.read(&mut [0]).await.unwrap(), 0,
+                    "tunnel cancellation must close the upstream TCP socket before transport cleanup");
+            }));
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let address = listener.local_addr().unwrap();
             let mut seed = Zeroizing::new([0; 32]);
@@ -406,8 +468,10 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                 ready: None,
                 geometry: None,
                 pause_replacement_pty: None,
-                pause_operation: (kind == "remote").then_some((entered, operation_release)),
+                pause_operation: (kind == "remote" || kind == "local-open-pending").then_some((entered, operation_release)),
                 operation_channels: None,
+                forward_to: target_address,
+                forwarded: JoinSet::new(),
             };
             let config = Arc::new(server::Config {
                 keys: vec![key],
@@ -477,7 +541,7 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                 let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
                 let bind_port = listener.local_addr().unwrap().port();
                 port = Some(bind_port);
-                if kind == "local" {
+                if kind.starts_with("local") {
                     SshCommand::StartLocalForward {
                         job: LocalForwardJob {
                             tunnel_id: kind.into(),
@@ -485,7 +549,7 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                             bind_host: "127.0.0.1".into(),
                             bind_port,
                             target_host: "127.0.0.1".into(),
-                            target_port: 1,
+                            target_port: target_address.map_or(1, |target| target.port()),
                             listener,
                             cancel: cancellation,
                         },
@@ -516,6 +580,8 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
             let events = Arc::new(Mutex::new(Vec::new()));
             let observed = events.clone();
             let mut started = Some(started);
+            let (accepted, accepted_connection) = oneshot::channel();
+            let mut accepted = Some(accepted);
             assert!(
                 spawn_session_tunnel(
                     command,
@@ -528,6 +594,9 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                         {
                             let _ = started.send(());
                         }
+                        if event.connections > 0 && let Some(accepted) = accepted.take() {
+                            let _ = accepted.send(());
+                        }
                         observed.lock().unwrap().push(event);
                     }
                 )
@@ -538,10 +607,35 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                 1,
                 "{kind} tunnel must belong to the session worker set"
             );
-            if kind == "remote" {
-                operation_entered.await.unwrap();
-            } else {
+            if kind != "remote" {
                 ready.await.unwrap();
+            }
+            let mut client = if traffic || kind == "socks-handshake" || kind == "local-open-pending" {
+                Some(tokio::net::TcpStream::connect(("127.0.0.1", port.unwrap())).await.unwrap())
+            } else { None };
+            if kind == "remote" || kind == "local-open-pending" {
+                operation_entered.await.unwrap();
+            }
+            if let Some(client) = &mut client {
+                accepted_connection.await.unwrap();
+                if traffic {
+                    if kind.starts_with("socks") {
+                        client.write_all(&[5, 1, 0]).await.unwrap();
+                        let mut greeting = [0; 2];
+                        client.read_exact(&mut greeting).await.unwrap();
+                        assert_eq!(greeting, [5, 0]);
+                        let target = target_address.unwrap().port().to_be_bytes();
+                        client.write_all(&[5, 1, 0, 1, 127, 0, 0, 1, target[0], target[1]]).await.unwrap();
+                        let mut reply = [0; 10];
+                        client.read_exact(&mut reply).await.unwrap();
+                        assert_eq!(&reply[..2], &[5, 0]);
+                    }
+                    client.write_all(&payload).await.unwrap();
+                    let mut echoed = vec![0; payload.len()];
+                    client.read_exact(&mut echoed).await.unwrap();
+                    assert_eq!(echoed, payload, "encrypted forwarding preserves both directions' bytes");
+                    assert!(!target_task.as_ref().unwrap().is_finished());
+                }
             }
             assert!(
                 !server.is_finished(),
@@ -553,6 +647,21 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
             assert!(workers.is_empty());
             assert!(manager.tunnels.lock().unwrap().is_empty());
             assert!(manager.remote_forwards.lock().unwrap().is_empty());
+            if let Some(client) = &mut client {
+                let mut closed = Vec::new();
+                tokio::time::timeout(Duration::from_secs(2), client.take(11).read_to_end(&mut closed)).await
+                    .unwrap_or_else(|_| panic!("joined {kind} tunnel must close its client before transport cleanup or peer release"))
+                    .unwrap();
+                if traffic { assert!(closed.is_empty(), "no extra payload is forwarded after cleanup"); }
+                else if kind == "socks-handshake" { assert!(closed.is_empty() || closed == [5, 1, 0, 1, 0, 0, 0, 0, 0, 0],
+                    "a stopped SOCKS handshake may report failure before EOF"); }
+                else { assert!(closed.is_empty(), "pending direct-channel open must drop its local client on cancellation"); }
+            }
+            drop(client);
+            if let Some(target) = target_task {
+                target.await.unwrap();
+                drop(TcpListener::bind(target_address.unwrap()).await.expect("owned TCP target listener released"));
+            }
             if kind == "remote" {
                 assert!(
                     response
@@ -563,6 +672,7 @@ async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
                 );
                 release.send(()).unwrap();
             } else {
+                if kind == "local-open-pending" { release.send(()).unwrap(); }
                 assert!(matches!(
                     events.lock().unwrap().last().unwrap().state,
                     TunnelState::Stopped
@@ -644,6 +754,8 @@ async fn finite_session_operations_settle_before_transport_cleanup() {
                 pause_replacement_pty: None,
                 pause_operation: Some((entered, operation_release)),
                 operation_channels: Some(std::collections::HashMap::new()),
+                forward_to: None,
+                forwarded: JoinSet::new(),
             };
             let config = Arc::new(server::Config {
                 keys: vec![key],

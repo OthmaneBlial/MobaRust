@@ -70,3 +70,49 @@ later source change; GitHub workflows remain disabled.
 The subsequent [live operation history correction](live-operation-history.md)
 keeps live tunnel Stop controls visible beyond the old 20-row total cap.
 It is frontend retention evidence, with native large-list acceptance pending.
+
+## Active TCP and pending-handshake cleanup — 2026-10-03
+
+The existing encrypted ownership regression now exercises seven cases: idle
+local/SOCKS jobs, pending remote approval, local/SOCKS traffic, a SOCKS client
+stopped before its greeting and a local channel-open with a withheld peer
+reply. It uses generated memory-only authentication/host keys and the
+production tunnel dispatcher, runners and session drain.
+
+For each traffic case, an owned TCP echo endpoint binds only `127.0.0.1`.
+The SSH fixture forwards only to that preselected address/port, rejects other
+destinations without resolving them and bounds its own forwarding workers.
+A 32 KiB binary payload is delivered and echoed byte-for-byte through the
+encrypted channel. With the client and target connections still open,
+cancellation/session drain closes the client socket and the upstream TCP
+socket before SSH transport teardown. The target task is joined, and target,
+tunnel and SSH listeners are rebound after their owners finish.
+
+The pending SOCKS case checks closure or the bounded protocol failure frame
+followed by EOF. The pending local-open case checks client EOF before releasing
+the peer's withheld response. That child cannot reach its copy-loop cancellation
+select while waiting for channel approval, so the runner must actually abort
+and join it. Deliberately replacing the local runner's child shutdown with
+detachment fails at this named client-close deadline; the production bytes
+were restored. This is a mutation check, not a reproduced defect in current
+production code.
+
+```sh
+cargo test --locked -p mobarust tunnel_workers_are_owned_and_joined_before_transport_cleanup
+cargo xtask check
+```
+
+The full local `cargo xtask check` passed on macOS ARM64 / Apple M2 in 232.49
+seconds, including the expanded seven-case regression, 113 desktop tests,
+workspace tests/Clippy, the complete frontend checks (including live-history
+retention), protocol/helpers, release/lab tooling, package contracts and fuzz
+compilation. The optional real Xvfb case retained its prerequisite skip.
+
+This strengthens backend cleanup evidence for open connections and unresolved
+protocol work. The traffic cases complete one binary roundtrip before Stop;
+they do not prove cancellation amid saturated writes, 30-minute stability or
+native Close/Quit under sustained traffic. The remote case still rejects
+approval and opens no real remote listener. Real remote listener revocation,
+broader OpenSSH/server compatibility and Windows/Linux/native acceptance remain
+open. No production application logic or published installer changed in this
+test milestone; the earlier source fixes remain absent from v0.1.29 installers.

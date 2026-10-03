@@ -231,8 +231,9 @@ memory remain separate concerns; the checklist is unchanged.
 The shared 32-worker owner now also includes [local/SOCKS/remote tunnel
 jobs](docs/testing/tunnel-lifecycle.md). Excess queued starts fail explicitly,
 and session cleanup cancels and joins accepted runners before transport
-cleanup. Loopback admission and idle/pending-job wire checks do not close
-native sustained-traffic or real remote-listener revocation gates.
+cleanup. Loopback admission, byte-matched local/SOCKS TCP roundtrips and
+pending handshake/channel-open cleanup checks do not close native
+sustained-traffic or real remote-listener revocation gates.
 
 On main, [operation history retention](docs/testing/live-operation-history.md)
 keeps live tunnel/transfer rows and their Stop/Cancel controls available while
