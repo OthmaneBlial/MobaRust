@@ -1,5 +1,41 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## v0.1.27 ARM64 release-copy legacy Open acceptance — 2026-10-03
+
+A disposable copy of the verified v0.1.27 ARM64 DMG, source/tag
+`8384eb53e9edf3a4ad40656c1f3403f363befb7e`, repeated the complete explicit
+legacy Open workflow. The packaged runtime SHA-256 was
+`6e9eff5488dd0c2019733ad7884646de3e20ca25ef55b74dcea214a97d15fbcf`
+before lab metadata/state and the disposable ad hoc signature. Its process
+HOME/ZDOTDIR/XDG paths and empty SSH-agent settings were checked before
+connection and again before Quit.
+
+- Default UTF-8 Edit refused the five-byte Windows-1252 file without changing
+  its bytes or mode `0640`. Explicit **Open text as → Windows-1252** displayed
+  `café` plus newline, the correct encoding, clean state and disabled Save.
+- Save of `café · €` plus newline wrote exactly nine Windows-1252 bytes with
+  mode `0640`; Close/reopen loaded the same text and clean state.
+- Selecting **Save encoding → UTF-8** marked the editor dirty. Save wrote
+  exactly 13 UTF-8 bytes with mode `0640`; choosing UTF-8 in the browser and
+  reopening showed matching content, encoding and clean state.
+- Other generated files were unchanged and no editor parts remained. Normal
+  native menu Quit with a clean editor, active SSH and local PTY released the
+  owned app, PTY child, SSH session children and connections. The fixture
+  listener was still loopback-only before stopping it; the harness exited
+  successfully, removed its private root/daemon and freed its loopback port.
+
+Both Mac DMGs passed image verification, read-only mounted package inventory,
+strict ad hoc signatures, app/helper architecture and isolated CLI checks.
+All four published assets were anonymously downloaded and byte-matched.
+The version-aligned full local suite passed, including 108 desktop tests.
+[Release receipt and checksums](../release/v0.1.27.md).
+
+This proves the stated short ARM64 workflow. Intel CLI was checked through
+Rosetta, not Intel hardware/GUI. Windows/Linux, warning focus, uncertain
+promotion recovery, listing-limit refusals and sustained use remain separate.
+The video remains the real v0.1.17 recording; GitHub workflows remain disabled.
+
+
 ## Explicit legacy Open native acceptance — 2026-10-03
 
 A production ARM64 candidate from source `4a7625cdfd8fb0e1e05a583c99a1662f154953ae`

@@ -28,8 +28,11 @@ when the disk filled before workspace tests ran; after removing only this
 repository's regenerable incremental compiler cache, the same complete command
 passed without relaxing any assertion or timeout.
 
-Installers, native release-copy acceptance and publication remain separate gates.
-Public Mac downloads remain v0.1.26.
+The subsequent [v0.1.27 release receipt](../release/v0.1.27.md) records both
+verified Mac DMGs, ARM64 native legacy Open/Save/reopen and UTF-8 conversion,
+normal-Quit cleanup, and all four anonymously downloaded, byte-matched public
+assets. Windows/Linux, broader native acceptance and independent review remain
+open; publication does not remove the warnings.
 
 ## v0.1.26 release preparation audit — 2026-10-03
 

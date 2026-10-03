@@ -281,8 +281,10 @@ UTF-8 conversion/reopen, byte/mode checks and normal Quit with active SSH/local
 PTY. Its owned fixture root/daemon were removed and its loopback port was
 reusable. [Native receipt and limits](../testing/native-workflow.md#explicit-legacy-open-native-acceptance--2026-10-03).
 
-The new selector is source work after the public v0.1.26 release. Updated
-installers and Windows/Linux native acceptance remain separate gates; the
-v0.1.26 downloads still open UTF-8 only. Bounds, symlink/file-type refusal,
+Both [v0.1.27 Mac installers](../release/v0.1.27.md) now include this selector.
+The verified ARM64 release copy repeated the stated native legacy Open/Save/
+reopen, UTF-8 conversion and normal-Quit workflow. [Release-copy receipt](../testing/native-workflow.md#v0127-arm64-release-copy-legacy-open-acceptance--2026-10-03).
+Windows/Linux native acceptance remains separate; historical v0.1.26 downloads
+still open UTF-8 only. Bounds, symlink/file-type refusal,
 byte conflicts and lossy-write refusal use the existing reader/writer rather
 than a parallel implementation.

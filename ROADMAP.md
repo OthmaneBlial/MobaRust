@@ -23,14 +23,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.26; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.27; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.26.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.27.md).
 
 ## Completed in the current improvement cycle
 
@@ -204,7 +204,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.26 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.27 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
@@ -224,12 +224,12 @@ regression covers conversion, unchanged targets after refusals, permissions
 and cleanup. The newer Mac source candidate closes the specific UI recovery
 gate above; v0.1.26 ships the encoding-selector wire fix and passed the stated
 release-copy conversion checks. Windows/Linux execution remains pending.
-The v0.1.26 GUI Open still requires UTF-8. Newer source now provides an explicit
-UTF-8/Windows-1252 **Open text as** choice through the existing bounded reader;
-the production ARM64 candidate passed native legacy Open/Save/reopen, UTF-8
-conversion and normal Quit with exact bytes/modes and complete fixture cleanup.
-[Native receipt](docs/testing/native-workflow.md#explicit-legacy-open-native-acceptance--2026-10-03).
-Shipping and Windows/Linux acceptance remain the next gates. [Behavior and
+The v0.1.27 Mac downloads now include explicit UTF-8/Windows-1252
+**Open text as** through the existing bounded reader. The verified ARM64
+installer copy passed native default-UTF-8 refusal, legacy Open/Save/reopen,
+UTF-8 conversion/reopen and normal Quit with exact bytes/modes and complete
+fixture cleanup. [Release-copy receipt](docs/testing/native-workflow.md#v0127-arm64-release-copy-legacy-open-acceptance--2026-10-03).
+Windows/Linux, warning focus and uncertain promotion recovery remain open. [Behavior and
 regressions](docs/adr/0022-bounded-remote-text-editor.md#explicit-legacy-encoding-open-on-main--2026-10-03).
 Public v0.1.25 retains its selector defect.
 
