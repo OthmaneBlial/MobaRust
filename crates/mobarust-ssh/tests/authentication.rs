@@ -1011,7 +1011,9 @@ async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
                 result,
                 Err(SshError::ChannelRequestRejected { request: "shell" })
             )),
-            ShellReply::StartupStall => assert!(matches!(result, Err(SshError::Timeout))),
+            ShellReply::StartupStall => {
+                assert!(matches!(result, Err(SshError::StartupInputTimeout)))
+            }
             _ => unreachable!(),
         }
         connection.disconnect().await.unwrap();
@@ -1147,10 +1149,21 @@ async fn startup_input_keeps_shell_output_draining() {
         let result = tokio::time::timeout(Duration::from_secs(3), connection.open_shell(80, 24))
             .await
             .unwrap();
+        if matches!(reply, ShellReply::StartupStall) {
+            let message = result.as_ref().err().unwrap().to_string();
+            assert_eq!(
+                message,
+                "SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting."
+            );
+            assert!(
+                !message.contains("must-not-replay"),
+                "startup text stays private"
+            );
+        }
         assert!(
             matches!(
                 (reply, result),
-                (ShellReply::StartupStall, Err(SshError::Timeout))
+                (ShellReply::StartupStall, Err(SshError::StartupInputTimeout))
                     | (
                         ShellReply::StartupExit,
                         Err(SshError::ChannelRequestClosed {

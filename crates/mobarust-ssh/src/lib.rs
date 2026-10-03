@@ -83,6 +83,10 @@ pub enum SshError {
     AuthenticationCancelled,
     #[error("SSH connection timed out")]
     Timeout,
+    #[error(
+        "SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting."
+    )]
+    StartupInputTimeout,
     #[error("SSH connection lifecycle transition failed")]
     Lifecycle,
     #[error("SSH host could not be resolved")]
@@ -1250,7 +1254,7 @@ impl SshConnection {
                 write_shell_startup(&mut reader, &writer, startup, &mut buffered_bytes),
             )
             .await
-            .map_err(|_| SshError::Timeout)
+            .map_err(|_| SshError::StartupInputTimeout)
             .and_then(|result| result);
             if let Err(error) = write {
                 close_failed_shell_setup(reader.channel, writer.channel).await;

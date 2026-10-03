@@ -252,3 +252,34 @@ add a connected exact-once startup, explicit tab close, shell refusal and
 zero-credit timeout on Mac ARM64. Full native output ordering, sustained
 rendering and updated Windows/Linux installers remain open; package checks
 alone do not establish those gates.
+
+## Startup timeout diagnosis on main — 2026-10-03
+
+The current-source native zero-credit check displayed only “SSH connection
+timed out”, even though authentication and the shell request had succeeded.
+The shared `open_shell` path now returns `SshError::StartupInputTimeout` when
+the startup-input write reaches its existing setup deadline. Its static message
+names that phase and advises checking the remote session and startup settings
+before reconnecting, because some input may already have reached the server.
+It includes no command text, credentials, destination or raw server detail.
+
+Initial connections and automatic reconnects already use this shared path, so
+both receive the same diagnosis. The write, output-draining loop, deadline,
+channel-close cleanup and approval policy are unchanged. Timeout before shell
+acceptance remains a separate connection/setup failure; the new error does not
+claim that authentication or connectivity failed.
+
+The existing real-loopback startup regression failed on the generic message
+before the correction and passed afterward. It checks the typed startup timeout,
+exact message and absence of configured startup text, alongside zero accepted
+input and channel close before transport teardown. The same regression retains
+its split/unsplit ordered-output and exact-once success checks, early-exit and
+buffer-overflow cases. The disposable native endpoint regression now expects
+the specific timeout as well. Published v0.1.27 installers retain the earlier
+message; the correction currently belongs to main.
+
+The full local `cargo xtask check` passed on macOS ARM64, including workspace
+tests/Clippy, frontend tests/type/lint/build, protocol fixtures, fuzz compilation
+and package-layout contracts. The real X11 server case was skipped for missing
+prerequisites; native observation of the revised message remains a separate
+check.
