@@ -37,6 +37,7 @@ enum SftpReply {
     Cancel,
     Prelude,
     Flood,
+    OversizedPacket,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -280,6 +281,10 @@ impl server::Handler for Handler {
             if data == [0, 0, 0, 5, 1, 0, 0, 0, 3] {
                 if matches!(reply, SftpReply::Accept) {
                     session.data(channel, SFTP_VERSION.to_vec())?;
+                } else if matches!(reply, SftpReply::OversizedPacket) {
+                    // Only a header: never allocate or send a giant payload.
+                    let length = russh_sftp::client::Config::default().max_packet_len + 1;
+                    session.data(channel, length.to_be_bytes().to_vec())?;
                 }
             } else {
                 // The fixture has no filesystem: refuse its one OPENDIR request.
@@ -336,7 +341,7 @@ impl server::Handler for Handler {
                     session.data(channel, vec![b'x'; 32 * 1024])?;
                 }
             }
-            SftpReply::Accept | SftpReply::Prelude => {
+            SftpReply::Accept | SftpReply::Prelude | SftpReply::OversizedPacket => {
                 if matches!(reply, SftpReply::Prelude) {
                     session.data(channel, SFTP_VERSION[..6].to_vec())?;
                     session.extended_data(
@@ -1303,6 +1308,7 @@ async fn sftp_setup_requires_server_acceptance_on_both_channels() {
             SftpReply::Silent,
             SftpReply::Cancel,
             SftpReply::Flood,
+            SftpReply::OversizedPacket,
             SftpReply::Accept,
             SftpReply::Prelude,
         ] {
@@ -1365,7 +1371,7 @@ async fn sftp_setup_requires_server_acceptance_on_both_channels() {
             };
             let requests = fixture.observations.sftp_requests.load(Ordering::SeqCst);
             let input = fixture.observations.sftp_input_bytes.load(Ordering::SeqCst);
-            if matches!(reply, SftpReply::Cancel) && closed {
+            if matches!(reply, SftpReply::Cancel | SftpReply::OversizedPacket) && closed {
                 tokio::time::timeout(Duration::from_secs(1), async {
                     let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
                     assert_eq!(
@@ -1381,7 +1387,7 @@ async fn sftp_setup_requires_server_acceptance_on_both_channels() {
                     writer.close().await.unwrap();
                 })
                 .await
-                .expect("cancelled SFTP setup must preserve the authenticated transport");
+                .expect("failed SFTP setup must preserve the authenticated transport");
             }
             connection.disconnect().await.unwrap();
             drop(connection);
@@ -1417,6 +1423,7 @@ async fn sftp_setup_requires_server_acceptance_on_both_channels() {
                         _
                     ) | (SftpReply::Silent, Err(SshError::Timeout), _)
                         | (SftpReply::Flood, Err(SshError::SftpSetupOutputTooLarge), _)
+                        | (SftpReply::OversizedPacket, Err(SshError::SftpProtocol), _)
                         | (SftpReply::Accept | SftpReply::Prelude, Ok(()), false)
                         | (
                             SftpReply::Accept | SftpReply::Prelude,
@@ -1431,7 +1438,9 @@ async fn sftp_setup_requires_server_acceptance_on_both_channels() {
                 "{reply:?}, listing={listing}: failed or finished SFTP channels close before transport disconnect"
             );
             assert_eq!(requests, 1 + usize::from(listing));
-            if !matches!(reply, SftpReply::Accept | SftpReply::Prelude) {
+            if matches!(reply, SftpReply::OversizedPacket) {
+                assert_eq!(input, 9 * (1 + usize::from(listing)));
+            } else if !matches!(reply, SftpReply::Accept | SftpReply::Prelude) {
                 assert_eq!(
                     input,
                     if listing { 9 } else { 0 },

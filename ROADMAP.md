@@ -117,6 +117,11 @@ before SSH disconnect; [backend ownership checks and pending native save/exit ga
 Both SFTP channels now require the server's subsystem acceptance before INIT,
 with explicit refusal/closure, bounded early output and owned failed-channel cleanup;
 [native file-browser/editor and broader server acceptance remain pending](docs/testing/ssh-lab.md#sftp-subsystem-acceptance-on-main--2026-10-03).
+Both readers also enforce the configured 256 KiB response payload limit before
+allocation, reject impossible sequence counts and excess read data, and settle
+requests when malformed frames close their SFTP channel. [Regression evidence
+and installer limits](vendor/russh-sftp/MOBARUST_PATCH.md) remain separate from
+native file-browser/editor acceptance.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

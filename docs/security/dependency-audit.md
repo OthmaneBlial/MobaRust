@@ -1,5 +1,40 @@
 # Dependency audit record
 
+## SFTP inbound response bounds on main — 2026-10-03
+
+The workspace now uses a [repository-local russh-sftp 2.4.0 copy](../../vendor/russh-sftp/MOBARUST_PATCH.md).
+The original client reader passed `u32::MAX` to its allocation helper rather
+than the existing configured packet limit. It also continued after malformed
+frames and retained pending request senders after reader termination. The local
+correction enforces the default 256 KiB payload limit before allocation,
+rejects impossible sequence counts before visitor reservation, settles pending
+requests and stops both stream workers. DATA must fit the requested read length.
+Both SFTP channel paths use the same corrected dependency.
+
+`sftp_bounds` reproduced acceptance of a valid 33-byte VERSION against a
+32-byte configured limit, delivery of an impossible sequence count to a visitor,
+and a header-only response leaving INIT pending beyond the two-second regression
+deadline. A separate check reproduced acceptance of five DATA bytes for a
+four-byte request. These are small in-memory tests; no excessive allocation or
+public network listener was used. Provenance and changed-file scope are recorded
+with the patch. This is source after v0.1.22, not a correction present in the
+published installers or a new RustSec advisory claim.
+
+`cargo audit --no-fetch --json` checks the resulting lockfile against the
+cached 1,288-advisory database: zero reported vulnerabilities, with the same
+`RUSTSEC-2024-0370` and `RUSTSEC-2024-0429` warnings. The lockfile changes only
+russh-sftp's registry source/checksum to the local path; dependency versions
+and features are unchanged. This version check does not audit the local patch.
+
+The five in-memory response-bound checks pass. The generated encrypted SSH
+fixture also rejects a header-only oversized packet on both SFTP channel paths,
+requires their closure before transport disconnect and successfully opens a
+fresh echo shell on the same authenticated connection. The complete local
+`cargo xtask check` passes, including all 16 OpenSSH cases, workspace Clippy,
+frontend checks, protocol fixtures, package-layout contracts and fuzz compilation.
+The real Xvfb check reports its prerequisite skip. Native GUI and cross-platform
+runtime acceptance remain pending; no roadmap checkbox was closed by this patch.
+
 ## v0.1.22 release recheck — 2026-10-03
 
 `cargo audit --json` refreshed RustSec to commit

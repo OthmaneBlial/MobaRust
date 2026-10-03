@@ -12,7 +12,7 @@ members = [
   "apps/desktop/src-tauri",
   "xtask",
 ]
-exclude = ["vendor/russh"]
+exclude = ["vendor/russh", "vendor/russh-sftp"]
 resolver = "2"
 
 [workspace.package]
@@ -35,7 +35,8 @@ libc = "0.2"
 # Marvin timing advisory (RUSTSEC-2023-0071). Ed25519/ECDSA remain enabled.
 # Local packet-reader correction: vendor/russh/MOBARUST_PATCH.md.
 russh = { path = "vendor/russh", version = "0.63.3", default-features = false, features = ["aws-lc-rs", "flate2"] }
-russh-sftp = "2.4.0"
+# Enforce inbound packet limits: vendor/russh-sftp/MOBARUST_PATCH.md.
+russh-sftp = { path = "vendor/russh-sftp", version = "2.4.0" }
 serialport = { version = "4.7", default-features = false }
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.41"
