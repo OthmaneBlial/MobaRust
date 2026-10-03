@@ -25,6 +25,8 @@ const EXTERNAL: &[u8] = b"another writer after promotion";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Fault {
+    None,
+    MissingTypeMetadata,
     RereadDenied,
     ConcurrentWrite,
     BackupCleanupDenied,
@@ -42,6 +44,7 @@ struct State {
     promoted: bool,
     post_promotion_reads: usize,
     writes: usize,
+    renames: usize,
 }
 
 struct Sftp {
@@ -75,9 +78,17 @@ impl russh_sftp::server::Handler for Sftp {
         let file = state.files.get(&path).ok_or(StatusCode::NoSuchFile)?;
         let mut attrs = FileAttributes::empty();
         attrs.size = Some(file.bytes.len() as u64);
-        attrs.permissions = Some(file.mode);
+        attrs.permissions = if state.fault == Fault::MissingTypeMetadata && path == TARGET {
+            None
+        } else {
+            Some(file.mode)
+        };
         attrs.mtime = Some(123);
         Ok(Attrs { id, attrs })
+    }
+
+    async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        self.lstat(id, path).await
     }
 
     async fn open(
@@ -169,6 +180,7 @@ impl russh_sftp::server::Handler for Sftp {
 
     async fn rename(&mut self, id: u32, old: String, new: String) -> Result<Status, Self::Error> {
         let mut state = self.state.lock().unwrap();
+        state.renames += 1;
         if state.files.contains_key(&new) {
             return Err(StatusCode::Failure);
         }
@@ -289,6 +301,7 @@ impl Fixture {
             promoted: false,
             post_promotion_reads: 0,
             writes: 0,
+            renames: 0,
         }));
         let (ended, receiver) = oneshot::channel();
         let handler = Ssh {
@@ -451,4 +464,76 @@ async fn concurrent_post_save_changes_do_not_replace_the_saved_buffer_or_revisio
 #[tokio::test]
 async fn backup_cleanup_failures_keep_a_usable_saved_revision_and_report_a_warning() {
     verify_receipt(Fault::BackupCleanupDenied).await;
+}
+
+#[tokio::test]
+async fn upload_promotion_refuses_unknown_special_and_directory_types_before_rename() {
+    for (mode, cancellable) in [
+        None,
+        Some(0),
+        Some(0o010600),
+        Some(0o020600),
+        Some(0o040755),
+        Some(0o060600),
+        Some(0o140600),
+        Some(0o170600),
+    ]
+    .into_iter()
+    .flat_map(|mode| [false, true].map(|cancellable| (mode, cancellable)))
+    {
+        let fixture = Fixture::connect(
+            if mode.is_none() {
+                Fault::MissingTypeMetadata
+            } else {
+                Fault::None
+            },
+            true,
+        )
+        .await;
+        const PART: &str = "/complete.part";
+        {
+            let mut state = fixture.state.lock().unwrap();
+            if let Some(mode) = mode {
+                state.files.get_mut(TARGET).unwrap().mode = mode;
+            }
+            state.files.insert(
+                PART.into(),
+                File {
+                    bytes: WRITTEN.as_bytes().to_vec(),
+                    mode: 0o100600,
+                },
+            );
+        }
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let preflight = sftp.check_upload_destination(TARGET).await.unwrap_err();
+        let result = if cancellable {
+            let (_sender, mut cancel) = oneshot::channel();
+            sftp.promote_uploaded_file_with_cancel(PART, TARGET, true, &mut cancel)
+                .await
+        } else {
+            sftp.promote_uploaded_file(PART, TARGET, true).await
+        };
+        let error = result.expect_err("refuse unsafe upload destination");
+        assert_eq!(error.to_string(), preflight.to_string());
+        if mode == Some(0o040755) {
+            assert!(matches!(error, SshError::RemoteUploadDestinationDirectory));
+        } else {
+            assert!(matches!(
+                error,
+                SshError::RemoteUploadDestinationUnsupported
+            ));
+        }
+        {
+            let state = fixture.state.lock().unwrap();
+            assert_eq!(state.files[TARGET].bytes, ORIGINAL);
+            assert!(!state.files.contains_key(PART));
+            assert_eq!(
+                state.renames, 0,
+                "refuse unsafe types before any rename request"
+            );
+            assert_eq!(state.files.len(), 1, "no unexpected backup");
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
 }

@@ -201,14 +201,16 @@ pub struct FileAttributes {
     pub mtime: Option<u32>,
 }
 
+// POSIX type codes overlap; they are one field, not independent flags.
+const FILE_TYPE_MASK: u32 = 0o170000;
+
 macro_rules! impl_fn_type {
     ($get_name:ident, $set_name:ident, $doc_name:expr, $flag:ident) => {
         #[doc = "Returns `true` if is a "]
         #[doc = $doc_name]
         pub fn $get_name(&self) -> bool {
-            self.permissions.map_or(false, |b| {
-                FileMode::from_bits_truncate(b).contains(FileMode::$flag)
-            })
+            self.permissions
+                .is_some_and(|mode| mode & FILE_TYPE_MASK == FileMode::$flag.bits())
         }
 
         #[doc = "Set flag if is a "]
@@ -231,16 +233,18 @@ impl FileAttributes {
     impl_fn_type!(is_block, set_block, "block", BLK);
     impl_fn_type!(is_fifo, set_fifo, "fifo", FIFO);
 
-    /// Set mode flag
+    /// Replace the file type, preserving permission bits.
     pub fn set_type(&mut self, mode: FileMode) {
         let perms = self.permissions.unwrap_or(0);
-        self.permissions = Some(perms | mode.bits());
+        self.permissions = Some((perms & !FILE_TYPE_MASK) | (mode.bits() & FILE_TYPE_MASK));
     }
 
-    /// Remove mode flag
+    /// Clear the file type only if it matches the requested type.
     pub fn remove_type(&mut self, mode: FileMode) {
         let perms = self.permissions.unwrap_or(0);
-        self.permissions = Some(perms & !mode.bits());
+        if perms & FILE_TYPE_MASK == mode.bits() & FILE_TYPE_MASK {
+            self.permissions = Some(perms & !FILE_TYPE_MASK);
+        }
     }
 
     /// Returns the file type
@@ -302,7 +306,7 @@ impl FileAttributes {
 /// For simple conversion of [`Metadata`] into [`FileAttributes`]
 impl From<&Metadata> for FileAttributes {
     fn from(metadata: &Metadata) -> Self {
-        let mut attrs = Self {
+        let attrs = Self {
             size: Some(metadata.len()),
             #[cfg(unix)]
             uid: Some(metadata.uid()),
@@ -321,8 +325,20 @@ impl From<&Metadata> for FileAttributes {
             ..Default::default()
         };
 
-        attrs.set_dir(metadata.is_dir());
-        attrs.set_regular(!metadata.is_dir());
+        // Unix mode already contains the exact type, including special files.
+        #[cfg(not(unix))]
+        let attrs = {
+            let mut attrs = attrs;
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                attrs.set_symlink(true);
+            } else if kind.is_dir() {
+                attrs.set_dir(true);
+            } else if kind.is_file() {
+                attrs.set_regular(true);
+            }
+            attrs
+        };
 
         attrs
     }

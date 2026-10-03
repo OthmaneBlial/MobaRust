@@ -1159,6 +1159,111 @@ fn idle_shell_survives_the_connection_timeout_without_keepalives() {
 }
 
 #[test]
+fn upload_replacement_replaces_links_without_following_their_targets() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let target_file = fixture.directory.path().join("link-target.txt");
+        let target_directory = fixture.directory.path().join("link-target-directory");
+        let missing_target = fixture.directory.path().join("missing-link-target");
+        fs::write(&target_file, b"unrelated file").unwrap();
+        fs::create_dir(&target_directory).unwrap();
+        fs::write(
+            target_directory.join("child.txt"),
+            b"unrelated directory child",
+        )
+        .unwrap();
+        let destination = fixture.directory.path().join("link-destination");
+        let temporary = fixture.directory.path().join("complete-upload.part");
+        let remote = destination.to_str().unwrap();
+        let part = temporary.to_str().unwrap();
+        for target in [&target_file, &target_directory, &missing_target] {
+            for cancellable in [false, true] {
+                std::os::unix::fs::symlink(target, &destination).unwrap();
+                assert_eq!(sftp.check_upload_destination(remote).await.unwrap(), None);
+                for cancel_upload in [false, true] {
+                    sftp.upload_from(&b"new complete file"[..], part)
+                        .await
+                        .unwrap();
+                    let result = if cancel_upload {
+                        let (sender, mut cancel) = oneshot::channel();
+                        sender.send(()).unwrap();
+                        sftp.promote_uploaded_file_with_cancel(part, remote, true, &mut cancel)
+                            .await
+                    } else {
+                        sftp.promote_uploaded_file(part, remote, false).await
+                    };
+                    assert!(result.is_err());
+                    assert_eq!(fs::read_link(&destination).unwrap(), *target);
+                    assert!(!temporary.exists());
+                }
+                sftp.upload_from(&b"new complete file"[..], part)
+                    .await
+                    .unwrap();
+                sftp.set_permissions(part, 0o600).await.unwrap();
+                if cancellable {
+                    let (_sender, mut cancel) = oneshot::channel();
+                    sftp.promote_uploaded_file_with_cancel(part, remote, true, &mut cancel)
+                        .await
+                        .expect("explicit overwrite replaces the link itself");
+                } else {
+                    sftp.promote_uploaded_file(part, remote, true)
+                        .await
+                        .expect("explicit overwrite replaces the link itself");
+                }
+                assert!(fs::symlink_metadata(&destination).unwrap().is_file());
+                assert_eq!(fs::read(&destination).unwrap(), b"new complete file");
+                assert_eq!(
+                    fs::metadata(&destination).unwrap().permissions().mode() & 0o7777,
+                    0o600
+                );
+                assert_eq!(fs::read(&target_file).unwrap(), b"unrelated file");
+                assert_eq!(
+                    fs::read(target_directory.join("child.txt")).unwrap(),
+                    b"unrelated directory child"
+                );
+                assert!(!missing_target.exists());
+                assert!(!temporary.exists());
+                fs::remove_file(&destination).unwrap();
+            }
+        }
+        sftp.upload_from(&b"new complete file"[..], part)
+            .await
+            .unwrap();
+        assert!(matches!(
+            sftp.check_upload_destination(target_directory.to_str().unwrap())
+                .await,
+            Err(SshError::RemoteUploadDestinationDirectory)
+        ));
+        assert!(
+            sftp.promote_uploaded_file(part, target_directory.to_str().unwrap(), true)
+                .await
+                .is_err()
+        );
+        assert!(target_directory.is_dir());
+        assert_eq!(
+            fs::read(target_directory.join("child.txt")).unwrap(),
+            b"unrelated directory child"
+        );
+        assert!(!temporary.exists());
+        assert!(
+            fs::read_dir(fixture.directory.path())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".mobarust-upload-backup-"))
+        );
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn cancelled_upload_promotion_preserves_original_and_removes_complete_part() {
     use std::future::{Future, poll_fn};
     use std::task::Poll;
@@ -1282,7 +1387,8 @@ fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
                 assert!(fingerprint.starts_with("SHA256:"));
                 fingerprint
             }
-            _ => panic!("unknown host key was not rejected"),
+            Err(error) => panic!("expected host-key rejection, received: {error}"),
+            Ok(_) => panic!("unknown host key was accepted"),
         };
 
         let inspection = inspect_host_key(SshFingerprintOptions {

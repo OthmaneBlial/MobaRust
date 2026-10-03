@@ -3194,10 +3194,9 @@ where
     let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
     let sftp = connection.open_sftp().await?;
     if sftp.try_exists(remote_path).await? {
-        let (_, is_directory) = sftp.file_info(remote_path).await?;
-        if is_directory {
+        if let Err(error) = sftp.check_upload_destination(remote_path).await {
             let _ = sftp.close().await;
-            return Err(SshError::Scp("upload destination is a directory".into()));
+            return Err(error);
         }
         if !overwrite {
             let _ = sftp.close().await;
@@ -3382,11 +3381,12 @@ where
     let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
     let sftp = connection.open_sftp().await?;
     if sftp.try_exists(remote_path).await? {
-        let (_, is_directory) = sftp.file_info(remote_path).await?;
-        if is_directory {
-            return Err(SshError::Sftp("upload destination is a directory".into()));
+        if let Err(error) = sftp.check_upload_destination(remote_path).await {
+            let _ = sftp.close().await;
+            return Err(error);
         }
         if !overwrite {
+            let _ = sftp.close().await;
             return Err(SshError::Sftp(
                 "upload destination already exists; enable overwrite explicitly".into(),
             ));
@@ -3797,10 +3797,7 @@ where
     F: FnMut(u64, Option<u64>),
 {
     if sftp.try_exists(remote_path).await? {
-        let (_, is_directory) = sftp.file_info(remote_path).await?;
-        if is_directory {
-            return Err(SshError::Sftp("upload destination is a directory".into()));
-        }
+        sftp.check_upload_destination(remote_path).await?;
         if !overwrite {
             return Err(SshError::Sftp(
                 "upload destination already exists; enable overwrite explicitly".into(),

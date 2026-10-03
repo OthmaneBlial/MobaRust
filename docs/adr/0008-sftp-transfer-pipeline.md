@@ -50,6 +50,11 @@ both files for manual recovery and reports the uncertainty; a failed backup
 cleanup is reported after the new file has been promoted. When the existing
 target is a regular file, its permission bits are applied to the complete
 temporary file before promotion.
+On main after v0.1.24, all three upload paths share an `LSTAT` destination
+check. Directories and missing/unsupported type metadata refuse before
+promotion. Explicit overwrite replaces a final-path symlink itself, including
+directory and dangling links, without inheriting its mode or opening its target.
+The same check runs again before fallback backup creation.
 Single-file SFTP and SCP uploads reject selected local symlinks, including
 dangling links, before opening a remote transfer. On Unix, file uploads also
 open with `O_NOFOLLOW` and check the opened handle is a regular file, preventing
@@ -121,3 +126,60 @@ confirmation again.
 
 - per-item conflict decisions for recursive jobs;
 - pause/resume where the protocol and remote semantics support it;
+
+## Upload destination regressions — 2026-10-03
+
+The SDK's POSIX type predicates used overlapping codes as independent flags:
+a symlink also matched regular/character, and block devices or sockets could
+match directory. Type setters could corrupt another type, and conversion from
+Unix filesystem metadata could relabel a socket. The local dependency now
+compares the complete type field, replaces it on assignment, clears only an
+exact match, and preserves the original Unix mode.
+
+Before correction, the real OpenSSH link-replacement test reproduced an upload
+created with mode `0600` becoming `0755`. Three metadata regressions also failed,
+and the scripted SFTP fixture accepted an occupied destination without type
+metadata. None of these checks uses a public SSH server.
+
+```text
+cargo test --locked -p mobarust-ssh --test sftp_metadata
+cargo test --locked -p mobarust-ssh --test remote_editor
+cargo test --locked -p mobarust-ssh --test local_sshd upload_replacement_replaces_links_without_following_their_targets -- --exact
+cargo xtask check
+```
+
+The metadata cases verify mutually exclusive predicates, setter/clear behavior
+and conversion of owned Unix files, directories, symlinks and a Unix-domain
+socket. The private OpenSSH fixture checks file/directory/dangling symlinks
+through both promotion APIs: create-only and queued cancellation preserve the
+link; replacement preserves exact uploaded bytes and mode `0600`, leaves link
+targets unchanged and removes owned parts/backups. A real directory refuses.
+The existing ordinary-file replacement check still verifies mode `0640`.
+
+The authenticated, memory-only SFTP fixture checks absent, zero, FIFO,
+character, directory, block, socket and unknown type codes through both APIs
+(16 combinations). Preflight and promotion return the same typed error, make
+zero rename requests, preserve original bytes and remove the owned part.
+
+The first full run passed 18/19 OpenSSH cases; the existing loopback X11 check
+hit its five-second channel deadline before its xauth wrapper ran. Its unchanged
+targeted rerun passed in 1.94 seconds, and the next full run passed all 19
+OpenSSH cases in 23.74 seconds. The cause of that initial delay is not established.
+No existing payload, assertion or deadline was relaxed.
+A later run also failed the existing initial host-key rejection assertion;
+that assertion now distinguishes unexpected redacted errors from acceptance
+without changing its required result. The final workspace run passed all 19
+OpenSSH cases in 33.12 seconds, plus the metadata and scripted fault cases.
+These intermittent lab failures remain unresolved rather than a diagnosed fix.
+The complete local `cargo xtask check` passed: workspace tests/Clippy,
+frontend unit tests/type checking/lint/build, release/lab tooling, RDP/VNC
+fixtures, package-layout contracts and fuzz compilation. Three manual
+authentication labs remain ignored; real Xvfb reports its prerequisite skip.
+
+These are source/protocol checks on macOS ARM64. Desktop SCP, single-file SFTP
+and recursive per-file preflights use the shared guard, but native collision
+dialogues and whole recursive workflows still need acceptance. Other-platform
+metadata conversion is unobserved. Ancestor/final-path swaps between requests,
+a malicious server and lost rename replies remain limitations. Published
+v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged; no broader roadmap
+gate is closed by these regressions.

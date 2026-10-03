@@ -11,7 +11,7 @@ metadata are omitted. Default library tests/doctests are disabled and this
 dependency is excluded from workspace test targets. The local SSH/full-check
 commands explicitly run its private library tests, alongside MobaRust's
 public-API regressions. No dependency version, feature or production source file changes
-except the five files below and line-ending normalization.
+except the six files below and line-ending normalization.
 
 - `src/client/mod.rs`: route the existing configuration to the packet reader,
   enforce the default 256 KiB payload limit before allocation, stop on invalid
@@ -43,12 +43,18 @@ except the five files below and line-ending normalization.
   Out-of-range positions fail before another data request; empty I/O stays empty.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
+- `src/protocol/file_attrs.rs`: compare the complete POSIX type field rather
+  than testing overlapping codes as flags. Setting replaces the type; clearing
+  affects only an exact match and preserves permission bits. Unix metadata
+  conversion retains the original mode, including symlinks and special files.
+  Other platforms infer mutually exclusive directory/file/link types.
 
 Regression commands:
 
 ```text
 cargo test --locked -p russh-sftp --lib
 cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo test --locked -p mobarust-ssh --test sftp_metadata
 cargo xtask test-ssh
 cargo xtask check
 ```
@@ -81,7 +87,10 @@ include the first three response-bound changes. Both verified
 [v0.1.24 Mac previews](../../docs/release/v0.1.24.md) also include the later file-reader,
 64-bit-limit, request-lifetime and file-write corrections. Native workflow
 acceptance remains pending.
-The subsequent seek-recovery and offset-exhaustion fixes are source after
+The subsequent seek-recovery, offset-exhaustion and file-type fixes are source after
 v0.1.24, pending new installers and native acceptance.
+The [metadata and upload regressions](../../docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
+use generated types, owned Unix filesystem entries and disposable loopback SSH;
+they do not establish Windows metadata or native GUI acceptance.
 Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
 neither of the first two cohorts.

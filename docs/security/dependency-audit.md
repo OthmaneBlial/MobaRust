@@ -227,6 +227,23 @@ published v0.1.24 Mac DMGs and v0.1.12 Windows/Linux installers are unchanged;
 the correction awaits a subsequent installer cohort. Baseline-version advisory
 scanners do not independently audit this repository-local patch.
 
+## SFTP file-type classification after v0.1.24 — 2026-10-03
+
+The local SDK used overlapping POSIX type codes as flags, misclassifying links
+as regular files and sockets/block devices as directories. Assignment/removal
+and Unix metadata conversion could also corrupt the type. A private OpenSSH
+regression reproduced mode `0600` becoming `0755` when replacing a link;
+three public metadata regressions failed, and an authenticated memory-only
+SFTP fixture reproduced promotion without type metadata.
+
+Exact type-field handling and a shared no-follow upload guard now preserve
+regular-file modes, replace final-path links themselves and refuse unsupported
+occupied types before rename. [Commands, coverage and limitations](../adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
+separate protocol checks from pending native/cross-platform acceptance. The
+dependency version/features are unchanged and published downloads do not
+contain this source correction. This is not an independent audit or new
+RustSec advisory claim.
+
 ## v0.1.24 release preparation audit — 2026-10-03
 
 A fresh `cargo audit --json` lookup reports RustSec commit

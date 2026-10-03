@@ -29,6 +29,10 @@ symlinks are refused, and Windows replacement does not delete an existing file
 before the replacement succeeds. Existing files require the explicit overwrite
 choice. Cancellation removes the in-flight temporary file and leaves no
 partial destination file presented as complete.
+On main after v0.1.24, each uploaded file uses the shared no-follow destination
+guard: explicit overwrite replaces a final-path link itself; real directories,
+special files and absent type metadata refuse. Destination directory links
+remain refused. [Protocol checks and native limits](0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03).
 Recursive downloads also refuse existing local subdirectory symlinks before
 creating files. A concurrent local process can still swap an ancestor after
 that check; directory-handle-relative operations would be needed to close

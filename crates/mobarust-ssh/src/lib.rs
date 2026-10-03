@@ -158,6 +158,10 @@ pub enum SshError {
         "remote upload completed, but its backup could not be removed; inspect the nearby .mobarust-upload-backup file"
     )]
     RemoteUploadBackupCleanupFailed,
+    #[error("upload destination is a directory; choose a file path")]
+    RemoteUploadDestinationDirectory,
+    #[error("upload destination type is missing or unsupported; choose an unused file path")]
+    RemoteUploadDestinationUnsupported,
     #[error(
         "operation failed and a temporary remote file could not be removed; inspect the destination folder for a hidden .mobarust-* file"
     )]
@@ -2514,6 +2518,30 @@ impl SftpConnection {
         Ok(metadata.is_dir() && !metadata.is_symlink())
     }
 
+    /// Inspect an occupied upload path without following its final symlink.
+    /// A regular file supplies permission bits to preserve; replacing a link
+    /// keeps the upload's own mode. Directories and unknown/special types refuse.
+    pub async fn check_upload_destination(
+        &self,
+        path: impl Into<String>,
+    ) -> Result<Option<u32>, SshError> {
+        let metadata = self
+            .session
+            .symlink_metadata(path)
+            .await
+            .map_err(map_sftp_error)?;
+        match metadata.file_type() {
+            russh_sftp::protocol::FileType::File => {
+                Ok(metadata.permissions.map(|permissions| permissions & 0o7777))
+            }
+            russh_sftp::protocol::FileType::Symlink => Ok(None),
+            russh_sftp::protocol::FileType::Dir => Err(SshError::RemoteUploadDestinationDirectory),
+            russh_sftp::protocol::FileType::Other => {
+                Err(SshError::RemoteUploadDestinationUnsupported)
+            }
+        }
+    }
+
     /// Change only the permission bits of a remote path. The caller validates
     /// the path and the bounded POSIX mode before this operation reaches the
     /// SFTP server; no shell command is involved.
@@ -2958,18 +2986,11 @@ impl SftpConnection {
                     "upload destination already exists; enable overwrite explicitly".into(),
                 ));
             }
-            if overwrite && self.try_exists(destination).await? {
-                let metadata = self
-                    .session
-                    .symlink_metadata(destination)
-                    .await
-                    .map_err(map_sftp_error)?;
-                if metadata.is_regular()
-                    && let Some(permissions) = metadata.permissions
-                {
-                    self.set_permissions(temporary, permissions & 0o7777)
-                        .await?;
-                }
+            if overwrite
+                && self.try_exists(destination).await?
+                && let Some(permissions) = self.check_upload_destination(destination).await?
+            {
+                self.set_permissions(temporary, permissions).await?;
             }
             if cancel.as_mut().is_some_and(|receiver| {
                 !matches!(
@@ -2987,10 +3008,7 @@ impl SftpConnection {
             if !self.try_exists(temporary).await? || !self.try_exists(destination).await? {
                 return Err(initial_error);
             }
-            let (_, is_directory) = self.file_info(destination).await?;
-            if is_directory {
-                return Err(SshError::Sftp("upload destination is a directory".into()));
-            }
+            self.check_upload_destination(destination).await?;
 
             let backup = format!(
                 "{destination}.mobarust-upload-backup-{}",

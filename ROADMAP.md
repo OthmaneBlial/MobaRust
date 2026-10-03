@@ -148,6 +148,11 @@ unsigned offsets. Tiny in-memory peers verify seek recovery, metadata failures,
 the full unsigned range and READ/WRITE refusal before position wrap.
 [Offset checks and installer limits](vendor/russh-sftp/MOBARUST_PATCH.md)
 remain separate from native file-workflow acceptance; published DMGs are unchanged.
+Source after v0.1.24 also corrects overlapping SFTP file-type classification
+and shares a no-follow upload destination guard across SCP, SFTP and recursive
+files. [Metadata, link replacement and unsafe-type regressions](docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
+verify mode preservation and refusal before rename. Native collision workflows,
+other-platform metadata and new installers remain pending; the checklist stays 56/76.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
