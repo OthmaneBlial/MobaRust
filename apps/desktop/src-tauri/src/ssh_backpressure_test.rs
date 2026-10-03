@@ -51,6 +51,21 @@ impl russh_sftp::server::Handler for DeniedSftp {
 impl server::Handler for Peer {
     type Error = russh::Error;
 
+    async fn tcpip_forward(
+        &mut self,
+        _address: &str,
+        _port: &mut u32,
+        _session: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        if let Some((entered, release)) = self.pause_operation.take() {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
+        // This fixture never opens a remote listener. Pause/reject the request
+        // to exercise cancellation while server acceptance is unresolved.
+        Ok(false)
+    }
+
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         Ok(if user == "fixture" && password == self.password.as_str() {
             Auth::Accept
@@ -359,6 +374,227 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
             drop(TcpListener::bind(address).await.expect("owned listener released"));
         }
     }).await.expect("loopback backpressure fixture cleanup deadline");
+}
+
+#[tokio::test]
+async fn tunnel_workers_are_owned_and_joined_before_transport_cleanup() {
+    use super::{
+        DynamicForwardJob, LocalForwardJob, RemoteForwardJob, SshCommand, SshManager,
+        TunnelControl, TunnelState, spawn_session_tunnel,
+    };
+    use tokio::task::JoinSet;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for kind in ["local", "socks", "remote"] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut seed = Zeroizing::new([0; 32]);
+            seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+            seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+            let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "")
+                .unwrap();
+            let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+            let password = Zeroizing::new(Uuid::new_v4().to_string());
+            let (entered, operation_entered) = oneshot::channel();
+            let (release, operation_release) = oneshot::channel();
+            let peer = Peer {
+                password: password.clone(),
+                received: Arc::new(AtomicUsize::new(0)),
+                received_bytes: Arc::new(Mutex::new(Vec::new())),
+                delivered: Arc::new(Notify::new()),
+                pause_first: None,
+                ready: None,
+                geometry: None,
+                pause_replacement_pty: None,
+                pause_operation: (kind == "remote").then_some((entered, operation_release)),
+                operation_channels: None,
+            };
+            let config = Arc::new(server::Config {
+                keys: vec![key],
+                auth_rejection_time: Duration::ZERO,
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                inactivity_timeout: None,
+                ..Default::default()
+            });
+            let server = tokio::spawn(async move {
+                let (stream, remote) = listener.accept().await.unwrap();
+                assert!(remote.ip().is_loopback());
+                drop(listener);
+                server::run_stream(config, stream, peer)
+                    .await
+                    .unwrap()
+                    .await
+            });
+            let connection = Arc::new(
+                SshConnection::connect(SshConnectOptions {
+                    host: "127.0.0.1".into(),
+                    port: address.port(),
+                    host_key_policy: HostKeyPolicy::PinnedFingerprint(fingerprint),
+                    timeout: Duration::from_secs(5),
+                    credentials: SshCredentials::password_secret(
+                        "fixture",
+                        mobarust_ssh::Secret::from_zeroizing(password),
+                    ),
+                    keepalive_interval: None,
+                    x11: None,
+                    environment: Vec::new(),
+                    startup_directory: None,
+                    startup_command: None,
+                })
+                .await
+                .unwrap(),
+            );
+            let manager = SshManager::default();
+            let (cancel, cancellation) = watch::channel(false);
+            manager.tunnels.lock().unwrap().insert(
+                kind.into(),
+                TunnelControl {
+                    terminal_id: "fixture".into(),
+                    cancel,
+                },
+            );
+            let (reply, response) = oneshot::channel();
+            let mut port = None;
+            let command = if kind == "remote" {
+                manager
+                    .remote_forwards
+                    .lock()
+                    .unwrap()
+                    .insert("fixture".into(), kind.into());
+                SshCommand::StartRemoteForward {
+                    job: RemoteForwardJob {
+                        tunnel_id: kind.into(),
+                        terminal_id: "fixture".into(),
+                        bind_host: "127.0.0.1".into(),
+                        bind_port: 1,
+                        target_host: "127.0.0.1".into(),
+                        target_port: 1,
+                        cancel: cancellation,
+                    },
+                    reply,
+                }
+            } else {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let bind_port = listener.local_addr().unwrap().port();
+                port = Some(bind_port);
+                if kind == "local" {
+                    SshCommand::StartLocalForward {
+                        job: LocalForwardJob {
+                            tunnel_id: kind.into(),
+                            terminal_id: "fixture".into(),
+                            bind_host: "127.0.0.1".into(),
+                            bind_port,
+                            target_host: "127.0.0.1".into(),
+                            target_port: 1,
+                            listener,
+                            cancel: cancellation,
+                        },
+                    }
+                } else {
+                    SshCommand::StartDynamicForward {
+                        job: DynamicForwardJob {
+                            tunnel_id: kind.into(),
+                            terminal_id: "fixture".into(),
+                            bind_host: "127.0.0.1".into(),
+                            bind_port,
+                            listener,
+                            cancel: cancellation,
+                        },
+                    }
+                }
+            };
+            let mut workers = JoinSet::new();
+            let command = manager
+                .admit_session_command(
+                    command,
+                    &mut workers,
+                    |_| panic!("tunnels do not emit transfer events"),
+                    |_| panic!("idle session must admit tunnel"),
+                )
+                .unwrap();
+            let (started, ready) = oneshot::channel();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let observed = events.clone();
+            let mut started = Some(started);
+            assert!(
+                spawn_session_tunnel(
+                    command,
+                    manager.clone(),
+                    connection.clone(),
+                    &mut workers,
+                    move |event| {
+                        if matches!(event.state, TunnelState::Running)
+                            && let Some(started) = started.take()
+                        {
+                            let _ = started.send(());
+                        }
+                        observed.lock().unwrap().push(event);
+                    }
+                )
+                .is_none()
+            );
+            assert_eq!(
+                workers.len(),
+                1,
+                "{kind} tunnel must belong to the session worker set"
+            );
+            if kind == "remote" {
+                operation_entered.await.unwrap();
+            } else {
+                ready.await.unwrap();
+            }
+            assert!(
+                !server.is_finished(),
+                "transport is still owned while draining its tunnel"
+            );
+            manager
+                .finish_session_operations("fixture", &mut workers)
+                .await;
+            assert!(workers.is_empty());
+            assert!(manager.tunnels.lock().unwrap().is_empty());
+            assert!(manager.remote_forwards.lock().unwrap().is_empty());
+            if kind == "remote" {
+                assert!(
+                    response
+                        .await
+                        .unwrap()
+                        .unwrap_err()
+                        .contains("cancelled before")
+                );
+                release.send(()).unwrap();
+            } else {
+                assert!(matches!(
+                    events.lock().unwrap().last().unwrap().state,
+                    TunnelState::Stopped
+                ));
+                drop(
+                    TcpListener::bind(("127.0.0.1", port.unwrap()))
+                        .await
+                        .expect("joined tunnel must release its listener before transport cleanup"),
+                );
+            }
+            assert!(!server.is_finished());
+            connection.disconnect().await.unwrap();
+            drop(connection);
+            let result = server.await.unwrap();
+            if let Err(error) = result {
+                assert!(
+                    matches!(error, russh::Error::Disconnect)
+                        || matches!(&error, russh::Error::IO(error) if matches!(error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe)),
+                    "unexpected tunnel fixture protocol error: {error}"
+                );
+            }
+            drop(
+                TcpListener::bind(address)
+                    .await
+                    .expect("owned SSH listener released"),
+            );
+        }
+    })
+    .await
+    .expect("owned loopback tunnel cleanup deadline");
 }
 
 #[tokio::test]

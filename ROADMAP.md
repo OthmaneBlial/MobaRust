@@ -225,8 +225,14 @@ Finite actions and transfer/tunnel starts also use [immediate command queue
 admission](docs/testing/transfer-lifecycle.md#immediate-command-queue-admission-after-v0129--2026-10-03):
 a full queue refuses explicitly before cancellation controls are registered,
 instead of retaining callers waiting for capacity. Terminal input keeps
-backpressure. Listener binding, active tunnel counts and total IPC/process
+backpressure. Listener binding, tunnel totals across many sessions and total IPC/process
 memory remain separate concerns; the checklist is unchanged.
+
+The shared 32-worker owner now also includes [local/SOCKS/remote tunnel
+jobs](docs/testing/tunnel-lifecycle.md). Excess queued starts fail explicitly,
+and session cleanup cancels and joins accepted runners before transport
+cleanup. Loopback admission and idle/pending-job wire checks do not close
+native sustained-traffic or real remote-listener revocation gates.
 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.

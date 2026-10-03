@@ -317,3 +317,8 @@ resource pressure. Terminal write producers, IPC deserialization, concurrent
 listener binding, active tunnel counts, many-session workloads and native
 saturation/Retry acceptance still need separate bounds or evidence. Published
 v0.1.29 installers do not include this source change; workflows remain disabled.
+
+The subsequent [tunnel worker ownership change](tunnel-lifecycle.md) puts
+accepted tunnel jobs under the shared session cap and drain. Concurrent
+listener-binding requests and tunnel totals across many sessions remain
+separate concerns.

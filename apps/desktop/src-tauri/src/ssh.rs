@@ -1510,6 +1510,7 @@ impl SshManager {
             command,
             QUEUED_COMMAND_CANCELLED,
             TransferState::Cancelled,
+            TunnelState::Stopped,
             transfer_event,
             tunnel_event,
         );
@@ -1535,12 +1536,16 @@ impl SshManager {
                     | SshCommand::SaveTextFileAs { .. }
                     | SshCommand::FileOperation { .. }
                     | SshCommand::StartTransfer { .. }
+                    | SshCommand::StartLocalForward { .. }
+                    | SshCommand::StartDynamicForward { .. }
+                    | SshCommand::StartRemoteForward { .. }
             )
         {
             self.reject_command(
                 command,
                 SESSION_OPERATION_BUSY,
                 TransferState::Failed,
+                TunnelState::Failed,
                 transfer_event,
                 tunnel_event,
             );
@@ -1555,6 +1560,7 @@ impl SshManager {
         command: SshCommand,
         reason: &str,
         transfer_state: TransferState,
+        tunnel_state: TunnelState,
         transfer_event: impl FnOnce(SshTransferEvent),
         tunnel_event: impl FnOnce(SshTunnelEvent),
     ) {
@@ -1580,15 +1586,15 @@ impl SshManager {
             }
             SshCommand::StartLocalForward { job } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
+                tunnel_event(job.event(tunnel_state, 0, 0, Some(reason.into())));
             }
             SshCommand::StartDynamicForward { job } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
+                tunnel_event(job.event(tunnel_state, 0, 0, Some(reason.into())));
             }
             SshCommand::StartRemoteForward { job, reply } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
+                tunnel_event(job.event(tunnel_state, 0, 0, Some(reason.into())));
                 let _ = reply.send(Err(reason.into()));
             }
         }
@@ -1678,8 +1684,10 @@ impl SshManager {
 
     async fn finish_session_operations(&self, terminal_id: &str, workers: &mut JoinSet<()>) {
         self.cancel_for_terminal(terminal_id);
-        // Let accepted file/editor operations settle, including part cleanup and
-        // promotion/rollback. Aborting them before disconnect can strand originals.
+        // Join tunnels after signalling cancellation; their listeners and connection
+        // workers must stop before session completion. Let accepted file/editor
+        // operations settle, including part cleanup and promotion/rollback.
+        // Aborting those operations before disconnect can strand originals.
         while let Some(result) = workers.join_next().await {
             if result.is_err() {
                 tracing::warn!(event = "session_operation_failed_during_close");
@@ -2400,6 +2408,34 @@ fn spawn_session_operation(
     None
 }
 
+fn spawn_session_tunnel(
+    command: SshCommand,
+    manager: SshManager,
+    connection: Arc<SshConnection>,
+    workers: &mut JoinSet<()>,
+    emit_tunnel: impl FnMut(SshTunnelEvent) + Send + 'static,
+) -> Option<SshCommand> {
+    match command {
+        SshCommand::StartLocalForward { job } => {
+            workers.spawn(run_local_forward(emit_tunnel, manager, connection, job));
+        }
+        SshCommand::StartDynamicForward { job } => {
+            workers.spawn(run_dynamic_forward(emit_tunnel, manager, connection, job));
+        }
+        SshCommand::StartRemoteForward { job, reply } => {
+            workers.spawn(run_remote_forward(
+                emit_tunnel,
+                manager,
+                connection,
+                job,
+                reply,
+            ));
+        }
+        command => return Some(command),
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_shell_once(
     app: &AppHandle,
@@ -2445,10 +2481,16 @@ async fn run_shell_once(
                             |event| manager.emit_tunnel(app, event)) else {
                             continue;
                         };
-                        match spawn_session_operation(command, Arc::clone(connection), workers) {
-                        None => continue,
-                        Some(command) => Some(command),
-                        }
+                        let Some(command) = spawn_session_operation(command, Arc::clone(connection), workers) else {
+                            continue;
+                        };
+                        let event_manager = manager.clone();
+                        let event_app = app.clone();
+                        let Some(command) = spawn_session_tunnel(command, manager.clone(), Arc::clone(connection), workers,
+                            move |event| event_manager.emit_tunnel(&event_app, event)) else {
+                            continue;
+                        };
+                        Some(command)
                     },
                     None => None,
                 };
@@ -2459,37 +2501,6 @@ async fn run_shell_once(
                             return result;
                         }
                     }
-                    Some(SshCommand::StartLocalForward { job }) => {
-                        let tunnel_manager = manager.clone();
-                        let tunnel_connection = Arc::clone(connection);
-                        let tunnel_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_local_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
-                        });
-                    }
-                    Some(SshCommand::StartDynamicForward { job }) => {
-                        let tunnel_manager = manager.clone();
-                        let tunnel_connection = Arc::clone(connection);
-                        let tunnel_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_dynamic_forward(tunnel_app, tunnel_manager, tunnel_connection, job).await;
-                        });
-                    }
-                    Some(SshCommand::StartRemoteForward { job, reply }) => {
-                        let tunnel_manager = manager.clone();
-                        let tunnel_connection = Arc::clone(connection);
-                        let tunnel_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            run_remote_forward(
-                                tunnel_app,
-                                tunnel_manager,
-                                tunnel_connection,
-                                job,
-                                reply,
-                            )
-                            .await;
-                        });
-                    }
                     Some(SshCommand::StartTransfer { job, cancel }) => {
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
@@ -2498,7 +2509,7 @@ async fn run_shell_once(
                             run_transfer(transfer_app, transfer_manager, transfer_connection, job, cancel).await;
                         });
                     }
-                    Some(_) => unreachable!("finite operations are dispatched above"),
+                    Some(_) => unreachable!("session operations are dispatched above"),
                     None => {
                         return ShellRunResult::Closed;
                     }
@@ -2624,7 +2635,7 @@ async fn run_file_operation(
 }
 
 async fn run_local_forward(
-    app: AppHandle,
+    mut emit_tunnel: impl FnMut(SshTunnelEvent),
     manager: SshManager,
     connection: Arc<SshConnection>,
     mut job: LocalForwardJob,
@@ -2635,16 +2646,13 @@ async fn run_local_forward(
     let mut failed = false;
     let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
 
-    manager.emit_tunnel(
-        &app,
-        job.event(TunnelState::Running, connections, bytes_forwarded, None),
-    );
+    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
 
     loop {
         tokio::select! {
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
                     break;
                 }
             }
@@ -2653,13 +2661,13 @@ async fn run_local_forward(
                     match result {
                         Ok(Ok((uploaded, downloaded))) => {
                             bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                         }
                         Ok(Err(error)) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
                         }
                         Err(error) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
                         }
                     }
                 }
@@ -2669,7 +2677,7 @@ async fn run_local_forward(
                     Ok((mut local, _peer)) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(local);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("tunnel connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("tunnel connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
@@ -2687,11 +2695,11 @@ async fn run_local_forward(
                                 copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                     }
                     Err(error) => {
                         failed = true;
-                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("local tunnel listener failed: {error}"))));
+                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("local tunnel listener failed: {error}"))));
                         break;
                     }
                 }
@@ -2701,16 +2709,13 @@ async fn run_local_forward(
 
     workers.shutdown().await;
     if !failed {
-        manager.emit_tunnel(
-            &app,
-            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
-        );
+        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
     }
     manager.finish_tunnel(&job.tunnel_id);
 }
 
 async fn run_dynamic_forward(
-    app: AppHandle,
+    mut emit_tunnel: impl FnMut(SshTunnelEvent),
     manager: SshManager,
     connection: Arc<SshConnection>,
     mut job: DynamicForwardJob,
@@ -2721,16 +2726,13 @@ async fn run_dynamic_forward(
     let mut failed = false;
     let mut workers = JoinSet::<Result<(u64, u64), String>>::new();
 
-    manager.emit_tunnel(
-        &app,
-        job.event(TunnelState::Running, connections, bytes_forwarded, None),
-    );
+    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
 
     loop {
         tokio::select! {
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
                     break;
                 }
             }
@@ -2739,13 +2741,13 @@ async fn run_dynamic_forward(
                     match result {
                         Ok(Ok((uploaded, downloaded))) => {
                             bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                         }
                         Ok(Err(error)) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
                         }
                         Err(error) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
                         }
                     }
                 }
@@ -2755,7 +2757,7 @@ async fn run_dynamic_forward(
                     Ok((mut local, _peer)) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(local);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("SOCKS connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("SOCKS connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
@@ -2811,11 +2813,11 @@ async fn run_dynamic_forward(
                                 copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                     }
                     Err(error) => {
                         failed = true;
-                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("SOCKS listener failed: {error}"))));
+                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some(format!("SOCKS listener failed: {error}"))));
                         break;
                     }
                 }
@@ -2825,16 +2827,13 @@ async fn run_dynamic_forward(
 
     workers.shutdown().await;
     if !failed {
-        manager.emit_tunnel(
-            &app,
-            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
-        );
+        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
     }
     manager.finish_tunnel(&job.tunnel_id);
 }
 
 async fn run_remote_forward(
-    app: AppHandle,
+    mut emit_tunnel: impl FnMut(SshTunnelEvent),
     manager: SshManager,
     connection: Arc<SshConnection>,
     mut job: RemoteForwardJob,
@@ -2864,7 +2863,7 @@ async fn run_remote_forward(
                 Ok(port) => port,
                 Err(error) => {
                     let message = error.to_string();
-                    manager.emit_tunnel(&app, job.event(TunnelState::Failed, 0, 0, Some(message.clone())));
+                    emit_tunnel(job.event(TunnelState::Failed, 0, 0, Some(message.clone())));
                     let _ = reply.send(Err(message));
                     manager.finish_tunnel(&job.tunnel_id);
                     return;
@@ -2874,10 +2873,7 @@ async fn run_remote_forward(
     };
     job.bind_port = remote_port;
 
-    manager.emit_tunnel(
-        &app,
-        job.event(TunnelState::Listening, connections, bytes_forwarded, None),
-    );
+    emit_tunnel(job.event(TunnelState::Listening, connections, bytes_forwarded, None));
     let response = SshTunnelResponse {
         tunnel_id: job.tunnel_id.clone(),
         bind_host: job.bind_host.clone(),
@@ -2890,16 +2886,13 @@ async fn run_remote_forward(
         manager.finish_tunnel(&job.tunnel_id);
         return;
     }
-    manager.emit_tunnel(
-        &app,
-        job.event(TunnelState::Running, connections, bytes_forwarded, None),
-    );
+    emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
 
     loop {
         tokio::select! {
             changed = job.cancel.changed() => {
                 if changed.is_err() || *job.cancel.borrow() {
-                    manager.emit_tunnel(&app, job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
+                    emit_tunnel(job.event(TunnelState::Stopping, connections, bytes_forwarded, None));
                     break;
                 }
             }
@@ -2908,13 +2901,13 @@ async fn run_remote_forward(
                     match result {
                         Ok(Ok((uploaded, downloaded))) => {
                             bytes_forwarded = bytes_forwarded.saturating_add(uploaded).saturating_add(downloaded);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                         }
                         Ok(Err(error)) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error)));
                         }
                         Err(error) => {
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some(error.to_string())));
                         }
                     }
                 }
@@ -2924,7 +2917,7 @@ async fn run_remote_forward(
                     Some(channel) => {
                         if workers.len() >= MAX_CONNECTIONS {
                             drop(channel);
-                            manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, Some("remote tunnel connection limit reached".into())));
+                            emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, Some("remote tunnel connection limit reached".into())));
                             continue;
                         }
                         connections = connections.saturating_add(1);
@@ -2951,11 +2944,11 @@ async fn run_remote_forward(
                                 copied = copy_bidirectional(&mut local, &mut remote) => copied.map_err(|error| error.to_string()),
                             }
                         });
-                        manager.emit_tunnel(&app, job.event(TunnelState::Running, connections, bytes_forwarded, None));
+                        emit_tunnel(job.event(TunnelState::Running, connections, bytes_forwarded, None));
                     }
                     None => {
                         failed = true;
-                        manager.emit_tunnel(&app, job.event(TunnelState::Failed, connections, bytes_forwarded, Some("SSH connection closed while remote forwarding was active".into())));
+                        emit_tunnel(job.event(TunnelState::Failed, connections, bytes_forwarded, Some("SSH connection closed while remote forwarding was active".into())));
                         break;
                     }
                 }
@@ -2969,21 +2962,15 @@ async fn run_remote_forward(
         .await
     {
         failed = true;
-        manager.emit_tunnel(
-            &app,
-            job.event(
-                TunnelState::Failed,
-                connections,
-                bytes_forwarded,
-                Some(format!("could not cancel remote listener: {error}")),
-            ),
-        );
+        emit_tunnel(job.event(
+            TunnelState::Failed,
+            connections,
+            bytes_forwarded,
+            Some(format!("could not cancel remote listener: {error}")),
+        ));
     }
     if !failed {
-        manager.emit_tunnel(
-            &app,
-            job.event(TunnelState::Stopped, connections, bytes_forwarded, None),
-        );
+        emit_tunnel(job.event(TunnelState::Stopped, connections, bytes_forwarded, None));
     }
     manager.finish_tunnel(&job.tunnel_id);
 }
@@ -5382,6 +5369,15 @@ mod tests {
 
     #[tokio::test]
     async fn retired_queue_reports_cancelled_jobs_and_releases_loopback_listeners() {
+        assert_queued_jobs_cleanup(false).await;
+    }
+
+    #[tokio::test]
+    async fn saturated_session_refuses_tunnels_and_releases_loopback_listeners() {
+        assert_queued_jobs_cleanup(true).await;
+    }
+
+    async fn assert_queued_jobs_cleanup(saturated: bool) {
         use super::{
             DynamicForwardJob, LocalForwardJob, QUEUED_COMMAND_CANCELLED, RemoteForwardJob,
             SshCommand, TransferControl, TransferDirection, TransferJob, TunnelControl,
@@ -5506,40 +5502,71 @@ mod tests {
         );
         let mut transfers = Vec::new();
         let mut tunnels = Vec::new();
-        let count = tokio::time::timeout(
-            Duration::from_secs(2),
-            manager.retire_command_queue(
-                "closing",
-                &mut commands,
-                |event| transfers.push(event),
-                |event| tunnels.push(event),
-            ),
-        )
-        .await
-        .expect("queued jobs cleanup deadline");
+        let count = if saturated {
+            let mut workers = tokio::task::JoinSet::new();
+            for _ in 0..super::SESSION_OPERATION_LIMIT {
+                workers.spawn(std::future::pending::<()>());
+            }
+            let mut count = 0;
+            while let Ok(command) = commands.try_recv() {
+                assert!(
+                    manager
+                        .admit_session_command(
+                            command,
+                            &mut workers,
+                            |event| transfers.push(event),
+                            |event| tunnels.push(event)
+                        )
+                        .is_none(),
+                    "tunnels must share session worker admission"
+                );
+                assert_eq!(workers.len(), super::SESSION_OPERATION_LIMIT);
+                count += 1;
+            }
+            workers.abort_all();
+            while workers.join_next().await.is_some() {}
+            count
+        } else {
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                manager.retire_command_queue(
+                    "closing",
+                    &mut commands,
+                    |event| transfers.push(event),
+                    |event| tunnels.push(event),
+                ),
+            )
+            .await
+            .expect("queued jobs cleanup deadline")
+        };
+        let reason = if saturated {
+            super::SESSION_OPERATION_BUSY
+        } else {
+            QUEUED_COMMAND_CANCELLED
+        };
         assert_eq!(count, 5);
         assert_eq!(transfers.len(), 1);
         assert_eq!(transfers[0].transfer_id, "queued-file");
-        assert_eq!(transfers[0].state, TransferState::Cancelled);
+        assert_eq!(
+            transfers[0].state,
+            if saturated {
+                TransferState::Failed
+            } else {
+                TransferState::Cancelled
+            }
+        );
         assert_eq!(transfers[0].bytes_transferred, 0);
-        assert_eq!(
-            transfers[0].error.as_deref(),
-            Some(QUEUED_COMMAND_CANCELLED)
-        );
+        assert_eq!(transfers[0].error.as_deref(), Some(reason));
         assert_eq!(tunnels.len(), 3);
-        assert!(
-            tunnels
-                .iter()
-                .all(|event| matches!(event.state, TunnelState::Stopped))
-        );
-        assert_eq!(
-            remote_response.await.unwrap().unwrap_err(),
-            QUEUED_COMMAND_CANCELLED
-        );
-        assert_eq!(
-            editor_response.await.unwrap().unwrap_err(),
-            QUEUED_COMMAND_CANCELLED
-        );
+        assert!(tunnels.iter().all(|event| (if saturated {
+            matches!(event.state, TunnelState::Failed)
+        } else {
+            matches!(event.state, TunnelState::Stopped)
+        }) && event.error.as_deref() == Some(reason)
+            && event.bytes_forwarded == 0
+            && event.connections == 0));
+        assert_eq!(remote_response.await.unwrap().unwrap_err(), reason);
+        assert_eq!(editor_response.await.unwrap().unwrap_err(), reason);
         assert!(manager.transfers.lock().unwrap().is_empty());
         assert!(manager.tunnels.lock().unwrap().is_empty());
         assert!(manager.remote_forwards.lock().unwrap().is_empty());
