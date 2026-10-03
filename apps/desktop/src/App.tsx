@@ -10,7 +10,7 @@ import {
   experimentalDesktopTargetError,
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
-import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, replaceTextMatches } from "./remote-editor";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, reloadRemoteEditorDocument, replaceTextMatches } from "./remote-editor";
 import {
   parseRemoteDesktopProfile,
   remoteDesktopCanResize,
@@ -3040,6 +3040,24 @@ function App() {
     }
   }, [pinRemoteFileConnection, remoteSessionId]);
 
+  const reloadRemoteTextFile = useCallback(async (dirty: boolean) => {
+    if (!editingRemoteFile) throw new Error("Reopen the file before reloading.");
+    const reloaded = await reloadRemoteEditorDocument({
+      dirty,
+      confirmDiscard: () => confirmAction("Reload this file from the server? Unsaved local changes will be discarded only if the read succeeds."),
+      stillConnected: editingRemoteFile.stillConnected,
+      read: () => invoke<RemoteTextDocument>("ssh_open_remote_text_file", {
+        terminalId: editingRemoteFile.sessionId,
+        path: editingRemoteFile.document.path,
+        encoding: editingRemoteFile.document.encoding,
+      }),
+    });
+    if (!reloaded) return null;
+    setEditingRemoteFile((current) => current === editingRemoteFile ? { ...current, document: reloaded } : current);
+    setSessionNotice(`Reloaded ${reloaded.path}.`);
+    return reloaded;
+  }, [editingRemoteFile]);
+
   const saveRemoteTextFile = useCallback(async (content: string, encoding: RemoteTextDocument["encoding"]) => {
     if (!editingRemoteFile) return;
     if (!editingRemoteFile.stillConnected()) throw new Error("The SSH connection changed or closed. Reopen the file before saving.");
@@ -4182,7 +4200,7 @@ function App() {
       {editingSession && <SessionEditor session={editingSession} onClose={() => setEditingSession(null)} onSave={saveEditedSession} />}
       {settingsOpen && <SettingsModal settings={settings} error={settingsError} portableVaultStatus={portableVaultStatus} onClose={() => setSettingsOpen(false)} onSave={saveSettings} onReset={resetSettings} onExport={exportSettings} onImport={importSettings} onExportDiagnostics={exportDiagnostics} onPortableCreate={createPortableVault} onPortableUnlock={unlockPortableVault} onPortableLock={lockPortableVault} />}
       {credentialsOpen && <CredentialVaultModal portableVaultStatus={portableVaultStatus} onClose={() => setCredentialsOpen(false)} onSave={saveCredential} onDelete={deleteCredential} onPortableSave={savePortableCredential} onPortableDelete={deletePortableCredential} />}
-      {editingRemoteFile && <RemoteEditorModal key={`${editingRemoteFile.sessionId}:${editingRemoteFile.document.path}:${editingRemoteFile.document.revision}`} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
+      {editingRemoteFile && <RemoteEditorModal key={`${editingRemoteFile.sessionId}:${editingRemoteFile.document.path}:${editingRemoteFile.document.revision}`} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onReload={reloadRemoteTextFile} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal key={recordedMacroDraft?.id ?? "macros"} initialDraft={recordedMacroDraft ?? undefined} macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => { setMacrosOpen(false); setRecordedMacroDraft(null); }} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
@@ -4378,7 +4396,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
   </section>;
 }
 
-function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: RemoteTextDocument; onClose: () => void; onSave: (content: string, encoding: RemoteTextDocument["encoding"]) => Promise<void>; onSaveAs: (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => Promise<void> }) {
+function RemoteEditorModal({ document, onClose, onReload, onSave, onSaveAs }: { document: RemoteTextDocument; onClose: () => void; onReload: (dirty: boolean) => Promise<RemoteTextDocument | null>; onSave: (content: string, encoding: RemoteTextDocument["encoding"]) => Promise<void>; onSaveAs: (path: string, content: string, encoding: RemoteTextDocument["encoding"], overwrite: boolean) => Promise<void> }) {
   const highlightRef = useRef<HTMLPreElement>(null);
   const [content, setContent] = useState(document.content);
   const [encoding, setEncoding] = useState<RemoteTextDocument["encoding"]>(document.encoding);
@@ -4396,6 +4414,22 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
     if (busy) return;
     if (dirty && !await confirmAction("Discard unsaved remote changes?")) return;
     onClose();
+  };
+
+  const reload = async () => {
+    setBusy(true);
+    try {
+      const reloaded = await onReload(dirty);
+      if (!reloaded) return;
+      // The same server revision keeps this component mounted: reset it too.
+      setContent(reloaded.content);
+      setEncoding(reloaded.encoding);
+      setError(null);
+    } catch (reloadError) {
+      setError(String(reloadError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const save = async () => {
@@ -4447,7 +4481,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
       <pre ref={highlightRef} className="remote-editor-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightRemoteCode(content, language) }} />
       <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" disabled={busy} />
     </div>
-    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + recovery copy</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
+    <div className="session-editor-footer"><span className="remote-editor-safety"><ShieldCheck size={13} /> Conflict check + recovery copy</span><div><button type="button" className="outline-button" onClick={close} disabled={busy}>Close</button><button type="button" className="outline-button" onClick={() => void reload()} disabled={busy}>Reload from server</button><button type="button" className="outline-button" onClick={() => void saveAs()} disabled={busy}>{busy ? "Working…" : "Save as"}</button><button type="button" className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save remote file"}</button></div></div>
   </section></div>;
 }
 

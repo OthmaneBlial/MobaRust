@@ -2,6 +2,49 @@
 
 **Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
+## Next agent: start here
+
+The maintainer requested this handoff and a stop. Continue only on a new request.
+
+**Positioning:** always keep **Free, open-source MobaXterm alternative built with Rust**.
+**Progress:** 57/76 checklist items (75%), not a production-readiness score.
+
+**Finished on main:** bounded terminal input, deferred local startup, owned PTY
+cleanup at Quit, named terminal inputs/focus outline, and remote attachment
+closure ordering. The remote editor now has **Reload from server**: dirty drafts
+require approval, failed reads preserve the draft, and connection changes before
+or during the read refuse the result. Reload safety regressions, frontend type
+checking and edited-file lint passed; native Reload acceptance remains pending.
+
+**Downloads:** Mac ARM64/x64 previews are v0.1.31; Windows/Linux downloads are
+v0.1.12. Later main fixes are not included in those installers. Older Windows
+link and Linux SSH receipts do not validate the newer terminal changes.
+
+**Next work, in order:**
+
+1. Check native remote-editor Reload: cancel discard, failed read, unchanged
+   revision, external conflict and reconnect during read. Check the recent pane
+   labels/focus and attachment closure changes in the same disposable Mac lab.
+2. Verify Files Refresh after busy-session recovery, then publish a new Mac
+   preview containing the current fixes. Preserve existing release tags/assets.
+3. Run current-source Windows ConPTY/WSL and Linux desktop acceptance when those
+   runtimes and enough disk space are available. Then align platform installers.
+
+**Rules:** GitHub Quality and Release installers workflows stay disabled.
+Keep fixtures disposable and loopback-only; do not expose ports to the internet
+or use personal SSH config, keys or agent. Run focused checks for each change,
+commit/push small milestones, and distinguish source checks, native observations
+and published installer evidence. Do not repeat full suites without a reason.
+
+**Code/evidence:** [editor](apps/desktop/src/remote-editor.ts),
+[desktop UI](apps/desktop/src/App.tsx),
+[editor safety checks](apps/desktop/test/remote-editor-security.test.mjs),
+[terminal receipts](docs/testing/terminal-input.md),
+[native editor receipts](docs/testing/native-workflow.md),
+[busy-session receipt](docs/testing/native-busy-recovery-v0.1.31.md).
+
+The sections below retain the detailed history and remaining gates.
+
 The [v0.1.31 Mac previews](docs/release/v0.1.31.md) fix under-reported active
 and cancelled tunnel traffic. Both architectures passed package checks and
 anonymous downloaded byte comparison. The ARM64 installer copy passed

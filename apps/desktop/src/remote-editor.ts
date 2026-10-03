@@ -1,5 +1,23 @@
 export type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
 
+/** Read a replacement before discarding the draft, on the approved connection. */
+export async function reloadRemoteEditorDocument<T>({ dirty, confirmDiscard, stillConnected, read }: {
+  dirty: boolean;
+  confirmDiscard: () => Promise<boolean>;
+  stillConnected: () => boolean;
+  read: () => Promise<T>;
+}): Promise<T | null> {
+  const checkConnection = () => {
+    if (!stillConnected()) throw new Error("The SSH connection changed or closed. Reopen the file before reloading.");
+  };
+  checkConnection();
+  if (dirty && !await confirmDiscard()) return null;
+  checkConnection();
+  const document = await read();
+  checkConnection();
+  return document;
+}
+
 export function remoteEditorSaveNotice(path: string, backupCleanupFailed = false): string {
   return backupCleanupFailed
     ? `Saved ${path}. Backup cleanup could not be confirmed. Inspect nearby .mobarust-edit-backup files before removing them.`

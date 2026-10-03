@@ -36,7 +36,7 @@ import {
   remoteDesktopSizeChanged,
   vncKeysymForText,
 } from "../src/remote-desktop-input.ts";
-import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, replaceTextMatches } from "../src/remote-editor.ts";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, reloadRemoteEditorDocument, replaceTextMatches } from "../src/remote-editor.ts";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
 import { remoteChildPath, remoteParentPath } from "../src/remote-path.ts";
 import { quoteRemotePromptPath } from "../src/remote-prompt.ts";
@@ -493,3 +493,47 @@ assert.equal(sanitizeTerminalTitle("x".repeat(MAX_TERMINAL_TITLE_LENGTH + 20)).l
 assert.equal(quoteRemotePromptPath("/srv/report.txt"), '"/srv/report.txt"');
 assert.equal(quoteRemotePromptPath("/srv/pay\u202ereport.txt\n"), '"/srv/pay\\u{202e}report.txt\\n"');
 assert.equal(quoteRemotePromptPath("/srv/a\u2028b\u007f"), '"/srv/a\\u{2028}b\\u{7f}"');
+
+// Reload must finish an approved read before the editor can replace its draft.
+const reloadedDocument = { content: "server revision", encoding: "utf-8", revision: "new" };
+let reloadConnected = true;
+let reloadReads = 0;
+let reloadApprovals = 0;
+const reloadOptions = {
+  dirty: true,
+  confirmDiscard: async () => { reloadApprovals++; return true; },
+  stillConnected: () => reloadConnected,
+  read: async () => { reloadReads++; return reloadedDocument; },
+};
+assert.equal(await reloadRemoteEditorDocument(reloadOptions), reloadedDocument);
+assert.equal(reloadReads, 1);
+assert.equal(reloadApprovals, 1);
+assert.equal(await reloadRemoteEditorDocument({ ...reloadOptions, confirmDiscard: async () => false }), null);
+assert.equal(reloadReads, 1, "cancelled discard must not read or replace the draft");
+assert.equal(await reloadRemoteEditorDocument({ ...reloadOptions, dirty: false }), reloadedDocument);
+assert.equal(reloadApprovals, 1, "a clean buffer needs no discard approval");
+reloadConnected = false;
+await assert.rejects(reloadRemoteEditorDocument(reloadOptions), /connection changed or closed/);
+assert.equal(reloadReads, 2, "a disconnected editor must not read");
+reloadConnected = true;
+await assert.rejects(reloadRemoteEditorDocument({
+  ...reloadOptions,
+  confirmDiscard: async () => { reloadConnected = false; return true; },
+}), /connection changed or closed/);
+assert.equal(reloadReads, 2, "a reconnect during approval must not use a replacement session");
+reloadConnected = true;
+let finishReloadRead;
+const pendingReload = reloadRemoteEditorDocument({
+  ...reloadOptions,
+  dirty: false,
+  read: () => new Promise(resolve => { finishReloadRead = resolve; }),
+});
+reloadConnected = false;
+finishReloadRead(reloadedDocument);
+await assert.rejects(pendingReload, /connection changed or closed/, "a late read must not replace the draft after connection loss");
+reloadConnected = true;
+const reloadReadFailure = new Error("bounded read failed");
+await assert.rejects(reloadRemoteEditorDocument({
+  ...reloadOptions,
+  read: async () => { throw reloadReadFailure; },
+}), error => error === reloadReadFailure, "read errors must reach the editor without a replacement document");
