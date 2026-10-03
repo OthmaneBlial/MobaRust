@@ -514,6 +514,37 @@ including a competing embedded Mach-O Info.plist. Run them with
 `node --test tools/prepare-macos-ui-lab.test.mjs`; it also runs in
 `cargo xtask check` and explicitly skips on other platforms.
 
+On 2026-10-03, a harmless Foundation probe launched directly through
+LaunchServices reproduced the isolation limitation: disposable ZDOTDIR/XDG
+paths were retained, but HOME and SSH_AUTH_SOCK were replaced. The attempted
+metadata-only hardening was removed. Native observation can relaunch a stopped
+app directly, so do not select or observe it after Quit. Verify the actual PID
+and environment again after any unexpected process change; stop only the owned
+lab processes before restarting through `launcherApp`.
+
+### Disposable native file-editor lab — 2026-10-03
+
+```sh
+cargo test --locked -p mobarust-ssh --test local_sshd \
+  native_file_editor_lab -- --ignored --exact --nocapture
+```
+
+The opt-in fifteen-minute fixture prints private metadata and a secret-free
+profile import file. It generates keys and three editor files, binds sshd only
+to `127.0.0.1`, and creates its root and files directory with mode `0700`.
+The shared OpenSSH fixture now explicitly starts internal SFTP in that root:
+setting shell HOME alone left SFTP's default directory in the account home.
+The existing isolation regression checks canonical SFTP `.` and a relative
+listing/download as well as shell HOME/ZDOTDIR; it failed before that correction.
+This is a working-directory boundary, not a filesystem sandbox or separate user.
+
+Prepare and verify the isolated app first. Import only the generated profile,
+operate only on generated files, and record GUI results separately. Close the
+owned app normally and verify its children/connections are gone before creating
+the metadata's `stop` marker. The harness then reaps its daemon, removes its
+directory and verifies its loopback port can be rebound. A passing harness does
+not establish editor or native-shutdown acceptance.
+
 ### Native lab bundle identity correction — 2026-10-03
 
 An isolated copy of the verified v0.1.21 ARM64 runtime retained the published

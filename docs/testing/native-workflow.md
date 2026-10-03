@@ -1,5 +1,43 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## v0.1.25 release-copy editor check — 2026-10-03
+
+A fresh disposable copy of the verified ARM64 DMG runtime (source `534c1ef`)
+matched its packaged executable before lab metadata and its ad hoc test
+signature were applied. Native accessibility and screenshot observation worked
+on this attempt; the earlier observation failures below remain historical and
+their cause is unproven. The isolated launch's actual process environment was
+checked before using generated loopback OpenSSH credentials and files.
+
+- A local PTY accepted input and returned the expected marker.
+- Save refused an externally changed file, preserving its exact bytes and
+  mode `0640`, with the local edit still visible. Cancel retained the dirty
+  buffer; confirmed discard, close and reopen loaded the external revision.
+- Save after reopen wrote the accented UTF-8 buffer exactly and preserved
+  `0640`. New Save as wrote the same bytes with mode `0600` and rebound the
+  editor path. Create only refused an occupied target without altering its
+  bytes/mode or the buffer/path; explicit Replace succeeded and preserved `0640`.
+- Windows-1252 Save failed at native argument decoding because the enum's JSON
+  names differed from the renderer's values. The target remained unchanged.
+  [Wire correction and regression](../adr/0022-bounded-remote-text-editor.md#native-encoding-wire-regression--2026-10-03)
+  are on main after this release; the published installer is unchanged.
+- Native menu Quit with active SSH released the owned app, local PTY and
+  server session children/connections. After the stop marker, the manual
+  fixture exited successfully, its directory was removed, its daemon was
+  absent and its loopback port was reusable. No editor parts/backups remained.
+
+The first connection exposed SFTP's account-home default: only directory names
+were listed, with no file opened or copied there. A fresh fixture used the
+corrected disposable SFTP working directory for all editor checks above.
+An unexpected process change during keyboard automation also required stopping
+the owned direct relaunch and restarting through the isolated launcher. See
+[lab isolation and relaunch limits](ssh-lab.md#disposable-native-file-editor-lab--2026-10-03).
+
+This establishes these short macOS ARM64 workflows, not native encoding
+acceptance, saved-with-warning focus, uncertain rename recovery, clean
+installation, sustained use or Windows/Linux behavior. The editor roadmap gate
+remains open pending the rebuilt encoding-selector check.
+
 ## v0.1.24 release-copy observation attempt — 2026-10-03
 
 A fresh disposable copy came from the anonymously downloaded, verified ARM64

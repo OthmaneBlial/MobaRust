@@ -109,6 +109,41 @@ fn fixture_shell_uses_only_the_disposable_home() {
         let home = fixture.directory.path().to_string_lossy();
         assert!(output.contains(&format!("MOBARUST_HOME={home}\r\n")));
         assert!(output.contains(&format!("MOBARUST_ZDOTDIR={home}\r\n")));
+        let sftp = connection.open_sftp().await.expect("open isolated SFTP");
+        assert_eq!(
+            PathBuf::from(sftp.canonicalize(".").await.unwrap()),
+            fs::canonicalize(fixture.directory.path()).unwrap(),
+            "SFTP must start in its disposable HOME, independently of shell environment"
+        );
+        assert_eq!(
+            fixture
+                .directory
+                .path()
+                .metadata()
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        fs::write(
+            fixture.directory.path().join("isolation-marker"),
+            b"generated fixture bytes",
+        )
+        .unwrap();
+        assert!(
+            sftp.read_dir(".")
+                .await
+                .unwrap()
+                .iter()
+                .any(|entry| entry.name == "isolation-marker")
+        );
+        let mut bytes = Vec::new();
+        sftp.download_to("isolation-marker", &mut bytes)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"generated fixture bytes");
+        sftp.close().await.unwrap();
         connection.disconnect().await.expect("disconnect fixture");
     });
 }
@@ -2818,6 +2853,95 @@ async fn assert_no_remote_editor_artifacts(sftp: &SftpConnection, remote_root: &
     );
 }
 
+/// Manual GUI fixture only; passing this harness is not native acceptance.
+#[tokio::test]
+#[ignore = "manual native editor lab; generated loopback keys/files; fifteen-minute deadline"]
+async fn native_file_editor_lab() {
+    use mobarust_core::{AuthMethod, Protocol, SessionRecord};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let fixture = LocalSshd::start().expect("start disposable native file lab");
+    assert_eq!(
+        fixture
+            .directory
+            .path()
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    wait_for_port(fixture.port).await;
+    let root = fixture.directory.path().to_owned();
+    let files = root.join("files");
+    fs::create_dir(&files).unwrap();
+    fs::set_permissions(&files, fs::Permissions::from_mode(0o700)).unwrap();
+    for (name, bytes) in [
+        ("app.conf", b"greeting=initial\n".as_slice()),
+        ("occupied.conf", b"preserve=occupied\n".as_slice()),
+        ("legacy.txt", b"caf\xe9\n".as_slice()),
+    ] {
+        fs::write(files.join(name), bytes).unwrap();
+        fs::set_permissions(files.join(name), fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let mut profile = SessionRecord::local_terminal("Disposable editor lab");
+    profile.protocol = Protocol::Ssh;
+    profile.hostname = "127.0.0.1".into();
+    profile.port = fixture.port;
+    profile.username = Some(fixture.username.clone());
+    profile.auth = AuthMethod::PrivateKey {
+        key_ref: fixture.client_key.to_string_lossy().into_owned(),
+        credential_ref: None,
+    };
+    profile.known_hosts_path = Some(fixture.known_hosts.to_string_lossy().into_owned());
+    profile.folder = Some("Native acceptance lab".into());
+    profile.tags = vec!["loopback".into()];
+    profile.favorite = false;
+    profile.notes = Some("Generated loopback OpenSSH keys/files; disposable HOME.".into());
+    profile.validate().unwrap();
+    for (name, value) in [
+        (
+            "profiles.json",
+            serde_json::json!({"schema_version": 1, "sessions": [profile]}),
+        ),
+        (
+            "file_lab.json",
+            serde_json::json!({"root": root, "files": files, "host": "127.0.0.1", "port": fixture.port, "sshd_pid": fixture.child.id(), "stop": root.join("stop")}),
+        ),
+    ] {
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(root.join(name))
+            .unwrap();
+        serde_json::to_writer(file, &value).unwrap();
+    }
+    eprintln!(
+        "Native editor lab metadata: {}",
+        root.join("file_lab.json").display()
+    );
+    eprintln!(
+        "Import secret-free profiles: {}",
+        root.join("profiles.json").display()
+    );
+    eprintln!(
+        "Close the owned app before creating the stop marker; this harness does not assert GUI results."
+    );
+    let stopped = tokio::time::timeout(Duration::from_secs(900), async {
+        while !root.join("stop").exists() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await;
+    let port = fixture.port;
+    drop(fixture);
+    assert!(!root.exists(), "native file lab state must be removed");
+    drop(TcpListener::bind(("127.0.0.1", port)).await.unwrap());
+    stopped.expect("manual native file lab deadline");
+}
+
 struct LocalSshd {
     child: Child,
     directory: tempfile::TempDir,
@@ -2871,7 +2995,9 @@ impl LocalSshd {
     }
 
     fn start_internal(x11: bool, ipv6: bool) -> Result<Self, Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+        let directory = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()?;
         let host_key = directory.path().join("host_key");
         let client_key = directory.path().join("client_key");
         let authorized_keys = directory.path().join("authorized_keys");
@@ -2950,7 +3076,7 @@ exit "$xauth_result"
         fs::write(
             &config,
             format!(
-                "Port {port}\nListenAddress 127.0.0.1\n{ipv6_listener}HostKey {}\nAuthorizedKeysFile {}\nPidFile \"{home}/sshd.pid\"\nSubsystem sftp internal-sftp\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nPermitUserRC no\nPermitUserEnvironment no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\nSetEnv \"HOME={home}\" \"ZDOTDIR={home}\" \"XDG_CONFIG_HOME={home}\" \"XAUTHORITY={home}/.Xauthority\" BASH_ENV=/dev/null ENV=/dev/null\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
+                "Port {port}\nListenAddress 127.0.0.1\n{ipv6_listener}HostKey {}\nAuthorizedKeysFile {}\nPidFile \"{home}/sshd.pid\"\nSubsystem sftp internal-sftp -d \"{home}\"\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\nPermitUserRC no\nPermitUserEnvironment no\nUsePAM no\nStrictModes no\nAllowTcpForwarding yes\nAcceptEnv MOBARUST_FIXTURE\nSetEnv \"HOME={home}\" \"ZDOTDIR={home}\" \"XDG_CONFIG_HOME={home}\" \"XAUTHORITY={home}/.Xauthority\" BASH_ENV=/dev/null ENV=/dev/null\n{x11_config}AllowUsers {username}\nPrintMotd no\nUseDNS no\nLogLevel QUIET\n",
                 host_key.display(),
                 authorized_keys.display(),
             ),
