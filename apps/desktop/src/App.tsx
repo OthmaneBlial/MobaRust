@@ -970,6 +970,8 @@ function TerminalViewport({ label, colorTheme, workspaceId, instanceKey, remoteS
             void invoke(closeCommand, { terminalId: remoteSessionId }).catch(() => undefined);
             return;
           }
+          // A close event may arrive before attachment's IPC reply.
+          if (terminalClosed) return;
           onStatusChange(workspaceId, "connected");
           fit();
           return;

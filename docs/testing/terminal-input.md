@@ -147,3 +147,13 @@ terminal. A theme-aware outline follows actual keyboard focus inside each pane,
 making the input destination visible when working with splits. TypeScript and
 lint checks cover this source change; updated native focus acceptance and
 published installers remain separate.
+
+### Remote attachment closure ordering on main
+
+SSH, Telnet and serial attachment now preserve a terminal close event received
+before the attachment IPC reply. A late successful reply cannot mark the closed
+pane connected or request a resize on it. Local attachment already checks the
+same close flag. Focused checks: TypeScript, component lint and the existing
+remote-close status regression. The latter verifies close-to-status mapping,
+not IPC/event ordering. Native reproduction of that race and new installers
+remain pending.
