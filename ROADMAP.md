@@ -6,8 +6,11 @@ The [v0.1.30 Mac previews](docs/release/v0.1.30.md) include bounded session
 operation admission, owned tunnel cleanup, correct explicit remote ports,
 transport retirement for uncertain forwards and retained live Stop/Cancel
 controls. Both architectures passed package checks and anonymous downloaded
-byte comparison. Native v0.1.30 Stop/Close/Quit, saturation/Retry and live-list
-acceptance remains pending; the checklist is unchanged.
+byte comparison. The ARM64 installer copy passed [21 live tunnel controls,
+shared 32-job admission and native Stop/Close/Quit](docs/testing/native-tunnels-v0.1.30.md).
+The same check exposed under-reported active/cancelled byte counts, which are
+next to fix. Broader native workloads and platform gates remain open; the
+checklist is unchanged.
 
 The earlier [v0.1.29 Mac previews](docs/release/v0.1.29.md) stop automatic reconnect
 retries after uncertain startup delivery. A disposable copy of the verified

@@ -43,3 +43,18 @@ operations or prove large-list rendering performance. The backend's
 [shared session worker owner](tunnel-lifecycle.md) is a separate limit; native
 many-session workloads, focus/scroll acceptance and wider platforms remain
 open. Published v0.1.29 installers do not include this later source change.
+
+## v0.1.30 ARM64 native acceptance — 2026-10-03
+
+The change is included in both v0.1.30 Mac installers. A disposable ARM64
+installer copy retained 21 live native Stop controls and a badge of 21,
+matching 21 actual loopback listeners. The oldest row stopped its byte-matched
+32 KiB client and released the listener while SSH remained connected.
+After SSH-tab Close, live counts returned to zero and finished history to 20.
+[Native workflows and cleanup](native-tunnels-v0.1.30.md) also cover shared
+32-job admission and normal Quit with local/SOCKS/remote traffic.
+
+The same check exposed a separate byte-counter defect: cancelled traffic
+displayed 0 B despite verified roundtrips. Transfer lists above 40 live jobs,
+many sessions, keyboard/focus, sustained rendering and wider platforms remain
+open. These short tunnel checks do not close those broader gates.
