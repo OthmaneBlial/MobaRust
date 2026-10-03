@@ -61,6 +61,10 @@ remain visible in CI logs. The full local command additionally checks
 experimental helpers and fuzz targets. CI fixtures do not establish GUI, hardware, installer, or
 external-server interoperability. Quality never publishes installers.
 
+The [Windows GNU compile receipt](docs/testing/windows-cross-check.md) records
+current source checks from macOS, the cross-tool prerequisites and isolation
+boundary. Cross-compilation does not replace native Windows tests or installers.
+
 The payload audit checks the established main-branch workflow and secret/path
 boundaries; it does not push. Contributors working on topic branches can use
 the focused tests and `git diff --check`, and leave the main-branch payload

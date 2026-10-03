@@ -26,7 +26,9 @@ Unix and Windows even when the terminal disappears before the user clicks
 Close.
 
 The fixture command is explicit and platform-specific: `/bin/sh -c ...` on
-Unix and `cmd.exe /C ...` on Windows. The local Unix test also launches each
+Unix and profile-free PowerShell on Windows. A separate Windows fixture uses
+`cmd.exe /D /C ...`. PowerShell and cmd each perform three consecutive round
+trips in the current tests; every startup must pass. The local Unix test also launches each
 fixed `bash`, `zsh`, and `fish` target that is installed and checks a marker
 through a native PTY. The product launch contract now also
 accepts only typed shell choices: `powershell.exe`/`cmd.exe` on Windows and
@@ -40,16 +42,23 @@ read a personal file.
 | Target | Source/test coverage | Runtime evidence | Status |
 | --- | --- | --- | --- |
 | macOS ARM64 | native PTY fixture and local shell branch | `cargo xtask check` on the local ARM64 host | Verified locally |
-| Windows x64 | Windows shell branch with typed PowerShell/cmd targets, WSL parser and conditional discovery path | Requires a real Windows runtime | Pending |
-| Linux x64 | Unix shell branch with typed bash/zsh/fish targets and native PTY path | Requires a real Linux desktop runtime | Pending |
+| Windows x64 | Windows shell branch with typed PowerShell/cmd targets, WSL parser and conditional discovery path | Earlier native Quality run at `ac70e39`; current repeated startups and GUI require a Windows runtime | Current acceptance pending |
+| Linux x64 | Unix shell branch with typed bash/zsh/fish targets and native PTY path | Earlier native Quality run at `ac70e39`; expanded shell checks and GUI require a Linux runtime | Current acceptance pending |
 | macOS x64 | Same Unix source branch | Requires a separate x64 runtime or artifact | Pending |
 | Windows ARM64 | Windows shell branch | Requires a real Windows ARM64 runtime | Pending |
 | Linux ARM64 | Unix shell branch | Requires a real Linux ARM64 runtime | Pending |
 
-The current development machine has only the `aarch64-apple-darwin` desktop
-target installed. No cross-target installation was performed for this matrix.
-The test suite's Windows WSL discovery test is parser-only on macOS/Linux and
-does not invoke `wsl.exe`.
+The completed [Quality run 36998538983](https://github.com/OthmaneBlial/MobaRust/actions/runs/36998538983)
+passed Ubuntu, macOS and Windows jobs at source
+`ac70e39c98b54d8f2a444b0c4b3232486fd6e3bf`. It does not prove the stricter
+three-startup tests added later, WSL launch, desktop GUI behavior, or current
+installer acceptance. Quality and installer workflows remain disabled by
+request. The test suite's Windows WSL discovery test is parser-only on
+macOS/Linux and does not invoke `wsl.exe`.
+
+Current source also passed [Windows GNU workspace and all-target compile
+checks](../testing/windows-cross-check.md) from the macOS host. This checks
+Windows-specific code without running ConPTY, WSL or desktop UI on Windows.
 
 ## Acceptance gates
 

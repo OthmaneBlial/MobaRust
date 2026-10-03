@@ -65,6 +65,23 @@ loopback protocol/helper fixtures, package contracts and fuzz compilation.
 The optional real Xvfb test retained its missing-prerequisite skip. No extra
 state helper, dependency or backend admission change was added.
 
+### Corrected source package — 2026-10-03
+
+Source `549b3066234f2e7775ed0350b421897f8a9d5ab7` subsequently passed
+`cargo xtask package-check` in 155.53 seconds. It built an unsigned ARM64
+debug app, verified the app/VNC package layout and checksum manifest, and
+checked the isolated `MobaRust 0.1.31` CLI path. That CLI probe is not a GUI
+startup benchmark. The source executable SHA-256 was
+`3a9efc79b0af0c365ef7151c9c6f4d7028561760cdee548d81d81cee68f9d774`.
+This source candidate differs from the tagged v0.1.31 release executable.
+
+The private lab copy started an app and local PTY with verified isolated
+HOME/ZDOTDIR/XDG and empty agent settings. Window observation failed before
+any SSH fixture was started, including after rebinding and resetting the UI
+connection. The owned app/PTY were cleaned up with SIGTERM. No native recovery
+or normal-Quit result is inferred from this attempt; the candidate remains
+ready for a later observable UI check. Published tag/assets are unchanged.
+
 Native acceptance of the corrected candidate remains pending. This run does
 not exercise transfer Retry, all finite mutations, queue saturation, sustained
 workloads, many sessions, Intel GUI or Windows/Linux. The 57/76 roadmap
