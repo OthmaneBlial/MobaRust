@@ -294,3 +294,38 @@ claimed. Only the confirmed owned runtime received SIGTERM; it and its local
 zsh child exited. Normal native Quit was not observed in this attempt. The
 observation failure's cause remains unproven; it does not establish an SSH
 regression. The new message still needs native acceptance.
+
+## v0.1.28 ARM64 release-copy startup timeout — 2026-10-03
+
+A disposable copy of the verified ARM64 DMG runtime from source/tag
+`51f637d9b31c204072d30d706c171aa79248fe28` passed native startup review
+and the revised timeout diagnosis. Before re-signing its unique lab bundle,
+the runtime hash matched the mounted installer. HOME/ZDOTDIR/XDG paths were
+verified as disposable and SSH-agent variables were empty. Generated Ed25519
+host keys were pinned; all three fixture endpoints listened on `127.0.0.1`
+with OS-assigned ports. No fixture executed an OS shell.
+
+The 8 KiB startup review kept its heading, destination, reconnect warning and
+Cancel/Continue controls visible. Cancel held initial focus; Shift-Tab and
+Page Down focused/scrolled the command region while the surrounding context
+stayed visible. Escape returned to the workspace with no established fixture
+connection. After explicit Continue and distinct generated password/OTP
+answers, the zero-credit endpoint produced the exact new message:
+
+> SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting.
+
+No failed SSH tab was created; the local PTY stayed active. The fixture reported
+one shell request, zero startup bytes and no exact-once success receipt. No
+fixture connection remained established after the error. Entered factors were
+absent from the app's owned persistence and final accessibility state.
+
+Normal native menu Quit released the app and local zsh child without a signal.
+The same fixture completed its five-minute deadline with exit 0, removed its
+private metadata and disposable HOME, and released all three ports; explicit
+loopback rebind checks passed. This run exercised the stalled endpoint only.
+Successful startup, shell refusal and full output ordering retain their earlier
+source/test receipts; they are not new v0.1.28 GUI claims. Intel GUI,
+Windows/Linux and wider server/load acceptance remain separate gates.
+
+Both v0.1.28 Mac DMGs and their manifests passed local package verification and
+anonymous public-download byte comparison. [Release checks and limits](../release/v0.1.28.md).

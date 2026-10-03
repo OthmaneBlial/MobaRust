@@ -2,24 +2,20 @@
 
 **Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
-The latest [native SSH setup lab](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
-provides disposable import profiles for startup output pressure, shell rejection
-and stalled input. The v0.1.27 ARM64 release-copy check observed startup review,
-Escape cancellation before networking, two-factor authentication and a connected
-terminal with startup echo. The server received the 8,193-byte input exactly
-once. A subsequent current-source Mac debug check verified shell refusal and
-stalled-input timeout with zero startup bytes, explicit SSH-tab cleanup and
-native menu Quit releasing its local PTY. Windows/Linux remain v0.1.12.
+The [v0.1.28 Mac previews](docs/release/v0.1.28.md) include readable startup
+review and phase-specific timeout diagnosis. A disposable copy of the verified
+ARM64 DMG passed keyboard scrolling of an 8 KiB command with the destination,
+reconnect warning and controls visible, Escape before connection, distinct
+password/OTP challenges, and the exact startup-input timeout without creating
+an SSH tab. The stalled fixture accepted one shell request and zero input
+bytes. Normal menu Quit released the local PTY; the fixture's deadline removed
+private state and released all three loopback ports.
 
-On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
-now covers saved/imported SSH profiles as well as local profiles. It shows the
-full command and destination, explains automatic reconnect repetition, and
-refuses a stopped macro's pending startup. A subsequent layout correction on
-main keeps long commands in a keyboard-scrollable region with the destination
-and controls visible. Frontend tests, browser checks, Mac debug packaging and
-native light/dark keyboard review passed; the correction is not yet in the
-v0.1.27 downloads. Broader native acceptance and updated
-Windows/Linux downloads remain pending.
+Earlier [setup receipts](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
+cover connected exact-once startup, shell refusal and explicit SSH-tab cleanup.
+Those results retain their recorded source/artifact scope. Broader native
+successful-startup/output-ordering, queued expiry/overflow, sustained workloads
+and updated Windows/Linux downloads remain pending.
 
 **Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
 
@@ -29,14 +25,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.27; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.28; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.27.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.28.md).
 
 ## Completed in the current improvement cycle
 
@@ -211,7 +207,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.27 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.28 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.

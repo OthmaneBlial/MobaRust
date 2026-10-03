@@ -23,8 +23,10 @@ build, release/lab tooling, isolated RDP/VNC fixtures, package-layout contracts
 and fuzz compilation. Coverage includes 108 desktop tests, 43 SSH unit tests,
 15 authentication cases, 25 OpenSSH cases, 22 SFTP boundary cases and 15
 editor/transfer fault cases. Four manual SSH labs remain opt-in; real Xvfb
-reported its missing-prerequisite skip. Installer verification and publication
-remain separate gates.
+reported its missing-prerequisite skip. Both Mac DMGs subsequently passed
+package verification and anonymous public-download byte comparison. The ARM64 release copy passed the scoped native startup
+timeout check and cleanup. [Release receipt](../release/v0.1.28.md).
+Broader platform, GUI, signing and independent-review gates remain open.
 
 ## v0.1.27 release preparation audit — 2026-10-03
 
