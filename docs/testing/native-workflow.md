@@ -1,5 +1,19 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## v0.1.24 release-copy observation attempt — 2026-10-03
+
+A fresh disposable copy came from the anonymously downloaded, verified ARM64
+DMG. Before lab metadata and its ad hoc test signature were applied, the runtime
+matched the packaged executable SHA-256. The actual PID had disposable
+HOME/ZDOTDIR/XDG paths and empty SSH-agent variables; its process sample reported
+the generated bundle identity and version 0.1.24 in AppKit's event loop.
+
+CUA listed the app as running but native selection again failed with
+`cgWindowNotFound`. No SSH fixture, file operation or native Quit check was
+started. The owned app and shell were stopped by SIGTERM and verified absent;
+only the generated copy was removed. This is isolation and signal-cleanup
+evidence, not GUI, clean-install, editor-save or normal-Quit acceptance.
+
 ## v0.1.22 release-copy observation attempt — 2026-10-03
 
 A disposable ARM64 app copy was prepared from the verified v0.1.22 DMG.
