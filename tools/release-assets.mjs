@@ -21,7 +21,9 @@ if (process.argv[2] === 'check-version') {
     return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]);
   }
   const files = walk(process.argv[4] ?? 'target/release/bundle').filter(path => extensions.some(ext => path.endsWith(ext)));
-  if (files.length !== extensions.length) throw new Error(`Expected ${extensions.length} installers, found ${files.length}`);
+  if (extensions.some(ext => files.filter(path => path.endsWith(ext)).length !== 1)) {
+    throw new Error(`Expected exactly one installer per format: ${extensions.join(', ')}`);
+  }
   if (platform.startsWith('macos-')) {
     const arch = platform === 'macos-arm64' ? 'aarch64' : 'x64';
     if (basename(files[0]) !== `MobaRust_${config.version}_${arch}.dmg`) throw new Error(`Wrong macOS installer architecture for ${platform}`);

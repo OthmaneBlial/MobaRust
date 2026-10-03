@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -60,6 +60,20 @@ test('macOS collector rejects an ARM DMG labeled as Intel', () => fixture(({ cwd
   const manifest = readFileSync(join(cwd, 'target/release-assets/SHA256SUMS-macos-x64.txt'), 'utf8');
   assert.equal(manifest, `${createHash('sha256').update('intel-package').digest('hex')}  MobaRust-0.1.0-macos-x64.dmg\n`);
 }));
+
+test('Linux collector rejects duplicate formats before writing output', () => {
+  for (const extension of ['.deb', '.AppImage']) fixture(({ cwd, put, invoke }) => {
+    put('apps/desktop/src-tauri/helpers/mobarust-vnc-helper', 'helper');
+    put(`target/release/bundle/first${extension}`, 'first-package');
+    put(`target/release/bundle/second${extension}`, 'second-package');
+    const result = invoke('collect', 'linux-x64');
+    assert.notEqual(result.status, 0, `Two ${extension} files must not replace the required pair`);
+    assert.match(result.stderr, /Expected exactly one installer per format/);
+    assert.equal(existsSync(join(cwd, 'target/release-assets')), false);
+    assert.equal(readFileSync(join(cwd, `target/release/bundle/first${extension}`), 'utf8'), 'first-package');
+    assert.equal(readFileSync(join(cwd, `target/release/bundle/second${extension}`), 'utf8'), 'second-package');
+  });
+});
 
 test('collector refuses stale installers without deleting them', () => fixture(({ cwd, put, invoke }) => {
   put('apps/desktop/src-tauri/helpers/mobarust-vnc-helper', 'helper');

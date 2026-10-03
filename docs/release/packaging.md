@@ -3,7 +3,7 @@
 ## Downloadable previews
 
 The v0.1.12 preview has Windows x64 NSIS, Linux x64 Debian/AppImage, and macOS
-ARM64/x64 DMG packages. The newer [v0.1.20 preview](v0.1.20.md) updates only
+ARM64/x64 DMG packages. The newer [v0.1.22 preview](v0.1.22.md) updates only
 the two Mac DMGs using local builds. The release workflow is disabled; new
 builds and checks run locally. A release tag must match the Cargo, frontend,
 and Tauri versions.
@@ -63,6 +63,11 @@ argument and an output directory as its fifth. Use an empty, version-specific
 output directory for local releases. The collector refuses an output directory
 containing installers from another version, preserving those files for review
 instead of mixing them into a new upload.
+It requires exactly one installer of each target format before writing any
+output: EXE for Windows, DMG for macOS, and both DEB and AppImage for Linux.
+Two DEBs or two AppImages cannot substitute for the Linux pair or overwrite
+the same canonical output with duplicate checksum entries. These collection
+checks do not establish the package's contents or runtime behavior.
 
 `cargo xtask package-check` builds an unsigned current-platform debug app
 bundle and verifies that the Tauri resource step completes. The bundle
