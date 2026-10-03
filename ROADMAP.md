@@ -135,7 +135,11 @@ does not close the native GUI or Windows ConPTY acceptance gates.
 Saved local startup input now uses that worker after attachment, with the
 terminal ID available for Close while startup is pending.
 Native Quit now awaits local PTY child cleanup as well as SSH cleanup; the
-same receipt separates manager evidence from pending OS/GUI acceptance.
+[same receipt](docs/testing/terminal-input.md#native-macos-startup-split-input-and-quit--2026-10-03)
+now includes a short macOS ARM64 source-candidate UI check: approved saved local
+startup, visible split input and menu Quit releasing two owned local children.
+Shortcut/focus, blocked-input GUI, Windows/Linux and installer acceptance remain
+open; this does not complete the broader platform item.
 
 The v0.1.20 Mac preview includes startup output ordering corrections across SSH, Telnet and serial
 attachment. Native manager regressions verify replay under the publication lock;

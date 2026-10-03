@@ -109,3 +109,32 @@ Native process creation, resize and child cleanup remain separate synchronous
 paths; these changes do not establish that every terminal operation is
 nonblocking. Existing published installers are unchanged. GitHub workflows
 remain disabled and roadmap completion is unchanged.
+
+## Native macOS startup, split input and Quit — 2026-10-03
+
+Source `dc8235dd114ab3f00e323c7e6f66151da5c8ba80` passed
+`cargo xtask package-check` on macOS ARM64. The resulting debug app was copied
+to a disposable lab, given a lab-only ad-hoc signature, and launched with a
+private HOME, shell startup file and portable session store. SSH-agent settings
+were blank. This was a source-candidate check, not the published v0.1.31 DMG.
+
+Through the native UI, a saved local zsh profile displayed its startup review.
+After approval, the terminal showed `MOBARUST_STARTUP_GUI_OK` and its shell PID.
+A split was opened; synthetic input produced visible output in both panes.
+Each shell then used `exec /bin/sleep 300`, leaving two directly owned native
+children running for the Quit check. A PID-scoped check found no TCP listeners.
+No SSH server, personal credentials or remote connection was used.
+
+Choosing **Quit** from the native application menu exited the app and removed
+both recorded children. Process checks confirmed all three PIDs absent, and
+`lsof` found no open files in the lab before its disposable copy was removed.
+No signal-based fallback cleanup was needed. The attempted Cmd+Q shortcut did
+not visibly initiate Quit in this automation pass; menu Quit is the observed
+result. An accessibility click also left keyboard focus in the other pane;
+clicking the visible right pane established its input target.
+
+This short check establishes saved local startup, visible split input and menu
+Quit cleanup for this Mac source candidate. It does not establish blocked-input
+GUI responsiveness, shortcut/focus acceptance, arbitrary descendant cleanup,
+Windows/Linux behavior, sustained output or installer acceptance. Those gates
+remain open; the focused manager regressions above retain their separate scope.
