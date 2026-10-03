@@ -224,8 +224,11 @@ regression covers conversion, unchanged targets after refusals, permissions
 and cleanup. The newer Mac source candidate closes the specific UI recovery
 gate above; v0.1.26 ships the encoding-selector wire fix and passed the stated
 release-copy conversion checks. Windows/Linux execution remains pending.
-Initial GUI Open still requires UTF-8; explicit legacy-encoding Open is the next
-editor task. Public v0.1.25 retains its selector defect.
+The v0.1.26 GUI Open still requires UTF-8. Newer source now provides an explicit
+UTF-8/Windows-1252 **Open text as** choice through the existing bounded reader;
+native acceptance and shipping remain the next editor gates. [Behavior and
+regressions](docs/adr/0022-bounded-remote-text-editor.md#explicit-legacy-encoding-open-on-main--2026-10-03).
+Public v0.1.25 retains its selector defect.
 
 The [editor temporary ownership check](docs/adr/0022-bounded-remote-text-editor.md#temporary-ownership-regression--2026-10-03)
 also refuses existing temporary files/links without truncating or removing

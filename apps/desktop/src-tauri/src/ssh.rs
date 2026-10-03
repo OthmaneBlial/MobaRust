@@ -336,6 +336,7 @@ enum SshCommand {
     },
     OpenTextFile {
         path: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
         reply: oneshot::Sender<Result<mobarust_ssh::RemoteTextDocument, String>>,
     },
     CollectMonitor {
@@ -951,11 +952,16 @@ impl SshManager {
         &self,
         terminal_id: &str,
         path: String,
+        encoding: mobarust_ssh::RemoteTextEncoding,
     ) -> Result<mobarust_ssh::RemoteTextDocument, SshManagerError> {
         let path = validate_remote_file_path(&path)?;
         let (reply, response) = oneshot::channel();
         self.sender(terminal_id)?
-            .send(SshCommand::OpenTextFile { path, reply })
+            .send(SshCommand::OpenTextFile {
+                path,
+                encoding,
+                reply,
+            })
             .await
             .map_err(|_| SshManagerError::Closed)?;
         response
@@ -2311,9 +2317,13 @@ fn spawn_session_operation(
                 let _ = reply.send(result);
             });
         }
-        SshCommand::OpenTextFile { path, reply } => {
+        SshCommand::OpenTextFile {
+            path,
+            encoding,
+            reply,
+        } => {
             workers.spawn(async move {
-                let result = read_remote_text_file(&connection, path).await;
+                let result = read_remote_text_file(&connection, path, encoding).await;
                 let _ = reply.send(result);
             });
         }
@@ -2497,13 +2507,14 @@ async fn list_remote_directory(
 async fn read_remote_text_file(
     connection: &SshConnection,
     path: String,
+    encoding: mobarust_ssh::RemoteTextEncoding,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
     let sftp = connection
         .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp
-        .read_text_document(path)
+        .read_text_document_with_encoding(path, encoding)
         .await
         .map_err(|error| error.to_string());
     let _ = sftp.close().await;
@@ -4622,6 +4633,35 @@ mod tests {
             },
         );
         commands
+    }
+
+    #[tokio::test]
+    async fn remote_text_open_preserves_explicit_encoding_and_path_validation() {
+        use super::SshCommand;
+        use mobarust_ssh::RemoteTextEncoding;
+
+        let manager = SshManager::default();
+        let mut commands = queue_test_session(&manager, "editor");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for selected in [RemoteTextEncoding::Utf8, RemoteTextEncoding::Windows1252] {
+                let (result, ()) = tokio::join!(
+                    manager.open_remote_text_file("editor", "./café.conf".into(), selected),
+                    async {
+                        match commands.recv().await.unwrap() {
+                            SshCommand::OpenTextFile { path, encoding, reply } => {
+                                assert_eq!(path, "./café.conf");
+                                assert_eq!(encoding, selected);
+                                reply.send(Err("controlled read refusal".into())).unwrap();
+                            }
+                            _ => panic!("unexpected editor command"),
+                        }
+                    }
+                );
+                assert!(matches!(result, Err(SshManagerError::InvalidRequest(message)) if message == "controlled read refusal"));
+            }
+            assert!(manager.open_remote_text_file("editor", "bad\0path".into(), RemoteTextEncoding::Windows1252).await.is_err());
+            assert!(commands.try_recv().is_err(), "invalid paths must not queue a read");
+        }).await.expect("editor command deadline");
     }
 
     fn authentication_test_context(

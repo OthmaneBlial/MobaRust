@@ -14,6 +14,14 @@ metadata. The lightweight renderer editor keeps the content in an explicit
 editable buffer and provides local search/replace plus a deliberate Save
 action.
 
+On `main` after v0.1.26, the browser's **Open text as** selector chooses UTF-8
+(the default) or Windows-1252 before the edit action. The selected encoding
+passes through typed Tauri IPC, the SSH command queue and the existing bounded
+reader; there is no automatic detection or fallback. Missing IPC encoding keeps
+the UTF-8 default, while unsupported values are rejected. The editor's separate
+**Save encoding** selector controls the bytes written, without reinterpreting
+the open buffer. Connection-generation and stale-result guards still apply.
+
 On save, Rust rereads the remote file and rejects the operation when its
 revision differs from the token captured at open time. After the complete
 temporary upload and mode application, it performs a second revision check
@@ -243,3 +251,31 @@ output encoding after opening. Therefore this evidence proves conversion of an
 open UTF-8 document, not opening an existing Windows-1252 document through the
 GUI. Explicit legacy-encoding Open is the next editor task, reusing the bounded
 reader while preserving connection-generation and stale-result guards.
+
+### Explicit legacy-encoding Open on main — 2026-10-03
+
+The renderer, Tauri command and SSH manager now carry the explicit input
+encoding described above. A manager regression covers both supported encodings,
+unchanged Unicode paths, read-error propagation and invalid-path refusal before
+queuing. The existing loopback OpenSSH encoding regression now reopens a file
+containing Windows-1252 bytes and checks the decoded text, encoding, original
+byte revision, size, permissions and unchanged remote bytes before conversion.
+
+```sh
+cargo test --locked -p mobarust ssh::tests::remote_text_open_preserves_explicit_encoding_and_path_validation -- --exact
+cargo test --locked -p mobarust-ssh --test local_sshd remote_editor_encoding_changes_preserve_byte_conflicts_and_permissions -- --exact
+cargo xtask check
+```
+
+The full local `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed on macOS ARM64: all 108 desktop tests, 43 SSH unit tests, 15 authentication
+cases, 25 OpenSSH cases, 22 SFTP boundary cases and 15 editor/transfer fault cases,
+plus workspace tests/Clippy, frontend checks/build, release/lab tooling,
+isolated RDP/VNC fixtures, package-layout contracts and fuzz compilation.
+The four manual SSH labs remain opt-in; real Xvfb reported its prerequisite
+skip. Both GitHub workflows remain disabled; no timeout or assertion was relaxed.
+
+The new selector is source work after the public v0.1.26 release. Native GUI
+acceptance and new installers are separate gates; the v0.1.26 downloads still
+open UTF-8 only. Bounds, symlink/file-type refusal, byte conflicts and lossy-write
+refusal use the existing reader/writer rather than a parallel implementation.

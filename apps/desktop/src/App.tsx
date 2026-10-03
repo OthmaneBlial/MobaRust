@@ -2978,7 +2978,7 @@ function App() {
     };
   }, []);
 
-  const openRemoteTextFile = useCallback(async (entry: RemoteEntry) => {
+  const openRemoteTextFile = useCallback(async (entry: RemoteEntry, encoding: RemoteTextDocument["encoding"]) => {
     if (!remoteSessionId || !entry.isRegular) return;
     const sessionId = remoteSessionId;
     const stillConnected = pinRemoteFileConnection(sessionId);
@@ -2988,6 +2988,7 @@ function App() {
       const document = await invoke<RemoteTextDocument>("ssh_open_remote_text_file", {
         terminalId: sessionId,
         path: entry.path,
+        encoding,
       });
       if (!isCurrentSessionRequest(
         requestId,
@@ -4286,11 +4287,12 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
   onDelete: (entry: RemoteEntry) => void;
   onSetPermissions: (entry: RemoteEntry) => void;
   onCopyPath: (entry: RemoteEntry) => void;
-  onEdit: (entry: RemoteEntry) => void;
+  onEdit: (entry: RemoteEntry, encoding: RemoteTextDocument["encoding"]) => void;
   onCancelTransfer: (transferId: string) => void;
   onRetryTransfer: (transfer: SshTransferEvent) => void;
 }) {
   const [transferProtocol, setTransferProtocol] = useState<TransferProtocol>("sftp");
+  const [openEncoding, setOpenEncoding] = useState<RemoteTextDocument["encoding"]>("utf-8");
   const [sort, setSort] = useState<RemoteFileSort>("name");
   const [showHidden, setShowHidden] = useState(true);
   const parentPath = remoteParentPath(path);
@@ -4314,6 +4316,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
         <button className="outline-button" onClick={onOpenTerminal}><TerminalIcon size={14} /> Open terminal</button>
         <label className="transfer-protocol-select">Transport<select aria-label="Transfer transport" value={transferProtocol} onChange={(event) => setTransferProtocol(event.target.value as TransferProtocol)}><option value="sftp">SFTP · recommended</option><option value="scp">SCP · legacy files</option></select></label>
         <label className="transfer-protocol-select">Sort<select aria-label="Sort remote files" value={sort} onChange={(event) => setSort(event.target.value as RemoteFileSort)}><option value="name">Name</option><option value="type">Type</option><option value="size">Size</option><option value="modified">Modified</option></select></label>
+        <label className="transfer-protocol-select">Open text as<select aria-label="Encoding for opening remote text files" value={openEncoding} onChange={(event) => setOpenEncoding(event.target.value as RemoteTextDocument["encoding"])}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label>
         <label className="remote-files-hidden"><input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Hidden</label>
         <button className="outline-button" onClick={onCreateDirectory} disabled={status !== "ready"}><FolderPlus size={14} /> New folder</button>
         <button className="outline-button" onClick={() => onUpload(transferProtocol, "files")} disabled={status !== "ready"}><Upload size={14} /> Upload files</button>
@@ -4331,7 +4334,7 @@ function RemoteFilesView({ entries, path, status, error, localDropActive, transf
           <span className="remote-file-icon">{entry.isDirectory ? <Folder size={15} /> : <ArrowDownToLine size={15} />}</span><span>{entry.name}</span><small>{remoteEntryDetails(entry)}</small>
         </button>
         <button className="remote-file-action" onClick={() => onDownload(entry, entry.isDirectory ? "sftp" : transferProtocol)} title={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`} aria-label={`${entry.isDirectory ? "Download directory" : "Download"} ${entry.name}`}><Download size={14} /></button>
-        {entry.isRegular && <button className="remote-file-action" onClick={() => onEdit(entry)} title={`Edit ${entry.name}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
+        {entry.isRegular && <button className="remote-file-action" onClick={() => onEdit(entry, openEncoding)} title={`Edit ${entry.name} as ${openEncoding}`} aria-label={`Edit ${entry.name}`}><Pencil size={14} /></button>}
         <button className="remote-file-action" onClick={() => onCopyPath(entry)} title={`Copy path for ${entry.name}`} aria-label={`Copy path for ${entry.name}`}><Copy size={14} /></button>
         <button className="remote-file-action" onClick={() => onSetPermissions(entry)} title={`Change permissions for ${entry.name}`} aria-label={`Change permissions for ${entry.name}`}><Settings2 size={14} /></button>
         <button className="remote-file-action" onClick={() => onRename(entry)} title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}><Pencil size={14} /></button>
@@ -4406,7 +4409,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
 
   return <div className="palette-backdrop" role="presentation" onMouseDown={close}><section className="remote-editor-modal" role="dialog" aria-modal="true" aria-label={`Edit ${document.path}`} onMouseDown={(event) => event.stopPropagation()}>
     <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close} disabled={busy}><X size={17} /></button></div>
-    <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding" disabled={busy}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
+    <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Save encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file save encoding" disabled={busy}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
     {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error.includes("target already exists") ? "That remote target already exists. Choose Replace when using Save as if overwriting is intentional." : error}</span></div>}
     {document.backupCleanupFailed && <div className="remote-editor-save-warning" role="status"><ShieldCheck size={14} /><span>{remoteEditorSaveNotice(document.path, true)}</span></div>}
     <div className="remote-editor-code-shell">

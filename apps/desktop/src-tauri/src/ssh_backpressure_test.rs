@@ -499,6 +499,7 @@ async fn finite_session_operations_settle_before_transport_cleanup() {
                     (
                         SshCommand::OpenTextFile {
                             path: "/fixture.txt".into(),
+                            encoding: RemoteTextEncoding::Utf8,
                             reply,
                         },
                         rejected(response),

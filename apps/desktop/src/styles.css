@@ -94,7 +94,7 @@ button:not(:disabled) { cursor: pointer; }
 .quick-connect-check-row { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--muted) !important; font-family: "Avenir Next", "Helvetica Neue", sans-serif !important; font-size: 10px !important; letter-spacing: 0 !important; text-transform: none !important; }.quick-connect-check-row input { width: 14px; height: 14px; accent-color: var(--amber); }.quick-connect-check-row span { display: flex; flex-direction: column; gap: 2px; }
 .serial-device-input { display: flex; align-items: center; gap: 8px; }.serial-device-input input { min-width: 0; flex: 1; }.connect-error-inline { color: var(--coral) !important; overflow-wrap: anywhere; }
 
-.remote-files-toolbar-actions { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
+.remote-files-toolbar-actions { display: flex !important; flex-direction: row !important; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .transfer-protocol-select { display: flex; flex-direction: column; gap: 4px; color: var(--faint); font-family: var(--mono); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
 .transfer-protocol-select select { height: 29px; padding: 0 7px; border: 1px solid var(--line); outline: 0; background: rgba(7, 11, 10, .52); color: var(--text); font-family: var(--mono); font-size: 9px; letter-spacing: 0; text-transform: none; }
 .transfer-protocol-select select:focus { border-color: rgba(232, 180, 92, .6); }

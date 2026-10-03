@@ -180,6 +180,17 @@ fn remote_editor_encoding_changes_preserve_byte_conflicts_and_permissions() {
             Err(SshError::RemoteFileNotUtf8)
         ));
 
+        let reopened = sftp
+            .read_text_document_with_encoding(remote_path.as_ref(), RemoteTextEncoding::Windows1252)
+            .await
+            .expect("explicitly reopen existing Windows-1252 bytes");
+        assert_eq!(reopened.content, text);
+        assert_eq!(reopened.encoding, RemoteTextEncoding::Windows1252);
+        assert_eq!(reopened.revision, legacy.revision);
+        assert_eq!(reopened.size, legacy_bytes.len() as u64);
+        assert_eq!(reopened.permissions.map(|mode| mode & 0o7777), Some(0o640));
+        assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
+
         let converted = sftp
             .save_text_document_with_encoding(
                 remote_path.as_ref(),

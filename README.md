@@ -110,7 +110,7 @@ On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install .
 - **Earlier file protections retained:** conflict detection, private temporary files, explicit collision policies and acknowledged transfer/handle shutdown remain included.
 - **Locally checked release:** the complete suite passed, including 25 OpenSSH cases, 22 boundary checks and 15 editor/transfer fault cases. Both Mac packages passed mounted layout, architecture, signature and CLI checks.
 
-Both Mac DMGs include these fixes; all four published assets were downloaded anonymously and matched the verified local bytes. Initial GUI Open still expects UTF-8; explicit legacy-encoding Open is next. Windows/Linux remain v0.1.12; broader native acceptance remains pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.26.md).
+Both Mac DMGs include these fixes; all four published assets were downloaded anonymously and matched the verified local bytes. The v0.1.26 GUI Open still expects UTF-8. Newer source adds an explicit **Open text as** choice for UTF-8/Windows-1252; native acceptance and new installers are separate gates. [Source behavior and checks](docs/adr/0022-bounded-remote-text-editor.md#explicit-legacy-encoding-open-on-main--2026-10-03). Windows/Linux remain v0.1.12; broader native acceptance remains pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.26.md).
 
 ## 🧭 Progress and next steps
 
@@ -120,13 +120,13 @@ Both Mac DMGs include these fixes; all four published assets were downloaded ano
 | --- | --- | --- |
 | ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.25, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.25 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
-| ✅ **Editor recovery** | Mac candidate passed conflict/reopen recovery and both Save as policies. The v0.1.26 ARM64 installer copy passed encoding Save, new Save as, byte/mode checks and normal Quit. [Receipts](docs/testing/native-workflow.md). | Explicit legacy-encoding Open; Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
+| ✅ **Editor recovery** | Mac candidate passed conflict/reopen recovery and both Save as policies. The v0.1.26 ARM64 installer copy passed encoding Save, new Save as, byte/mode checks and normal Quit. [Receipts](docs/testing/native-workflow.md). | Native acceptance and shipping for explicit legacy-encoding Open; Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
 | 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.25 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
 | 🟡 **Distribution** | Mac ARM64/x64 0.1.26 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
-**Next priorities:** explicit legacy-encoding Open → native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers.
+**Next priorities:** native legacy-encoding Open acceptance and shipping → native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers.
 
 [📍 Detailed roadmap & completion criteria](ROADMAP.md) · [Platform evidence](docs/testing/hardware-interoperability.md) · [SSH lab](docs/testing/ssh-lab.md) · [Benchmark receipt](benchmarks/2026-10-02-local.md)
 

@@ -1363,9 +1363,10 @@ async fn ssh_open_remote_text_file(
     manager: State<'_, SshManager>,
     terminal_id: String,
     path: String,
+    encoding: Option<mobarust_ssh::RemoteTextEncoding>,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
     manager
-        .open_remote_text_file(&terminal_id, path)
+        .open_remote_text_file(&terminal_id, path, encoding.unwrap_or_default())
         .await
         .map_err(|error| error.to_string())
 }
