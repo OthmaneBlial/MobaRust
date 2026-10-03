@@ -21,6 +21,31 @@ struct Peer {
     ready: Option<oneshot::Sender<(server::Handle, russh::ChannelId)>>,
     geometry: Option<mpsc::Sender<(&'static str, u32, u32)>>,
     pause_replacement_pty: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    pause_operation: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    operation_channels:
+        Option<std::collections::HashMap<russh::ChannelId, russh::Channel<server::Msg>>>,
+}
+
+struct DeniedSftp(Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>);
+
+impl russh_sftp::server::Handler for DeniedSftp {
+    type Error = russh_sftp::protocol::StatusCode;
+
+    fn unimplemented(&self) -> Self::Error {
+        russh_sftp::protocol::StatusCode::OpUnsupported
+    }
+
+    async fn init(
+        &mut self,
+        _version: u32,
+        _extensions: std::collections::HashMap<String, String>,
+    ) -> Result<russh_sftp::protocol::Version, Self::Error> {
+        if let Some((entered, release)) = self.0.take() {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
+        Ok(russh_sftp::protocol::Version::new())
+    }
 }
 
 impl server::Handler for Peer {
@@ -36,10 +61,13 @@ impl server::Handler for Peer {
 
     async fn channel_open_session(
         &mut self,
-        _channel: russh::Channel<server::Msg>,
+        channel: russh::Channel<server::Msg>,
         reply: server::ChannelOpenHandle,
         _session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if let Some(channels) = &mut self.operation_channels {
+            channels.insert(channel.id(), channel);
+        }
         reply.accept().await;
         Ok(())
     }
@@ -109,6 +137,43 @@ impl server::Handler for Peer {
         }
         Ok(())
     }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: russh::ChannelId,
+        name: &str,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(name, "sftp");
+        session.channel_success(channel)?;
+        russh_sftp::server::run(
+            self.operation_channels
+                .as_mut()
+                .unwrap()
+                .remove(&channel)
+                .unwrap()
+                .into_stream(),
+            DeniedSftp(self.pause_operation.take()),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: russh::ChannelId,
+        _command: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some((entered, release)) = self.pause_operation.take() {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+        }
+        session.eof(channel)?;
+        session.exit_status_request(channel, 1)?;
+        session.close(channel)?;
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -137,7 +202,8 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
                 received_bytes: received_bytes.clone(), delivered: delivered.clone(),
                 pause_first: (action == "resume").then_some((first, resumed)), ready: Some(ready),
                 geometry: (action == "resume").then_some(geometry),
-                pause_replacement_pty: (action == "resume").then_some((pty_entered, pty_resumed)) };
+                pause_replacement_pty: (action == "resume").then_some((pty_entered, pty_resumed)),
+                pause_operation: None, operation_channels: None };
             let config = Arc::new(server::Config {
                 keys: vec![key], window_size: if action == "resume" { 1024 } else { 0 }, maximum_packet_size: 1024,
                 auth_rejection_time: Duration::ZERO, auth_rejection_time_initial: Some(Duration::ZERO),
@@ -293,4 +359,192 @@ async fn blocked_shell_input_keeps_output_and_cancellation_live() {
             drop(TcpListener::bind(address).await.expect("owned listener released"));
         }
     }).await.expect("loopback backpressure fixture cleanup deadline");
+}
+
+#[tokio::test]
+async fn finite_session_operations_settle_before_transport_cleanup() {
+    use super::{SshCommand, SshFileOperation, SshManager, spawn_session_operation};
+    use mobarust_ssh::RemoteTextEncoding;
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use tokio::task::{JoinHandle, JoinSet};
+
+    fn rejected<T: Send + 'static>(
+        response: oneshot::Receiver<Result<T, String>>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            assert!(response.await.unwrap().is_err());
+        })
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for action in [
+            "save",
+            "save-as",
+            "file-operation",
+            "list",
+            "open",
+            "monitor",
+        ] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut seed = Zeroizing::new([0; 32]);
+            seed[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+            seed[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+            let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "")
+                .unwrap();
+            let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+            let password = Zeroizing::new(Uuid::new_v4().to_string());
+            let (entered, operation_entered) = oneshot::channel();
+            let (release, operation_release) = oneshot::channel();
+            let peer = Peer {
+                password: password.clone(),
+                received: Arc::new(AtomicUsize::new(0)),
+                received_bytes: Arc::new(Mutex::new(Vec::new())),
+                delivered: Arc::new(Notify::new()),
+                pause_first: None,
+                ready: None,
+                geometry: None,
+                pause_replacement_pty: None,
+                pause_operation: Some((entered, operation_release)),
+                operation_channels: Some(std::collections::HashMap::new()),
+            };
+            let config = Arc::new(server::Config {
+                keys: vec![key],
+                auth_rejection_time: Duration::ZERO,
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                inactivity_timeout: None,
+                ..Default::default()
+            });
+            let server = tokio::spawn(async move {
+                let (stream, remote) = listener.accept().await.unwrap();
+                assert!(remote.ip().is_loopback());
+                drop(listener);
+                server::run_stream(config, stream, peer)
+                    .await
+                    .unwrap()
+                    .await
+            });
+            let connection = Arc::new(
+                SshConnection::connect(SshConnectOptions {
+                    host: "127.0.0.1".into(),
+                    port: address.port(),
+                    host_key_policy: HostKeyPolicy::PinnedFingerprint(fingerprint),
+                    timeout: Duration::from_secs(5),
+                    credentials: SshCredentials::password_secret(
+                        "fixture",
+                        mobarust_ssh::Secret::from_zeroizing(password),
+                    ),
+                    keepalive_interval: None,
+                    x11: None,
+                    environment: Vec::new(),
+                    startup_directory: None,
+                    startup_command: None,
+                })
+                .await
+                .unwrap(),
+            );
+            let (command, response) = match action {
+                "save" => {
+                    let (reply, response) = oneshot::channel();
+                    (
+                        SshCommand::SaveTextFile {
+                            path: "/fixture.txt".into(),
+                            expected_revision: "fixture-revision".into(),
+                            content: "replacement".into(),
+                            encoding: RemoteTextEncoding::Utf8,
+                            reply,
+                        },
+                        rejected(response),
+                    )
+                }
+                "save-as" => {
+                    let (reply, response) = oneshot::channel();
+                    (
+                        SshCommand::SaveTextFileAs {
+                            path: "/fixture-copy.txt".into(),
+                            content: "replacement".into(),
+                            encoding: RemoteTextEncoding::Utf8,
+                            overwrite: true,
+                            reply,
+                        },
+                        rejected(response),
+                    )
+                }
+                "file-operation" => {
+                    let (reply, response) = oneshot::channel();
+                    (
+                        SshCommand::FileOperation {
+                            operation: SshFileOperation::Rename {
+                                from: "/before".into(),
+                                to: "/after".into(),
+                            },
+                            reply,
+                        },
+                        rejected(response),
+                    )
+                }
+                "list" => {
+                    let (reply, response) = oneshot::channel();
+                    (
+                        SshCommand::ListDirectory {
+                            path: "/".into(),
+                            reply,
+                        },
+                        rejected(response),
+                    )
+                }
+                "open" => {
+                    let (reply, response) = oneshot::channel();
+                    (
+                        SshCommand::OpenTextFile {
+                            path: "/fixture.txt".into(),
+                            reply,
+                        },
+                        rejected(response),
+                    )
+                }
+                "monitor" => {
+                    let (reply, response) = oneshot::channel();
+                    (SshCommand::CollectMonitor { reply }, rejected(response))
+                }
+                _ => unreachable!(),
+            };
+            let manager = SshManager::default();
+            let mut workers = JoinSet::new();
+            assert!(spawn_session_operation(command, connection.clone(), &mut workers).is_none());
+            operation_entered.await.unwrap();
+            assert!(!response.is_finished());
+            let mut drain = Box::pin(manager.finish_session_operations("fixture", &mut workers));
+            poll_fn(|cx| {
+                assert!(
+                    drain.as_mut().poll(cx).is_pending(),
+                    "{action} was detached from session cleanup"
+                );
+                Poll::Ready(())
+            })
+            .await;
+            release.send(()).unwrap();
+            drain.await;
+            assert!(workers.is_empty());
+            response.await.unwrap();
+            connection.disconnect().await.unwrap();
+            drop(connection);
+            let result = server.await.unwrap();
+            assert!(
+                result.is_ok()
+                    || matches!(result, Err(russh::Error::Disconnect))
+                    || matches!(&result, Err(russh::Error::IO(error))
+                        if matches!(error.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof)),
+                "unexpected SSH fixture error: {result:?}"
+            );
+            drop(
+                TcpListener::bind(address)
+                    .await
+                    .expect("owned listener released"),
+            );
+        }
+    })
+    .await
+    .expect("finite SSH operations and cleanup deadline");
 }

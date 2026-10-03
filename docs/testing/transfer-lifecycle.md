@@ -170,8 +170,8 @@ There is no whole-directory rollback, immediate-exit deadline, crash/force-kill
 cleanup guarantee, or Tauri restart acceptance claim. Metadata/cleanup retain their
 request timeouts; final exit waits rather than forcibly interrupting replacement.
 A dropped session acknowledgement logs a static warning and cannot establish
-successful cleanup. Remote editor mutations and other detached operations are not
-newly covered by the transfer drain.
+successful cleanup. This transfer receipt did not cover remote editor mutations
+or other finite operations; the later backend correction is recorded below.
 
 
 The final native bundle build and `cargo xtask check` passed, including all 93
@@ -180,3 +180,43 @@ fixtures, package contracts and fuzz-target compilation. The pre-push audit also
 passed. After the native checks, the owned supervisor and daemon were stopped and
 reaped, both loopback ports refused new connections, and generated key/trust files
 were removed. GitHub CI remains disabled; published v0.1.18 installers are unchanged.
+
+## Accepted file/editor operations during session cleanup — 2026-10-03
+
+After v0.1.22, source inspection found that editor Save/Save as, file mutations,
+directory listing, opening text and monitor collection still ran as detached
+tasks. The session drain awaited transfers only, so Close, shell exit, reconnect
+or normal app shutdown could disconnect while an accepted save was still running.
+
+These six finite operations now join the existing session-owned worker set.
+Cleanup keeps the authenticated transport alive until their replies settle;
+transfer cancellation remains cooperative. Accepted editor saves and file
+mutations finish under their existing operation deadlines rather than being
+aborted during replacement or rollback. Commands still waiting in the queue
+remain subject to [queue retirement](queued-ssh-commands.md), and are not replayed
+after reconnect. This change adds no whole-directory transaction or force-kill
+cleanup guarantee.
+
+```sh
+cargo test --locked -p mobarust finite_session_operations_settle_before_transport_cleanup
+cargo test --locked -p mobarust session_transfer_drain
+cargo xtask check
+```
+
+The new encrypted wire regression dispatches each of the six production commands
+against generated credentials on an OS-assigned `127.0.0.1` port. It pauses the
+peer before replying, verifies that the real session drain stays pending, then
+releases the peer, observes the operation's error reply and completes transport
+and listener cleanup. SFTP replies are deliberately unsupported; the fixture
+never writes a remote file or runs a monitor command. The regression failed on
+the detached implementation with `save was detached from session cleanup`.
+
+The corrected regression and complete local `cargo xtask check` passed on macOS
+ARM64 / Apple M2, including all 105 desktop tests, workspace tests/Clippy, frontend
+checks, release tooling, protocol fixtures, package contracts and fuzz compilation.
+GitHub CI remains disabled. No new native bundle or installer was built for this fix.
+
+This is backend worker-ownership evidence. Native Quit/Close during an editor
+save, actual promotion/rollback failures and Windows/Linux acceptance remain
+pending. Published v0.1.22 Mac and v0.1.12 Windows/Linux installers do not contain
+this later source correction.

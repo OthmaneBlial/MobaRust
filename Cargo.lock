@@ -2878,6 +2878,7 @@ dependencies = [
  "portable-pty",
  "rfd",
  "russh",
+ "russh-sftp",
  "serde",
  "serde_json",
  "tauri",

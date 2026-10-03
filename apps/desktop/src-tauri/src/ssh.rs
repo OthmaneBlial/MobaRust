@@ -867,7 +867,7 @@ impl SshManager {
             .map_err(|_| SshManagerError::Closed)
     }
 
-    /// Cancel every SSH session and wait for transfer cleanup/transport teardown.
+    /// Close every SSH session and wait for its operations and transport teardown.
     /// No timeout aborts a worker that may already be replacing a remote file.
     pub async fn shutdown(&self) {
         let sessions = {
@@ -1656,13 +1656,13 @@ impl SshManager {
         }
     }
 
-    async fn finish_session_transfers(&self, terminal_id: &str, workers: &mut JoinSet<()>) {
+    async fn finish_session_operations(&self, terminal_id: &str, workers: &mut JoinSet<()>) {
         self.cancel_for_terminal(terminal_id);
-        // Keep the transport alive for part cleanup and any promotion/rollback
-        // already in its critical section. Aborting here can strand originals.
+        // Let accepted file/editor operations settle, including part cleanup and
+        // promotion/rollback. Aborting them before disconnect can strand originals.
         while let Some(result) = workers.join_next().await {
             if result.is_err() {
-                tracing::warn!(event = "transfer_worker_failed_during_session_close");
+                tracing::warn!(event = "session_operation_failed_during_close");
             }
         }
     }
@@ -1985,7 +1985,7 @@ async fn run_remote_session(
     let mut connection_is_live = true;
     let mut shell_started_at = Instant::now();
     let mut reconnects_since_stable_shell = 0;
-    let mut transfers = JoinSet::new();
+    let mut workers = JoinSet::new();
 
     'session: loop {
         let shell_result = run_shell_once(
@@ -1998,7 +1998,7 @@ async fn run_remote_session(
             &mut commands,
             &mut close,
             &mut size,
-            &mut transfers,
+            &mut workers,
         )
         .await;
         let discarded = manager
@@ -2011,7 +2011,7 @@ async fn run_remote_session(
             .await;
         retire_shell_output(reader, &writer).await;
         manager
-            .finish_session_transfers(&terminal_id, &mut transfers)
+            .finish_session_operations(&terminal_id, &mut workers)
             .await;
         manager.finish_output(&app, &terminal_id);
         if discarded > 0 {
@@ -2299,6 +2299,71 @@ async fn run_shell_operation(
 #[path = "ssh_backpressure_test.rs"]
 mod backpressure_tests;
 
+fn spawn_session_operation(
+    command: SshCommand,
+    connection: Arc<SshConnection>,
+    workers: &mut JoinSet<()>,
+) -> Option<SshCommand> {
+    match command {
+        SshCommand::ListDirectory { path, reply } => {
+            workers.spawn(async move {
+                let result = list_remote_directory(&connection, path).await;
+                let _ = reply.send(result);
+            });
+        }
+        SshCommand::OpenTextFile { path, reply } => {
+            workers.spawn(async move {
+                let result = read_remote_text_file(&connection, path).await;
+                let _ = reply.send(result);
+            });
+        }
+        SshCommand::CollectMonitor { reply } => {
+            workers.spawn(async move {
+                let result = connection
+                    .remote_monitor_snapshot()
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = reply.send(result);
+            });
+        }
+        SshCommand::SaveTextFile {
+            path,
+            expected_revision,
+            content,
+            encoding,
+            reply,
+        } => {
+            workers.spawn(async move {
+                let result =
+                    save_remote_text_file(&connection, path, expected_revision, content, encoding)
+                        .await;
+                let _ = reply.send(result);
+            });
+        }
+        SshCommand::SaveTextFileAs {
+            path,
+            content,
+            encoding,
+            overwrite,
+            reply,
+        } => {
+            workers.spawn(async move {
+                let result =
+                    save_remote_text_file_as(&connection, path, content, encoding, overwrite).await;
+                let _ = reply.send(result);
+            });
+        }
+        SshCommand::FileOperation { operation, reply } => {
+            workers.spawn(async move {
+                let result = run_file_operation(&connection, operation).await;
+                let _ = reply.send(result);
+            });
+        }
+        command => return Some(command),
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_shell_once(
     app: &AppHandle,
@@ -2310,7 +2375,7 @@ async fn run_shell_once(
     commands: &mut mpsc::Receiver<SshCommand>,
     close: &mut watch::Receiver<bool>,
     size: &mut watch::Receiver<(u32, u32)>,
-    transfers: &mut JoinSet<()>,
+    workers: &mut JoinSet<()>,
 ) -> ShellRunResult {
     loop {
         if *close.borrow() || *manager.shutdown.borrow() {
@@ -2337,71 +2402,19 @@ async fn run_shell_once(
                     }
                     return ShellRunResult::Closed;
                 }
+                let command = match command {
+                    Some(command) => match spawn_session_operation(command, Arc::clone(connection), workers) {
+                        None => continue,
+                        Some(command) => Some(command),
+                    },
+                    None => None,
+                };
                 match command {
                     Some(SshCommand::Write(data)) => {
                         if let Err(result) = run_shell_operation(writer.write(&data), reader, close,
                             |bytes| manager.emit_output(app, terminal_id, bytes)).await {
                             return result;
                         }
-                    }
-                    Some(SshCommand::ListDirectory { path, reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = list_remote_directory(&operation_connection, path).await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::OpenTextFile { path, reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = read_remote_text_file(&operation_connection, path).await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::CollectMonitor { reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = operation_connection
-                                .remote_monitor_snapshot()
-                                .await
-                                .map_err(|error| error.to_string());
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::SaveTextFile { path, expected_revision, content, encoding, reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = save_remote_text_file(
-                                &operation_connection,
-                                path,
-                                expected_revision,
-                                content,
-                                encoding,
-                            )
-                            .await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::SaveTextFileAs { path, content, encoding, overwrite, reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = save_remote_text_file_as(
-                                &operation_connection,
-                                path,
-                                content,
-                                encoding,
-                                overwrite,
-                            )
-                            .await;
-                            let _ = reply.send(result);
-                        });
-                    }
-                    Some(SshCommand::FileOperation { operation, reply }) => {
-                        let operation_connection = Arc::clone(connection);
-                        tauri::async_runtime::spawn(async move {
-                            let result = run_file_operation(&operation_connection, operation).await;
-                            let _ = reply.send(result);
-                        });
                     }
                     Some(SshCommand::StartLocalForward { job }) => {
                         let tunnel_manager = manager.clone();
@@ -2438,16 +2451,17 @@ async fn run_shell_once(
                         let transfer_manager = manager.clone();
                         let transfer_connection = Arc::clone(connection);
                         let transfer_app = app.clone();
-                        transfers.spawn(async move {
+                        workers.spawn(async move {
                             run_transfer(transfer_app, transfer_manager, transfer_connection, job, cancel).await;
                         });
                     }
+                    Some(_) => unreachable!("finite operations are dispatched above"),
                     None => {
                         return ShellRunResult::Closed;
                     }
                 }
             }
-            _ = transfers.join_next(), if !transfers.is_empty() => {}
+            _ = workers.join_next(), if !workers.is_empty() => {}
             changed = size.changed() => {
                 if changed.is_err() {
                     return ShellRunResult::Closed;
@@ -5225,7 +5239,8 @@ mod tests {
             cleanup_started.send(()).unwrap();
             cleanup_finished.await.unwrap();
         });
-        let mut drain = Box::pin(manager.finish_session_transfers("closing-session", &mut workers));
+        let mut drain =
+            Box::pin(manager.finish_session_operations("closing-session", &mut workers));
         tokio::time::timeout(Duration::from_secs(2), async {
             tokio::select! {
                 _ = &mut drain => panic!("session closed before worker cleanup finished"),
