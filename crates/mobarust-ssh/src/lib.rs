@@ -151,10 +151,6 @@ pub enum SshError {
     )]
     RemoteSaveRestoreUncertain,
     #[error(
-        "remote file was saved, but its backup could not be removed; inspect the nearby .mobarust-edit-backup file"
-    )]
-    RemoteSaveBackupCleanupFailed,
-    #[error(
         "remote upload failed and the original could not be confirmed restored; inspect the target and nearby .mobarust-upload files before retrying"
     )]
     RemoteUploadRestoreUncertain,
@@ -2365,6 +2361,9 @@ pub struct RemoteTextDocument {
     pub modified_unix_seconds: Option<u64>,
     pub permissions: Option<u32>,
     pub encoding: RemoteTextEncoding,
+    /// The save was acknowledged, but removing its rollback copy failed or
+    /// could not be confirmed. The saved revision remains usable.
+    pub backup_cleanup_failed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2564,6 +2563,7 @@ impl SftpConnection {
             permissions: metadata.permissions,
             content,
             encoding,
+            backup_cleanup_failed: false,
         })
     }
 
@@ -2705,10 +2705,15 @@ impl SftpConnection {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(map_sftp_error(error));
         }
-        if let Err(_error) = self.session.remove_file(&backup).await {
-            return Err(SshError::RemoteSaveBackupCleanupFailed);
-        }
-        self.read_text_document_with_encoding(path, encoding).await
+        let backup_cleanup_failed = self.session.remove_file(&backup).await.is_err();
+        Ok(saved_text_document(
+            path,
+            content,
+            &encoded,
+            encoding,
+            current_metadata.permissions,
+            backup_cleanup_failed,
+        ))
     }
 
     /// Create a second remote document through a temporary file. Existing
@@ -2769,6 +2774,7 @@ impl SftpConnection {
             }
         }
 
+        let mut backup_cleanup_failed = false;
         if let Some((original_bytes, metadata)) = &existing {
             if let Some(permissions) = metadata.permissions {
                 let mut metadata = russh_sftp::client::fs::Metadata::empty();
@@ -2820,15 +2826,24 @@ impl SftpConnection {
                 self.cleanup_temporary_file(&temporary).await?;
                 return Err(map_sftp_error(error));
             }
-            if let Err(_error) = self.session.remove_file(&backup).await {
-                return Err(SshError::RemoteSaveBackupCleanupFailed);
-            }
+            backup_cleanup_failed = self.session.remove_file(&backup).await.is_err();
         } else if let Err(error) = self.session.rename(&temporary, &path).await {
             self.cleanup_temporary_file(&temporary).await?;
             return Err(map_sftp_error(error));
         }
 
-        self.read_text_document_with_encoding(path, encoding).await
+        let permissions = existing
+            .as_ref()
+            .and_then(|(_, metadata)| metadata.permissions)
+            .or(Some(SFTP_REGULAR_TYPE | 0o600));
+        Ok(saved_text_document(
+            path,
+            content,
+            &encoded,
+            encoding,
+            permissions,
+            backup_cleanup_failed,
+        ))
     }
 
     async fn upload_editor_temporary(&self, path: &str, bytes: &[u8]) -> Result<(), SshError> {
@@ -3086,6 +3101,29 @@ impl SftpConnection {
             session.close_session().map_err(map_sftp_error)?;
         }
         self.session.close().await.map_err(map_sftp_error)
+    }
+}
+
+fn saved_text_document(
+    path: String,
+    content: &str,
+    encoded: &[u8],
+    encoding: RemoteTextEncoding,
+    permissions: Option<u32>,
+    backup_cleanup_failed: bool,
+) -> RemoteTextDocument {
+    // A successful promotion acknowledges these bytes, not a later writer's
+    // content. No follow-up request may turn a committed save into a failure
+    // or replace the editor buffer. The server's current mtime is unknown.
+    RemoteTextDocument {
+        path,
+        content: content.into(),
+        revision: text_revision(encoded),
+        size: encoded.len() as u64,
+        modified_unix_seconds: None,
+        permissions,
+        encoding,
+        backup_cleanup_failed,
     }
 }
 
@@ -3985,13 +4023,10 @@ mod tests {
     }
 
     #[test]
-    fn remote_save_recovery_errors_distinguish_uncertain_restore_from_saved_file() {
+    fn remote_save_uncertain_restore_error_requires_inspection_before_retry() {
         let uncertain = SshError::RemoteSaveRestoreUncertain.to_string();
-        let saved = SshError::RemoteSaveBackupCleanupFailed.to_string();
         assert!(uncertain.contains("could not be confirmed restored"));
         assert!(uncertain.contains("before retrying"));
-        assert!(saved.contains("file was saved"));
-        assert!(saved.contains("backup could not be removed"));
     }
 
     #[test]

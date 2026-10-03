@@ -29,6 +29,18 @@ target before retrying. Other handled failures clean their temporary copy. If
 the final rollback-copy cleanup fails after a successful promotion, Rust
 reports that the new file was saved and leaves the backup for inspection.
 
+After promotion is acknowledged, Save and Save as return a receipt of the
+bytes they wrote, including the byte revision, encoding and size. They do not
+reread the target: a later read failure must not misclassify an acknowledged
+save, and a concurrent writer must not replace the editor's saved buffer or
+revision. The receipt's modification time is unknown (`null`), and its mode
+reflects the acknowledged creation/permission requests rather than a fresh
+metadata observation. Explicit Open still returns observed remote metadata.
+Backup removal failure sets `backupCleanupFailed` on the successful result;
+both the editor and workspace notice show saved status with an inspection
+warning. A subsequent save still checks the receipt's revision against the
+current remote bytes before uploading.
+
 Conflict checks hash the bounded original bytes without decoding them using
 the selected output encoding. This permits UTF-8/Windows-1252 conversion and
 still reports a byte conflict if a concurrent writer introduces invalid text.
@@ -69,7 +81,7 @@ The local OpenSSH fixture exercises upload, permission metadata, read, save,
 permission preservation, conflict rejection, and cleanup over a real loopback
 SFTP session, including symlink and dangling-link refusal. TypeScript, ESLint,
 Rust tests, and the production build cover the command and editor wiring. Unit
-tests cover the distinct recovery messages;
+checks cover the uncertain-restore diagnostic and saved-with-warning notice;
 the fixture does not inject a double rename failure.
 
 ### Encoding conversion regression — 2026-10-03
@@ -101,7 +113,7 @@ fixtures, package-layout checks and fuzz-target compilation. The optional
 real Xvfb case reported its prerequisite skip. GitHub workflows stayed disabled.
 
 This is backend protocol evidence. Native encoding-selection and conflict
-recovery acceptance, post-save observation failures, the final rename race,
+recovery acceptance, lost promotion replies, the final rename race,
 and Windows/Linux execution remain separate gates. Published v0.1.24 Mac
 and v0.1.12 Windows/Linux downloads are unchanged.
 
@@ -137,3 +149,45 @@ from being replaced after creation. If the server creates a file but its
 reply is lost, ownership is uncertain and the create-error path deliberately
 does not remove that name. Native acceptance, wider servers/platforms and
 updated installers remain pending; published downloads are unchanged.
+
+### Committed-save receipt regressions — 2026-10-03
+
+On `main` after v0.1.24, three portable regressions cover nine normal Save,
+replacing Save as and creating Save as flows over authenticated loopback SSH:
+
+```sh
+cargo test --locked -p mobarust-ssh --test remote_editor
+```
+
+The scripted SFTP peer keeps files and generated host keys in memory and
+injects failures at the protocol operation, without sleeps selecting a race:
+
+- Deny reading the target after acknowledged promotion. The save must still
+  return the committed text/revision and make no post-promotion target read.
+- Replace the target with another writer's bytes immediately after promotion.
+  The receipt must retain our saved buffer/revision; retry must refuse the
+  changed remote file without writing or removing the external bytes.
+- Reject backup removal after a replacing save. The result must retain a
+  usable saved revision and a serialized cleanup warning, preserve the old
+  backup, and permit a subsequent edit. Creating Save as has no backup and
+  must not report this warning.
+
+All three failed on the previous implementation: it reported the completed
+save as a read/cleanup error or returned the other writer's content. They pass
+with the receipt boundary. Checks also cover exact saved size, unknown fresh
+mtime, absence of owned temporary files, and shutdown of the owned SSH/SFTP
+workers. Frontend unit checks cover the shared saved/cleanup notice text used
+by both save callbacks and the editor warning; type checking, lint and build
+cover its wiring, rather than proving native display/focus acceptance.
+
+The full local `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed on macOS ARM64: workspace tests and Clippy, all 18 OpenSSH cases and
+the three new portable regressions, frontend tests/type checking/lint/build,
+release/lab tooling, RDP/VNC fixtures, package-layout checks and fuzz-target
+compilation. Real Xvfb reported its prerequisite skip. GitHub workflows stayed
+disabled; no deadline or assertion was relaxed.
+
+This does not prove a distributed transaction, a successful rename whose reply
+was lost, or native warning/focus acceptance. Native/cross-platform GUI checks,
+broader SFTP servers and updated installers remain pending. Published downloads
+are unchanged.

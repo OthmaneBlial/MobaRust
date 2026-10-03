@@ -1,5 +1,11 @@
 export type RemoteEditorLanguage = "plain" | "shell" | "json" | "yaml" | "ini";
 
+export function remoteEditorSaveNotice(path: string, backupCleanupFailed = false): string {
+  return backupCleanupFailed
+    ? `Saved ${path}. Backup cleanup could not be confirmed. Inspect nearby .mobarust-edit-backup files before removing them.`
+    : `Saved ${path}.`;
+}
+
 function textMatchPattern(query: string, matchCase: boolean): RegExp {
   const literal = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(literal, matchCase ? "gu" : "giu");

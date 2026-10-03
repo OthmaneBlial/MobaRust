@@ -153,6 +153,9 @@ button:not(:disabled) { cursor: pointer; }
 .remote-editor-dirty { color: var(--amber); }
 .remote-editor-error { flex-direction: row; align-items: flex-start; margin-bottom: 10px; }
 .remote-editor-error span { color: var(--muted); }
+.remote-editor-save-warning { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; padding: 10px; border: 1px solid var(--amber); background: var(--amber-soft); color: var(--amber); font-size: 11px; line-height: 1.5; }
+.remote-editor-save-warning svg { flex-shrink: 0; margin-top: 1px; }
+.remote-editor-save-warning span { min-width: 0; overflow-wrap: anywhere; }
 .remote-editor-code-shell { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: #0b100f; }
 .remote-editor-highlight, .remote-editor-textarea { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 14px; overflow: auto; font-family: var(--mono); font-size: 11px; line-height: 1.55; tab-size: 4; white-space: pre; }
 .remote-editor-highlight { color: var(--text); pointer-events: none; }

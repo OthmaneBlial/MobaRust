@@ -10,7 +10,7 @@ import {
   experimentalDesktopTargetError,
 } from "./connection-safety";
 import { parseQuickConnectUri } from "./connection-uri";
-import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, replaceTextMatches } from "./remote-editor";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, replaceTextMatches } from "./remote-editor";
 import {
   parseRemoteDesktopProfile,
   remoteDesktopCanResize,
@@ -626,6 +626,7 @@ type RemoteTextDocument = {
   modifiedUnixSeconds?: number | null;
   permissions?: number | null;
   encoding: "utf-8" | "windows-1252";
+  backupCleanupFailed?: boolean;
 };
 
 type RemoteMonitorSnapshot = {
@@ -3019,7 +3020,7 @@ function App() {
       encoding,
     });
     setEditingRemoteFile((current) => current === editingRemoteFile ? { ...current, document: saved } : current);
-    setSessionNotice(`Saved ${saved.path}. Remote changes were checked before temporary-file promotion.`);
+    setSessionNotice(remoteEditorSaveNotice(saved.path, saved.backupCleanupFailed));
     if (remoteSessionIdRef.current === sessionId) {
       setConnectionError(null);
       void loadRemoteDirectory(remotePath);
@@ -3038,7 +3039,7 @@ function App() {
       overwrite,
     });
     setEditingRemoteFile((current) => current === editingRemoteFile ? { ...current, document: saved } : current);
-    setSessionNotice(`Saved a new remote file at ${saved.path}.`);
+    setSessionNotice(remoteEditorSaveNotice(saved.path, saved.backupCleanupFailed));
     if (remoteSessionIdRef.current === sessionId) {
       setConnectionError(null);
       void loadRemoteDirectory(remotePath);
@@ -4401,6 +4402,7 @@ function RemoteEditorModal({ document, onClose, onSave, onSaveAs }: { document: 
     <div className="session-editor-heading"><div><span className="eyebrow">REMOTE FILE / {encoding.toUpperCase()}</span><h2>{document.path}</h2><p>Bounded editor buffer · {formatBytes(document.size)} · revision {document.revision.slice(0, 18)}…</p></div><button type="button" className="icon-button" aria-label="Close remote editor" onClick={close} disabled={busy}><X size={17} /></button></div>
     <div className="remote-editor-toolbar"><div className="remote-editor-search"><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Find" aria-label="Find in remote file" /><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replacement text" /><label className="remote-editor-case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /> Aa</label><button type="button" className="outline-button" onClick={replaceAll} disabled={!searchQuery || matchCount === 0 || busy}>Replace all</button><span>{searchQuery ? `${matchCount.toLocaleString()} match${matchCount === 1 ? "" : "es"}` : "Search"}</span></div><div className="remote-editor-meta"><label>Encoding<select value={encoding} onChange={(event) => setEncoding(event.target.value as RemoteTextDocument["encoding"])} aria-label="Remote file encoding" disabled={busy}><option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252</option></select></label><span>{lineCount.toLocaleString()} lines</span><span className={dirty ? "remote-editor-dirty" : ""}>{dirty ? "Unsaved changes" : "No local changes"}</span></div></div>
     {error && <div className="connect-error remote-editor-error" role="alert"><CircleX size={14} /><span>{error.includes("changed since") ? "The remote file changed after it was opened. Reload it before saving to avoid overwriting someone else’s work." : error.includes("target already exists") ? "That remote target already exists. Choose Replace when using Save as if overwriting is intentional." : error}</span></div>}
+    {document.backupCleanupFailed && <div className="remote-editor-save-warning" role="status"><ShieldCheck size={14} /><span>{remoteEditorSaveNotice(document.path, true)}</span></div>}
     <div className="remote-editor-code-shell">
       <pre ref={highlightRef} className="remote-editor-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightRemoteCode(content, language) }} />
       <textarea className="remote-editor-textarea" value={content} onChange={(event) => setContent(event.target.value)} onScroll={syncHighlightScroll} spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label="Remote file contents" disabled={busy} />

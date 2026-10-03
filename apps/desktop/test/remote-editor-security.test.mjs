@@ -36,7 +36,7 @@ import {
   remoteDesktopSizeChanged,
   vncKeysymForText,
 } from "../src/remote-desktop-input.ts";
-import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, replaceTextMatches } from "../src/remote-editor.ts";
+import { countTextMatches, highlightRemoteCode, remoteEditorLanguage, remoteEditorSaveNotice, replaceTextMatches } from "../src/remote-editor.ts";
 import { isRemoteMonitorRefreshInterval, REMOTE_MONITOR_REFRESH_INTERVALS } from "../src/remote-monitor.ts";
 import { remoteChildPath, remoteParentPath } from "../src/remote-path.ts";
 import { quoteRemotePromptPath } from "../src/remote-prompt.ts";
@@ -83,6 +83,11 @@ assert.equal(prepareTerminalPaste("first\nsecond", true), "\x1b[200~first\rsecon
 assert.equal(vncKeysymForText("\u0001"), null);
 
 const hostile = '<img src=x onerror="alert(1)"><script>alert(2)</script>&lt;already-encoded&gt;';
+assert.equal(remoteEditorSaveNotice("/config.ini"), "Saved /config.ini.");
+const cleanupNotice = remoteEditorSaveNotice("/config.ini", true);
+assert.equal(cleanupNotice.startsWith("Saved /config.ini."), true, "cleanup trouble must not report the acknowledged save as failed");
+assert.equal(cleanupNotice.includes("Backup cleanup could not be confirmed"), true);
+assert.equal(cleanupNotice.includes("Inspect nearby .mobarust-edit-backup files"), true);
 for (const language of ["plain", "shell", "json", "yaml", "ini"]) {
   const rendered = highlightRemoteCode(hostile, language);
   assert.equal(rendered.includes("<img"), false, `${language} must not emit an image element`);

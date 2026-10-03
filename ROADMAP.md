@@ -202,6 +202,13 @@ them. New editor files are created with mode `0600`, and replacement retains
 the original mode. A loopback OpenSSH regression verifies both Save paths;
 native acceptance and new downloads remain separate.
 
+[Committed-save receipts](docs/adr/0022-bounded-remote-text-editor.md#committed-save-receipt-regressions--2026-10-03)
+now retain the acknowledged editor buffer/revision without a follow-up read.
+Backup cleanup trouble is a visible saved-with-warning result. Three portable
+loopback SSH regressions cover nine Save/Save as flows, concurrent changes and
+usable retries. Native warning/recovery acceptance and updated installers
+remain pending.
+
 **Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The [v0.1.17 demo provenance](docs/release/desktop-demo.md) and [native lab receipt](docs/testing/native-workflow.md) record the tested scope. Broader failure recovery remains open.
 
 ## Experimental work and beta gates
