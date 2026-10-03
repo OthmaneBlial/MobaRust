@@ -16,8 +16,11 @@ retirement change is documented in its [patch record](../../vendor/russh/MOBARUS
 and [forwarding checks](../testing/tunnel-lifecycle.md#uncertain-remote-forwarding-retires-its-transport--2026-10-03).
 The audit does not certify that source change. The version-aligned
 `cargo xtask check` passed in 536.78 seconds, including the SSH forwarding
-regressions. Installer verification and public-download verification are
-still pending.
+regressions. Both Mac DMGs passed mounted layout, version, architecture and
+ad hoc signature checks. All four public assets matched anonymous downloads
+byte for byte; the downloaded checksum manifests passed.
+[Release checks and limits](../release/v0.1.30.md) keep native GUI, hardware,
+publisher signing and wider-platform acceptance separate.
 
 ## v0.1.29 release preparation audit — 2026-10-03
 
