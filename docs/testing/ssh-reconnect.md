@@ -381,10 +381,11 @@ failed because this run’s disposable wrapper omitted `USER`; restoring the
 fixture-required account name resolved it without changing production code,
 test assertions, deadlines or isolation of HOME/keys/agents.
 
-This correction is on main after the v0.1.28 tag; published installers have not
-been replaced. The macOS ARM64 debug timeout retry-stop check below passed; native acceptance
-of other startup-write failure types, a controlled OpenSSH peer restart,
-release-copy acceptance and Windows/Linux runtime checks remain open. The v0.1.28 native
+This correction is included in the v0.1.29 Mac installers; historical releases
+have not been replaced. The macOS ARM64 debug check below and the subsequent
+[release-copy timeout check](#v0129-arm64-release-copy-retry-stop--2026-10-03)
+passed. Native acceptance of other startup-write failure types, a controlled
+OpenSSH peer restart and Windows/Linux runtime checks remain open. The v0.1.28 native
 timeout receipt above proves initial-connection behavior, not this new
 reconnect decision. CI remains disabled.
 
@@ -445,7 +446,45 @@ the existing endpoint/profile helpers; no new dependency or public test service
 was added. The existing setup fixture remains three endpoints with its original
 three-second automated lifetime.
 
-Native overflow/peer-closure/transport-write failure classification, release-copy
-retry-stop acceptance, real OpenSSH/PAM restart and Windows/Linux checks remain
-open. Earlier successful startup can still run again on a later approved
-reconnect. No public installer or historical tag was replaced; CI stays disabled.
+Native overflow/peer-closure/transport-write failure classification, real
+OpenSSH/PAM restart and Windows/Linux checks remain open. The subsequent
+v0.1.29 check below covers the release-copy timeout retry stop. Earlier
+successful startup can still run again on a later approved reconnect. No
+historical installer or tag was replaced; CI stays disabled.
+
+## v0.1.29 ARM64 release-copy retry stop — 2026-10-03
+
+Both Mac DMGs were built offline from `ba53f52a3d49819b87ddf1c04c03f4f4ab2d4633`.
+The ARM64 package passed mounted layout, exact seven-file inventory, strict ad
+hoc signature, app/VNC architecture, LICENSE/NOTICE, CLI version and checksum
+checks. An executable-matched disposable copy received a unique app identity,
+portable state, private HOME/ZDOTDIR/XDG and empty agent settings. Its process
+environment and native v0.1.29 window were verified before the fixture started.
+
+The same repeatable reconnect-startup lab used one `127.0.0.1` listener and
+generated pin/password/OTP. Native settings showed reconnect enabled with
+three attempts and a 12,000 ms timeout. Escape cancelled the startup review
+before any accepted or established connection. After explicit approval and
+both challenges, the first connection received exactly 8,193 startup bytes once.
+A private empty marker interrupted only that fixture transport. The replacement
+used the same pin/factors, accepted one shell request and received zero startup
+bytes. The terminal displayed the complete actionable startup-timeout warning
+and stayed ERROR/SSH error. No third connection, established socket or further
+authentication prompt appeared during 63.59 seconds with the same listener
+still available and two retry attempts remaining.
+
+Both owned persisted files contained neither generated factor. Normal native
+menu Quit released the app and local zsh child; the SSH transport had already
+failed, so this is not active-SSH Quit proof. The fixture completed its 300.02
+second test lifetime with exit 0, removed private metadata/control and HOME,
+released its listener and permitted explicit port rebinding. No system service,
+personal keys/agent or Internet-facing listener was used.
+
+The Intel DMG passed the corresponding package checks; CLI execution used
+Rosetta on Apple Silicon and does not prove Intel GUI/hardware behavior. All
+four public assets downloaded anonymously with HTTP 200 and matched the
+validated local bytes and both checksum manifests. [Release notes and limits](../release/v0.1.29.md).
+Native other-failure retry stops, OpenSSH/PAM restart, sustained workloads,
+broader output ordering and Windows/Linux remain open. Startup can still run
+again after a later approved reconnect; this is not exactly-once execution
+across connection loss.

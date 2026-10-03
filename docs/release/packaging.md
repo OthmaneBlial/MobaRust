@@ -229,10 +229,10 @@ replacement for signed distribution or operating-system protection.
 | --- | --- | --- | --- |
 | Windows x64 | v0.1.12 native-runner build exists; current native build pending | v0.1.12 preview installer available; clean install pending | Owner certificate pending |
 | Linux x64 | v0.1.12 native-runner build exists; current native build pending | v0.1.12 DEB/AppImage available; distro checks pending | Signing policy pending |
-| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.28 DMG passed layout, integrity, CLI and public-download checks; native startup review/timeout/normal local-PTY Quit passed in an isolated v0.1.28 release copy; earlier encoding receipts retain their artifact scope; broader GUI and clean install pending | Developer ID/notarization pending |
+| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.29 DMG passed layout, integrity, CLI and public-download checks; native approved startup/reconnect-timeout retry-stop/normal local-PTY Quit passed in an isolated v0.1.29 release copy; earlier encoding receipts retain their artifact scope; broader GUI and clean install pending | Developer ID/notarization pending |
 | Windows ARM64 | Cross-build/toolchain required | Pending | Pending |
 | Linux ARM64 | Cross-build/toolchain required | Pending | Pending |
-| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.28 DMG passed layout, integrity, Rosetta CLI and public-download checks; Intel GUI pending | Developer ID/notarization pending |
+| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.29 DMG passed layout, integrity, Rosetta CLI and public-download checks; Intel GUI pending | Developer ID/notarization pending |
 
 Packaging is not a claim that RDP/VNC interoperability is complete. Real
 server tests, platform-specific input/clipboard/display behavior, dependency

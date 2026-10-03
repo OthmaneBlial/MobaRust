@@ -1,5 +1,22 @@
 # Dependency audit record
 
+## v0.1.29 release preparation audit — 2026-10-03
+
+The refreshed RustSec database remains at
+`ef6173cbc5c50ec8166f9a5b28f07834144373ee` (1,290 advisories). The shipping
+workspace reports zero vulnerabilities with its existing proc-macro-error/glib
+warnings. VNC and fuzz report no vulnerabilities or warnings. The excluded RDP
+candidate still fails on `RUSTSEC-2023-0071` with its two unmaintained warnings;
+no finding was suppressed, and RDP remains outside normal installers.
+
+Only 15 local package version entries changed from 0.1.28 to 0.1.29 across the
+four lockfiles. Third-party versions, sources, checksums and features are
+unchanged. The version-aligned full local check passed. Both Mac DMGs passed
+mounted package/signature/architecture/version checks; all four public assets
+downloaded anonymously and matched the validated bytes. The ARM64 release copy
+passed the scoped native reconnect-timeout retry stop and cleanup.
+[Release receipt and remaining gates](../release/v0.1.29.md).
+
 ## v0.1.28 release preparation audit — 2026-10-03
 
 The refreshed RustSec database remains at

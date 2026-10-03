@@ -2,14 +2,13 @@
 
 **Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
-The [v0.1.28 Mac previews](docs/release/v0.1.28.md) include readable startup
-review and phase-specific timeout diagnosis. A disposable copy of the verified
-ARM64 DMG passed keyboard scrolling of an 8 KiB command with the destination,
-reconnect warning and controls visible, Escape before connection, distinct
-password/OTP challenges, and the exact startup-input timeout without creating
-an SSH tab. The stalled fixture accepted one shell request and zero input
-bytes. Normal menu Quit released the local PTY; the fixture's deadline removed
-private state and released all three loopback ports.
+The [v0.1.29 Mac previews](docs/release/v0.1.29.md) stop automatic reconnect
+retries after uncertain startup delivery. A disposable copy of the verified
+ARM64 DMG passed Escape cancellation before connection, approved startup
+exactly once, private fixture interruption, replacement password/OTP challenges
+and the phase-specific timeout. No third connection appeared for 63.59 seconds
+while the listener stayed available. Normal menu Quit released the app/local
+PTY; the fixture deadline removed private state and released its loopback port.
 
 Earlier [setup receipts](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
 cover connected exact-once startup, shell refusal and explicit SSH-tab cleanup.
@@ -25,14 +24,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.28; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.29; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.28.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.29.md).
 
 ## Completed in the current improvement cycle
 
@@ -201,7 +200,7 @@ second login. Production-handler regressions cover request ownership, queued
 expiry, cancellation, overflow, page shutdown and IPC failure; frontend and Mac
 debug packaging checks passed. [Two-session Mac debug overlap, cancellation and Quit were also verified](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02); broader native acceptance remains pending.
 
-On main after v0.1.28, uncertain startup-input delivery stops automatic reconnect retries; ordinary pre-startup failures remain bounded. [Source checks](docs/testing/ssh-reconnect.md#uncertain-startup-delivery-stops-reconnect-retries-on-main--2026-10-03) and [Mac debug timeout retry-stop acceptance](docs/testing/ssh-reconnect.md#native-reconnect-startup-retry-stop--2026-10-03) distinguish this gate from pending release-copy, other-failure and wider-platform checks. Published installers retain their tagged behavior; the checklist is unchanged.
+The v0.1.29 Mac installers include the uncertain-startup retry stop; ordinary pre-startup failures remain bounded. [Source checks](docs/testing/ssh-reconnect.md#uncertain-startup-delivery-stops-reconnect-retries-on-main--2026-10-03), [Mac debug acceptance](docs/testing/ssh-reconnect.md#native-reconnect-startup-retry-stop--2026-10-03) and [ARM64 release-copy timeout acceptance](docs/testing/ssh-reconnect.md#v0129-arm64-release-copy-retry-stop--2026-10-03) retain distinct scopes. Native acceptance of other startup-write failures, real OpenSSH/PAM restart and wider platforms remains open; the checklist is unchanged.
 
 **Done when:** each added case has success, rejection/failure, bounded cancellation, and cleanup checks, runnable through the existing lab command. No personal accounts, agents, or production hosts are test prerequisites.
 
@@ -209,7 +208,7 @@ On main after v0.1.28, uncertain startup-input delivery stops automatic reconnec
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.28 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.29 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
