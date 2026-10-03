@@ -79,7 +79,7 @@ The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix 
 - [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [x] Defer normal app exit until SSH sessions drain; reject new work during shutdown and route macOS menu Quit through cleanup. Verify native menu Quit during a 32 MiB SFTP upload and window close during download, preserving originals and removing parts on macOS ARM64. [Receipt and remaining exit gates](docs/testing/transfer-lifecycle.md#application-shutdown-correction--2026-10-02).
 - [x] Retire native SSH command queues on loss/closure, cancel queued file/tunnel actions visibly, and give a reconnected shell a fresh queue under the same terminal ID. Verify close refusal, late permits, no input replay, fresh delivery and loopback listener release with deterministic regressions; GUI loss/race acceptance remains pending. [Checks and limits](docs/testing/queued-ssh-commands.md).
-- [ ] Align these corrections across the installer cohort: both checked v0.1.21 Mac DMGs include them; Windows/Linux remain v0.1.12. Published older DMGs remain unchanged.
+- [ ] Align these corrections across the installer cohort: both checked v0.1.22 Mac DMGs include them; Windows/Linux remain v0.1.12. Published older DMGs remain unchanged.
 
 ## Next, in priority order
 
@@ -127,7 +127,7 @@ a 256 KiB loopback burst verifies ordered output and exact-once command delivery
 - [x] Implement a separate ask-each-challenge mode in quick connect, saved profiles, jump hops and reconnect; verify distinct password/OTP success, wrong-OTP/trust rejection, cancellation and unanswered-responder drop at every endpoint of a two-bastion chain over SSH packets, bounded responder refusal, one-shot native answer ownership and dialogue abort/secret-field clearing. [Source checks and limits](docs/testing/ssh-lab.md#ask-each-challenge-on-main).
 - [ ] Finish native authentication acceptance: Mac debug covers saved/Quick-connect password/OTP, trust/OTP rejection, Escape/expiry/focus, reconnect, two-bastion routing and shutdown. Main's two-session prompt queue also passed native overlap, distinct-factor success, cancellation handoff, input and pending-authentication Quit checks. The v0.1.19 ARM64 release copy covers direct login, trust rejection, Escape, reconnect and active-session Quit. Native queued expiry/overflow, release-copy Quick connect/two-bastion/queue acceptance, Windows/Linux and OpenSSH password/PAM remain pending. [Receipts and limits](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02).
 - [ ] Cover Windows Pageant/alternative agents and additional OpenSSH versions.
-- [x] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab: [16 MiB SFTP/SCP interruption and full retry](docs/testing/interrupted-transfers.md), plus [byte-matched 8 MiB PTY/SFTP streams through two IPv6 bastions](docs/testing/routed-ipv6-streams.md) with ordinary and frequent-rekey cases. Fix nested-stream write starvation and retain shell output sent after process exit. These are macOS ARM64 protocol/PTY checks on main after v0.1.21; native rendering, wider platforms and published installers remain separate.
+- [x] Exercise sustained output, interrupted large transfers, and routed IPv6 in a controlled lab: [16 MiB SFTP/SCP interruption and full retry](docs/testing/interrupted-transfers.md), plus [byte-matched 8 MiB PTY/SFTP streams through two IPv6 bastions](docs/testing/routed-ipv6-streams.md) with ordinary and frequent-rekey cases. Fix nested-stream write starvation and retain shell output sent after process exit. These are macOS ARM64 protocol/PTY checks included in the v0.1.22 Mac installers; native rendering and wider platforms remain separate.
 
 The v0.1.20 Mac preview queues competing SSH challenges instead of cancelling the
 second login. Production-handler regressions cover request ownership, queued
@@ -140,7 +140,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.21 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.22 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
