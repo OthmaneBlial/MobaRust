@@ -226,3 +226,20 @@ Fixture byte/mode checks followed each native action, and the owned daemon/root
 were removed with the loopback port reusable.
 [Native receipt and remaining limits](../testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03).
 This source candidate does not replace the published v0.1.25 artifacts.
+
+### v0.1.26 publication and remaining Open limitation — 2026-10-03
+
+Both [v0.1.26 Mac installers](../release/v0.1.26.md) now include the wire fix;
+their public files and manifests were downloaded anonymously and byte-matched.
+The [ARM64 release copy](../testing/native-workflow.md#v0126-arm64-release-copy-editor-acceptance--2026-10-03)
+passed native UTF-8 → Windows-1252 → UTF-8 Save, new UTF-8 Save as, exact bytes,
+permissions, clean receipts and normal Quit with active SSH/local PTY.
+The earlier candidate's broader conflict/Save as acceptance remains a distinct
+source receipt. Public v0.1.25 artifacts and their known defect are unchanged.
+
+Initial GUI Open still invokes the default UTF-8 reader: neither the renderer's
+Open call nor its Tauri command accepts an encoding. The modal selector controls
+output encoding after opening. Therefore this evidence proves conversion of an
+open UTF-8 document, not opening an existing Windows-1252 document through the
+GUI. Explicit legacy-encoding Open is the next editor task, reusing the bounded
+reader while preserving connection-generation and stale-result guards.

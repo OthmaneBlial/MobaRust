@@ -1,5 +1,38 @@
 # Native macOS workflow receipt — 2026-10-02
 
+## v0.1.26 ARM64 release-copy editor acceptance — 2026-10-03
+
+A disposable app copy came from the verified v0.1.26 ARM64 DMG, source/tag
+`c10546b9c5d4efb4909ecb4b6795bf4ea2964b5f`. Its packaged runtime SHA-256
+was `e5695e075f1489a6632ad2efd4ad1626afc4d91b4a5bc5c27c69741a54e6234b`
+before lab metadata and the disposable ad hoc signature. The actual process
+had isolated HOME/ZDOTDIR/XDG paths and empty agent settings, checked before
+connection and again before Quit. All SSH/file operations used generated
+credentials and files on an explicitly pinned loopback OpenSSH fixture.
+
+- Initial UTF-8 Open showed the correct selector, clean state and disabled Save.
+- Native Windows-1252 Save wrote exact nine-byte `café · €` plus newline,
+  preserving mode `0640`. Switching back and saving wrote exact 13-byte UTF-8.
+  Both receipts retained the selected encoding and cleared dirty state.
+- New UTF-8 Save as wrote the same bytes with `0600`, rebound the editor path
+  and left the other generated files unchanged. No editor parts remained.
+- Normal menu Quit with SSH and the local PTY active released the owned app,
+  local child, server session children and established fixture connections.
+  The manual harness then exited successfully, removed its private root and
+  reaped its daemon; the loopback port was reusable.
+
+The version-aligned full local suite and both mounted Mac package checks passed.
+After publication, all four public assets downloaded anonymously with HTTP 200
+and matched the verified local bytes; both downloaded manifests passed.
+[Release files, hashes and limits](../release/v0.1.26.md).
+
+This is the stated ARM64 release-copy workflow, separate from the broader
+pre-version-bump candidate receipt below. Initial GUI Open still requires UTF-8;
+the selector controls output encoding. Explicit legacy-encoding Open, native
+warning focus, uncertain promotion recovery, listing-limit refusals, clean
+installation, sustained use and Windows/Linux acceptance remain pending.
+No personal SSH files, agent, Remote Login or firewall/router settings changed.
+
 ## Post-v0.1.25 native editor acceptance — 2026-10-03
 
 A local production ARM64 candidate from runtime source `982f297` passed the

@@ -6,7 +6,7 @@
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.25-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.25)
+[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.26-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.26)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
@@ -91,26 +91,26 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 
 | Platform | Download | Available version |
 | --- | --- | --- |
-| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.25/MobaRust-0.1.25-macos-arm64.dmg) | **0.1.25** |
-| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.25/MobaRust-0.1.25-macos-x64.dmg) | **0.1.25** |
+| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.26/MobaRust-0.1.26-macos-arm64.dmg) | **0.1.26** |
+| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.26/MobaRust-0.1.26-macos-x64.dmg) | **0.1.26** |
 | 🪟 **Windows · x64** | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
 | 🐧 **Ubuntu / Debian · x64** | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
 | 🐧 **Other Linux · x64** | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
 
 **Preview distribution:** no publisher signing; macOS is ad hoc signed and not notarized. Windows/Linux installers are older and do not include the latest `main` changes. RDP is excluded from normal installers.
 
-[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.25) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
+[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.26) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
 
 On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install ./MobaRust-0.1.12-linux-x64.deb`. AppImage prerequisites vary by distribution. Checksums verify downloaded bytes; they do not establish publisher identity.
 
-## 🚀 What's new — 0.1.25
+## 🚀 What's new — 0.1.26
 
-- **Safer editor saves:** byte-level conflict checks survive encoding conversion; exclusive private parts preserve occupied paths and permissions. Committed saves retain the written buffer, with a visible cleanup warning when needed.
-- **Private, guarded transfers:** exact file-type checks and mode-0600 parts protect SFTP/SCP workflows. Cancellation and copy failures await file shutdown before promotion or cleanup.
-- **Explicit file actions:** Delete unlinks final symlinks; rename, Delete, mkdir and chmod require named entries. Chmod refuses final symlinks and unknown types.
-- **Reliable SFTP shutdown:** checked offsets, drained WRITE replies and one acknowledged CLOSE retire handles without duplicate requests. The full local check passed, including 25 OpenSSH cases and 22 in-memory boundary checks.
+- **Encoding Save fixed:** UTF-8 and Windows-1252 selector values now reach Rust correctly. The ARM64 installer copy passed native conversion in both directions, exact bytes, permissions and new Save as.
+- **Bounded SFTP listings:** the shared browser and recursive planner refuse more than 10,000 entries, 16 MiB of decoded text or a 12-second READDIR phase, discard partial results and await close.
+- **Earlier file protections retained:** conflict detection, private temporary files, explicit collision policies and acknowledged transfer/handle shutdown remain included.
+- **Locally checked release:** the complete suite passed, including 25 OpenSSH cases, 22 boundary checks and 15 editor/transfer fault cases. Both Mac packages passed mounted layout, architecture, signature and CLI checks.
 
-Both Mac DMGs include these fixes; all four published assets matched the verified local bytes. **Known v0.1.25 issue:** Windows-1252 Save fails before writing. The correction on main passed a rebuilt Mac native workflow and is awaiting a new installer. Windows/Linux remain v0.1.12; broader native acceptance remains pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.25.md).
+Both Mac DMGs include these fixes; all four published assets were downloaded anonymously and matched the verified local bytes. Initial GUI Open still expects UTF-8; explicit legacy-encoding Open is next. Windows/Linux remain v0.1.12; broader native acceptance remains pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.26.md).
 
 ## 🧭 Progress and next steps
 
@@ -120,13 +120,13 @@ Both Mac DMGs include these fixes; all four published assets matched the verifie
 | --- | --- | --- |
 | ✅ **SSH reliability** | OpenSSH lab covers keys, jumps, agent, IPv6 and recovery. Mac debug two-bastion routing and [v0.1.19 ARM64 release-copy checks](docs/testing/ssh-lab.md#v0119-arm64-release-copy-authentication--2026-10-02). The prompt queue, included in v0.1.25, passed earlier Mac debug [two-session native reconnect, cancellation handoff and Quit checks](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02). | Native startup review, queued expiry/overflow, v0.1.25 release-copy prompt/backpressure/resize checks, Windows/Linux acceptance, OpenSSH password/PAM, wider retry/restart cases and sustained workloads. |
 | ✅ **Native workflow demo** | macOS ARM64 terminals, SSH, remote edit/save, file download and local tunnel. | Wider keyboard, failure-recovery and GUI coverage across all three OSes. |
-| ✅ **Editor recovery** | Rebuilt Mac candidate passed conflict/reopen recovery, both Save as policies, encoding conversion and byte/mode checks. [Receipt](docs/testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03). | Ship the selector fix; Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
+| ✅ **Editor recovery** | Mac candidate passed conflict/reopen recovery and both Save as policies. The v0.1.26 ARM64 installer copy passed encoding Save, new Save as, byte/mode checks and normal Quit. [Receipts](docs/testing/native-workflow.md). | Explicit legacy-encoding Open; Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
 | 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.25 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
-| 🟡 **Distribution** | Mac ARM64/x64 0.1.25 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
+| 🟡 **Distribution** | Mac ARM64/x64 0.1.26 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
-**Next priorities:** native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers → daily workflow polish.
+**Next priorities:** explicit legacy-encoding Open → native platform evidence → SSH recovery/authentication coverage → aligned, trusted installers.
 
 [📍 Detailed roadmap & completion criteria](ROADMAP.md) · [Platform evidence](docs/testing/hardware-interoperability.md) · [SSH lab](docs/testing/ssh-lab.md) · [Benchmark receipt](benchmarks/2026-10-02-local.md)
 

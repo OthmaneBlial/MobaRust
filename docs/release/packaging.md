@@ -3,7 +3,7 @@
 ## Downloadable previews
 
 The v0.1.12 preview has Windows x64 NSIS, Linux x64 Debian/AppImage, and macOS
-ARM64/x64 DMG packages. The newer [v0.1.25 preview](v0.1.25.md) updates only
+ARM64/x64 DMG packages. The newer [v0.1.26 preview](v0.1.26.md) updates only
 the two Mac DMGs using local builds. The release workflow is disabled; new
 builds and checks run locally. A release tag must match the Cargo, frontend,
 and Tauri versions.
@@ -227,12 +227,12 @@ replacement for signed distribution or operating-system protection.
 
 | Target | Helper build | Package evidence | Signing evidence |
 | --- | --- | --- | --- |
-| Windows x64 | v0.1.12 native-runner build exists; v0.1.25 native build pending | v0.1.12 preview installer available; clean install pending | Owner certificate pending |
-| Linux x64 | v0.1.12 native-runner build exists; v0.1.25 native build pending | v0.1.12 DEB/AppImage available; distro checks pending | Signing policy pending |
-| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.25 DMG passed layout, integrity and CLI checks; v0.1.19 release-copy SSH receipt is separate; v0.1.25 GUI and clean install pending | Developer ID/notarization pending |
+| Windows x64 | v0.1.12 native-runner build exists; current native build pending | v0.1.12 preview installer available; clean install pending | Owner certificate pending |
+| Linux x64 | v0.1.12 native-runner build exists; current native build pending | v0.1.12 DEB/AppImage available; distro checks pending | Signing policy pending |
+| macOS ARM64 | Local ARM helper passed; clean install pending | v0.1.26 DMG passed layout, integrity, CLI and public-download checks; native encoding Save/new Save as/normal Quit passed in an isolated release copy; broader GUI and clean install pending | Developer ID/notarization pending |
 | Windows ARM64 | Cross-build/toolchain required | Pending | Pending |
 | Linux ARM64 | Cross-build/toolchain required | Pending | Pending |
-| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.25 DMG passed layout, integrity and Rosetta CLI checks; Intel GUI pending | Developer ID/notarization pending |
+| macOS x64 | Local cross-built Intel VNC helper passed | v0.1.26 DMG passed layout, integrity, Rosetta CLI and public-download checks; Intel GUI pending | Developer ID/notarization pending |
 
 Packaging is not a claim that RDP/VNC interoperability is complete. Real
 server tests, platform-specific input/clipboard/display behavior, dependency

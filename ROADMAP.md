@@ -23,14 +23,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.25; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.26; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.25.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.26.md).
 
 ## Completed in the current improvement cycle
 
@@ -204,7 +204,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.25 Mac notes, versions, architectures, artifact names and downloaded byte-matched SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.26 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.
@@ -214,7 +214,7 @@ debug packaging checks passed. [Two-session Mac debug overlap, cancellation and 
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.
-- [x] Verify macOS ARM64 remote-editor conflict/discard/reopen recovery and both Save as policies through a complete native UI workflow, including exact UTF-8/Windows-1252 bytes, modes and shutdown. [Source-candidate receipt](docs/testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03); Windows/Linux acceptance and shipping the selector fix remain separate.
+- [x] Verify macOS ARM64 remote-editor conflict/discard/reopen recovery and both Save as policies through a complete native UI workflow, including exact UTF-8/Windows-1252 bytes, modes and shutdown. [Source-candidate receipt](docs/testing/native-workflow.md#post-v0125-native-editor-acceptance--2026-10-03); the selector fix is shipped and encoding Save/new Save as rechecked in the [v0.1.26 ARM64 installer copy](docs/testing/native-workflow.md#v0126-arm64-release-copy-editor-acceptance--2026-10-03). Windows/Linux acceptance remains separate.
 - [x] Record a new native macOS ARM64 demo with authenticated disposable SSH, SFTP editing/download and a working tunnel; redact account labels and local paths.
 
 On `main` after v0.1.24, [remote-editor encoding conversion](docs/adr/0022-bounded-remote-text-editor.md#encoding-conversion-regression--2026-10-03)
@@ -222,8 +222,10 @@ uses byte-level conflict checks for Save and Save as, so Windows-1252 → UTF-8
 conversion works without weakening revision refusal. A real loopback OpenSSH
 regression covers conversion, unchanged targets after refusals, permissions
 and cleanup. The newer Mac source candidate closes the specific UI recovery
-gate above; Windows/Linux execution and shipping the encoding-selector wire fix
-remain pending. Public v0.1.25 retains that selector defect.
+gate above; v0.1.26 ships the encoding-selector wire fix and passed the stated
+release-copy conversion checks. Windows/Linux execution remains pending.
+Initial GUI Open still requires UTF-8; explicit legacy-encoding Open is the next
+editor task. Public v0.1.25 retains its selector defect.
 
 The [editor temporary ownership check](docs/adr/0022-bounded-remote-text-editor.md#temporary-ownership-regression--2026-10-03)
 also refuses existing temporary files/links without truncating or removing
@@ -250,14 +252,15 @@ remain pending.
 | **X11** | Opt-in SSH channel bridge to an explicitly selected external display; loopback tests and optional Xvfb fixture | Run real external X-server cases on Linux, macOS, and Windows; verify authentication, DISPLAY setup, cancellation, and cleanup. |
 | **Serial** | Native configuration, refresh, sessions, and Unix pseudo-terminal lifecycle/device-loss tests | Test dedicated physical adapters, drivers/permissions, baud/parity/flow control, removal, and explicit reconnection per OS. |
 
-Both [verified v0.1.25 Mac previews](docs/release/v0.1.25.md) include the earlier editor, transfer, named-mutation and SDK handle corrections. All four published files were downloaded anonymously and byte-matched. The newer encoding wire fix is source-only; broader native workflows and Windows/Linux alignment remain pending.
+Both [verified v0.1.26 Mac previews](docs/release/v0.1.26.md) include the earlier editor, transfer, named-mutation and SDK handle corrections, plus the encoding wire fix and directory-listing bounds. All four published files were downloaded anonymously and byte-matched. Broader native workflows and Windows/Linux alignment remain pending.
 
 On main after v0.1.25, [directory listing guards](docs/adr/0008-sftp-transfer-pipeline.md#bounded-directory-listings--2026-10-03)
 bound filtered entries, cumulative text and the READDIR phase in the shared
 browser/recursive-planning reader. Local protocol regressions cover refusal,
-acknowledged close and same-connection recovery. Published installers do not
-include this newer guard; native limit/refusal and cross-platform acceptance
-remain open. The Mac editor candidate exercised an ordinary directory listing.
+acknowledged close and same-connection recovery. Both v0.1.26 Mac installers
+include this guard; native limit/refusal and cross-platform acceptance remain
+open. The Mac editor candidate and v0.1.26 release copy exercised ordinary
+directory listings.
 
 ## Implemented foundation
 

@@ -27,6 +27,13 @@ This includes 107 desktop tests, 43 SSH unit tests, 15 authentication cases,
 SSH labs remain ignored; real Xvfb reports its prerequisite skip. No timeout or
 assertion was relaxed. Installer validation and publication remain separate.
 
+The subsequent [v0.1.26 release receipt](../release/v0.1.26.md) records both
+verified Mac DMGs, the stated ARM64 native release-copy workflow and all four
+anonymously downloaded, byte-matched public assets. These downloads include
+the encoding wire fix and directory-listing bounds. Windows/Linux updates,
+broader native acceptance and independent review remain open. The preparation
+statements above retain their scope; publication does not remove the warnings.
+
 ## v0.1.25 release audit and publication — 2026-10-03
 
 A fresh workspace `cargo audit --json` scan refreshed RustSec to commit
