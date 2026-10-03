@@ -1310,8 +1310,14 @@ impl Session {
             // Keep reading the network for window adjustments, but leave
             // application output in its bounded receivers while a channel is
             // window-blocked.
-            let can_receive_outbound = !self.kex.active() && !self.common.has_any_pending_data();
+            let write_pending = self.common.packet_writer.has_pending();
+            let can_receive_outbound = !self.kex.active()
+                && !self.common.has_any_pending_data()
+                && !write_pending;
             tokio::select! {
+                r = self.common.packet_writer.flush_into(stream_write), if write_pending => {
+                    map_err!(r)?;
+                }
                 r = &mut reading => {
                     let (stream_read, mut buffer, mut opening_cipher) = match r {
                         Ok((_, stream_read, buffer, opening_cipher)) => (stream_read, buffer, opening_cipher),
@@ -1404,12 +1410,13 @@ impl Session {
             };
 
             self.flush()?;
-            crate::flush_or_timeout(
-                &mut self.common.packet_writer,
-                stream_write,
-                inactivity_timer.as_mut(),
-            )
-            .await?;
+            // Reads must continue while a nested transport's write window is
+            // blocked. Bound replies from a peer that will not drain writes.
+            if self.common.packet_writer.pending_len() as u64
+                > 2 * u64::from(self.common.config.window_size)
+            {
+                return Err(crate::Error::Pending.into());
+            }
 
             if let Some(ref mut enc) = self.common.encrypted {
                 if let EncryptedState::InitCompression = enc.state {
@@ -1447,6 +1454,12 @@ impl Session {
             }
         }
 
+        crate::flush_or_timeout(
+            &mut self.common.packet_writer,
+            stream_write,
+            inactivity_timer.as_mut(),
+        )
+        .await?;
         result
     }
 

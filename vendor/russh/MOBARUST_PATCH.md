@@ -22,12 +22,25 @@ and distinct password/OTP cases exercise normal answer delivery. No upstream
 fix or upstream test-suite result is claimed. Remove this local copy when an
 upstream release fixes the same behavior and these regressions pass unchanged.
 
+The client packet loop also selects pending writes alongside reads. Awaiting
+the entire flush previously stalled concurrent large PTY/SFTP streams over
+two nested jump channels. Further application output stays in bounded queues
+while a flush is pending; unsent replies exceeding twice the configured receive
+window are refused. `src/sshbuffer.rs` retains a partial-write cursor across
+select turns, so resuming a flush cannot duplicate its ciphertext prefix.
+Sent-prefix compaction occurs after at least half the buffer has been written.
+Final disconnect retains a final flush. Regression and limits:
+[8 MiB concurrent IPv6/OpenSSH streams](../../docs/testing/routed-ipv6-streams.md),
+run with `cargo xtask test-ssh` and `cargo xtask check`. Remove these changes only
+when the concurrent stream and existing authentication regressions pass with
+an upstream replacement.
+
 The workspace excludes this dependency from its own test targets, and its
 library test/doctest targets are disabled in the local manifest. Upstream
 examples, benchmarks, external tests, development dependencies, library/client
 test modules, key format fixtures, inline key fixtures and the key-bearing documentation
 example are omitted; production code is otherwise unchanged except for the
-client patch above. MobaRust generates test credentials in memory. Remaining
+client/packet-writer changes above. MobaRust generates test credentials in memory. Remaining
 inline upstream tests are not executed as workspace tests.
 
 `src/keys/format/mod.rs` retains upstream PEM delimiter literals. Its exact

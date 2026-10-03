@@ -112,6 +112,8 @@ On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install .
 
 Both Mac DMGs include these changes, the earlier concurrent authentication queue and Full-HD VNC renderer. Windows/Linux remain v0.1.12. Native startup-review and release-copy SSH acceptance remain pending. The walkthrough above was recorded on v0.1.17. [Release checks and limits](docs/release/v0.1.21.md).
 
+**On main, for the next preview:** locally validated fixes for interrupted SFTP/SCP transfers, concurrent streams through jump hosts and terminal output sent after process exit. The lab verifies [16 MiB interruption/retry](docs/testing/interrupted-transfers.md) and [8 MiB output plus file transfers through two IPv6 bastions](docs/testing/routed-ipv6-streams.md), including frequent rekeying. Published installers remain unchanged.
+
 ## 🧭 Progress, without invented percentages
 
 **Updated 2026-10-03.** Implementation, tests, downloadable binaries and hardware evidence are separate milestones.

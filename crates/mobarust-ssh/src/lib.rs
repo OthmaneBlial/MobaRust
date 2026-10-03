@@ -1207,6 +1207,9 @@ impl SshConnection {
         let mut reader = SshShellReader {
             channel: reader,
             pending_output,
+            exit_status: None,
+            output_eof: false,
+            finished: false,
         };
         let writer = SshShellWriter { channel: writer };
         if let Some(startup) = build_startup_input(
@@ -2322,9 +2325,14 @@ pub struct SshShell {
 
 /// Read-only half of an interactive SSH shell. It can run concurrently with
 /// [`SshShellWriter`] so terminal input never blocks remote output.
+/// Exit status is delivered after output EOF/close, including buffered data
+/// sent after the remote process exited.
 pub struct SshShellReader {
     channel: ChannelReadHalf,
     pending_output: VecDeque<SshOutput>,
+    exit_status: Option<u32>,
+    output_eof: bool,
+    finished: bool,
 }
 
 /// Write/control half of an interactive SSH shell.
@@ -3214,10 +3222,35 @@ impl SshShell {
 
 impl SshShellReader {
     pub async fn next_output(&mut self) -> Option<Result<SshOutput, SshError>> {
+        if self.finished {
+            return None;
+        }
         if let Some(output) = self.pending_output.pop_front() {
             return Some(Ok(output));
         }
-        shell_message_output(self.channel.wait().await?).map(Ok)
+        loop {
+            match self.channel.wait().await {
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    // A process can exit before its queued output reaches EOF.
+                    self.exit_status = Some(exit_status);
+                }
+                Some(ChannelMsg::Eof) => self.output_eof = true,
+                Some(ChannelMsg::Close) | None => {
+                    self.finished = true;
+                    return self
+                        .exit_status
+                        .take()
+                        .map(|status| Ok(SshOutput::ExitStatus(status)));
+                }
+                Some(message) => return shell_message_output(message).map(Ok),
+            }
+            if self.output_eof
+                && let Some(status) = self.exit_status.take()
+            {
+                self.finished = true;
+                return Some(Ok(SshOutput::ExitStatus(status)));
+            }
+        }
     }
 }
 

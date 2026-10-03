@@ -362,6 +362,7 @@ pub(crate) struct PacketWriter {
     compress: Compress,
     packet_buffer: Vec<u8>,
     write_buffer: SSHBuffer,
+    written: usize,
 }
 
 impl Debug for PacketWriter {
@@ -385,6 +386,7 @@ impl PacketWriter {
             compress,
             packet_buffer: Vec::new(),
             write_buffer: SSHBuffer::new(),
+            written: 0,
         }
     }
 
@@ -563,11 +565,34 @@ impl PacketWriter {
         self.write_buffer.seqn = Wrapping(0);
     }
 
+    pub fn has_pending(&self) -> bool {
+        !self.write_buffer.buffer.is_empty()
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.write_buffer.buffer.len() - self.written
+    }
+
+    /// Retain progress when a packet read wins the client's select. Restarting
+    /// write_all would duplicate an already transmitted ciphertext prefix.
     pub async fn flush_into<W: AsyncWrite + Unpin>(&mut self, w: &mut W) -> std::io::Result<()> {
         if !self.write_buffer.buffer.is_empty() {
-            w.write_all(&self.write_buffer.buffer).await?;
+            // Compact only after at least half was sent: total copying stays
+            // proportional to transmitted bytes while reads append replies.
+            if self.written > 0 && self.written >= self.write_buffer.buffer.len() / 2 {
+                self.write_buffer.buffer.drain(..self.written);
+                self.written = 0;
+            }
+            while self.written < self.write_buffer.buffer.len() {
+                let count = w.write(&self.write_buffer.buffer[self.written..]).await?;
+                if count == 0 {
+                    return Err(std::io::ErrorKind::WriteZero.into());
+                }
+                self.written += count;
+            }
             w.flush().await?;
             self.write_buffer.buffer.clear();
+            self.written = 0;
         }
         Ok(())
     }

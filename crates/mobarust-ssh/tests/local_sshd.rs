@@ -123,18 +123,7 @@ fn ipv6_loopback_verifies_known_hosts_and_runs_a_shell() {
     runtime.block_on(async {
         let fixture = LocalSshd::start_internal(false, true).expect("start IPv6 SSH fixture");
         wait_for_port(fixture.port).await;
-        let trust = fixture.directory.path().join("known_hosts_ipv6");
-        fs::write(
-            &trust,
-            fs::read_to_string(&fixture.known_hosts)
-                .unwrap()
-                .replace("[127.0.0.1]", "[::1]"),
-        )
-        .expect("write IPv6 fixture trust file");
-        let mut options = fixture.options();
-        options.host = "::1".into();
-        options.host_key_policy = HostKeyPolicy::KnownHosts(trust);
-        let connection = SshConnection::connect(options)
+        let connection = SshConnection::connect(fixture.ipv6_options())
             .await
             .expect("connect over IPv6");
         let output = shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'IPV6_OK'; exit\n").await;
@@ -796,6 +785,152 @@ fn distinct_jump_hosts_verify_every_key_and_reach_the_target() {
             .disconnect()
             .await
             .expect("disconnect complete jump chain");
+    });
+}
+
+#[test]
+fn ipv6_jump_chain_streams_large_shell_output_and_sftp_concurrently() {
+    run_ipv6_stream_lab(false);
+}
+
+#[test]
+fn ipv6_jump_chain_streams_large_shell_output_and_sftp_during_frequent_rekey() {
+    run_ipv6_stream_lab(true);
+}
+
+fn run_ipv6_stream_lab(frequent_rekey: bool) {
+    if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err() {
+        eprintln!("skipping routed IPv6 OpenSSH fixture: IPv6 loopback is unavailable");
+        return;
+    }
+    let runtime = tokio::runtime::Runtime::new().expect("create routed IPv6 runtime");
+    runtime.block_on(async {
+        let fixtures = std::array::from_fn::<_, 3, _>(|_| {
+            let mut fixture =
+                LocalSshd::start_internal(false, true).expect("start distinct IPv6 fixture");
+            if !frequent_rekey {
+                return fixture;
+            }
+            // Exercise packet-write resumption across server-requested key
+            // exchanges on every transport, rather than only initial keys.
+            fixture.child.kill().unwrap();
+            fixture.child.wait().unwrap();
+            let config = fixture.directory.path().join("sshd_config");
+            fs::write(&config, format!("{}\nRekeyLimit 256K\n", fs::read_to_string(&config).unwrap())).unwrap();
+            fixture.child = spawn_sshd(&config).expect("restart owned daemon with frequent rekey");
+            fixture
+        });
+        for fixture in &fixtures {
+            wait_for_port(fixture.port).await;
+        }
+        for rejected_hop in 0..3 {
+            let mut options = fixtures.each_ref().map(LocalSshd::ipv6_options);
+            options[rejected_hop].host_key_policy =
+                HostKeyPolicy::PinnedFingerprint("SHA256:untrusted-ipv6-fixture".into());
+            let [first, second, target] = options;
+            let result = tokio::time::timeout(
+                Duration::from_secs(20),
+                SshConnection::connect_with_jump_chain(target, vec![first, second]),
+            )
+            .await
+            .expect("IPv6 rejected-hop deadline");
+            assert!(matches!(result, Err(SshError::HostKeyRejected { .. })));
+        }
+        let [first, second, target] = fixtures.each_ref().map(LocalSshd::ipv6_options);
+        let trust_before = fixtures.each_ref().map(|fixture| {
+            fs::read(fixture.directory.path().join("known_hosts_ipv6")).unwrap()
+        });
+        let connection = tokio::time::timeout(
+            Duration::from_secs(20),
+            SshConnection::connect_with_jump_chain(target, vec![first, second]),
+        )
+        .await
+        .expect("IPv6 two-bastion connection deadline")
+        .expect("connect via IPv6 at every hop");
+
+        let line = "MobaRust café 🦀 \x1b[32mgreen\x1b[0m\n".as_bytes();
+        let mut payload = line.repeat(8 * 1024 * 1024 / line.len());
+        payload.resize(8 * 1024 * 1024, b'\n');
+        let root = fixtures[2].directory.path();
+        let source = root.join("sustained café 🦀.txt");
+        fs::write(&source, &payload).unwrap();
+        let uploaded = root.join("concurrent café 🦀.bin").to_string_lossy().into_owned();
+        let sftp = connection.open_sftp().await.unwrap();
+        let (mut reader, writer) = connection.open_shell(100, 30).await.unwrap().split();
+        let command = format!(
+            "stty -echo -onlcr; printf '\\nMOBARUST_STREAM_BEGIN\\n'; cat '{}'; printf '\\nMOBARUST_STREAM_END\\n'; exit\n",
+            source.to_string_lossy().replace('\'', "'\\''"),
+        );
+        writer.write(command.as_bytes()).await.unwrap();
+        let streams_started = std::time::Instant::now();
+        let output = async {
+            let mut bytes = Vec::new();
+            let mut exit = None;
+            while let Some(message) = reader.next_output().await {
+                match message.expect("read routed IPv6 PTY output") {
+                    SshOutput::Stdout(data) | SshOutput::Stderr(data) => {
+                        bytes.extend(data);
+                        assert!(bytes.len() <= payload.len() + 64 * 1024);
+                    }
+                    SshOutput::ExitStatus(status) => {
+                        exit = Some(status);
+                        break;
+                    }
+                    SshOutput::Control => {}
+                }
+            }
+            assert_eq!(exit, Some(0));
+            let begin = b"\nMOBARUST_STREAM_BEGIN\n";
+            let start = bytes.windows(begin.len()).position(|window| window == begin)
+                .expect("find output start marker") + begin.len();
+            let end = start + payload.len();
+            assert_eq!(&bytes[start..end], payload);
+            assert!(bytes[end..].starts_with(b"\nMOBARUST_STREAM_END\n"));
+            eprintln!("IPv6 progress: output completed at {:?}", streams_started.elapsed());
+        };
+        let files = async {
+            let count = sftp.upload_from(payload.as_slice(), &uploaded).await.unwrap();
+            assert_eq!(count, payload.len() as u64);
+            eprintln!("IPv6 progress: upload completed at {:?}", streams_started.elapsed());
+            let mut downloaded = Vec::new();
+            let (_sender, mut cancel) = oneshot::channel();
+            let mut reported = 0;
+            assert_eq!(sftp.download_to_with_cancel(&uploaded, &mut downloaded, &mut cancel, |bytes| {
+                if bytes / (1024 * 1024) > reported {
+                    reported = bytes / (1024 * 1024);
+                    eprintln!("IPv6 progress: downloaded {} MiB at {:?}", reported, streams_started.elapsed());
+                }
+            }).await.unwrap(), count);
+            assert_eq!(downloaded, payload);
+            assert_eq!(fs::read(&uploaded).unwrap(), payload);
+            sftp.remove_file(&uploaded).await.unwrap();
+        };
+        // The ordinary stream gate remains 30 seconds. Frequent server key
+        // renewal adds repeated cryptographic exchanges on all three hops.
+        let stream_deadline = Duration::from_secs(if frequent_rekey { 60 } else { 30 });
+        tokio::time::timeout(stream_deadline, async {
+            tokio::join!(output, files);
+        })
+        .await
+        .expect("concurrent IPv6 streams must finish without starving each other");
+        sftp.close().await.unwrap();
+        drop(reader);
+        drop(writer);
+        connection.disconnect().await.unwrap();
+        for (fixture, original) in fixtures.iter().zip(trust_before) {
+            assert_eq!(fs::read(fixture.directory.path().join("known_hosts_ipv6")).unwrap(), original);
+        }
+        let ports = fixtures.each_ref().map(|fixture| fixture.port);
+        let homes = fixtures.each_ref().map(|fixture| fixture.directory.path().to_owned());
+        drop(sftp);
+        drop(connection);
+        drop(fixtures);
+        for port in ports {
+            drop(TcpListener::bind(("127.0.0.1", port)).await.unwrap());
+            drop(TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).await.unwrap());
+        }
+        assert!(homes.iter().all(|home| !home.exists()));
+        eprintln!("routed IPv6: 8 MiB PTY output and byte-matched SFTP upload/download via two bastions; frequent_rekey={frequent_rekey}");
     });
 }
 
@@ -1815,6 +1950,21 @@ struct LocalSshd {
 }
 
 impl LocalSshd {
+    fn ipv6_options(&self) -> SshConnectOptions {
+        let trust = self.directory.path().join("known_hosts_ipv6");
+        fs::write(
+            &trust,
+            fs::read_to_string(&self.known_hosts)
+                .unwrap()
+                .replace("[127.0.0.1]", "[::1]"),
+        )
+        .expect("write IPv6 fixture trust file");
+        let mut options = self.options();
+        options.host = "::1".into();
+        options.host_key_policy = HostKeyPolicy::KnownHosts(trust);
+        options
+    }
+
     fn options(&self) -> SshConnectOptions {
         SshConnectOptions {
             host: "127.0.0.1".into(),

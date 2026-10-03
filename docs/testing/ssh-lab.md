@@ -15,6 +15,8 @@ personal SSH files, and remote servers are unnecessary.
 The [interrupted-transfer checks](interrupted-transfers.md) exercise 16 MiB
 SFTP/SCP streams over an owned loopback relay, preserve originals on loss,
 report unavailable remote cleanup and verify a full byte-matched retry.
+The [routed IPv6 stream check](routed-ipv6-streams.md) concurrently drains 8 MiB
+of real PTY output and transfers byte-matched files through two distinct bastions.
 
 ## OpenSSH fixture requirements (Unix)
 

@@ -37,6 +37,8 @@ enum ShellReply {
     StartupStall,
     StartupExit,
     StartupOverflow,
+    ExitBeforeOutput,
+    EofBeforeExit,
 }
 
 #[cfg(unix)]
@@ -215,6 +217,18 @@ impl server::Handler for Handler {
                 }
             }
             session.data(channel, SHELL_BANNER.to_vec())?;
+            if matches!(self.shell_reply, ShellReply::ExitBeforeOutput) {
+                session.exit_status_request(channel, 23)?;
+                session.data(channel, b"output after exit status\r\n".to_vec())?;
+                session.extended_data(channel, 1, b"stderr after exit status\r\n".to_vec())?;
+                session.eof(channel)?;
+                session.close(channel)?;
+            }
+            if matches!(self.shell_reply, ShellReply::EofBeforeExit) {
+                session.eof(channel)?;
+                session.exit_status_request(channel, 23)?;
+                session.close(channel)?;
+            }
             if matches!(self.shell_reply, ShellReply::StartupStall) {
                 self.observations.entered.notify_one();
             }
@@ -1171,6 +1185,55 @@ async fn shell_setup_requires_server_acceptance() {
             output, expected,
             "setup bytes precede live bytes exactly once"
         );
+        connection.disconnect().await.unwrap();
+        drop(connection);
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn shell_exit_status_waits_for_the_end_of_output() {
+    for reply in [ShellReply::ExitBeforeOutput, ShellReply::EofBeforeExit] {
+        let fixture = Fixture::start_with_shell(Method::Password, false, None, true, reply).await;
+        let connection = SshConnection::connect(fixture.options(Method::Password, true))
+            .await
+            .unwrap();
+        let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
+        let output = tokio::time::timeout(DEADLINE, async {
+            let mut output = Vec::new();
+            loop {
+                match reader
+                    .next_output()
+                    .await
+                    .expect("exit status must be delivered")
+                    .unwrap()
+                {
+                    SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => output.extend(bytes),
+                    SshOutput::ExitStatus(status) => {
+                        assert_eq!(status, 23);
+                        break;
+                    }
+                    SshOutput::Control => {}
+                }
+            }
+            output
+        })
+        .await
+        .unwrap();
+        let expected = if matches!(reply, ShellReply::ExitBeforeOutput) {
+            [
+                SHELL_BANNER,
+                b"output after exit status\r\n",
+                b"stderr after exit status\r\n",
+            ]
+            .concat()
+        } else {
+            SHELL_BANNER.to_vec()
+        };
+        assert_eq!(output, expected);
+        assert!(reader.next_output().await.is_none());
+        drop(reader);
+        drop(writer);
         connection.disconnect().await.unwrap();
         drop(connection);
         fixture.finish().await;
