@@ -283,3 +283,14 @@ tests/Clippy, frontend tests/type/lint/build, protocol fixtures, fuzz compilatio
 and package-layout contracts. The real X11 server case was skipped for missing
 prerequisites; native observation of the revised message remains a separate
 check.
+
+The corrected source `59c531a` also passed `cargo xtask package-check`: the
+Mac debug bundle, VNC resource, checksum manifest and isolated `--version`
+probe passed. A freshly prepared, ad hoc signed copy was launched with
+verified disposable HOME/XDG paths and empty SSH-agent settings. The UI tool
+could not observe its window on two attempts against the same confirmed live
+process, so no SSH fixture was started and no revised-message GUI result is
+claimed. Only the confirmed owned runtime received SIGTERM; it and its local
+zsh child exited. Normal native Quit was not observed in this attempt. The
+observation failure's cause remains unproven; it does not establish an SSH
+regression. The new message still needs native acceptance.

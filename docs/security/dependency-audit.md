@@ -1,5 +1,31 @@
 # Dependency audit record
 
+## v0.1.28 release preparation audit — 2026-10-03
+
+The refreshed RustSec database remains at
+`ef6173cbc5c50ec8166f9a5b28f07834144373ee` (1,290 advisories). The
+638-package shipping workspace reports zero vulnerabilities and retains
+`RUSTSEC-2024-0370` (unmaintained proc-macro-error) and `RUSTSEC-2024-0429`
+(glib unsoundness) warnings. Against the same database, VNC (82 packages)
+and fuzz (52 packages) report no vulnerabilities or warnings. The excluded
+RDP candidate (374 packages) still fails on `RUSTSEC-2023-0071`, with
+`RUSTSEC-2023-0089` and `RUSTSEC-2025-0134` unmaintained warnings. No finding
+was suppressed; RDP remains outside normal installers.
+
+Semantic comparison of the four lockfiles confirms only local package versions
+changed from 0.1.27 to 0.1.28. Third-party dependency versions, sources,
+checksums and features are unchanged. This candidate includes the readable
+[startup review](../testing/text-input-dialogs.md#saved-startup-command-review-on-main)
+and [phase-specific startup timeout](../testing/ssh-reconnect.md#startup-timeout-diagnosis-on-main).
+The version-aligned `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed on macOS ARM64: workspace tests/Clippy, frontend tests/type checks/lint/
+build, release/lab tooling, isolated RDP/VNC fixtures, package-layout contracts
+and fuzz compilation. Coverage includes 108 desktop tests, 43 SSH unit tests,
+15 authentication cases, 25 OpenSSH cases, 22 SFTP boundary cases and 15
+editor/transfer fault cases. Four manual SSH labs remain opt-in; real Xvfb
+reported its missing-prerequisite skip. Installer verification and publication
+remain separate gates.
+
 ## v0.1.27 release preparation audit — 2026-10-03
 
 A fresh workspace scan refreshed RustSec to commit
