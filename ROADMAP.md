@@ -165,6 +165,11 @@ SFTP downloads now require regular STAT/FSTAT types before file reads, reject
 unsafe sources and observe cancellation/close replies. [Source and shutdown checks](docs/adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
 also cover direct-upload cancellation and failed pending WRITE replies.
 Native/recursive acceptance and new installers remain pending; this does not close a checklist gate.
+The shared SFTP File adapter also retires handle operations as shutdown starts,
+avoids duplicate CLOSE on cancelled drop or completed retry, and preserves
+failure on subsequent retry. [Marker-gated handle lifecycle checks](docs/security/dependency-audit.md#sftp-handle-retirement-after-v0124--2026-10-03)
+cover pending/successful/denied close and pre-close draining without changing
+empty I/O or local position semantics. Native and new-installer acceptance remain pending.
 Native rename, Delete, mkdir and chmod now require a named final entry before
 session lookup. The shared guard handles root/dot aliases and trailing slashes;
 chmod also refuses live final symlinks or unknown types without opening contents.

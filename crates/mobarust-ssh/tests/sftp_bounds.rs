@@ -1,6 +1,11 @@
 //! Bounded in-memory peers; no sockets, credentials or filesystem operations.
 
-use std::{future::poll_fn, pin::Pin, task::Poll, time::Duration};
+use std::{
+    future::{Future, poll_fn},
+    pin::Pin,
+    task::Poll,
+    time::Duration,
+};
 
 use russh_sftp::client::{Config, RawSftpSession, SftpSession, fs::File};
 use tokio::io::{
@@ -236,10 +241,26 @@ async fn memory_file_with_write_limit(
     max_packet_len: u32,
     file_handle: &str,
 ) -> (SftpSession, File, DuplexStream) {
+    memory_file_with_options(limits, max_packet_len, file_handle, false).await
+}
+
+async fn memory_file_with_options(
+    limits: Option<(u64, u64, u64)>,
+    max_packet_len: u32,
+    file_handle: &str,
+    fsync: bool,
+) -> (SftpSession, File, DuplexStream) {
     let (stream, mut peer) = tokio::io::duplex(1024);
     let server = async {
         read_init(&mut peer).await;
         let mut extensions = Vec::new();
+        if fsync {
+            let name = b"fsync@openssh.com";
+            extensions.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            extensions.extend_from_slice(name);
+            extensions.extend_from_slice(&1_u32.to_be_bytes());
+            extensions.push(b'1');
+        }
         if limits.is_some() {
             let name = b"limits@openssh.com";
             extensions.extend_from_slice(&(name.len() as u32).to_be_bytes());
@@ -899,6 +920,191 @@ async fn shutdown_drains_failed_writes_and_keeps_the_first_status_after_close() 
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn shutdown_handle_retirement_blocks_wire_operations_and_duplicate_close() {
+    let mut failures = Vec::new();
+    for (pending, close_status) in [(false, 0), (false, 3), (true, 0), (true, 3)] {
+        let (session, mut file, mut peer) =
+            memory_file_with_options(None, 128, "fixture", true).await;
+        let (close_seen, seen) = tokio::sync::oneshot::channel();
+        let server = async {
+            // Positive controls prove these APIs and the fsync extension work
+            // before shutdown. The guard must not disable a live file.
+            let metadata = request(&mut peer).await;
+            assert_eq!(metadata[0], 8);
+            let mut attrs = 1_u32.to_be_bytes().to_vec();
+            attrs.extend_from_slice(&0_u64.to_be_bytes());
+            reply(&mut peer, 105, &metadata[1..5], &attrs).await;
+            for expected in [10, 200, 200] {
+                let req = request(&mut peer).await;
+                assert_eq!(req[0], expected);
+                status_reply(&mut peer, &req, 0).await;
+            }
+            let close = request(&mut peer).await;
+            assert_eq!(close[0], 4);
+            close_seen.send(()).unwrap();
+            if !pending {
+                status_reply(&mut peer, &close, close_status).await;
+            }
+            let mut unexpected = Vec::new();
+            loop {
+                let req = request(&mut peer).await;
+                if req[0] == 17 {
+                    // The session-level marker flushes every earlier request,
+                    // without relying on a timing-based quiet period.
+                    if pending {
+                        status_reply(&mut peer, &close, close_status).await;
+                    }
+                    status_reply(&mut peer, &req, 4).await;
+                    break;
+                }
+                unexpected.push(req[0]);
+                status_reply(&mut peer, &req, if req[0] == 4 { close_status } else { 4 }).await;
+            }
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(tail.is_empty());
+            unexpected
+        };
+        let client = async {
+            assert_eq!(file.metadata().await.unwrap().size, Some(0));
+            file.set_metadata(russh_sftp::client::fs::Metadata::empty())
+                .await
+                .unwrap();
+            file.sync_all().await.unwrap();
+            file.flush().await.unwrap();
+            if pending {
+                let mut shutdown = Box::pin(file.shutdown());
+                poll_fn(|cx| {
+                    assert!(shutdown.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                drop(shutdown);
+            } else {
+                assert_eq!(file.shutdown().await.is_ok(), close_status == 0);
+            }
+            seen.await.unwrap();
+            let mut refused = vec![
+                matches!(
+                    file.metadata().await,
+                    Err(russh_sftp::client::error::Error::IO(_))
+                ),
+                matches!(
+                    file.set_metadata(russh_sftp::client::fs::Metadata::empty())
+                        .await,
+                    Err(russh_sftp::client::error::Error::IO(_))
+                ),
+                matches!(
+                    file.sync_all().await,
+                    Err(russh_sftp::client::error::Error::IO(_))
+                ),
+            ];
+            let mut byte = [0];
+            refused.push(matches!(file.read(&mut byte).await, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe));
+            refused.push(matches!(file.write(b"x").await, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe));
+            refused.push(matches!(file.flush().await, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe));
+            refused.push(matches!(file.seek(std::io::SeekFrom::End(0)).await, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe));
+            assert_eq!(file.read(&mut []).await.unwrap(), 0);
+            assert_eq!(file.write(&[]).await.unwrap(), 0);
+            let position = file_position(&mut file).await;
+            if !pending {
+                let retry = file.shutdown().await;
+                refused.push(if close_status == 0 {
+                    retry.is_ok()
+                } else {
+                    matches!(retry, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe)
+                });
+            }
+            assert!(session.metadata("marker").await.is_err());
+            if pending {
+                // Cancelling the borrowed future preserves its one in-flight
+                // close; resuming it still observes the original status.
+                assert_eq!(file.shutdown().await.is_ok(), close_status == 0);
+            }
+            drop(file);
+            session.close().await.unwrap();
+            (refused, position)
+        };
+        let ((refused, position), unexpected) =
+            tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+                .await
+                .unwrap();
+        if refused.iter().any(|refused| !refused) || position != 0 || !unexpected.is_empty() {
+            failures.push(format!("pending={pending}, close_status={close_status}, refused={refused:?}, position={position}, extra packets={unexpected:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "retired handle operations: {failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_shutdown_drop_sends_exactly_one_close_in_each_phase() {
+    let mut failures = Vec::new();
+    for draining_write in [false, true] {
+        let (session, mut file, mut peer) = memory_file(None).await;
+        let server = async {
+            let write = if draining_write {
+                let req = request(&mut peer).await;
+                assert_eq!(req[0], 6);
+                Some(req)
+            } else {
+                None
+            };
+            let mut closes = 0;
+            loop {
+                let req = request(&mut peer).await;
+                if req[0] == 17 {
+                    status_reply(&mut peer, &req, 4).await;
+                    break;
+                }
+                assert_eq!(req[0], 4);
+                closes += 1;
+                if let Some(write) = &write {
+                    status_reply(&mut peer, write, 0).await;
+                }
+                status_reply(&mut peer, &req, 0).await;
+            }
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(tail.is_empty());
+            closes
+        };
+        let client = async {
+            if draining_write {
+                file.write_all(b"x").await.unwrap();
+            }
+            let mut shutdown = Box::pin(file.shutdown());
+            poll_fn(|cx| {
+                assert!(shutdown.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(shutdown);
+            if draining_write {
+                assert!(
+                    matches!(file.write(b"y").await, Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe)
+                );
+                assert_eq!(file_position(&mut file).await, 1);
+            }
+            drop(file);
+            assert!(session.metadata("marker").await.is_err());
+            session.close().await.unwrap();
+        };
+        let ((), closes) = tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+        if closes != 1 {
+            failures.push(format!(
+                "draining_write={draining_write}: CLOSE count={closes}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "cancelled drop closes: {failures:?}");
 }
 
 #[tokio::test]

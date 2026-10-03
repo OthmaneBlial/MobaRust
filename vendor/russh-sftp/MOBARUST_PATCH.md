@@ -47,6 +47,12 @@ except the six files below and line-ending normalization.
   During shutdown, retain the first pending WRITE failure while retiring the
   remaining replies and awaiting CLOSE, rather than falling back to an
   unacknowledged drop-close after the first error.
+  Retire handle operations on the first shutdown poll, clearing borrowed read/
+  seek/fsync state before draining writes. Drop sends one fallback CLOSE only
+  if no close is already pending. Completed success is an idempotent no-op;
+  retry after failed shutdown refuses locally instead of issuing another CLOSE
+  or masking failure. Metadata, fsync, flush, nonempty I/O and end-seek all share
+  the open-state guard; empty I/O and local position operations stay request-free.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
 - `src/protocol/file_attrs.rs`: compare the complete POSIX type field rather
@@ -105,5 +111,10 @@ The subsequent [guarded-download and shutdown receipt](../../docs/adr/0008-sftp-
 adds a two-WRITE-failure close gate and a raw in-memory SDK check preserving the
 first error across successful/failed CLOSE replies. This is still the same six
 patched production files, without version/feature changes or native certification.
+The subsequent [handle-retirement checks](../../docs/security/dependency-audit.md#sftp-handle-retirement-after-v0124--2026-10-03)
+reproduce duplicate cancelled closes and extra wire operations on closing/closed
+handles. Marker-gated in-memory cases verify both drop phases, live API controls,
+successful/denied close replies and refusal before further handle requests.
+These changes remain source after v0.1.24, pending new installers and native acceptance.
 Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
 neither of the first two cohorts.

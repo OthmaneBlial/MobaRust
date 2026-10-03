@@ -270,6 +270,61 @@ separate this source correction from native/cross-platform acceptance and public
 installers. Versions/features remain unchanged; this is not a new RustSec
 advisory or an independent audit.
 
+## SFTP handle retirement after v0.1.24 — 2026-10-03
+
+The memory baseline reproduced two CLOSE packets when a polled shutdown was
+cancelled and the file dropped. Repeated completed shutdown also sent another
+CLOSE. Metadata, metadata mutation, fsync, flush and end-seek still sent handle
+requests after closure; while CLOSE was pending, nonempty READ/WRITE were also
+accepted and the write advanced position. These are wire-level reproductions,
+not a claim that a real server reused a handle or an external file was affected.
+
+The shared File guard now retires handle operations on the first shutdown poll,
+including while WRITE acknowledgements are still draining. It clears borrowed
+read/seek/fsync futures and buffered data, retains the first WRITE error, and
+awaits the one CLOSE. Cancelling a borrowed shutdown permits resuming that same
+close/status; it does not reopen the file for another operation. After completion,
+successful shutdown is a local no-op, while failed shutdown refuses retries with
+BrokenPipe. The original call retains its structured first error.
+
+Drop queues a fallback CLOSE while still draining writes, when no close has been
+queued. It queues none if the close future already owns a request or shutdown has
+completed. The native consumed-file timeout/drop path uses this same adapter.
+Metadata/FSETSTAT, fsync/flush, nonempty READ/WRITE and end-seek share the guard;
+empty I/O and local position operations remain request-free.
+
+```text
+cargo test --locked -p mobarust-ssh --test sftp_bounds shutdown_ -- --show-output
+cargo test --locked -p mobarust-ssh --test sftp_bounds --test remote_editor
+cargo xtask check
+```
+
+Positive controls exercise FSTAT/FSETSTAT/fsync/flush on live files. Four
+closing/closed cases use successful or permission-denied CLOSE replies and a
+session-level STAT marker to flush all earlier packets without a timed quiet
+period. Both cancelled-drop phases must emit exactly one CLOSE; the pre-close
+draining case also refuses a new write without changing its position. The memory
+peers use no sockets, files, credentials or external servers. Existing first-WRITE
+error and authenticated transfer/editor close/cancellation regressions remain
+part of the check.
+
+The final full local `cargo xtask check` exited successfully on macOS ARM64:
+107 desktop tests, 42 SSH unit tests, 15 authenticated fixtures (three manual
+probes ignored), all 25 OpenSSH cases (36.23 seconds), 14 SFTP fault tests,
+22 packet/lifecycle checks, three metadata checks and five private SDK tests
+passed. Workspace/Clippy, frontend tests/typecheck/lint/build, release/isolated
+launcher checks, RDP/VNC helper tests, unsigned package-layout contracts and
+fuzz-target compilation also passed. The real X11 server fixture explicitly
+skipped its unavailable Xvfb/safe-socket prerequisite; external X11 acceptance
+remains unverified.
+
+A lost/failed CLOSE reply remains an uncertain server outcome: retiring local
+ownership prevents unsafe handle reuse, but does not prove the server closed the
+file or committed data. Drop does not await replies. Native GUI/release-copy and
+wider-platform acceptance remain pending, as do updated installers. The patch
+still modifies the same six SDK production files, without dependency version or
+feature changes; this is not a new advisory or an independent security audit.
+
 ## v0.1.24 release preparation audit — 2026-10-03
 
 A fresh `cargo audit --json` lookup reports RustSec commit

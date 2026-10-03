@@ -45,8 +45,9 @@ struct FileState {
 /// [`shutdown`](tokio::io::AsyncWriteExt::shutdown) on a file should be called.
 /// Also implement [`AsyncSeek`] and other async i/o implementations.
 ///
-/// On drop the handle is closed as well, but the reply is not awaited, so
-/// pending write errors and the close status are silently discarded
+/// Drop queues one close unless closure completed or CLOSE is already pending.
+/// It does not await pending write errors or the close status. Once shutdown is
+/// polled, new handle operations refuse; a cancelled shutdown can still resume.
 ///
 /// # Weakness
 /// Using [`SeekFrom::End`] is costly and time-consuming because we need to
@@ -57,6 +58,8 @@ pub struct File {
     state: FileState,
     pos: u64,
     closed: bool,
+    closing: bool,
+    shutdown_failed: bool,
     features: Features,
 }
 
@@ -76,17 +79,31 @@ impl File {
             },
             pos: 0,
             closed: false,
+            closing: false,
+            shutdown_failed: false,
             features,
         }
     }
 
+    fn ensure_open(&self) -> io::Result<()> {
+        if self.closing || self.closed {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SFTP file is closing or closed",
+            ));
+        }
+        Ok(())
+    }
+
     /// Queries metadata about the remote file.
     pub async fn metadata(&self) -> SftpResult<Metadata> {
+        self.ensure_open().map_err(Error::from)?;
         Ok(self.session.fstat(self.handle.as_str()).await?.attrs)
     }
 
     /// Sets metadata for a remote file.
     pub async fn set_metadata(&self, metadata: Metadata) -> SftpResult<()> {
+        self.ensure_open().map_err(Error::from)?;
         self.session
             .fsetstat(self.handle.as_str(), metadata)
             .await
@@ -98,6 +115,7 @@ impl File {
     /// If the server does not support `fsync@openssh.com` sending the request will
     /// be omitted, but will still pseudo-successfully
     pub async fn sync_all(&self) -> SftpResult<()> {
+        self.ensure_open().map_err(Error::from)?;
         if !self.features.fsync {
             return Ok(());
         }
@@ -154,7 +172,9 @@ fn poll_drain_writes(
 
 impl Drop for File {
     fn drop(&mut self) {
-        if self.closed {
+        // While draining writes, no CLOSE exists yet: Drop must still send it.
+        // Once the close future exists, it already owns the one queued request.
+        if self.closed || self.state.f_shutdown.is_some() {
             return;
         }
 
@@ -181,12 +201,7 @@ impl AsyncRead for File {
             return Poll::Ready(Ok(()));
         }
         let file = self.get_mut();
-        if file.closed {
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "SFTP file is closed",
-            )));
-        }
+        file.ensure_open()?;
         if file.pos == u64::MAX {
             return Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -260,6 +275,9 @@ impl AsyncRead for File {
 
 impl AsyncSeek for File {
     fn start_seek(mut self: Pin<&mut Self>, position: io::SeekFrom) -> io::Result<()> {
+        if matches!(position, SeekFrom::End(_)) {
+            self.ensure_open()?;
+        }
         if self.state.f_seek.is_some() {
             return Err(io::Error::other(
                 "other file operation is pending, call poll_complete before start_seek",
@@ -310,12 +328,7 @@ impl AsyncWrite for File {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        if self.closed {
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "SFTP file is closed",
-            )));
-        }
+        self.ensure_open()?;
         if self.pos == u64::MAX {
             return Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -368,6 +381,7 @@ impl AsyncWrite for File {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        self.ensure_open()?;
         ready!(poll_drain_writes(&mut self.state.write_acks, cx))?;
 
         if !self.features.fsync {
@@ -402,6 +416,25 @@ impl AsyncWrite for File {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
+        if self.closed {
+            return Poll::Ready(if self.shutdown_failed {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "SFTP file shutdown already failed",
+                ))
+            } else {
+                Ok(())
+            });
+        }
+        if !self.closing {
+            self.closing = true;
+            // Retire borrowed operations before draining writes. A cancelled
+            // caller must not resume another handle request after CLOSE starts.
+            self.state.f_read = None;
+            self.state.read_buffer = io::Cursor::default();
+            self.state.f_seek = None;
+            self.state.f_flush = None;
+        }
         // A failed WRITE must not bypass the CLOSE acknowledgement. Retain the
         // first failure across polls while retiring all outstanding writes.
         while let Some(poll) = poll_oldest_write(&mut self.state.write_acks, cx) {
@@ -430,6 +463,8 @@ impl AsyncWrite for File {
         self.closed = true;
         self.state.f_read = None;
         self.state.read_buffer = io::Cursor::default();
-        Poll::Ready(self.state.shutdown_error.take().map_or(result, Err))
+        let result = self.state.shutdown_error.take().map_or(result, Err);
+        self.shutdown_failed = result.is_err();
+        Poll::Ready(result)
     }
 }
