@@ -114,6 +114,8 @@ pub enum SshError {
     ChannelRequestClosed { request: &'static str },
     #[error("SSH shell setup output exceeded the 1 MiB safety limit")]
     ShellSetupOutputTooLarge,
+    #[error("SFTP setup output exceeded the 1 MiB safety limit")]
+    SftpSetupOutputTooLarge,
     #[error("remote monitoring command failed with exit status {0}")]
     RemoteMonitorCommandFailed(u32),
     #[error("remote monitoring output exceeded its safety limit")]
@@ -1169,7 +1171,7 @@ impl SshConnection {
                     )
                     .await
                     .map_err(SshError::Channel)?;
-                wait_for_shell_request(
+                wait_for_channel_request(
                     &mut channel,
                     "X11 forwarding",
                     &mut pending_output,
@@ -1187,7 +1189,7 @@ impl SshConnection {
                 .request_shell(true)
                 .await
                 .map_err(SshError::Channel)?;
-            wait_for_shell_request(
+            wait_for_channel_request(
                 &mut channel,
                 "shell",
                 &mut pending_output,
@@ -1346,22 +1348,13 @@ impl SshConnection {
     }
 
     pub async fn open_sftp(&self) -> Result<SftpConnection, SshError> {
-        let session = tokio::time::timeout(Duration::from_secs(12), async {
-            let channel = self
-                .handle
-                .channel_open_session()
+        let deadline = tokio::time::Instant::now() + FILE_OPERATION_TIMEOUT;
+        let stream = open_sftp_stream(self.handle.clone(), deadline).await?;
+        let session =
+            tokio::time::timeout_at(deadline, russh_sftp::client::SftpSession::new(stream))
                 .await
-                .map_err(SshError::Channel)?;
-            channel
-                .request_subsystem(true, "sftp")
-                .await
-                .map_err(SshError::Channel)?;
-            russh_sftp::client::SftpSession::new(channel.into_stream())
-                .await
-                .map_err(map_sftp_error)
-        })
-        .await
-        .map_err(|_| SshError::Timeout)??;
+                .map_err(|_| SshError::Timeout)?
+                .map_err(map_sftp_error)?;
         session.set_timeout(12);
         Ok(SftpConnection {
             session,
@@ -2419,23 +2412,14 @@ impl SftpConnection {
         let path = path.into();
         let mut listing_session = self.listing_session.lock().await;
         if listing_session.is_none() {
-            let raw_session = tokio::time::timeout(Duration::from_secs(12), async {
-                let channel = self
-                    .handle
-                    .channel_open_session()
-                    .await
-                    .map_err(SshError::Channel)?;
-                channel
-                    .request_subsystem(true, "sftp")
-                    .await
-                    .map_err(SshError::Channel)?;
-                let session = russh_sftp::client::RawSftpSession::new(channel.into_stream());
-                session.set_timeout(12);
-                session.init().await.map_err(map_sftp_error)?;
-                Ok::<_, SshError>(session)
-            })
-            .await
-            .map_err(|_| SshError::Timeout)??;
+            let deadline = tokio::time::Instant::now() + FILE_OPERATION_TIMEOUT;
+            let stream = open_sftp_stream(self.handle.clone(), deadline).await?;
+            let raw_session = russh_sftp::client::RawSftpSession::new(stream);
+            raw_session.set_timeout(12);
+            tokio::time::timeout_at(deadline, raw_session.init())
+                .await
+                .map_err(|_| SshError::Timeout)?
+                .map_err(map_sftp_error)?;
             *listing_session = Some(raw_session);
         }
 
@@ -3254,7 +3238,69 @@ impl SshShellReader {
     }
 }
 
-async fn wait_for_shell_request(
+struct PendingSftpChannel(Option<Channel<client::Msg>>);
+
+impl Drop for PendingSftpChannel {
+    fn drop(&mut self) {
+        if let Some(channel) = self.0.take() {
+            // Use russh's stream cleanup even when a caller drops the setup
+            // future. Stream Drop retires the reader and schedules Close.
+            drop(channel.into_stream());
+        }
+    }
+}
+
+async fn open_sftp_stream(
+    handle: Arc<client::Handle<ClientHandler>>,
+    deadline: tokio::time::Instant,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + 'static, SshError> {
+    let channel = tokio::time::timeout_at(deadline, handle.channel_open_session())
+        .await
+        .map_err(|_| SshError::Timeout)?
+        .map_err(SshError::Channel)?;
+    let mut pending_channel = PendingSftpChannel(Some(channel));
+    let mut pending_output = VecDeque::new();
+    let mut buffered_bytes = 0;
+    let setup = tokio::time::timeout_at(deadline, async {
+        let channel = pending_channel.0.as_mut().expect("pending SFTP channel");
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(SshError::Channel)?;
+        wait_for_channel_request(
+            channel,
+            "SFTP subsystem",
+            &mut pending_output,
+            &mut buffered_bytes,
+        )
+        .await
+    })
+    .await
+    .map_err(|_| SshError::Timeout)
+    .and_then(|result| result);
+    if let Err(error) = setup {
+        return Err(match error {
+            SshError::ShellSetupOutputTooLarge => SshError::SftpSetupOutputTooLarge,
+            error => error,
+        });
+    }
+    let channel = pending_channel.0.take().expect("accepted SFTP channel");
+    // Keep early protocol bytes in order. Extended data remains separate from
+    // SFTP, as it is in ChannelStream, and is never exposed in error messages.
+    let mut prefix = Vec::new();
+    for output in pending_output {
+        if let SshOutput::Stdout(bytes) = output {
+            prefix.extend_from_slice(&bytes);
+        }
+    }
+    let (reader, writer) = tokio::io::split(channel.into_stream());
+    Ok(tokio::io::join(
+        AsyncReadExt::chain(io::Cursor::new(prefix), reader),
+        writer,
+    ))
+}
+
+async fn wait_for_channel_request(
     channel: &mut Channel<client::Msg>,
     request: &'static str,
     pending_output: &mut VecDeque<SshOutput>,

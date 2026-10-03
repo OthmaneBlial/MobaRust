@@ -114,6 +114,9 @@ closure, bounded setup output and ordered pre-acceptance bytes;
 [native GUI and wider server acceptance remain pending](docs/testing/ssh-reconnect.md#shell-request-acceptance-on-main).
 After v0.1.22, source also drains accepted editor/file and monitor operations
 before SSH disconnect; [backend ownership checks and pending native save/exit gates](docs/testing/transfer-lifecycle.md#accepted-fileeditor-operations-during-session-cleanup--2026-10-03) remain distinct.
+Both SFTP channels now require the server's subsystem acceptance before INIT,
+with explicit refusal/closure, bounded early output and owned failed-channel cleanup;
+[native file-browser/editor and broader server acceptance remain pending](docs/testing/ssh-lab.md#sftp-subsystem-acceptance-on-main--2026-10-03).
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

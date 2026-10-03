@@ -2485,7 +2485,8 @@ async fn list_remote_directory(
     connection: &SshConnection,
     path: String,
 ) -> Result<Vec<mobarust_ssh::RemoteEntry>, String> {
-    let sftp = open_sftp_with_timeout(connection)
+    let sftp = connection
+        .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp.read_dir(path).await.map_err(|error| error.to_string());
@@ -2497,7 +2498,8 @@ async fn read_remote_text_file(
     connection: &SshConnection,
     path: String,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
-    let sftp = open_sftp_with_timeout(connection)
+    let sftp = connection
+        .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp
@@ -2515,7 +2517,8 @@ async fn save_remote_text_file(
     content: String,
     encoding: mobarust_ssh::RemoteTextEncoding,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
-    let sftp = open_sftp_with_timeout(connection)
+    let sftp = connection
+        .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp
@@ -2533,7 +2536,8 @@ async fn save_remote_text_file_as(
     encoding: mobarust_ssh::RemoteTextEncoding,
     overwrite: bool,
 ) -> Result<mobarust_ssh::RemoteTextDocument, String> {
-    let sftp = open_sftp_with_timeout(connection)
+    let sftp = connection
+        .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = sftp
@@ -2548,7 +2552,8 @@ async fn run_file_operation(
     connection: &SshConnection,
     operation: SshFileOperation,
 ) -> Result<(), String> {
-    let sftp = open_sftp_with_timeout(connection)
+    let sftp = connection
+        .open_sftp()
         .await
         .map_err(|error| error.to_string())?;
     let result = match operation {
@@ -3187,7 +3192,7 @@ where
 
     let mut file = open_local_upload_file(source).await?;
     let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
-    let sftp = open_sftp_with_timeout(connection).await?;
+    let sftp = connection.open_sftp().await?;
     if sftp.try_exists(remote_path).await? {
         let (_, is_directory) = sftp.file_info(remote_path).await?;
         if is_directory {
@@ -3245,7 +3250,7 @@ async fn run_download<F>(
 where
     F: FnMut(u64, Option<u64>),
 {
-    let sftp = open_sftp_with_timeout(connection).await?;
+    let sftp = connection.open_sftp().await?;
     let (total, is_directory) = sftp.file_info(remote_path).await?;
     if is_directory {
         if !recursive {
@@ -3352,7 +3357,7 @@ where
                 "upload source is a directory; enable recursive transfer",
             )));
         }
-        let sftp = open_sftp_with_timeout(connection).await?;
+        let sftp = connection.open_sftp().await?;
         let result = upload_directory(
             &sftp,
             source,
@@ -3375,7 +3380,7 @@ where
     }
     let mut file = open_local_upload_file(source).await?;
     let source_size = file.metadata().await.map_err(SshError::LocalIo)?.len();
-    let sftp = open_sftp_with_timeout(connection).await?;
+    let sftp = connection.open_sftp().await?;
     if sftp.try_exists(remote_path).await? {
         let (_, is_directory) = sftp.file_info(remote_path).await?;
         if is_directory {
@@ -3904,14 +3909,6 @@ fn remote_child_path(parent: &str, name: &str) -> String {
     } else {
         format!("{parent}/{name}")
     }
-}
-
-async fn open_sftp_with_timeout(
-    connection: &SshConnection,
-) -> Result<mobarust_ssh::SftpConnection, SshError> {
-    tokio::time::timeout(Duration::from_secs(12), connection.open_sftp())
-        .await
-        .map_err(|_| SshError::Timeout)?
 }
 
 async fn upload_destination_exists(

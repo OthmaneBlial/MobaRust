@@ -23,6 +23,21 @@ const DEADLINE: Duration = Duration::from_secs(10);
 const SHELL_BANNER: &[u8] = b"Disposable SSH authentication echo fixture (no OS shell).\r\n";
 const SHELL_PRELUDE: &[u8] = "prelude: été 🦀\r\n".as_bytes();
 const SHELL_STDERR: &[u8] = b"setup stderr\r\n";
+const SFTP_VERSION: &[u8] = &[0, 0, 0, 5, 2, 0, 0, 0, 3];
+const SFTP_UNSUPPORTED: &[u8] = &[
+    0, 0, 0, 17, 101, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+#[derive(Clone, Copy, Debug)]
+enum SftpReply {
+    Accept,
+    Reject,
+    Close,
+    Silent,
+    Cancel,
+    Prelude,
+    Flood,
+}
 
 #[derive(Clone, Copy, Debug)]
 enum ShellReply {
@@ -76,6 +91,9 @@ struct Observations {
     closed_channels: AtomicUsize,
     channel_closed: Notify,
     startup_input: Mutex<Vec<u8>>,
+    sftp_requests: AtomicUsize,
+    sftp_input_bytes: AtomicUsize,
+    sftp_entered: Notify,
 }
 
 struct Handler {
@@ -88,6 +106,8 @@ struct Handler {
     shell_reply: ShellReply,
     forward_to: Option<SocketAddr>,
     forwarded: JoinSet<()>,
+    sftp_reply: Option<(SftpReply, bool)>,
+    sftp_channels: std::collections::HashSet<russh::ChannelId>,
 }
 
 impl Handler {
@@ -247,6 +267,27 @@ impl server::Handler for Handler {
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if self.sftp_channels.contains(&channel) {
+            self.observations
+                .sftp_input_bytes
+                .fetch_add(data.len(), Ordering::SeqCst);
+            let (reply, listing) = self.sftp_reply.unwrap();
+            let reply = if listing && self.observations.sftp_requests.load(Ordering::SeqCst) == 1 {
+                SftpReply::Accept
+            } else {
+                reply
+            };
+            if data == [0, 0, 0, 5, 1, 0, 0, 0, 3] {
+                if matches!(reply, SftpReply::Accept) {
+                    session.data(channel, SFTP_VERSION.to_vec())?;
+                }
+            } else {
+                // The fixture has no filesystem: refuse its one OPENDIR request.
+                assert_eq!(&data[4..9], &[11, 0, 0, 0, 1]);
+                session.data(channel, SFTP_UNSUPPORTED.to_vec())?;
+            }
+            return Ok(());
+        }
         if self.native_echo {
             self.observations
                 .shell_input_bytes
@@ -260,6 +301,53 @@ impl server::Handler for Handler {
                 input.extend_from_slice(data);
             }
             session.data(channel, data.to_vec())?;
+        }
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: russh::ChannelId,
+        name: &str,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(name, "sftp");
+        let request = self
+            .observations
+            .sftp_requests
+            .fetch_add(1, Ordering::SeqCst);
+        self.observations.sftp_entered.notify_one();
+        let Some((reply, listing)) = self.sftp_reply else {
+            session.channel_failure(channel)?;
+            return Ok(());
+        };
+        self.sftp_channels.insert(channel);
+        let reply = if listing && request == 0 {
+            SftpReply::Accept
+        } else {
+            reply
+        };
+        match reply {
+            SftpReply::Reject => session.channel_failure(channel)?,
+            SftpReply::Close => session.close(channel)?,
+            SftpReply::Silent | SftpReply::Cancel => {}
+            SftpReply::Flood => {
+                for _ in 0..33 {
+                    session.data(channel, vec![b'x'; 32 * 1024])?;
+                }
+            }
+            SftpReply::Accept | SftpReply::Prelude => {
+                if matches!(reply, SftpReply::Prelude) {
+                    session.data(channel, SFTP_VERSION[..6].to_vec())?;
+                    session.extended_data(
+                        channel,
+                        1,
+                        b"fixture diagnostic must stay private".to_vec(),
+                    )?;
+                    session.data(channel, SFTP_VERSION[6..].to_vec())?;
+                }
+                session.channel_success(channel)?;
+            }
         }
         Ok(())
     }
@@ -404,6 +492,17 @@ impl Fixture {
         native_echo: bool,
         shell_reply: ShellReply,
     ) -> Self {
+        Self::start_with_replies(method, stall, forward_to, native_echo, shell_reply, None).await
+    }
+
+    async fn start_with_replies(
+        method: Method,
+        stall: bool,
+        forward_to: Option<SocketAddr>,
+        native_echo: bool,
+        shell_reply: ShellReply,
+        sftp_reply: Option<(SftpReply, bool)>,
+    ) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind loopback fixture");
@@ -451,6 +550,8 @@ impl Fixture {
             shell_reply,
             forward_to,
             forwarded: JoinSet::new(),
+            sftp_reply,
+            sftp_channels: std::collections::HashSet::new(),
         };
         let accepted = observations.clone();
         let worker = tokio::spawn(async move {
@@ -768,6 +869,8 @@ async fn native_endpoint(
                         native_echo: forward_to.is_none(), forward_to,
                         shell_reply,
                         forwarded: JoinSet::new(),
+                        sftp_reply: None,
+                        sftp_channels: std::collections::HashSet::new(),
                     };
                     let config = config.clone();
                     let label = label.clone();
@@ -1188,6 +1291,157 @@ async fn shell_setup_requires_server_acceptance() {
         connection.disconnect().await.unwrap();
         drop(connection);
         fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn sftp_setup_requires_server_acceptance_on_both_channels() {
+    for listing in [false, true] {
+        for reply in [
+            SftpReply::Reject,
+            SftpReply::Close,
+            SftpReply::Silent,
+            SftpReply::Cancel,
+            SftpReply::Flood,
+            SftpReply::Accept,
+            SftpReply::Prelude,
+        ] {
+            let fixture = Fixture::start_with_replies(
+                Method::Password,
+                false,
+                None,
+                true,
+                ShellReply::Accept,
+                Some((reply, listing)),
+            )
+            .await;
+            let connection = SshConnection::connect(fixture.options(Method::Password, true))
+                .await
+                .unwrap();
+            let deadline = if matches!(reply, SftpReply::Silent) {
+                Duration::from_secs(14)
+            } else {
+                Duration::from_secs(2)
+            };
+            let mut operation = Box::pin(async {
+                let sftp = connection.open_sftp().await?;
+                let result = if listing {
+                    sftp.read_dir("/fixture").await.map(|_| ())
+                } else {
+                    Ok(())
+                };
+                sftp.close().await.unwrap();
+                result
+            });
+            let result = if matches!(reply, SftpReply::Cancel) {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    while fixture.observations.sftp_requests.load(Ordering::SeqCst)
+                        < 1 + usize::from(listing)
+                    {
+                        tokio::select! {
+                            _ = &mut operation => panic!("silent subsystem setup must stay pending"),
+                            _ = fixture.observations.sftp_entered.notified() => {},
+                        }
+                    }
+                }).await.expect("reach the pending subsystem before cancelling");
+                tokio::time::timeout(Duration::ZERO, operation).await
+            } else {
+                tokio::time::timeout(deadline, operation).await
+            };
+            let closed = if result.is_ok() || matches!(reply, SftpReply::Cancel) {
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    // A server-initiated Close removes its channel before the
+                    // client's acknowledgement can invoke channel_close here.
+                    let expected =
+                        1 + usize::from(listing) - usize::from(matches!(reply, SftpReply::Close));
+                    while fixture.observations.closed_channels.load(Ordering::SeqCst) < expected {
+                        fixture.observations.channel_closed.notified().await;
+                    }
+                })
+                .await
+                .is_ok()
+            } else {
+                false
+            };
+            let requests = fixture.observations.sftp_requests.load(Ordering::SeqCst);
+            let input = fixture.observations.sftp_input_bytes.load(Ordering::SeqCst);
+            if matches!(reply, SftpReply::Cancel) && closed {
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    let (mut reader, writer) = connection.open_shell(80, 24).await.unwrap().split();
+                    assert_eq!(
+                        reader.next_output().await.unwrap().unwrap(),
+                        SshOutput::Stdout(SHELL_BANNER.to_vec())
+                    );
+                    writer.write(b"transport still usable").await.unwrap();
+                    assert_eq!(
+                        reader.next_output().await.unwrap().unwrap(),
+                        SshOutput::Stdout(b"transport still usable".to_vec())
+                    );
+                    drop(reader);
+                    writer.close().await.unwrap();
+                })
+                .await
+                .expect("cancelled SFTP setup must preserve the authenticated transport");
+            }
+            connection.disconnect().await.unwrap();
+            drop(connection);
+            fixture.finish().await;
+            if matches!(reply, SftpReply::Cancel) {
+                assert!(
+                    result.is_err(),
+                    "dropping setup before the request deadline"
+                );
+                assert!(
+                    closed,
+                    "cancelled SFTP setup closes its channel before disconnect"
+                );
+                assert_eq!(requests, 1 + usize::from(listing));
+                assert_eq!(input, if listing { 9 } else { 0 });
+                continue;
+            }
+            let result = result.expect("SFTP refusal/closure must not become a request timeout");
+            assert!(
+                matches!(
+                    (reply, &result, listing),
+                    (
+                        SftpReply::Reject,
+                        Err(SshError::ChannelRequestRejected {
+                            request: "SFTP subsystem"
+                        }),
+                        _
+                    ) | (
+                        SftpReply::Close,
+                        Err(SshError::ChannelRequestClosed {
+                            request: "SFTP subsystem"
+                        }),
+                        _
+                    ) | (SftpReply::Silent, Err(SshError::Timeout), _)
+                        | (SftpReply::Flood, Err(SshError::SftpSetupOutputTooLarge), _)
+                        | (SftpReply::Accept | SftpReply::Prelude, Ok(()), false)
+                        | (
+                            SftpReply::Accept | SftpReply::Prelude,
+                            Err(SshError::SftpProtocol),
+                            true
+                        )
+                ),
+                "unexpected {reply:?}, listing={listing}: {result:?}"
+            );
+            assert!(
+                closed,
+                "{reply:?}, listing={listing}: failed or finished SFTP channels close before transport disconnect"
+            );
+            assert_eq!(requests, 1 + usize::from(listing));
+            if !matches!(reply, SftpReply::Accept | SftpReply::Prelude) {
+                assert_eq!(
+                    input,
+                    if listing { 9 } else { 0 },
+                    "no INIT goes to an unaccepted subsystem"
+                );
+            }
+            if let Err(error) = result {
+                assert!(!error.to_string().contains("fixture diagnostic"));
+            }
+        }
     }
 }
 

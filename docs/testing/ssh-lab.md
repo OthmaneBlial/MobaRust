@@ -742,9 +742,63 @@ own daemon. The generated keys, selected port, server configuration, and
 transport explicitly; it does not exercise the desktop's automatic reconnect
 loop or its retry budget.
 
+## SFTP subsystem acceptance on main — 2026-10-03
+
+After v0.1.22, an encrypted loopback regression reproduced a server's explicit
+SFTP refusal waiting beyond a two-second observation deadline. Both the main
+file channel and the separate directory-listing channel had sent the subsystem
+request without consuming its acceptance/failure reply before starting SFTP.
+[RFC 4254 sections 5.4 and 6.5](https://www.rfc-editor.org/rfc/rfc4254.html#section-5.4)
+define the requested channel reply and subsystem request.
+
+Both paths now use the same acceptance guard. Refusal returns the static,
+actionable `SFTP subsystem` rejection error; early EOF/close returns the distinct
+closed-before-acceptance error. No SFTP INIT is sent to an unaccepted subsystem.
+The existing 12-second setup budget covers channel opening, acceptance and
+version negotiation. A pending-channel guard uses russh's stream Drop cleanup on
+refusal, timeout or caller cancellation: it retires the reader before scheduling
+best-effort Close. The desktop delegates to this owned setup instead of cancelling
+it with a second outer timer. Cleanup depends on a live Tokio runtime/transport;
+it is not a force-kill guarantee.
+
+Early protocol data stays ordered through a Tokio reader/writer join, with the
+existing 1 MiB setup-output bound. Extended data does not enter SFTP or error
+messages. There is no new dependency or server-selected error text.
+
+```sh
+cargo test --locked -p mobarust-ssh --test authentication sftp_setup_requires_server_acceptance_on_both_channels
+cargo xtask check
+```
+
+The wire regression exercises refusal, early Close, silence, caller cancellation, setup-output flood,
+ordinary acceptance and fragmented version bytes before acceptance on both
+channels. It verifies failed-channel cleanup before transport disconnect, no
+premature INIT, static errors, worker completion and loopback listener release.
+Cancellation waits for the peer to receive the subsystem request before dropping
+setup; a fresh echo shell verifies that the same transport remains usable.
+Its generated password/host key are memory-only; its tiny SFTP peer has no
+filesystem and deliberately refuses OPENDIR. It does not run OS shell commands,
+access personal SSH state or listen outside `127.0.0.1`.
+
+The corrected regression and final complete `cargo xtask check` passed on macOS
+ARM64 / Apple M2: 105 desktop tests, 42 SSH unit tests, 15 automated authentication
+tests (three manual labs ignored), 16 OpenSSH cases, workspace Clippy, frontend
+checks, release tooling, helper fixtures, package contracts and fuzz compilation.
+Real Xvfb remained an explicit prerequisite skip.
+
+An earlier full run stopped at the X11 bridge fixture's five-second channel wait,
+after shell input was echoed. The same-source isolated case passed in 2.32 seconds,
+and the unchanged full rerun passed. Its cause is unproven; no X11 assertion or
+deadline was relaxed, and this is not an X11 correction or native GUI receipt.
+
+This is backend protocol evidence. Native file-browser/editor acceptance,
+external server implementations and Windows/Linux runtime checks remain open.
+Published v0.1.22 Mac and v0.1.12 Windows/Linux installers do not contain this
+later source correction. GitHub CI remains disabled.
+
 ## Limits and next interoperability gates
 
-These tests exercise the installed OpenSSH version on the current machine.
+The OpenSSH fixtures exercise the installed server version on the current machine.
 They do not prove Windows SSH-server compatibility, OpenSSH password or PAM/MFA
 authentication (see the separate Rust-wire coverage above), Windows Pageant or
 other agent implementations, routed IPv6,
