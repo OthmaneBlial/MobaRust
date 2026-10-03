@@ -215,6 +215,12 @@ The v0.1.29 Mac installers include the uncertain-startup retry stop; ordinary pr
 
 ### 5. Polish daily terminal and file workflows
 
+On main after v0.1.29, [session operation admission](docs/testing/transfer-lifecycle.md#bounded-session-operation-admission-after-v0129--2026-10-03)
+bounds finite file/monitor and active/waiting transfer workers to 32 per SSH
+session. Excess work receives an explicit busy failure; input and independent
+resize remain available. Native saturation/Retry, many-session/IPC pressure
+and wider-platform checks remain pending; published installers are unchanged.
+
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.

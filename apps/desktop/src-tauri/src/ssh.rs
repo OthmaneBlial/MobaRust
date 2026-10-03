@@ -28,6 +28,9 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 const COMMAND_CAPACITY: usize = 64;
+const SESSION_OPERATION_LIMIT: usize = 32;
+const SESSION_OPERATION_BUSY: &str =
+    "SSH session is busy; wait for an operation to finish, then retry explicitly";
 const QUEUED_COMMAND_CANCELLED: &str =
     "SSH session changed or closed before this queued action ran; retry explicitly";
 const OUTPUT_BUFFER_BYTES: usize = 32 * 1024;
@@ -1524,58 +1527,90 @@ impl SshManager {
         transfer_event: impl FnOnce(SshTransferEvent),
         tunnel_event: impl FnOnce(SshTunnelEvent),
     ) {
+        self.reject_command(
+            command,
+            QUEUED_COMMAND_CANCELLED,
+            TransferState::Cancelled,
+            transfer_event,
+            tunnel_event,
+        );
+    }
+
+    fn admit_session_command(
+        &self,
+        command: SshCommand,
+        workers: &mut JoinSet<()>,
+        transfer_event: impl FnOnce(SshTransferEvent),
+        tunnel_event: impl FnOnce(SshTunnelEvent),
+    ) -> Option<SshCommand> {
+        // A bounded command queue alone cannot bound spawned workers. Reap
+        // completed entries before deciding whether another operation fits.
+        while workers.try_join_next().is_some() {}
+        if workers.len() >= SESSION_OPERATION_LIMIT
+            && matches!(
+                command,
+                SshCommand::ListDirectory { .. }
+                    | SshCommand::OpenTextFile { .. }
+                    | SshCommand::CollectMonitor { .. }
+                    | SshCommand::SaveTextFile { .. }
+                    | SshCommand::SaveTextFileAs { .. }
+                    | SshCommand::FileOperation { .. }
+                    | SshCommand::StartTransfer { .. }
+            )
+        {
+            self.reject_command(
+                command,
+                SESSION_OPERATION_BUSY,
+                TransferState::Failed,
+                transfer_event,
+                tunnel_event,
+            );
+            None
+        } else {
+            Some(command)
+        }
+    }
+
+    fn reject_command(
+        &self,
+        command: SshCommand,
+        reason: &str,
+        transfer_state: TransferState,
+        transfer_event: impl FnOnce(SshTransferEvent),
+        tunnel_event: impl FnOnce(SshTunnelEvent),
+    ) {
         match command {
             SshCommand::Write(_) => {}
             SshCommand::ListDirectory { reply, .. } => {
-                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+                let _ = reply.send(Err(reason.into()));
             }
             SshCommand::OpenTextFile { reply, .. }
             | SshCommand::SaveTextFile { reply, .. }
             | SshCommand::SaveTextFileAs { reply, .. } => {
-                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+                let _ = reply.send(Err(reason.into()));
             }
             SshCommand::CollectMonitor { reply } => {
-                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+                let _ = reply.send(Err(reason.into()));
             }
             SshCommand::FileOperation { reply, .. } => {
-                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+                let _ = reply.send(Err(reason.into()));
             }
             SshCommand::StartTransfer { job, .. } => {
                 self.finish_transfer(&job.transfer_id);
-                transfer_event(job.event(
-                    0,
-                    None,
-                    TransferState::Cancelled,
-                    Some(QUEUED_COMMAND_CANCELLED.into()),
-                ));
+                transfer_event(job.event(0, None, transfer_state, Some(reason.into())));
             }
             SshCommand::StartLocalForward { job } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(
-                    TunnelState::Stopped,
-                    0,
-                    0,
-                    Some(QUEUED_COMMAND_CANCELLED.into()),
-                ));
+                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
             }
             SshCommand::StartDynamicForward { job } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(
-                    TunnelState::Stopped,
-                    0,
-                    0,
-                    Some(QUEUED_COMMAND_CANCELLED.into()),
-                ));
+                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
             }
             SshCommand::StartRemoteForward { job, reply } => {
                 self.finish_tunnel(&job.tunnel_id);
-                tunnel_event(job.event(
-                    TunnelState::Stopped,
-                    0,
-                    0,
-                    Some(QUEUED_COMMAND_CANCELLED.into()),
-                ));
-                let _ = reply.send(Err(QUEUED_COMMAND_CANCELLED.into()));
+                tunnel_event(job.event(TunnelState::Stopped, 0, 0, Some(reason.into())));
+                let _ = reply.send(Err(reason.into()));
             }
         }
     }
@@ -2425,9 +2460,16 @@ async fn run_shell_once(
                     return ShellRunResult::Closed;
                 }
                 let command = match command {
-                    Some(command) => match spawn_session_operation(command, Arc::clone(connection), workers) {
+                    Some(command) => {
+                        let Some(command) = manager.admit_session_command(command, workers,
+                            |event| manager.emit_transfer(app, event),
+                            |event| manager.emit_tunnel(app, event)) else {
+                            continue;
+                        };
+                        match spawn_session_operation(command, Arc::clone(connection), workers) {
                         None => continue,
                         Some(command) => Some(command),
+                        }
                     },
                     None => None,
                 };
@@ -5053,6 +5095,189 @@ mod tests {
         })
         .await
         .expect("queue retirement deadline");
+    }
+
+    #[tokio::test]
+    async fn saturated_session_rejects_work_settles_replies_and_keeps_input_available() {
+        use super::{
+            SESSION_OPERATION_BUSY, SESSION_OPERATION_LIMIT, SshCommand, SshFileOperation,
+            TransferControl, TransferDirection, TransferJob,
+        };
+        use mobarust_core::TransferState;
+        use mobarust_ssh::RemoteTextEncoding;
+
+        async fn busy<T>(response: oneshot::Receiver<Result<T, String>>) {
+            let result = tokio::time::timeout(Duration::from_secs(1), response)
+                .await
+                .expect("busy action must settle immediately")
+                .expect("busy action must retain its explicit error");
+            assert!(matches!(result, Err(error) if error == SESSION_OPERATION_BUSY));
+        }
+
+        let manager = SshManager::default();
+        let _commands = queue_test_session(&manager, "saturated");
+        let mut size = manager.sessions.lock().unwrap()["saturated"]
+            .size
+            .subscribe();
+        let mut workers = tokio::task::JoinSet::new();
+        for _ in 0..SESSION_OPERATION_LIMIT {
+            workers.spawn(std::future::pending::<()>());
+        }
+        let refuse = |command, workers: &mut tokio::task::JoinSet<()>| {
+            assert!(
+                manager
+                    .admit_session_command(
+                        command,
+                        workers,
+                        |_| panic!("file action must not emit a transfer event"),
+                        |_| panic!("file action must not emit a tunnel event"),
+                    )
+                    .is_none()
+            );
+            assert_eq!(workers.len(), SESSION_OPERATION_LIMIT);
+        };
+        let (reply, response) = oneshot::channel();
+        refuse(
+            SshCommand::ListDirectory {
+                path: "/".into(),
+                reply,
+            },
+            &mut workers,
+        );
+        busy(response).await;
+        let (reply, response) = oneshot::channel();
+        refuse(
+            SshCommand::OpenTextFile {
+                path: "/fixture".into(),
+                encoding: RemoteTextEncoding::Utf8,
+                reply,
+            },
+            &mut workers,
+        );
+        busy(response).await;
+        let (reply, response) = oneshot::channel();
+        refuse(
+            SshCommand::SaveTextFile {
+                path: "/fixture".into(),
+                expected_revision: "revision".into(),
+                content: "never-written".into(),
+                encoding: RemoteTextEncoding::Utf8,
+                reply,
+            },
+            &mut workers,
+        );
+        busy(response).await;
+        let (reply, response) = oneshot::channel();
+        refuse(
+            SshCommand::SaveTextFileAs {
+                path: "/fixture".into(),
+                content: "never-written".into(),
+                encoding: RemoteTextEncoding::Utf8,
+                overwrite: true,
+                reply,
+            },
+            &mut workers,
+        );
+        busy(response).await;
+        let (reply, response) = oneshot::channel();
+        refuse(
+            SshCommand::FileOperation {
+                operation: SshFileOperation::Delete {
+                    path: "/fixture".into(),
+                },
+                reply,
+            },
+            &mut workers,
+        );
+        busy(response).await;
+        let (reply, response) = oneshot::channel();
+        refuse(SshCommand::CollectMonitor { reply }, &mut workers);
+        busy(response).await;
+
+        let (cancel, cancellation) = oneshot::channel();
+        manager.transfers.lock().unwrap().insert(
+            "excess-transfer".into(),
+            TransferControl {
+                terminal_id: "saturated".into(),
+                cancel,
+            },
+        );
+        let mut events = Vec::new();
+        assert!(
+            manager
+                .admit_session_command(
+                    SshCommand::StartTransfer {
+                        job: TransferJob {
+                            transfer_id: "excess-transfer".into(),
+                            terminal_id: "saturated".into(),
+                            direction: TransferDirection::Upload,
+                            protocol: TransferProtocol::Sftp,
+                            remote_path: "never-uploaded".into(),
+                            local_path: "never-opened".into(),
+                            overwrite: false,
+                            recursive: false,
+                            source: "never-opened".into(),
+                            destination: "never-uploaded".into(),
+                            created_at: Instant::now(),
+                        },
+                        cancel: cancellation,
+                    },
+                    &mut workers,
+                    |event| events.push(event),
+                    |_| panic!("no tunnel event")
+                )
+                .is_none()
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].state, TransferState::Failed);
+        assert_eq!(events[0].bytes_transferred, 0);
+        assert_eq!(events[0].error.as_deref(), Some(SESSION_OPERATION_BUSY));
+        assert!(manager.transfers.lock().unwrap().is_empty());
+        assert_eq!(workers.len(), SESSION_OPERATION_LIMIT);
+
+        let input = b"explicit-terminal-input\n".to_vec();
+        assert!(
+            matches!(manager.admit_session_command(SshCommand::Write(input.clone()),
+            &mut workers, |_| panic!("no transfer"), |_| panic!("no tunnel")),
+            Some(SshCommand::Write(bytes)) if bytes == input)
+        );
+        manager.resize("saturated", 140, 45).await.unwrap();
+        assert_eq!(*size.borrow_and_update(), (140, 45));
+
+        // Even a completed, unjoined entry must free capacity before admission.
+        workers.abort_all();
+        while workers.join_next().await.is_some() {}
+        for _ in 1..SESSION_OPERATION_LIMIT {
+            workers.spawn(std::future::pending::<()>());
+        }
+        let finished = workers.spawn(async {});
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !finished.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(workers.len(), SESSION_OPERATION_LIMIT);
+        let (reply, response) = oneshot::channel();
+        let command = manager.admit_session_command(
+            SshCommand::ListDirectory {
+                path: "/retry".into(),
+                reply,
+            },
+            &mut workers,
+            |_| panic!("no transfer"),
+            |_| panic!("no tunnel"),
+        );
+        assert_eq!(workers.len(), SESSION_OPERATION_LIMIT - 1);
+        let Some(SshCommand::ListDirectory { path, reply }) = command else {
+            panic!("a completed worker must allow an explicit retry");
+        };
+        assert_eq!(path, "/retry");
+        reply.send(Ok(Vec::new())).unwrap();
+        assert!(response.await.unwrap().unwrap().is_empty());
+        workers.abort_all();
+        while workers.join_next().await.is_some() {}
     }
 
     #[tokio::test]

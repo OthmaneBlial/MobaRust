@@ -513,6 +513,14 @@ async fn finite_session_operations_settle_before_transport_cleanup() {
             };
             let manager = SshManager::default();
             let mut workers = JoinSet::new();
+            let command = manager
+                .admit_session_command(
+                    command,
+                    &mut workers,
+                    |_| panic!("finite action must not emit a transfer event"),
+                    |_| panic!("finite action must not emit a tunnel event"),
+                )
+                .expect("an idle session must admit the operation");
             assert!(spawn_session_operation(command, connection.clone(), &mut workers).is_none());
             operation_entered.await.unwrap();
             assert!(!response.is_finished());

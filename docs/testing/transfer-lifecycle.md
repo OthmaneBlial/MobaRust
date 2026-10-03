@@ -222,3 +222,45 @@ This is backend worker-ownership evidence. Native Quit/Close during an editor
 save, actual promotion/rollback failures and Windows/Linux acceptance remain
 pending. Published v0.1.22 Mac and v0.1.12 Windows/Linux installers do not contain
 this later source correction.
+
+## Bounded session operation admission after v0.1.29 — 2026-10-03
+
+The 64-entry SSH command queue did not bound concurrently spawned work: its
+consumer could drain commands into the session's worker set faster than file
+operations or transfers finished. On main after v0.1.29, each session admits
+at most 32 workers shared by directory listing, text Open/Save/Save as, file
+mutations, monitor collection and active/waiting transfers. The existing
+three-transfer global execution limit remains separate.
+
+Completed entries are reaped before admission. Excess finite actions receive
+the static error, “SSH session is busy; wait for an operation to finish, then
+retry explicitly.” Excess transfers receive one Failed event with zero copied
+bytes and release their cancellation control before a transfer worker starts.
+They are not silently retained for later execution. Terminal writes remain
+admitted at saturation; resize retains its independent watch channel. Accepted
+operations retain their deadlines and cooperative session drain. Queue
+retirement still reports cancellation with its original reason.
+
+```sh
+cargo test --locked -p mobarust saturated_session_rejects_work_settles_replies_and_keeps_input_available
+cargo test --locked -p mobarust finite_session_operations_settle_before_transport_cleanup
+cargo xtask check
+```
+
+The saturation regression holds 32 workers pending and checks explicit replies
+for all six finite command types, one Failed transfer event/control removal,
+unchanged input bytes, resize and admission after a completed entry is reaped.
+It passed with the guard and failed when the guard was deliberately disabled;
+that mutation was restored. The encrypted worker/drain regression now passes
+commands through the same production admission function.
+
+The full local `cargo xtask check` passed on macOS ARM64 / Apple M2 in 228.70
+seconds, including 110 desktop tests, workspace tests/Clippy, frontend checks,
+protocol/helper cases, release/lab tooling, package contracts and fuzz
+compilation. The optional real Xvfb case retained its prerequisite skip.
+
+These are source-level manager and wire checks, not native saturation/UI
+acceptance or a whole-process memory bound. Producer/IPC pressure, many-session
+workloads, native Retry/focus and Windows/Linux require separate validation.
+Published v0.1.29 installers retain their tagged behavior; this later change
+is not included in them. GitHub workflows remain disabled.
