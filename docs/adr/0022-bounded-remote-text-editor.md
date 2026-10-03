@@ -18,8 +18,9 @@ On save, Rust rereads the remote file and rejects the operation when its
 revision differs from the token captured at open time. After the complete
 temporary upload and mode application, it performs a second revision check
 immediately before promotion so a concurrent update during a slow upload is
-also rejected. It writes the new content to a unique remote temporary file,
-reapplies the original mode, moves the old file to a unique rollback name,
+also rejected. It writes the new content to an exclusively created remote
+temporary file, requesting mode `0600` at creation, reapplies the original
+mode, moves the old file to a unique rollback name,
 promotes the complete temporary file, and removes the rollback copy. If
 promotion fails, Rust attempts to restore the original before returning the
 error. If restoration also fails or its result is uncertain, Rust retains the
@@ -35,6 +36,12 @@ Save as with explicit replacement uses the same byte checks; the existing
 target need not share the new file's encoding. Opening a document still
 requires valid text in the requested encoding, and encoding new content still
 rejects lossy Windows-1252 conversion.
+
+Save and Save as share a private temporary writer. Only an acknowledged
+exclusive create establishes ownership: an existing regular file or symlink
+at the temporary name is refused without truncation or cleanup. Write/close
+failures after creation attempt cleanup of the owned part. New Save as files
+retain mode `0600`; replacement reapplies the original mode after uploading.
 
 ## Security and reliability boundary
 
@@ -97,3 +104,36 @@ This is backend protocol evidence. Native encoding-selection and conflict
 recovery acceptance, post-save observation failures, the final rename race,
 and Windows/Linux execution remain separate gates. Published v0.1.24 Mac
 and v0.1.12 Windows/Linux downloads are unchanged.
+
+### Temporary ownership regression — 2026-10-03
+
+On `main` after v0.1.24, editor temporary files use SFTP `CREATE | EXCLUDE |
+WRITE` with creation permissions `0600`, rather than the ordinary upload
+primitive's create-or-truncate behavior. Before the fix, a pre-existing
+regular temporary path was accepted and the regression failed. The ordinary
+upload API retains its existing overwrite semantics.
+
+```sh
+cargo test --locked -p mobarust-ssh --test local_sshd \
+  remote_editor_temporary_collisions_preserve_unowned_files -- --exact
+```
+
+The local OpenSSH case starts a fresh child test process so the editor's
+temporary-name counter is deterministic without changing the shared test
+environment. For both Save and replacing Save as, it pre-creates a regular
+temporary or a symlink to an unrelated fixture file. All four cases require
+refusal, unchanged original/unrelated bytes, and preservation of the unowned
+temporary or link. It then verifies successful new Save as with actual mode
+`0600`, normal Save preserving `0640`, and no owned editor parts/backups.
+
+The full local `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed again on macOS ARM64 with all 18 OpenSSH cases, workspace tests and
+Clippy, frontend checks, release/lab tooling, RDP/VNC fixtures, package-layout
+checks and fuzz-target compilation. Real Xvfb reported its prerequisite skip;
+GitHub workflows remained disabled. No timeout or assertion was relaxed.
+
+This does not make a malicious SFTP server trustworthy or prevent a path
+from being replaced after creation. If the server creates a file but its
+reply is lost, ownership is uncertain and the create-error path deliberately
+does not remove that name. Native acceptance, wider servers/platforms and
+updated installers remain pending; published downloads are unchanged.

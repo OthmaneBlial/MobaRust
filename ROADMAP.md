@@ -196,6 +196,12 @@ regression covers conversion, unchanged targets after refusals, permissions
 and cleanup. Native acceptance and updated installers remain pending; this
 does not close the complete UI recovery gate above.
 
+The [editor temporary ownership check](docs/adr/0022-bounded-remote-text-editor.md#temporary-ownership-regression--2026-10-03)
+also refuses existing temporary files/links without truncating or removing
+them. New editor files are created with mode `0600`, and replacement retains
+the original mode. A loopback OpenSSH regression verifies both Save paths;
+native acceptance and new downloads remain separate.
+
 **Done when:** the workflows can be completed and recovered using the keyboard, errors explain the next action, and recordings show the tested product rather than synthetic states. The [v0.1.17 demo provenance](docs/release/desktop-demo.md) and [native lab receipt](docs/testing/native-workflow.md) record the tested scope. Broader failure recovery remains open.
 
 ## Experimental work and beta gates

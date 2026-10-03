@@ -209,6 +209,110 @@ fn remote_editor_encoding_changes_preserve_byte_conflicts_and_permissions() {
 }
 
 #[test]
+fn remote_editor_temporary_collisions_preserve_unowned_files() {
+    const CHILD: &str = "MOBARUST_EDITOR_COLLISION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Give the editor's process-local counter a deterministic starting
+        // point without racing other tests or mutating their environment.
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        clear_credential_environment(&mut command);
+        assert!(
+            command
+                .args([
+                    "--exact",
+                    "remote_editor_temporary_collisions_preserve_unowned_files",
+                    "--nocapture"
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let original = fixture.directory.path().join("original.txt");
+        let victim = fixture.directory.path().join("unrelated.txt");
+        fs::write(&original, b"original document").unwrap();
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o640)).unwrap();
+        fs::write(&victim, b"unrelated bytes").unwrap();
+        let path = original.to_str().unwrap();
+        let document = sftp.read_text_document(path).await.unwrap();
+        for (index, (save_as, symlink)) in
+            [(false, false), (false, true), (true, false), (true, true)]
+                .into_iter()
+                .enumerate()
+        {
+            let temporary = PathBuf::from(format!(
+                "{path}.mobarust-edit-{}-{}",
+                std::process::id(),
+                index + 1
+            ));
+            if symlink {
+                std::os::unix::fs::symlink(&victim, &temporary).unwrap();
+            } else {
+                fs::write(&temporary, b"unowned temporary bytes").unwrap();
+            }
+            let result = if save_as {
+                sftp.save_text_document_as(path, "new bytes", RemoteTextEncoding::Utf8, true)
+                    .await
+            } else {
+                sftp.save_text_document(path, &document.revision, "new bytes")
+                    .await
+            };
+            assert!(
+                result.is_err(),
+                "a colliding editor temporary must be refused"
+            );
+            assert_eq!(fs::read(&original).unwrap(), b"original document");
+            assert_eq!(fs::read(&victim).unwrap(), b"unrelated bytes");
+            if symlink {
+                assert!(
+                    fs::symlink_metadata(&temporary)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
+                assert_eq!(fs::read_link(&temporary).unwrap(), victim);
+            } else {
+                assert_eq!(fs::read(&temporary).unwrap(), b"unowned temporary bytes");
+            }
+            fs::remove_file(&temporary).unwrap();
+        }
+        let created_path = fixture.directory.path().join("new-private.txt");
+        let created = sftp
+            .save_text_document_as(
+                created_path.to_str().unwrap(),
+                "private bytes",
+                RemoteTextEncoding::Utf8,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.content, "private bytes");
+        assert_eq!(created.permissions.map(|mode| mode & 0o7777), Some(0o600));
+        assert_eq!(
+            fs::metadata(&created_path).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        let saved = sftp
+            .save_text_document(path, &document.revision, "new document")
+            .await
+            .unwrap();
+        assert_eq!(saved.content, "new document");
+        assert_eq!(saved.permissions.map(|mode| mode & 0o7777), Some(0o640));
+        assert_no_remote_editor_artifacts(&sftp, fixture.directory.path().to_str().unwrap()).await;
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn ipv6_loopback_verifies_known_hosts_and_runs_a_shell() {
     if std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err() {
         eprintln!("skipping IPv6 OpenSSH fixture: IPv6 loopback is unavailable");

@@ -2648,10 +2648,7 @@ impl SftpConnection {
             std::process::id(),
             next_editor_temp_id()
         );
-        if let Err(error) = self.upload_from(encoded.as_slice(), &temporary).await {
-            self.cleanup_temporary_file(&temporary).await?;
-            return Err(error);
-        }
+        self.upload_editor_temporary(&temporary, &encoded).await?;
         if let Some(permissions) = current_metadata.permissions {
             let mut metadata = russh_sftp::client::fs::Metadata::empty();
             metadata.permissions = Some(permissions);
@@ -2744,10 +2741,7 @@ impl SftpConnection {
             std::process::id(),
             next_editor_temp_id()
         );
-        if let Err(error) = self.upload_from(encoded.as_slice(), &temporary).await {
-            self.cleanup_temporary_file(&temporary).await?;
-            return Err(error);
-        }
+        self.upload_editor_temporary(&temporary, &encoded).await?;
 
         // A target can appear after the initial existence check while the
         // temporary upload is in progress. Re-evaluate that state before
@@ -2835,6 +2829,35 @@ impl SftpConnection {
         }
 
         self.read_text_document_with_encoding(path, encoding).await
+    }
+
+    async fn upload_editor_temporary(&self, path: &str, bytes: &[u8]) -> Result<(), SshError> {
+        use russh_sftp::protocol::OpenFlags;
+        let mut attributes = russh_sftp::client::fs::Metadata::empty();
+        attributes.permissions = Some(0o600);
+        // An acknowledged exclusive create establishes ownership. If it fails,
+        // never truncate or clean up a path that may belong to someone else.
+        let mut file = self
+            .session
+            .open_with_flags_and_attributes(
+                path,
+                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                attributes,
+            )
+            .await
+            .map_err(map_sftp_error)?;
+        let mut source = bytes;
+        let (_cancel_sender, mut cancel) = oneshot::channel();
+        let write_result =
+            copy_with_cancel(&mut source, &mut file, &mut cancel, |_| {}, self, false)
+                .await
+                .map(|_| ());
+        let close_result = self.file_io(file.close()).await;
+        if let Err(error) = write_result.and(close_result) {
+            self.cleanup_temporary_file(path).await?;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub async fn try_exists(&self, path: impl Into<String>) -> Result<bool, SshError> {
