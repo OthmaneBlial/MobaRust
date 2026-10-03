@@ -168,6 +168,21 @@ were verified loopback-only, stopped, and their ports closed. This post-tag
 correction is not included in the unchanged public v0.1.18 DMGs. Wider retry
 budgets, actual daemon-restart GUI recovery and other platforms remain pending.
 
+## Offline Linux ARM64 backend runtime, 2026-10-03
+
+Source `ecb382ff6e19f6b7a0da5ef0122e9934e0215184` executed seven static musl
+SSH harnesses in Ubuntu 24.04.4 ARM64 under QEMU/HVF: **128 passed, zero
+failed, five ignored**. IPv6 known-hosts and both two-bastion 8 MiB shell/SFTP
+cases ran; real Xvfb skipped. The [receipt](linux-ssh-vm.md) records the signed
+image, compiler setup, executable hashes, exact scope and disposable cleanup.
+
+The guest had no network adapter, host forwarding or shared host directories;
+fixture traffic remained on guest loopback. No guest test-account processes
+or TCP/UDP listeners remained before shutdown. QEMU exited and its private
+credential-bearing disks/seeds were removed. This proves Linux SSH backend
+execution, not a native desktop/glibc build, local-shell PTY matrix, GUI,
+installer or hardware interoperability. Workflows remain disabled.
+
 ## Required matrix
 
 | Target | PTY / shell | SSH / SFTP | Serial adapter | RDP | VNC | Clipboard / display | Status |
@@ -177,7 +192,7 @@ budgets, actual daemon-restart GUI recovery and other platforms remain pending.
 | Windows x64 | PowerShell/cmd native CI fixtures; WSL and GUI checks remain | Real Windows runtime required | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Partial CI fixture evidence |
 | Windows ARM64 | Real Windows ARM64 runtime | Real Windows ARM64 runtime | Dedicated adapter/driver required | Real Windows RDP server required | Dedicated server required | Clipboard, DPI, multi-monitor | Pending |
 | Linux x64 | Native CI fixture; X11/Wayland GUI checks remain | CI OpenSSH fixture; manual checks remain | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Partial CI fixture evidence |
-| Linux ARM64 | Separate runtime required | Separate runtime required | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Pending |
+| Linux ARM64 | Local-shell PTY matrix still required | [Offline Ubuntu guest](linux-ssh-vm.md) ran cross-built static musl SSH/SFTP fixtures; GUI and broader server checks remain | Dedicated adapter/permissions required | Dedicated server required | Dedicated server required | Clipboard and window manager | Partial backend VM evidence |
 
 ## Serial test cases
 

@@ -17,6 +17,10 @@ SFTP/SCP streams over an owned loopback relay, preserve originals on loss,
 report unavailable remote cleanup and verify a full byte-matched retry.
 The [routed IPv6 stream check](routed-ipv6-streams.md) concurrently drains 8 MiB
 of real PTY output and transfers byte-matched files through two distinct bastions.
+The [offline Linux ARM64 receipt](linux-ssh-vm.md) records actual execution of
+seven cross-built SSH harnesses in Ubuntu with no network adapter: 128 passed,
+zero failed, five ignored, with a separate real-Xvfb skip. Its prototype VM
+setup does not replace this maintained command or establish desktop acceptance.
 
 ## OpenSSH fixture requirements (Unix)
 
@@ -43,7 +47,8 @@ enable Remote Login. A missing prerequisite is a lab setup failure; configure
 a dedicated test runner rather than granting the tests system permissions.
 On Windows, `test-ssh` runs portable unit and authentication-wire tests and
 reports that the OpenSSH fixtures are skipped. The wire cases contain no
-Unix-specific APIs; their execution has so far been verified on macOS ARM64.
+Unix-specific APIs; their execution has been verified on macOS ARM64 and in
+the [offline Linux ARM64 backend guest](linux-ssh-vm.md).
 The opt-in native labs and their metadata/profile/cleanup regressions are Unix-only.
 
 ## Portable authentication-wire fixture

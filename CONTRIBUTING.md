@@ -65,6 +65,11 @@ The [Windows GNU compile/link receipt](docs/testing/windows-cross-check.md) reco
 current source checks from macOS, the cross-tool prerequisites and isolation
 boundary. Cross-compilation does not replace native Windows tests or installers.
 
+The [offline Linux ARM64 SSH receipt](docs/testing/linux-ssh-vm.md) records
+cross-built backend tests actually executed in a guest with no network adapter.
+Its VM tooling remains a local prototype; use `cargo xtask test-ssh` for the
+maintained lab command. Linux desktop and installer acceptance remain separate.
+
 The payload audit checks the established main-branch workflow and secret/path
 boundaries; it does not push. Contributors working on topic branches can use
 the focused tests and `git diff --check`, and leave the main-branch payload

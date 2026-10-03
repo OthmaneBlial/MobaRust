@@ -36,6 +36,11 @@ Those results retain their recorded source/artifact scope. Broader native
 successful-startup/output-ordering, queued expiry/overflow, sustained workloads
 and updated Windows/Linux downloads remain pending.
 
+Current source also passed [Windows GNU executable/test linking](docs/testing/windows-cross-check.md)
+and an [offline Linux ARM64 SSH runtime](docs/testing/linux-ssh-vm.md): seven
+harnesses, 128 passed, zero failed, five ignored; real Xvfb skipped. These add
+backend/platform evidence without closing GUI, installer or broader runtime gates.
+
 **Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
 
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
@@ -73,7 +78,7 @@ These changes are included in the v0.1.17 Mac preview. Windows/Linux installers 
 - [x] Replace native tunnel browser prompts with an integrated form; verify invalid-port rejection, all three modes and listener cleanup on macOS ARM64.
 - [x] Build and check both v0.1.17 Mac DMGs and record the real native workflows.
 
-The SSH lab has **42 unit tests, eight Rust authentication-wire tests, one Unix native-lab directory-permission/cleanup regression and 12 OpenSSH integration test cases**, plus opt-in direct and two-bastion native authentication fixtures. IPv6 and real Xvfb have conditional prerequisites; harness success alone does not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped.
+At that v0.1.17 milestone, the SSH lab had **42 unit tests, eight Rust authentication-wire tests, one Unix native-lab directory-permission/cleanup regression and 12 OpenSSH integration test cases**, plus opt-in direct and two-bastion native authentication fixtures. IPv6 and real Xvfb had conditional prerequisites; harness success alone did not prove those optional cases ran. The local IPv6 case ran successfully; real Xvfb was skipped. Current source counts and Linux execution are recorded separately in the [offline Linux receipt](docs/testing/linux-ssh-vm.md).
 
 ### Included in the v0.1.18 Mac preview
 
