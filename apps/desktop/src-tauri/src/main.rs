@@ -1846,6 +1846,16 @@ fn cli_message(argument: Option<&str>) -> Option<String> {
     }
 }
 
+async fn finish_native_shutdown(
+    ssh: SshManager,
+    local: impl std::future::Future<Output = Result<(), terminal::TerminalError>>,
+) {
+    ssh.shutdown().await;
+    if local.await.is_err() {
+        tracing::warn!(event = "local_terminal_shutdown_incomplete");
+    }
+}
+
 fn main() {
     if let Some(message) = cli_message(std::env::args().nth(1).as_deref()) {
         println!("{message}");
@@ -2067,10 +2077,11 @@ fn main() {
                 exit_pending = true;
                 let _ = app.emit("app://closing", ());
                 let manager = app.state::<SshManager>().inner().clone();
+                let local_cleanup = app.state::<TerminalManager>().shutdown();
                 let app = app.clone();
                 let exit_ready = Arc::clone(&exit_ready);
                 tauri::async_runtime::spawn(async move {
-                    manager.shutdown().await;
+                    finish_native_shutdown(manager, local_cleanup).await;
                     exit_ready.store(true, Ordering::Release);
                     app.exit(code.unwrap_or(0));
                 });
@@ -2080,7 +2091,8 @@ fn main() {
             // OS termination may bypass ExitRequested (for example, Dock Quit).
             // The event loop is ending, so finish native cleanup before returning.
             let manager = app.state::<SshManager>().inner().clone();
-            tauri::async_runtime::block_on(manager.shutdown());
+            let local_cleanup = app.state::<TerminalManager>().shutdown();
+            tauri::async_runtime::block_on(finish_native_shutdown(manager, local_cleanup));
         }
         _ => {}
     });

@@ -35,6 +35,31 @@ dispatch. Paste also rechecks all approved destinations; macro actions recheck
 all selected targets and Cancel. Closing or reconnecting does not reroute old
 input into the replacement session, including SSH reconnects that retain an ID.
 
+## Local terminal cleanup at Quit
+
+The native Quit paths now start local PTY cleanup alongside the existing SSH
+cleanup and await both before proceeding. This covers the app's
+`ExitRequested` handler and its `Exit` fallback; Tauri distinguishes those
+events in its [runtime event documentation](https://docs.rs/tauri/latest/tauri/enum.RunEvent.html).
+It does not depend on the renderer unmounting terminal panes.
+
+Starting shutdown immediately seals the local manager. A child created before
+Quit cannot be published afterward: publication refusal also reaps that child.
+All shutdown callers share completion, so a repeated request cannot mistake an
+emptied registry for finished cleanup. A dedicated cleanup thread avoids
+waiting behind blocked input workers in the runtime's blocking pool; if that
+thread cannot start, the same cleanup runs in place.
+
+Explicit Close and reader EOF retain the registered child until reaping
+finishes, allowing concurrent Quit to await the child lock. Closing terminals
+reject further input. Cleanup recovers owned controls from poisoned registry
+or child locks, cancels unconsumed startup commands and attempts every registered
+child even if another cleanup reports an error. Cleanup failures are reported
+with redacted native diagnostics.
+
+These checks cover directly owned PTY children. They do not certify every
+descendant process tree, native OS termination path or Windows/WSL lifecycle.
+
 ## Focused regression checks
 
 ```sh
@@ -70,6 +95,13 @@ and platform suites.
 The startup follow-up also passed those 16 terminal checks; after strengthening
 the fixture to preload the PTY input, the single input-pressure regression
 passed again. Frontend type checking and lint passed on the updated source.
+
+The Quit follow-up passed 17 terminal regressions on macOS ARM64, with 99
+unrelated desktop tests filtered out. Its new manager case holds a child lock
+to verify that repeated shutdown cannot acknowledge early, then checks actual
+exit/reaping before fallback test cleanup. It covers multiple children,
+late-publication refusal, unconsumed startup cancellation and poisoned controls.
+The real input-pressure fixture also checks shutdown while a write is blocked.
 
 This is production-manager and frontend routing evidence, not native GUI
 observation. Windows ConPTY behavior under input pressure remains unverified.

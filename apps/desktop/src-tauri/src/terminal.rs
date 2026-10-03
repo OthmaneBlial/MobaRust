@@ -4,7 +4,9 @@ use mobarust_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -24,6 +26,10 @@ pub enum TerminalError {
     Missing(String),
     #[error("terminal session is already attached")]
     AlreadyAttached,
+    #[error("MobaRust is closing; no new local terminal can be opened")]
+    ShuttingDown,
+    #[error("local terminal shutdown cleanup failed")]
+    ShutdownIncomplete,
     #[error("local terminal state is unavailable")]
     LockPoisoned,
     #[error("terminal I/O failed")]
@@ -143,6 +149,7 @@ struct TerminalClosed {
 }
 
 struct TerminalSession {
+    closing: AtomicBool,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Arc<tokio::sync::Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
@@ -154,9 +161,26 @@ struct TerminalStart {
     startup_command: Option<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Copy)]
+enum ShutdownPhase {
+    Open,
+    Closing,
+    Complete { failed: bool },
+}
+
+#[derive(Clone)]
 pub struct TerminalManager {
     sessions: Arc<Mutex<HashMap<String, Arc<TerminalSession>>>>,
+    shutdown: tokio::sync::watch::Sender<ShutdownPhase>,
+}
+
+impl Default for TerminalManager {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::default(),
+            shutdown: tokio::sync::watch::channel(ShutdownPhase::Open).0,
+        }
+    }
 }
 
 impl TerminalManager {
@@ -167,6 +191,7 @@ impl TerminalManager {
         rows: u16,
         target: LocalTerminalTarget,
     ) -> Result<String, TerminalError> {
+        self.ensure_open()?;
         target.validate()?;
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
@@ -247,6 +272,7 @@ impl TerminalManager {
         let id = Uuid::new_v4().to_string();
         let (start, ready) = mpsc::channel();
         let session = Arc::new(TerminalSession {
+            closing: AtomicBool::new(false),
             master: Mutex::new(pair.master),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
             child: Mutex::new(child),
@@ -256,15 +282,7 @@ impl TerminalManager {
             })),
         });
 
-        let mut sessions = match self.sessions.lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
-                let _ = cleanup_session(&session);
-                return Err(TerminalError::LockPoisoned);
-            }
-        };
-        sessions.insert(id.clone(), Arc::clone(&session));
-        drop(sessions);
+        self.register_session(&id, Arc::clone(&session))?;
 
         let manager = self.clone();
         let terminal_id = id.clone();
@@ -281,10 +299,9 @@ impl TerminalManager {
         {
             // The session is inserted before the stream worker starts so the
             // worker can race safely with an immediate close. If the OS
-            // refuses the worker, take the session back and reap its child
+            // refuses the worker, close the session and reap its child
             // instead of leaving a native process behind.
-            let _ = self.take_session(&id);
-            let _ = cleanup_session(&session);
+            let _ = self.close(&id);
             return Err(TerminalError::Io(error));
         }
 
@@ -300,8 +317,7 @@ impl TerminalManager {
             .take()
             .ok_or(TerminalError::AlreadyAttached)?;
         if start.ready.send(()).is_err() {
-            let _ = self.take_session(id);
-            let _ = cleanup_session(&session);
+            let _ = self.close(id);
             return Err(TerminalError::Io(std::io::ErrorKind::BrokenPipe.into()));
         }
         // Start the output reader before sending saved input. The ID is
@@ -349,10 +365,98 @@ impl TerminalManager {
     }
 
     pub fn close(&self, id: &str) -> Result<(), TerminalError> {
-        let session = self
-            .take_session(id)?
-            .ok_or_else(|| TerminalError::Missing(id.to_owned()))?;
-        cleanup_session(&session)
+        let session = self.session(id)?;
+        // Keep the cleanup owner visible to shutdown until the child is reaped.
+        cleanup_session(&session)?;
+        self.take_session(id)?;
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> Result<(), TerminalError> {
+        if matches!(*self.shutdown.borrow(), ShutdownPhase::Open) {
+            Ok(())
+        } else {
+            Err(TerminalError::ShuttingDown)
+        }
+    }
+
+    fn register_session(
+        &self,
+        id: &str,
+        session: Arc<TerminalSession>,
+    ) -> Result<(), TerminalError> {
+        let result = self
+            .sessions
+            .lock()
+            .map_err(|_| TerminalError::LockPoisoned)
+            .and_then(|mut sessions| {
+                self.ensure_open()?;
+                sessions.insert(id.to_owned(), Arc::clone(&session));
+                Ok(())
+            });
+        if result.is_err() {
+            let _ = cleanup_session(&session);
+        }
+        result
+    }
+
+    /// Seal the manager immediately; every caller awaits the same cleanup.
+    pub fn shutdown(&self) -> impl Future<Output = Result<(), TerminalError>> + Send + use<> {
+        let mut finished = self.shutdown.subscribe();
+        let first = self.shutdown.send_if_modified(|phase| {
+            if matches!(phase, ShutdownPhase::Open) {
+                *phase = ShutdownPhase::Closing;
+                true
+            } else {
+                false
+            }
+        });
+        if first {
+            let manager = self.clone();
+            // Use a dedicated worker: blocked input may occupy the runtime's
+            // blocking pool, but shutdown must still be able to kill its children.
+            if thread::Builder::new()
+                .name("mobarust-pty-shutdown".into())
+                .spawn(move || manager.finish_shutdown())
+                .is_err()
+            {
+                self.finish_shutdown();
+            }
+        }
+        async move {
+            loop {
+                let phase = *finished.borrow();
+                if let ShutdownPhase::Complete { failed } = phase {
+                    return if failed {
+                        Err(TerminalError::ShutdownIncomplete)
+                    } else {
+                        Ok(())
+                    };
+                }
+                finished
+                    .changed()
+                    .await
+                    .map_err(|_| TerminalError::ShutdownIncomplete)?;
+            }
+        }
+    }
+
+    fn finish_shutdown(&self) {
+        let sessions = std::mem::take(
+            &mut *self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        let mut failed = false;
+        for session in sessions.into_values() {
+            if let Err(error) = cleanup_session(&session) {
+                failed = true;
+                tracing::warn!(event = "local_terminal_cleanup_failed", error = %error);
+            }
+        }
+        self.shutdown
+            .send_replace(ShutdownPhase::Complete { failed });
     }
 
     fn session(&self, id: &str) -> Result<Arc<TerminalSession>, TerminalError> {
@@ -360,6 +464,7 @@ impl TerminalManager {
             .lock()
             .map_err(|_| TerminalError::LockPoisoned)?
             .get(id)
+            .filter(|session| !session.closing.load(Ordering::Acquire))
             .cloned()
             .ok_or_else(|| TerminalError::Missing(id.to_owned()))
     }
@@ -372,14 +477,20 @@ impl TerminalManager {
     }
 }
 
-/// Stop and reap a native PTY child exactly once after its session has been
-/// removed from the manager. This is shared by explicit close, worker-start
+/// Stop and reap a native PTY child under its child lock. Shared by close, worker-start
 /// failure, and reader EOF so every local process has a deterministic owner.
 fn cleanup_session(session: &TerminalSession) -> Result<(), TerminalError> {
+    session.closing.store(true, Ordering::Release);
+    // Cleanup must retain ownership even if an earlier operation panicked.
+    session
+        .start
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
     let mut child = session
         .child
         .lock()
-        .map_err(|_| TerminalError::LockPoisoned)?;
+        .unwrap_or_else(|error| error.into_inner());
     cleanup_child(child.as_mut())
 }
 
@@ -529,7 +640,6 @@ fn stream_output<R: Read + Send + 'static>(
                 terminal_id: terminal_id.clone(),
             },
         );
-        manager.remove(&terminal_id);
         return;
     }
 
@@ -565,15 +675,14 @@ fn stream_output<R: Read + Send + 'static>(
             terminal_id: terminal_id.clone(),
         },
     );
-    manager.remove(&terminal_id);
 }
 
 fn cleanup_stream_session(manager: &TerminalManager, terminal_id: &str) {
-    if let Ok(Some(session)) = manager.take_session(terminal_id) {
-        // The stream has ended, so an otherwise-live child no longer has a
-        // usable terminal. Reuse the same bounded kill-and-reap policy as an
-        // explicit close; there is no silent orphan path on reader EOF.
-        let _ = cleanup_session(&session);
+    // Keep the cleanup owner registered until it is reaped, including at EOF.
+    if let Err(error) = manager.close(terminal_id) {
+        if !matches!(error, TerminalError::Missing(_)) {
+            tracing::warn!(event = "local_terminal_stream_cleanup_failed", error = %error);
+        }
     }
 }
 
@@ -592,12 +701,6 @@ fn emit_text(app: &AppHandle, terminal_id: &str, data: String) {
             data,
         },
     );
-}
-
-impl TerminalManager {
-    fn remove(&self, id: &str) {
-        let _ = self.take_session(id);
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -874,6 +977,7 @@ mod tests {
             .insert(
                 "cleanup-fixture".into(),
                 Arc::new(TerminalSession {
+                    closing: AtomicBool::new(false),
                     master: Mutex::new(pair.master),
                     writer: Arc::new(tokio::sync::Mutex::new(writer)),
                     child: Mutex::new(child),
@@ -934,6 +1038,7 @@ mod tests {
             .insert(
                 "stream-cleanup-fixture".into(),
                 Arc::new(TerminalSession {
+                    closing: AtomicBool::new(false),
                     master: Mutex::new(pair.master),
                     writer: Arc::new(tokio::sync::Mutex::new(writer)),
                     child: Mutex::new(child),
@@ -964,15 +1069,136 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn a_non_reading_pty_does_not_block_async_input_or_close() {
-        assert_non_reading_pty_responsive(false).await;
-        assert_non_reading_pty_responsive(true).await;
+    #[allow(clippy::await_holding_lock)] // Hold the child gate to test shared shutdown acknowledgement.
+    async fn shutdown_reaps_children_and_refuses_late_publication_even_after_poison() {
+        for poisoned in [false, true] {
+            let manager = TerminalManager::default();
+            let mut sessions = Vec::new();
+            let mut ready_receivers = Vec::new();
+            for index in 0..3 {
+                let pair = portable_pty::native_pty_system()
+                    .openpty(PtySize {
+                        rows: 24,
+                        cols: 80,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .expect("open shutdown fixture");
+                let writer = pair.master.take_writer().expect("take fixture writer");
+                let child = pair
+                    .slave
+                    .spawn_command(long_running_fixture_command())
+                    .expect("spawn fixture");
+                drop(pair.slave);
+                let (ready, receiver) = mpsc::channel();
+                let session = Arc::new(TerminalSession {
+                    closing: AtomicBool::new(false),
+                    master: Mutex::new(pair.master),
+                    writer: Arc::new(tokio::sync::Mutex::new(writer)),
+                    child: Mutex::new(child),
+                    start: Mutex::new(Some(TerminalStart {
+                        ready,
+                        startup_command: Some("exit".into()),
+                    })),
+                });
+                if index < 2 {
+                    manager
+                        .register_session(&format!("shutdown-{index}"), Arc::clone(&session))
+                        .unwrap();
+                }
+                sessions.push(session);
+                ready_receivers.push(receiver);
+            }
+            // A cleanup must not need the input writer, even during pressure.
+            let writer = Arc::clone(&sessions[0].writer).try_lock_owned().unwrap();
+            if poisoned {
+                let session = Arc::clone(&sessions[0]);
+                let registry = Arc::clone(&manager.sessions);
+                let _ = thread::spawn(move || {
+                    let _child = session.child.lock().unwrap();
+                    let _sessions = registry.lock().unwrap();
+                    panic!("poison owned shutdown controls");
+                })
+                .join();
+            }
+            let child_gate = sessions[0]
+                .child
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let cleanup = manager.shutdown();
+            let repeated = manager.clone().shutdown();
+            tokio::pin!(repeated);
+            let premature_ack = tokio::time::timeout(Duration::from_millis(20), &mut repeated)
+                .await
+                .is_ok();
+            drop(child_gate);
+            let sealed = manager.ensure_open();
+            // Simulate a child created before Quit reaching publication late.
+            let late = manager.register_session("late", Arc::clone(&sessions[2]));
+            let completed = tokio::time::timeout(Duration::from_secs(3), async {
+                (cleanup.await, repeated.await)
+            })
+            .await;
+            drop(writer);
+            let reaped = sessions.iter().all(|session| {
+                session
+                    .child
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .try_wait()
+                    .is_ok_and(|exit| exit.is_some())
+            });
+            let closing = sessions
+                .iter()
+                .all(|session| session.closing.load(Ordering::Acquire));
+            let startup_cancelled = ready_receivers
+                .iter()
+                .all(|ready| matches!(ready.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+            // Always attempt cleanup before assertions, including on timeout.
+            for session in &sessions {
+                let _ = cleanup_session(session);
+            }
+            assert!(matches!(sealed, Err(TerminalError::ShuttingDown)));
+            assert!(matches!(
+                late,
+                Err(TerminalError::ShuttingDown | TerminalError::LockPoisoned)
+            ));
+            assert!(matches!(completed, Ok((Ok(()), Ok(())))));
+            assert!(
+                !premature_ack,
+                "repeated Quit must wait for the first cleanup owner"
+            );
+            assert!(
+                reaped,
+                "shutdown and late-publication refusal must reap their children"
+            );
+            assert!(closing);
+            assert!(startup_cancelled, "pending startup must be cancelled");
+            assert!(
+                manager
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_empty()
+            );
+            manager
+                .shutdown()
+                .await
+                .expect("completed shutdown stays idempotent");
+        }
     }
 
     #[cfg(unix)]
-    async fn assert_non_reading_pty_responsive(startup: bool) {
+    #[tokio::test]
+    async fn a_non_reading_pty_does_not_block_async_input_or_close() {
+        assert_non_reading_pty_responsive(false, false).await;
+        assert_non_reading_pty_responsive(true, false).await;
+        assert_non_reading_pty_responsive(false, true).await;
+    }
+
+    #[cfg(unix)]
+    async fn assert_non_reading_pty_responsive(startup: bool, shutdown: bool) {
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -994,6 +1220,7 @@ mod tests {
         drop(pair.slave);
         let (start, attached) = mpsc::channel();
         let session = Arc::new(TerminalSession {
+            closing: AtomicBool::new(false),
             master: Mutex::new(pair.master),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
             child: Mutex::new(child),
@@ -1069,7 +1296,11 @@ mod tests {
             );
         let busy = manager.write("non-reader", b"tail".to_vec()).await;
         // Cleanup before asserting: close never needs the input writer lock.
-        let close = manager.close("non-reader");
+        let close = if shutdown {
+            manager.shutdown().await
+        } else {
+            manager.close("non-reader")
+        };
         let closed = session.child.lock().unwrap().try_wait();
         let completion = tokio::time::timeout(Duration::from_secs(2), write).await;
         drop(session);
@@ -1156,15 +1387,20 @@ mod tests {
     fn long_running_fixture_command() -> CommandBuilder {
         #[cfg(target_os = "windows")]
         {
-            let mut command = CommandBuilder::new("cmd.exe");
-            command.args(["/D", "/C", "ping 127.0.0.1 -n 30 > nul"]);
+            let mut command = CommandBuilder::new("powershell.exe");
+            command.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ]);
             command
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let mut command = CommandBuilder::new("/bin/sh");
-            command.args(["-c", "sleep 30"]);
+            command.args(["-c", "exec sleep 30"]);
             command
         }
     }
