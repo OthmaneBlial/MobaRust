@@ -1,5 +1,32 @@
 # Dependency audit record
 
+## v0.1.26 release preparation audit — 2026-10-03
+
+A fresh workspace scan refreshed RustSec to commit
+`83278802b2c75399c153d84a6de246503b62966a` (1,289 advisories). The
+638-package workspace reports zero vulnerabilities and retains
+`RUSTSEC-2024-0370` (unmaintained proc-macro-error) and `RUSTSEC-2024-0429`
+(glib unsoundness) warnings. No-fetch checks against that same local database
+report no vulnerabilities or warnings for VNC (82 packages) or fuzz (52 packages).
+The excluded RDP candidate (374 packages) still fails on `RUSTSEC-2023-0071`
+with unmaintained warnings `RUSTSEC-2023-0089` and `RUSTSEC-2025-0134`.
+No finding was suppressed and RDP remains outside normal installers.
+
+Semantic comparison of all four lockfiles confirms only local package versions
+changed from 0.1.25 to 0.1.26; third-party versions, sources, checksums and
+features are unchanged. The newer editor JSON-name and directory-listing fixes
+have regression evidence; scanning baseline dependency versions does not
+independently review these local changes. Version-aligned checks, package
+verification and publication are still separate gates at this preparation step.
+
+The version-aligned `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+passed on macOS ARM64: workspace tests/Clippy, frontend checks/build, release/lab
+tooling, RDP/VNC loopback fixtures, package-layout contracts and fuzz compilation.
+This includes 107 desktop tests, 43 SSH unit tests, 15 authentication cases,
+25 ordinary OpenSSH cases and 15 editor/transfer fault cases. Four opt-in manual
+SSH labs remain ignored; real Xvfb reports its prerequisite skip. No timeout or
+assertion was relaxed. Installer validation and publication remain separate.
+
 ## v0.1.25 release audit and publication — 2026-10-03
 
 A fresh workspace `cargo audit --json` scan refreshed RustSec to commit

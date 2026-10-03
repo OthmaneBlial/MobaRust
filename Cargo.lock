@@ -2863,7 +2863,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "libc",
@@ -2895,7 +2895,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-benchmarks"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "mobarust-core",
  "serde_json",
@@ -2903,7 +2903,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-core"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "proptest",
  "serde",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-network"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-remote-desktop"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "serde",
  "serde_json",
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-serial"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "libc",
  "mobarust-core",
@@ -2946,7 +2946,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-ssh"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "encoding_rs",
@@ -2965,7 +2965,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-store"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "libc",
  "mobarust-core",
@@ -2979,7 +2979,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-telnet"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "encoding_rs",
  "mobarust-core",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "mobarust-vault"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -6689,7 +6689,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "sha2 0.11.0",
 ]
