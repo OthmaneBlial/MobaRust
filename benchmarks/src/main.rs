@@ -43,53 +43,76 @@ fn main() {
     benchmark_terminal_fixture(TerminalFixture::ProgressRedraw, 100_000);
 
     let profiles = synthetic_profiles(10_000);
-    let (elapsed, matches) = measure(|| search_profiles(&profiles, "fixture-09999"));
+    let (samples, matches) =
+        measure(|| search_profiles(black_box(&profiles), black_box("fixture-09999")));
+    let elapsed: Duration = samples.iter().sum();
     println!(
-        "session_search profiles={} matches={} mean_us={:.3}",
+        "session_search profiles={} matches={} mean_us={:.3} {}",
         profiles.len(),
         matches,
-        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64
+        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+        timing_summary(samples)
     );
 
     let session = SessionRecord::local_terminal("benchmark fixture");
-    let (elapsed, serialized_bytes) = measure(|| {
+    let (samples, serialized_bytes) = measure(|| {
         serde_json::to_vec(black_box(&session))
             .expect("local session serialization")
             .len()
     });
+    let elapsed: Duration = samples.iter().sum();
     println!(
-        "session_serialization fields=secret-free bytes={} mean_us={:.3}",
+        "session_serialization fields=secret-free bytes={} mean_us={:.3} {}",
         serialized_bytes,
-        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64
+        elapsed.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64,
+        timing_summary(samples)
     );
 }
 
 fn benchmark_terminal_fixture(fixture: TerminalFixture, lines: usize) {
     let payload = synthetic_terminal_output(lines, fixture);
-    let (elapsed, chunks) = measure(|| batch_terminal_output(&payload));
+    let (samples, chunks) = measure(|| batch_terminal_output(black_box(&payload)));
+    let elapsed: Duration = samples.iter().sum();
     let bytes_per_second =
         (payload.len() as f64 * ITERATIONS as f64) / elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
     println!(
-        "terminal_output fixture={} lines={lines} bytes={} chunks={} mean_ms={:.3} throughput_mib_s={:.2}",
+        "terminal_output fixture={} lines={lines} bytes={} chunks={} mean_ms={:.3} throughput_mib_s={:.2} {}",
         fixture.label(),
         payload.len(),
         chunks,
         elapsed.as_secs_f64() * 1000.0 / ITERATIONS as f64,
-        bytes_per_second / (1024.0 * 1024.0)
+        bytes_per_second / (1024.0 * 1024.0),
+        timing_summary(samples)
     );
 }
 
-fn measure<F, T>(mut operation: F) -> (Duration, T)
+fn measure<F, T>(mut operation: F) -> ([Duration; ITERATIONS], T)
 where
     F: FnMut() -> T,
     T: Copy,
 {
+    let mut samples = [Duration::ZERO; ITERATIONS];
     let started = Instant::now();
-    let mut value = operation();
-    for _ in 1..ITERATIONS {
-        value = operation();
+    let mut value = black_box(operation());
+    samples[0] = started.elapsed();
+    for sample in &mut samples[1..] {
+        let started = Instant::now();
+        value = black_box(operation());
+        *sample = started.elapsed();
     }
-    (started.elapsed(), black_box(value))
+    (samples, value)
+}
+
+fn timing_summary(samples: [Duration; ITERATIONS]) -> String {
+    let mut sorted = samples;
+    sorted.sort_unstable();
+    format!(
+        "samples_ns={:?} min_us={:.3} median_us={:.3} max_us={:.3}",
+        samples.map(|sample| sample.as_nanos()),
+        sorted[0].as_secs_f64() * 1_000_000.0,
+        sorted[ITERATIONS / 2].as_secs_f64() * 1_000_000.0,
+        sorted[ITERATIONS - 1].as_secs_f64() * 1_000_000.0
+    )
 }
 
 fn synthetic_terminal_output(lines: usize, fixture: TerminalFixture) -> Vec<u8> {
@@ -169,6 +192,21 @@ fn search_profiles(profiles: &[String], query: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measurement_executes_every_iteration_and_reports_raw_timing_statistics() {
+        let mut calls = 0;
+        let (_, value) = measure(|| {
+            calls += 1;
+            calls
+        });
+        assert_eq!(calls, ITERATIONS);
+        assert_eq!(value, ITERATIONS);
+        assert_eq!(
+            timing_summary([3000, 2000, 5000, 1000, 4000].map(Duration::from_nanos)),
+            "samples_ns=[3000, 2000, 5000, 1000, 4000] min_us=1.000 median_us=3.000 max_us=5.000"
+        );
+    }
 
     #[test]
     fn fixtures_cover_unicode_ansi_and_redraw_controls() {

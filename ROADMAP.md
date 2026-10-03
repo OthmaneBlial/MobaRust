@@ -222,3 +222,9 @@ These existing capabilities should be improved rather than recreated:
 - [ ] Recheck advisories at release time; keep RDP's known-vulnerable dependency path isolated and track the remaining GTK/glib warnings.
 
 The [2026-10-02 benchmark receipt](benchmarks/2026-10-02-local.md) was measured under high CPU contention. It is reproducible evidence of that run, not a before/after performance claim.
+
+On main, `cargo xtask benchmark` now retains five raw timing samples and reports
+min/median/max alongside means. [The methodology](benchmarks/README.md) records
+the separate timer boundaries and optimizer barriers; historical aggregate
+timers are not directly comparable. Quiet-machine and native GUI measurements
+remain open gates.
