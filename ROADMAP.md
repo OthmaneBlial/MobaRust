@@ -234,6 +234,11 @@ and session cleanup cancels and joins accepted runners before transport
 cleanup. Loopback admission and idle/pending-job wire checks do not close
 native sustained-traffic or real remote-listener revocation gates.
 
+On main, [operation history retention](docs/testing/live-operation-history.md)
+keeps live tunnel/transfer rows and their Stop/Cancel controls available while
+bounding only finished history. Reducer checks do not close native large-list,
+many-session or keyboard/focus acceptance gates.
+
 - [ ] Exercise keyboard navigation, focus return, resize, reconnect, and failure recovery in the native app.
 - [ ] Validate multi-file/recursive transfers, collision decisions, native SCP Cancel/retry, OS-originated/other-platform Quit during transfer and progress under realistic workloads. The [single-file SFTP native receipt](docs/testing/transfer-lifecycle.md) and [pre-promotion checks](docs/testing/transfer-cancellation.md) do not close this broader gate.
 - [x] Verify a basic native remote-editor save and a byte-matched SFTP download in the disposable macOS ARM64 lab.

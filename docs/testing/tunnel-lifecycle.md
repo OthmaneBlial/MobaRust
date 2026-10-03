@@ -66,3 +66,7 @@ revocation, broad server interoperability, Windows/Linux acceptance, a
 whole-process memory bound or a bound on concurrent listener-binding requests.
 Those gates remain open. Published v0.1.29 installers do not include this
 later source change; GitHub workflows remain disabled.
+
+The subsequent [live operation history correction](live-operation-history.md)
+keeps live tunnel Stop controls visible beyond the old 20-row total cap.
+It is frontend retention evidence, with native large-list acceptance pending.

@@ -28,6 +28,7 @@ import { terminalFontSizeAfterZoom } from "./terminal-zoom";
 import { focusConnectedTerminal } from "./terminal-focus";
 import { createSshAuthHandler, type SshAuthEvent } from "./ssh-authentication";
 import { parseTunnelPort } from "./tunnel-port";
+import { retainOperationHistory } from "./operation-history";
 import { chooseOverwrite, confirmAction, confirmSessionStartup, promptText } from "./text-prompt";
 import { remoteSessionCloseError, remoteSessionCloseStatus, remoteSessionStateError, sanitizeTerminalErrorDetail } from "./terminal-session-close";
 import { cachedTheme, terminalThemes, type ColorTheme } from "./theme";
@@ -3599,7 +3600,7 @@ function App() {
     void listen<SshTunnelEvent>("ssh://tunnel", (event) => {
       setTunnels((current) => {
         const next = current.filter((tunnel) => tunnel.tunnelId !== event.payload.tunnelId);
-        return [...next, event.payload].slice(-20);
+        return retainOperationHistory([...next, event.payload], (tunnel) => ["stopped", "failed"].includes(tunnel.state), 20);
       });
     }).then((stop) => {
       if (disposed) stop();
@@ -3783,7 +3784,7 @@ function App() {
       if (previousState !== payload.state && payload.state === "failed") recordAudit("transferFailed", payload.protocol.toUpperCase());
       setTransfers((current) => {
         const next = current.filter((transfer) => transfer.transferId !== payload.transferId);
-        return [...next, payload].slice(-40);
+        return retainOperationHistory([...next, payload], (transfer) => ["completed", "cancelled", "failed"].includes(transfer.state), 40);
       });
     }).then((stop) => {
       if (disposed) stop();
