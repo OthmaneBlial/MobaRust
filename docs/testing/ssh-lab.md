@@ -107,6 +107,44 @@ had 41 unit, five wire and 12 OpenSSH tests, with loopback IPv6 executed and the
 real Xvfb case skipped for missing prerequisites.
 The ordinary `cargo xtask test-ssh` and workspace suite include this fixture.
 
+### Repeatable native reconnect-startup lab on main
+
+After preparing an isolated current-source app and verifying its native window
+and HOME/agent settings, run:
+
+```sh
+cargo test --locked -p mobarust-ssh --test authentication native_shell_reconnect_lab -- --ignored --exact --nocapture
+```
+
+This five-minute Unix-only fixture exports one secret-free profile,
+**SSH setup reconnect-stalled**, from its printed private directory. It binds
+only `127.0.0.1` on an OS-assigned port, generates one host key and password/OTP
+pair, and executes no OS shell. Metadata is `0600` in a `0700` directory.
+
+1. Import its `profiles.json` in the disposable app. Verify reconnect is enabled
+   with at least two attempts, select the profile, review startup input, and
+   answer its generated factors. Observe a connected SSH terminal before
+   interrupting anything.
+2. Create a new empty `interrupt` file with mode `0600` **inside this fixture's
+   printed private directory**. This marker targets only its first accepted
+   transport; symlinks and nonempty files are ignored. Never interrupt a system
+   service or an unrelated process.
+3. Answer the replacement connection's password/OTP prompts. Its host key and
+   factors are unchanged, but startup has zero input credit. Expect the
+   phase-specific timeout and final SSH error state. Check the accepted-count
+   log for no third connection after the error; the unchanged attempt budget
+   must not replay uncertain startup input.
+4. Quit the disposable app normally and verify its runtime/local PTY exit.
+   Let the fixture reach its deadline, then verify its worker exit, private
+   metadata/control removal and listener release.
+
+The normal test `native_reconnect_endpoint_interrupts_once_then_stalls_startup`
+checks the same endpoint over real SSH packets: ordered successful startup,
+explicit interruption, matching trust/factors on the replacement, startup
+timeout, secret-free export, joined workers, port rebinding and metadata
+removal. This fixture contract is separate from native GUI acceptance of the
+production reconnect manager. [Retry decision and acceptance limits](ssh-reconnect.md#uncertain-startup-delivery-stops-reconnect-retries-on-main--2026-10-03).
+
 ### Repeatable native shell setup lab on main
 
 ```bash

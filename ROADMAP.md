@@ -201,7 +201,7 @@ second login. Production-handler regressions cover request ownership, queued
 expiry, cancellation, overflow, page shutdown and IPC failure; frontend and Mac
 debug packaging checks passed. [Two-session Mac debug overlap, cancellation and Quit were also verified](docs/testing/ssh-lab.md#native-overlapping-reconnects-and-shutdown--2026-10-02); broader native acceptance remains pending.
 
-On main after v0.1.28, uncertain startup-input delivery stops automatic reconnect retries; ordinary pre-startup failures remain bounded. [Source checks and pending native acceptance](docs/testing/ssh-reconnect.md#uncertain-startup-delivery-stops-reconnect-retries-on-main--2026-10-03). Published installers retain their tagged behavior; the checklist is unchanged.
+On main after v0.1.28, uncertain startup-input delivery stops automatic reconnect retries; ordinary pre-startup failures remain bounded. [Source checks](docs/testing/ssh-reconnect.md#uncertain-startup-delivery-stops-reconnect-retries-on-main--2026-10-03) and [Mac debug timeout retry-stop acceptance](docs/testing/ssh-reconnect.md#native-reconnect-startup-retry-stop--2026-10-03) distinguish this gate from pending release-copy, other-failure and wider-platform checks. Published installers retain their tagged behavior; the checklist is unchanged.
 
 **Done when:** each added case has success, rejection/failure, bounded cancellation, and cleanup checks, runnable through the existing lab command. No personal accounts, agents, or production hosts are test prerequisites.
 

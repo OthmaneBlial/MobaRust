@@ -382,7 +382,70 @@ fixture-required account name resolved it without changing production code,
 test assertions, deadlines or isolation of HOME/keys/agents.
 
 This correction is on main after the v0.1.28 tag; published installers have not
-been replaced. Native GUI retry-stop acceptance, a controlled OpenSSH peer
-restart and Windows/Linux runtime checks remain open. The v0.1.28 native
+been replaced. The macOS ARM64 debug timeout retry-stop check below passed; native acceptance
+of other startup-write failure types, a controlled OpenSSH peer restart,
+release-copy acceptance and Windows/Linux runtime checks remain open. The v0.1.28 native
 timeout receipt above proves initial-connection behavior, not this new
 reconnect decision. CI remains disabled.
+
+## Native reconnect startup retry-stop — 2026-10-03
+
+A current-source macOS 26.6 / ARM64 / Apple M2 debug bundle of `1b856c5` passed
+`cargo xtask package-check`. An executable-matched, ad hoc signed disposable
+copy used a unique identity, portable data, temporary HOME/ZDOTDIR/XDG paths
+and empty SSH-agent settings. Its actual process environment and native window
+were verified before starting the fixture. This is a main-source debug result;
+it is not a published-installer or release-copy result.
+
+The [repeatable reconnect-startup lab](ssh-lab.md#repeatable-native-reconnect-startup-lab-on-main)
+used one OS-assigned `127.0.0.1` listener, generated in-memory host key and
+password/OTP factors, private metadata and a secret-free exported profile. It
+executes no OS shell. The GUI showed the unchanged policy: reconnect enabled,
+three attempts, 12,000 ms timeout.
+
+Observed sequence:
+
+1. The imported profile displayed the full startup review, destination and
+   reconnect warning, with Cancel focused. Escape cancelled before any fixture
+   connection was accepted or established.
+2. Explicit Continue followed by the generated password and distinct OTP
+   connected the SSH terminal. Its status was connected/LIVE/SSH transport
+   active. The fixture accepted exactly 8,193 startup bytes once.
+3. A new private empty `interrupt` marker targeted only that fixture's first
+   transport. The GUI entered RECONNECTING and presented password/OTP prompts
+   for the replacement at the same pinned endpoint.
+4. After answering them, the zero-credit replacement timed out during startup.
+   The terminal displayed “SSH failed: SSH startup input timed out; some input
+   may have reached the server. Check the remote session and startup settings
+   before reconnecting.” Its tab, brief badge and callout stayed ERROR/SSH error.
+5. Logs recorded exactly two accepted connections, one shell request each,
+   first startup 8,193 bytes/exactly once and replacement zero bytes. No third
+   connection or new authentication dialogue appeared for more than 53 seconds
+   after the error, while the same listener remained live and two retry attempts
+   remained available. No established fixture sockets remained.
+6. The two generated factors were absent from both owned persisted app files.
+   Final native accessibility state had no authentication fields or dialogue.
+   Normal native menu Quit released the confirmed app runtime and local zsh
+   child. The SSH transport had already failed; this is not active-SSH Quit proof.
+
+The same manual fixture completed its 300-second test lifetime with exit 0.
+Its runtime and disposable HOME were absent, private metadata/control were
+removed, and the recorded localhost port had no listener and could be rebound.
+The complete local `cargo xtask check` passed: 109 desktop tests, 16 authentication/
+fixture tests with four opt-in labs ignored by default, workspace tests/
+Clippy, frontend tests/type/lint/build, protocol/helper checks, package-layout
+contracts and fuzz compilation. The optional real Xvfb case retained its
+prerequisite skip. The manual GUI fixture was run separately and passed; the
+other ignored lab cases were not silently counted as executed.
+
+The new fixture contract separately checks successful ordered startup, explicit
+interruption, same-key/factor replacement timeout, secret-free export, worker
+completion, port rebinding and removal of private metadata/control. It shares
+the existing endpoint/profile helpers; no new dependency or public test service
+was added. The existing setup fixture remains three endpoints with its original
+three-second automated lifetime.
+
+Native overflow/peer-closure/transport-write failure classification, release-copy
+retry-stop acceptance, real OpenSSH/PAM restart and Windows/Linux checks remain
+open. Earlier successful startup can still run again on a later approved
+reconnect. No public installer or historical tag was replaced; CI stays disabled.

@@ -53,6 +53,8 @@ enum ShellReply {
     StartupStall,
     StartupExit,
     StartupPartialExit,
+    #[cfg(unix)]
+    StartupReconnectStall,
     StartupOverflow,
     ExitBeforeOutput,
     EofBeforeExit,
@@ -686,7 +688,40 @@ async fn native_shell_setup_lab() {
     std::fs::create_dir_all(&root).unwrap();
     let directory = native_lab_directory(&root);
     let mut endpoints = JoinSet::new();
-    native_shell_endpoints(directory.path(), Duration::from_secs(300), &mut endpoints).await;
+    native_shell_endpoints(
+        directory.path(),
+        &NATIVE_SHELL_CASES,
+        Duration::from_secs(300),
+        &mut endpoints,
+    )
+    .await;
+    while let Some(result) = endpoints.join_next().await {
+        result.unwrap();
+    }
+}
+
+/// Success first; a private marker interrupts it. Later connections retain the
+/// same trust/credentials but have zero startup credit.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "manual native reconnect startup acceptance; five-minute deadline"]
+async fn native_shell_reconnect_lab() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target/shell-reconnect-native-lab");
+    std::fs::create_dir_all(&root).unwrap();
+    let directory = native_lab_directory(&root);
+    let mut endpoints = JoinSet::new();
+    native_shell_endpoints(
+        directory.path(),
+        &[("reconnect-stalled", ShellReply::StartupReconnectStall)],
+        Duration::from_secs(300),
+        &mut endpoints,
+    )
+    .await;
     while let Some(result) = endpoints.join_next().await {
         result.unwrap();
     }
@@ -695,6 +730,7 @@ async fn native_shell_setup_lab() {
 #[cfg(unix)]
 async fn native_shell_endpoints(
     directory: &std::path::Path,
+    cases: &[(&str, ShellReply)],
     lifetime: Duration,
     endpoints: &mut JoinSet<()>,
 ) -> Vec<SocketAddr> {
@@ -702,7 +738,7 @@ async fn native_shell_endpoints(
     use std::os::unix::fs::OpenOptionsExt;
     let mut profiles = Vec::new();
     let mut addresses = Vec::new();
-    for (name, reply) in NATIVE_SHELL_CASES {
+    for &(name, reply) in cases {
         let address = native_endpoint(directory, name, None, reply, lifetime, endpoints).await;
         addresses.push(address);
         let bytes = Zeroizing::new(std::fs::read(directory.join(format!("{name}.json"))).unwrap());
@@ -857,15 +893,20 @@ async fn native_endpoint(
         nodelay: true,
         ..Default::default()
     };
-    if matches!(shell_reply, ShellReply::StartupFlood) {
+    if matches!(
+        shell_reply,
+        ShellReply::StartupFlood | ShellReply::StartupReconnectStall
+    ) {
         config.window_size = 1024;
     } else if matches!(shell_reply, ShellReply::StartupStall) {
         config.window_size = 0;
     }
     let config = Arc::new(config);
     let label = name.to_owned();
+    let interrupt = directory.join("interrupt");
     endpoints.spawn(async move {
         let mut sessions = JoinSet::new();
+        let mut accepted = 0;
         let lifetime = tokio::time::sleep(lifetime);
         tokio::pin!(lifetime);
         loop {
@@ -878,22 +919,52 @@ async fn native_endpoint(
                     let (stream, peer) = peer.unwrap();
                     assert!(peer.ip().is_loopback());
                     if sessions.len() >= 8 { drop(stream); continue; }
+                    accepted += 1;
+                    let reconnect_lab = matches!(shell_reply, ShellReply::StartupReconnectStall);
+                    let reply = if reconnect_lab {
+                        if accepted == 1 { ShellReply::StartupFlood } else { ShellReply::StartupStall }
+                    } else { shell_reply };
+                    if reconnect_lab {
+                        eprintln!("Native reconnect {label}: accepted={accepted}, mode={reply:?}");
+                    }
                     let observations = Arc::new(Observations::default());
                     let handler = Handler {
                         method: Method::Distinct { together: false },
                         expected: password.clone(), otp: otp.clone(),
                         observations: observations.clone(), release: None,
                         native_echo: forward_to.is_none(), forward_to,
-                        shell_reply,
+                        shell_reply: reply,
                         forwarded: JoinSet::new(),
                         sftp_reply: None,
                         sftp_channels: std::collections::HashSet::new(),
                     };
-                    let config = config.clone();
+                    let config = if reconnect_lab && accepted > 1 {
+                        Arc::new(server::Config { keys: config.keys.clone(),
+                            auth_rejection_time: Duration::ZERO,
+                            inactivity_timeout: Some(Duration::from_secs(180)), nodelay: true,
+                            window_size: 0, ..Default::default() })
+                    } else { config.clone() };
                     let label = label.clone();
+                    let interrupt = interrupt.clone();
+                    let interrupt_first = reconnect_lab && accepted == 1;
                     sessions.spawn(async move {
-                        let result = server::run_stream(config, stream, handler).await?.await;
-                        if !matches!(shell_reply, ShellReply::Accept) {
+                        let running = server::run_stream(config, stream, handler).await?;
+                        let handle = running.handle();
+                        tokio::pin!(running);
+                        let result = tokio::select! {
+                            result = &mut running => result,
+                            _ = async {
+                                while !std::fs::symlink_metadata(&interrupt).is_ok_and(|metadata|
+                                    metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == 0) {
+                                    tokio::time::sleep(Duration::from_millis(50)).await;
+                                }
+                            }, if interrupt_first => {
+                                handle.disconnect(russh::Disconnect::ByApplication,
+                                    "disposable fixture interruption".into(), "en".into()).await?;
+                                running.await
+                            }
+                        };
+                        if !matches!(reply, ShellReply::Accept) {
                             // Report only counts and equality, never entered input or credentials.
                             let expected = format!("{}\n", "fixture-startup-".repeat(512));
                             eprintln!("Native shell setup {label}: shell_requests={}, input_bytes={}, startup_exact_once={}",
@@ -915,6 +986,39 @@ async fn native_endpoint(
 }
 
 #[cfg(unix)]
+fn native_fixture_options(metadata: &serde_json::Value) -> SshConnectOptions {
+    let password = Zeroizing::new(metadata["password"].as_str().unwrap().to_owned());
+    let otp = Zeroizing::new(metadata["otp"].as_str().unwrap().to_owned());
+    SshConnectOptions {
+        host: metadata["host"].as_str().unwrap().to_owned(),
+        port: u16::try_from(metadata["port"].as_u64().unwrap()).unwrap(),
+        host_key_policy: HostKeyPolicy::PinnedFingerprint(
+            metadata["fingerprint"].as_str().unwrap().to_owned(),
+        ),
+        timeout: Duration::from_millis(500),
+        keepalive_interval: None,
+        credentials: SshCredentials::keyboard_interactive_prompt("fixture", move |challenge| {
+            let responses = challenge
+                .prompts
+                .iter()
+                .map(|prompt| {
+                    Secret::from_zeroizing(if prompt == "OTP: " {
+                        otp.clone()
+                    } else {
+                        password.clone()
+                    })
+                })
+                .collect();
+            async move { Ok(responses) }
+        }),
+        x11: None,
+        environment: Vec::new(),
+        startup_directory: None,
+        startup_command: Some("fixture-startup-".repeat(512)),
+    }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
     use std::os::unix::fs::PermissionsExt;
@@ -922,8 +1026,13 @@ async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
     let directory = native_lab_directory(root.path());
     let path = directory.path().to_owned();
     let mut endpoints = JoinSet::new();
-    let addresses =
-        native_shell_endpoints(directory.path(), Duration::from_secs(3), &mut endpoints).await;
+    let addresses = native_shell_endpoints(
+        directory.path(),
+        &NATIVE_SHELL_CASES,
+        Duration::from_secs(3),
+        &mut endpoints,
+    )
+    .await;
     let profiles_path = directory.path().join("profiles.json");
     assert_eq!(
         profiles_path.metadata().unwrap().permissions().mode() & 0o777,
@@ -964,35 +1073,7 @@ async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
                 "generated factors must not enter session exports"
             );
         }
-        let password = Zeroizing::new(metadata["password"].as_str().unwrap().to_owned());
-        let otp = Zeroizing::new(metadata["otp"].as_str().unwrap().to_owned());
-        let options = SshConnectOptions {
-            host: metadata["host"].as_str().unwrap().to_owned(),
-            port: u16::try_from(metadata["port"].as_u64().unwrap()).unwrap(),
-            host_key_policy: HostKeyPolicy::PinnedFingerprint(
-                metadata["fingerprint"].as_str().unwrap().to_owned(),
-            ),
-            timeout: Duration::from_millis(500),
-            keepalive_interval: None,
-            credentials: SshCredentials::keyboard_interactive_prompt("fixture", move |challenge| {
-                let responses = challenge
-                    .prompts
-                    .iter()
-                    .map(|prompt| {
-                        Secret::from_zeroizing(if prompt == "OTP: " {
-                            otp.clone()
-                        } else {
-                            password.clone()
-                        })
-                    })
-                    .collect();
-                async move { Ok(responses) }
-            }),
-            x11: None,
-            environment: Vec::new(),
-            startup_directory: None,
-            startup_command: Some("fixture-startup-".repeat(512)),
-        };
+        let options = native_fixture_options(&metadata);
         let connection = SshConnection::connect(options).await.unwrap();
         let result = connection.open_shell(80, 24).await;
         match reply {
@@ -1042,6 +1123,94 @@ async fn native_shell_setup_endpoints_are_isolated_and_cleanup() {
     }
     drop(directory);
     assert!(!path.exists(), "manual lab metadata must be removed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_reconnect_endpoint_interrupts_once_then_stalls_startup() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let directory = native_lab_directory(root.path());
+    let path = directory.path().to_owned();
+    let mut endpoints = JoinSet::new();
+    let addresses = native_shell_endpoints(
+        directory.path(),
+        &[("reconnect-stalled", ShellReply::StartupReconnectStall)],
+        Duration::from_secs(3),
+        &mut endpoints,
+    )
+    .await;
+    let bytes =
+        Zeroizing::new(std::fs::read(directory.path().join("reconnect-stalled.json")).unwrap());
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let profiles = std::fs::read_to_string(directory.path().join("profiles.json")).unwrap();
+    for factor in ["password", "otp"] {
+        assert!(!profiles.contains(metadata[factor].as_str().unwrap()));
+    }
+    let connection = SshConnection::connect(native_fixture_options(&metadata))
+        .await
+        .unwrap();
+    let mut shell = connection.open_shell(80, 24).await.unwrap();
+    let expected = [
+        vec![b'x'; 256 * 1024],
+        SHELL_BANNER.to_vec(),
+        format!("{}\n", "fixture-startup-".repeat(512)).into_bytes(),
+    ]
+    .concat();
+    let received = tokio::time::timeout(DEADLINE, async {
+        let mut received = Vec::new();
+        while received.len() < expected.len() {
+            if let SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) =
+                shell.next_output().await.unwrap().unwrap()
+            {
+                received.extend(bytes);
+            }
+        }
+        received
+    })
+    .await
+    .unwrap();
+    assert_eq!(received, expected);
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(directory.path().join("interrupt"))
+        .unwrap();
+    tokio::time::timeout(DEADLINE, async {
+        while let Some(output) = shell.next_output().await {
+            if output.is_err() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("controlled interruption must close the first transport");
+    drop(shell);
+    drop(connection);
+    let replacement = SshConnection::connect(native_fixture_options(&metadata))
+        .await
+        .unwrap();
+    assert!(matches!(
+        replacement.open_shell(80, 24).await,
+        Err(SshError::StartupInputTimeout)
+    ));
+    replacement.disconnect().await.unwrap();
+    drop(replacement);
+    while let Some(result) = tokio::time::timeout(DEADLINE, endpoints.join_next())
+        .await
+        .unwrap()
+    {
+        result.unwrap();
+    }
+    for address in addresses {
+        drop(TcpListener::bind(address).await.unwrap());
+    }
+    drop(directory);
+    assert!(
+        !path.exists(),
+        "private control and generated metadata must be removed"
+    );
 }
 
 #[tokio::test]
