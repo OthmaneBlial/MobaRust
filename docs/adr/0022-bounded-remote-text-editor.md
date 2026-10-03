@@ -191,3 +191,29 @@ This does not prove a distributed transaction, a successful rename whose reply
 was lost, or native warning/focus acceptance. Native/cross-platform GUI checks,
 broader SFTP servers and updated installers remain pending. Published downloads
 are unchanged.
+
+### Native encoding wire regression — 2026-10-03
+
+The verified v0.1.25 ARM64 release copy exposed a separate IPC defect: the
+renderer sends `utf-8` and `windows-1252`, but Rust's derived enum names were
+`utf8` and `windows1252`. Selecting Windows-1252 and saving failed at argument
+deserialization, before writing. Backend encoding tests did not exercise this
+JSON boundary. The shared Rust enum now emits the renderer's names and accepts
+the old names as input aliases; unsupported encodings remain rejected.
+
+```sh
+cargo test --locked -p mobarust-ssh --lib \
+  tests::remote_editor_encoding_json_matches_native_ui_values -- --exact
+```
+
+This regression ran one test and failed before the fix, then passed. All 43
+SSH unit tests, 25 ordinary OpenSSH cases and 15 portable SFTP fault cases
+passed with the correction. The manual native lab is ignored by ordinary
+tests; its completion alone is not GUI evidence. Rebuilt native selector
+acceptance remains pending. Published v0.1.25 installers retain the defect.
+
+The full local `CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check`
+also passed on macOS ARM64: workspace tests/Clippy, frontend checks/build,
+release/lab tooling, isolated RDP/VNC fixtures, package-layout checks and
+fuzz-target compilation. Real Xvfb reported its prerequisite skip. Both
+GitHub workflows were verified `disabled_manually`.

@@ -2390,10 +2390,11 @@ const SFTP_REGULAR_TYPE: u32 = 0o100000;
 const SFTP_SYMLINK_TYPE: u32 = 0o120000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum RemoteTextEncoding {
     #[default]
+    #[serde(rename = "utf-8", alias = "utf8")]
     Utf8,
+    #[serde(rename = "windows-1252", alias = "windows1252")]
     Windows1252,
 }
 
@@ -4470,6 +4471,30 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, changed);
         assert!(first.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn remote_editor_encoding_json_matches_native_ui_values() {
+        for (encoding, name, legacy) in [
+            (RemoteTextEncoding::Utf8, "utf-8", "utf8"),
+            (
+                RemoteTextEncoding::Windows1252,
+                "windows-1252",
+                "windows1252",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(encoding).unwrap(), name);
+            for value in [name, legacy] {
+                assert_eq!(
+                    serde_json::from_value::<RemoteTextEncoding>(serde_json::Value::String(
+                        value.into()
+                    ))
+                    .unwrap(),
+                    encoding
+                );
+            }
+        }
+        assert!(serde_json::from_str::<RemoteTextEncoding>("\"utf-16\"").is_err());
     }
 
     #[test]
