@@ -185,6 +185,48 @@ frontend checks, protocol fixtures, package-layout contracts and fuzz compilatio
 The real Xvfb check reports its prerequisite skip. Native GUI and cross-platform
 runtime acceptance remain pending; no roadmap checkbox was closed by this patch.
 
+## SFTP seek recovery and offset exhaustion — 2026-10-03
+
+Source after v0.1.24 corrects another boundary in the shared SFTP file adapter.
+Relative seeks previously narrowed unsigned offsets or metadata sizes to `i64`
+before adding the delta. Valid large positions could be rejected, while signed
+addition could panic or wrap. A failed end-relative seek also retained its
+completed future; querying the position or seeking again reproduced
+`async fn resumed after completion`.
+
+Seeks now use checked unsigned arithmetic and return `InvalidInput` for overflow
+or movement before zero. Completed seek state is retired on both success and
+failure; failed metadata or arithmetic leaves the old position and read state
+intact. READ/WRITE chunks also fit the remaining representable offset space.
+Nonempty I/O at the maximum position fails before another data request, while
+empty I/O remains a no-op. There is no new dependency or public signature.
+
+```text
+cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo xtask check
+```
+
+Both seek regressions failed on the baseline: one rejected a valid unsigned
+position and the other panicked when polling a completed failed future. A third
+baseline check exposed a two-byte READ where only one byte could advance the
+offset safely. All 19 public in-memory boundary cases pass with the correction.
+The new cases use tiny generated packets, signed-minimum deltas, FSTAT refusal
+and absent/maximum sizes, exact offsets and no-extra-request assertions. No huge
+file, socket, credentials or filesystem fixture is involved.
+
+The complete local `cargo xtask check` also passed on macOS ARM64 / Apple M2:
+105 desktop tests, five private SDK checks, all 19 public SFTP boundary cases,
+15 automated authentication cases and all 16 OpenSSH cases, plus workspace
+Clippy, frontend tests/type checking/lint/build, release/lab tooling, isolated
+RDP/VNC fixtures, package-layout contracts and fuzz compilation. Three manual
+authentication labs remain ignored; real Xvfb reports its prerequisite skip.
+No existing fixture assertion, payload or deadline was relaxed.
+
+This is protocol-adapter evidence, not native app or hardware acceptance. The
+published v0.1.24 Mac DMGs and v0.1.12 Windows/Linux installers are unchanged;
+the correction awaits a subsequent installer cohort. Baseline-version advisory
+scanners do not independently audit this repository-local patch.
+
 ## v0.1.24 release preparation audit — 2026-10-03
 
 A fresh `cargo audit --json` lookup reports RustSec commit

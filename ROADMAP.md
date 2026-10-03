@@ -143,6 +143,11 @@ The shared SFTP file writer also splits uploads to fit both data and encoded
 packet limits, and refuses nonempty writes with no payload room or a closed
 handle. [Byte-matched chunk and refusal checks](docs/security/dependency-audit.md#sftp-file-write-packet-budgets-and-closed-handles--2026-10-03)
 are included in both v0.1.24 Mac installers; native upload acceptance remains pending.
+After v0.1.24, source also retires failed SFTP seek futures and uses checked
+unsigned offsets. Tiny in-memory peers verify seek recovery, metadata failures,
+the full unsigned range and READ/WRITE refusal before position wrap.
+[Offset checks and installer limits](vendor/russh-sftp/MOBARUST_PATCH.md)
+remain separate from native file-workflow acceptance; published DMGs are unchanged.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

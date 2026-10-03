@@ -303,6 +303,139 @@ async fn file_position(file: &mut File) -> u64 {
         .unwrap()
 }
 
+#[tokio::test]
+async fn file_relative_seeks_preserve_the_full_unsigned_offset_range() {
+    use std::io::{ErrorKind, SeekFrom};
+    let (session, mut file, mut peer) = memory_file(None).await;
+    let client = async {
+        for (start, delta, expected) in [
+            (u64::MAX, 0, Some(u64::MAX)),
+            (u64::MAX, 1, None),
+            (u64::MAX, i64::MIN, Some(i64::MAX as u64)),
+            (1_u64 << 63, i64::MAX, Some(u64::MAX)),
+            (0, -1, None),
+            (0, i64::MIN, None),
+            (1_u64 << 63, i64::MIN, Some(0)),
+        ] {
+            file.seek(SeekFrom::Start(start)).await.unwrap();
+            let result = file.seek(SeekFrom::Current(delta)).await;
+            match expected {
+                Some(position) => assert_eq!(result.unwrap(), position),
+                None => assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput),
+            }
+            assert_eq!(file_position(&mut file).await, expected.unwrap_or(start));
+        }
+        file.close().await.unwrap();
+        session.close().await.unwrap();
+    };
+    tokio::time::timeout(DEADLINE, async {
+        tokio::join!(client, close_peer(&mut peer))
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn failed_end_seeks_retire_the_request_and_allow_a_fresh_seek() {
+    use std::io::{ErrorKind, SeekFrom};
+    let (session, mut file, mut peer) = memory_file(None).await;
+    let server = async {
+        for case in 0..5 {
+            let stat = request(&mut peer).await;
+            assert_eq!(stat[0], 8, "only end-relative seeks request FSTAT");
+            if case == 0 {
+                status_reply(&mut peer, &stat, 4).await;
+            } else {
+                let mut attrs = if case == 1 {
+                    0_u32.to_be_bytes().to_vec()
+                } else {
+                    1_u32.to_be_bytes().to_vec()
+                };
+                if case >= 2 {
+                    attrs.extend_from_slice(&u64::MAX.to_be_bytes());
+                }
+                reply(&mut peer, 105, &stat[1..5], &attrs).await;
+            }
+        }
+        close_peer(&mut peer).await;
+    };
+    let client = async {
+        for (delta, expected) in [
+            (0, Err(ErrorKind::Other)),
+            (0, Err(ErrorKind::Other)),
+            (1, Err(ErrorKind::InvalidInput)),
+            (0, Ok(u64::MAX)),
+            (i64::MIN, Ok(i64::MAX as u64)),
+        ] {
+            file.seek(SeekFrom::Start(7)).await.unwrap();
+            let result = file.seek(SeekFrom::End(delta)).await;
+            match expected {
+                Ok(position) => assert_eq!(result.unwrap(), position),
+                Err(kind) => assert_eq!(result.unwrap_err().kind(), kind),
+            }
+            assert_eq!(file_position(&mut file).await, expected.unwrap_or(7));
+            assert_eq!(file.seek(SeekFrom::Start(9)).await.unwrap(), 9);
+        }
+        file.close().await.unwrap();
+        session.close().await.unwrap();
+    };
+    tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+        .await
+        .expect("failed metadata and overflowing seeks must permit recovery");
+}
+
+#[tokio::test]
+async fn file_io_never_wraps_a_seeked_offset_or_sends_unrepresentable_data() {
+    use std::io::{ErrorKind, SeekFrom};
+    for writing in [false, true] {
+        let (session, mut file, mut peer) = memory_file(None).await;
+        let server = async {
+            let req = request(&mut peer).await;
+            if writing {
+                assert_eq!(req[0], 6);
+                assert_eq!(&req[16..24], &(u64::MAX - 1).to_be_bytes());
+                assert_eq!(&req[24..28], &1_u32.to_be_bytes());
+                assert_eq!(&req[28..], b"x");
+                status_reply(&mut peer, &req, 0).await;
+            } else {
+                read_request(&req, u64::MAX - 1, 1);
+                data_reply(&mut peer, &req, b"x").await;
+            }
+            close_peer(&mut peer).await;
+        };
+        let client = async {
+            file.seek(SeekFrom::Start(u64::MAX - 1)).await.unwrap();
+            if writing {
+                assert_eq!(file.write(b"xy").await.unwrap(), 1);
+                file.flush().await.unwrap();
+                assert_eq!(
+                    file.write(b"y").await.unwrap_err().kind(),
+                    ErrorKind::InvalidInput
+                );
+            } else {
+                let mut bytes = [0; 2];
+                assert_eq!(file.read(&mut bytes).await.unwrap(), 1);
+                assert_eq!(bytes[0], b'x');
+                assert_eq!(
+                    file.read(&mut bytes).await.unwrap_err().kind(),
+                    ErrorKind::InvalidInput
+                );
+            }
+            assert_eq!(file_position(&mut file).await, u64::MAX);
+            empty_file_io(&mut file).await;
+            assert_eq!(
+                file.seek(SeekFrom::Current(-1)).await.unwrap(),
+                u64::MAX - 1
+            );
+            file.close().await.unwrap();
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .expect("offset exhaustion must fail before any additional wire request");
+    }
+}
+
 async fn cancel_pending_read(file: &mut File, observed: tokio::sync::oneshot::Receiver<()>) {
     let mut original = [0; 4];
     let read = file.read(&mut original);

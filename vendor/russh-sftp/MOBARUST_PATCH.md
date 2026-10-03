@@ -38,6 +38,9 @@ except the five files below and line-ending normalization.
   Cap WRITE chunks by both data and packet limits, accounting for the encoded
   packet prefix in the raw server limit; refuse zero-data-budget and closed-handle
   writes without advancing position or issuing a request.
+  Use checked unsigned seek arithmetic, retire failed end-seek futures before
+  reporting their error, and bound READ/WRITE by representable offset space.
+  Out-of-range positions fail before another data request; empty I/O stays empty.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
 
@@ -58,6 +61,9 @@ and offsets, empty I/O, pending/buffered seek and write, acknowledged handle
 closure, negotiated read/write limit combinations and deliberately tiny budgets.
 Upload checks reconstruct a multi-chunk byte sequence, assert exact offsets and
 encoded packet sizes, and refuse writes after acknowledged closure.
+Offset checks use tiny packets at the unsigned boundary, including signed-minimum
+seek deltas, rejected or missing FSTAT sizes, failed-seek recovery, partial I/O
+at the last representable byte and refusal without an extra data request.
 Private library checks cover immediate async/nowait slot release, timeout,
 late/unmatched replies while another request is pending, initialization refusal,
 and preservation of a newer live receiver when an ID is reused. Public in-memory
@@ -75,4 +81,7 @@ include the first three response-bound changes. Both verified
 [v0.1.24 Mac previews](../../docs/release/v0.1.24.md) also include the later file-reader,
 64-bit-limit, request-lifetime and file-write corrections. Native workflow
 acceptance remains pending.
-Older Mac downloads and v0.1.12 Windows/Linux installers contain neither cohort.
+The subsequent seek-recovery and offset-exhaustion fixes are source after
+v0.1.24, pending new installers and native acceptance.
+Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
+neither of the first two cohorts.

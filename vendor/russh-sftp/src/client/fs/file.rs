@@ -160,6 +160,15 @@ impl Drop for File {
     }
 }
 
+fn seek_position(base: u64, delta: i64) -> io::Result<u64> {
+    base.checked_add_signed(delta).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SFTP seek position out of range",
+        )
+    })
+}
+
 impl AsyncRead for File {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -176,6 +185,12 @@ impl AsyncRead for File {
                 "SFTP file is closed",
             )));
         }
+        if file.pos == u64::MAX {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SFTP file position leaves no room for data",
+            )));
+        }
         if file.state.read_buffer.position() == file.state.read_buffer.get_ref().len() as u64 {
             let poll = Pin::new(match file.state.f_read.as_mut() {
                 Some(f) => f,
@@ -190,7 +205,8 @@ impl AsyncRead for File {
                         .limits
                         .and_then(|l| l.read_len)
                         .unwrap_or(packet_read_len)
-                        .min(packet_read_len) as usize;
+                        .min(packet_read_len)
+                        .min(u64::MAX - file.pos) as usize;
                     if max_read_len == 0 {
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -250,15 +266,7 @@ impl AsyncSeek for File {
 
         self.state.f_seek = Some(match position {
             SeekFrom::Start(pos) => Box::pin(future::ready(Ok(pos))),
-            SeekFrom::Current(pos) => {
-                let new_pos = self.pos as i64 + pos;
-                if new_pos < 0 {
-                    return Err(io::Error::other(
-                        "cannot move file pointer before the beginning",
-                    ));
-                }
-                Box::pin(future::ready(Ok(new_pos as u64)))
-            }
+            SeekFrom::Current(pos) => Box::pin(future::ready(Ok(seek_position(self.pos, pos)?))),
             SeekFrom::End(pos) => {
                 let session = self.session.clone();
                 let file_handle = self.handle.clone();
@@ -269,15 +277,7 @@ impl AsyncSeek for File {
                         .await
                         .map_err(|e| io::Error::other(e.to_string()))?;
                     match result.attrs.size {
-                        Some(size) => {
-                            let new_pos = size as i64 + pos;
-                            if new_pos < 0 {
-                                return Err(io::Error::other(
-                                    "cannot move file pointer before the beginning",
-                                ));
-                            }
-                            Ok(new_pos as u64)
-                        }
+                        Some(size) => seek_position(size, pos),
                         None => Err(io::Error::other("file size unknown")),
                     }
                 })
@@ -291,8 +291,9 @@ impl AsyncSeek for File {
         match self.state.f_seek.as_mut() {
             None => Poll::Ready(Ok(self.pos)),
             Some(f) => {
-                self.pos = ready!(Pin::new(f).poll(cx))?;
+                let position = ready!(Pin::new(f).poll(cx));
                 self.state.f_seek = None;
+                self.pos = position?;
                 self.state.f_read = None;
                 self.state.read_buffer = io::Cursor::default();
                 Poll::Ready(Ok(self.pos))
@@ -316,6 +317,12 @@ impl AsyncWrite for File {
                 "SFTP file is closed",
             )));
         }
+        if self.pos == u64::MAX {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SFTP file position leaves no room for data",
+            )));
+        }
         if self.state.write_acks.len() >= self.features.max_concurrent_writes {
             if let Some(poll) = poll_oldest_write(&mut self.state.write_acks, cx) {
                 ready!(poll)?;
@@ -335,7 +342,8 @@ impl AsyncWrite for File {
             .write_len
             .unwrap_or(packet_write_len)
             .min(packet_write_len)
-            .min(server_write_len) as usize;
+            .min(server_write_len)
+            .min(u64::MAX - self.pos) as usize;
         if max_write_len == 0 {
             return Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
