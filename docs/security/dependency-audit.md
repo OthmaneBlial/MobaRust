@@ -1,5 +1,26 @@
 # Dependency audit record
 
+## v0.1.25 release audit and publication — 2026-10-03
+
+A fresh workspace `cargo audit --json` scan refreshed RustSec to commit
+`f8dee89e1b2f2f1eaf548312df7655fe5202a302` (1,288 advisories). The
+638-package workspace reports zero vulnerabilities and retains
+`RUSTSEC-2024-0370` (unmaintained proc-macro-error) and `RUSTSEC-2024-0429`
+(glib unsoundness) warnings. Separate no-fetch checks against that refreshed
+local database report no vulnerabilities or warnings for VNC (82 packages)
+or fuzz (52 packages). The isolated RDP candidate (374 packages) still fails
+on `RUSTSEC-2023-0071`, with unmaintained warnings `RUSTSEC-2023-0089` and
+`RUSTSEC-2025-0134`; it remains excluded from normal installers.
+
+Semantic comparison of all four lockfiles confirms only local package versions
+changed from 0.1.24 to 0.1.25; third-party entries and features are unchanged.
+The version-aligned source passed the complete local check. The
+[v0.1.25 release receipt](../release/v0.1.25.md) records both verified Mac
+DMGs and four anonymously downloaded, byte-matched assets. These installers
+include the post-v0.1.24 SFTP/editor corrections below. Native acceptance,
+Windows/Linux updates and independent review remain open. Earlier entries
+retain the evidence and publication status at their individual source milestones.
+
 ## SFTP file-read cancellation and negotiated limits — 2026-10-03
 
 After v0.1.23, a small in-memory peer reproduced the high-level file reader

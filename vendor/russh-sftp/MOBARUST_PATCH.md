@@ -99,14 +99,15 @@ include the first three response-bound changes. Both verified
 [v0.1.24 Mac previews](../../docs/release/v0.1.24.md) also include the later file-reader,
 64-bit-limit, request-lifetime and file-write corrections. Native workflow
 acceptance remains pending.
-The subsequent seek-recovery, offset-exhaustion and file-type fixes are source after
-v0.1.24, pending new installers and native acceptance.
+The subsequent seek-recovery, offset-exhaustion and file-type fixes were added
+after v0.1.24 and are included in both verified v0.1.25 Mac installers.
+Native and Windows/Linux acceptance remain pending.
 The [metadata and upload regressions](../../docs/adr/0008-sftp-transfer-pipeline.md#upload-destination-regressions--2026-10-03)
 use generated types, owned Unix filesystem entries and disposable loopback SSH;
 they do not establish Windows metadata or native GUI acceptance.
 Subsequent [private-part and close-denial checks](../../docs/adr/0008-sftp-transfer-pipeline.md#private-transfer-parts-and-close-acknowledgements--2026-10-03)
 verify typed file-I/O errors through authenticated loopback SSH/SFTP. These
-source changes are also after v0.1.24, pending new installers.
+source changes are also after v0.1.24 and included in both v0.1.25 Mac installers.
 The subsequent [guarded-download and shutdown receipt](../../docs/adr/0008-sftp-transfer-pipeline.md#guarded-downloads-and-acknowledged-shutdown--2026-10-03)
 adds a two-WRITE-failure close gate and a raw in-memory SDK check preserving the
 first error across successful/failed CLOSE replies. This is still the same six
@@ -115,6 +116,9 @@ The subsequent [handle-retirement checks](../../docs/security/dependency-audit.m
 reproduce duplicate cancelled closes and extra wire operations on closing/closed
 handles. Marker-gated in-memory cases verify both drop phases, live API controls,
 successful/denied close replies and refusal before further handle requests.
-These changes remain source after v0.1.24, pending new installers and native acceptance.
+Both [verified v0.1.25 Mac previews](../../docs/release/v0.1.25.md) include
+these shutdown and handle-retirement changes. All four public assets were
+downloaded anonymously and byte-matched; native GUI acceptance and updated
+Windows/Linux installers remain pending.
 Mac downloads before v0.1.23 and v0.1.12 Windows/Linux installers contain
 neither of the first two cohorts.
