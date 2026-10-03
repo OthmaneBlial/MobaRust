@@ -2,17 +2,18 @@
 
 **Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
 
-The [v0.1.30 Mac previews](docs/release/v0.1.30.md) include bounded session
-operation admission, owned tunnel cleanup, correct explicit remote ports,
-transport retirement for uncertain forwards and retained live Stop/Cancel
-controls. Both architectures passed package checks and anonymous downloaded
-byte comparison. The ARM64 installer copy passed [21 live tunnel controls,
-shared 32-job admission and native Stop/Close/Quit](docs/testing/native-tunnels-v0.1.30.md).
-The same check exposed under-reported active/cancelled byte counts. A
-[source fix](docs/testing/tunnel-lifecycle.md) now retains live and partial
-payload totals across all three modes; the full local suite passed. Native
-counter acceptance and its next installer remain pending. Broader workloads
-and platform gates remain open; the checklist is unchanged.
+The [v0.1.31 Mac previews](docs/release/v0.1.31.md) fix under-reported active
+and cancelled tunnel traffic. Both architectures passed package checks and
+anonymous downloaded byte comparison. The ARM64 installer copy passed
+[live/stopped totals, SSH-tab Close and normal Quit](docs/testing/native-tunnels-v0.1.31.md)
+with eight byte-matched clients and owned fixture cleanup. The full local suite
+passed. Sustained workloads, transfer-control acceptance and platform gates
+remain open; the checklist is unchanged.
+
+The earlier [v0.1.30 native checks](docs/testing/native-tunnels-v0.1.30.md)
+cover 21 live tunnel controls, shared 32-job admission and Stop/Close/Quit.
+Those packages retain the counter defect. Their retention/admission evidence
+keeps its original artifact scope.
 
 The earlier [v0.1.29 Mac previews](docs/release/v0.1.29.md) stop automatic reconnect
 retries after uncertain startup delivery. A disposable copy of the verified
@@ -36,14 +37,14 @@ A checked item means its stated implementation or test exists. It does not imply
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.30; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
+| **Published previews** | macOS ARM64/x64 v0.1.31; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
 | **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
 | **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
 | **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
 | **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.30.md).
+Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.31.md).
 
 ## Completed in the current improvement cycle
 
@@ -220,7 +221,7 @@ The v0.1.29 Mac installers include the uncertain-startup retry stop; ordinary pr
 
 - [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
-- [x] Validate v0.1.30 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
+- [x] Validate v0.1.31 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
 
 **Done when:** verified artifacts and their limitations are documented per platform. GitHub workflows remain disabled. Signing requires real credentials/infrastructure and is a separate gate from unsigned previews.

@@ -6,7 +6,7 @@
 
 SSH • SFTP/SCP • terminal tabs & splits • remote editing • tunnels • reviewed automation
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.30-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.30)
+[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.31-c99870?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-536f60?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-536f60?style=for-the-badge)](LICENSE)
 
@@ -91,26 +91,26 @@ Switch light/dark themes, adjust terminal fonts and shortcuts, and keep settings
 
 | Platform | Download | Available version |
 | --- | --- | --- |
-| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.30/MobaRust-0.1.30-macos-arm64.dmg) | **0.1.30** |
-| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.30/MobaRust-0.1.30-macos-x64.dmg) | **0.1.30** |
+| 🍎 **macOS · Apple Silicon** | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg) | **0.1.31** |
+| 🍎 **macOS · Intel** | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg) | **0.1.31** |
 | 🪟 **Windows · x64** | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
 | 🐧 **Ubuntu / Debian · x64** | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
 | 🐧 **Other Linux · x64** | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
 
 **Preview distribution:** no publisher signing; macOS is ad hoc signed and not notarized. Windows/Linux installers are older and do not include the latest `main` changes. RDP is excluded from normal installers.
 
-[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.30) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
+[📝 Mac release notes & SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31) · [Windows/Linux release files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12) · [Installation help](docs/release/preview-notes.md)
 
 On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install ./MobaRust-0.1.12-linux-x64.deb`. AppImage prerequisites vary by distribution. Checksums verify downloaded bytes; they do not establish publisher identity.
 
-## 🚀 What's new — 0.1.30
+## 🚀 What's new — 0.1.31
 
-- **Reliable remote-forward Stop:** explicit ports stay correct when the server omits them from its success reply. Dropped, timed-out or unconfirmed forwarding attempts close that SSH transport; other work on the connection ends too.
-- **Bounded session work:** finite file/monitor, transfer and tunnel jobs share a 32-worker owner. A full command queue refuses these starts promptly; session cleanup cancels and joins tunnel runners.
-- **Keep live controls:** active tunnel and transfer rows retain Stop/Cancel. Only finished history is capped.
-- **Locally checked release:** the full suite passed, including 113 desktop tests, four forwarding cases and 25 OpenSSH cases. Both Mac packages passed mounted layout, architecture, signature and CLI checks.
+- **Live tunnel traffic:** local, SOCKS5 and remote forwards now show payload bytes while clients remain connected.
+- **Accurate stopped totals:** Stop and copy errors retain accepted bytes; completed copies count once and SOCKS5 framing is excluded.
+- **Native checks:** the ARM64 installer copy passed live/stopped totals, SSH-tab Close and normal Quit with eight byte-matched clients and clean fixture shutdown.
+- **Locally checked release:** the full suite passed, including 114 desktop tests, four forwarding cases and 25 OpenSSH cases. Both Mac packages passed mounted layout, architecture, signature and CLI checks.
 
-All four published assets matched anonymous downloads byte for byte. The ARM64 copy passed 21 live controls, shared 32-job refusal/recovery and native Stop/Close/Quit with byte-matched traffic. **Known issue in v0.1.30:** active/cancelled tunnel byte counts can display 0 B. A [source fix](docs/testing/tunnel-lifecycle.md) passed local checks; native validation and its next preview are pending. Broader workloads and Windows/Linux acceptance remain open. Their downloads remain v0.1.12; the walkthrough remains v0.1.17. [Native checks](docs/testing/native-tunnels-v0.1.30.md) · [Release limits](docs/release/v0.1.30.md).
+All four published assets matched anonymous downloads byte for byte. This fixes the v0.1.30 active/cancelled counter defect. Broader workloads, Intel GUI and Windows/Linux acceptance remain open. Windows/Linux downloads remain v0.1.12; the walkthrough remains v0.1.17. [Native checks](docs/testing/native-tunnels-v0.1.31.md) · [Release limits](docs/release/v0.1.31.md).
 
 ## 🧭 Progress and next steps
 
@@ -123,10 +123,10 @@ All four published assets matched anonymous downloads byte for byte. The ARM64 c
 | ✅ **Editor recovery** | Mac candidate passed conflict/reopen recovery and both Save as policies. The v0.1.26 ARM64 copy passed encoding Save/new Save as; the v0.1.27 copy passed explicit legacy Open/Save/reopen and UTF-8 conversion, with exact bytes/modes and normal-Quit cleanup. [Receipts](docs/testing/native-workflow.md). | Windows/Linux, saved-with-warning focus and uncertain promotion recovery. |
 | ✅ **Quality baseline** | One complete green Ubuntu/macOS/Windows run on source `ac70e39`; local checks continue. | New repeated Windows startups and Linux zsh/fish runtime evidence. **GitHub CI is disabled by request.** |
 | 🟡 **Native dialogues** | Mac lab verified file policies, reconnect-safe approvals, settings imports and visible error focus. Included in the v0.1.25 Mac preview. | Broader collision/recovery checks and native Windows/Linux acceptance. [Evidence](docs/testing/text-input-dialogs.md). |
-| 🟡 **Distribution** | Mac ARM64/x64 0.1.30 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
+| 🟡 **Distribution** | Mac ARM64/x64 0.1.31 previews; Windows/Linux 0.1.12 downloads. | Align versions, clean install/uninstall, signing and notarization. |
 | 🧪 **RDP / VNC / X11 / serial** | Isolated helpers and controlled fixtures exist. | Real servers, physical adapters and platform interoperability. RDP security gates remain open. |
 
-**Next priorities:** native counter validation and the next preview → sustained failure/recovery and transfer-control acceptance → current Windows/Linux installers → signing and notarization. Wider SSH authentication/recovery remains open.
+**Next priorities:** sustained failure/recovery and transfer-control acceptance → current Windows/Linux installers → signing and notarization. Wider SSH authentication/recovery remains open.
 
 [📍 Detailed roadmap & completion criteria](ROADMAP.md) · [Platform evidence](docs/testing/hardware-interoperability.md) · [SSH lab](docs/testing/ssh-lab.md) · [Benchmark receipt](benchmarks/2026-10-02-local.md)
 

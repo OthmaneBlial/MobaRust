@@ -272,8 +272,10 @@ cargo test --locked -p mobarust ssh::backpressure_tests::tunnel_ -- --nocapture
 cargo xtask check
 ```
 
-This is source/backend evidence. The published v0.1.30 Mac packages retain
-the counter defect; native acceptance of this new candidate and its next
-installer remain pending. These short checks do not prove sustained throughput,
-cancellation amid saturated writes, broad server or Windows/Linux acceptance.
-GitHub workflows remain disabled; the 57/76 roadmap checklist is unchanged.
+The published v0.1.30 Mac packages retain the counter defect. The verified
+v0.1.31 ARM64 installer copy subsequently passed [native live/stopped counter,
+Close and Quit acceptance](native-tunnels-v0.1.31.md), with eight independently
+byte-matched clients and owned fixture cleanup. These short checks do not prove
+sustained throughput, cancellation amid saturated writes, broad server or
+Windows/Linux acceptance. GitHub workflows remain disabled; the 57/76 roadmap
+checklist is unchanged.
