@@ -1,5 +1,19 @@
 # Dependency audit record
 
+## v0.1.22 release recheck — 2026-10-03
+
+`cargo audit --json` refreshed RustSec to commit
+`f8dee89e1b2f2f1eaf548312df7655fe5202a302`, containing 1,288 advisories.
+The version-aligned workspace reports zero vulnerabilities and the same two
+warnings: `RUSTSEC-2024-0370` (`proc-macro-error`, unmaintained) and
+`RUSTSEC-2024-0429` (`glib`, unsoundness). Cached checks report no vulnerability
+or warning for the VNC helper. The isolated RDP helper still reports
+`RUSTSEC-2023-0071` and two unmaintained dependencies, and remains excluded
+from normal installers. No advisory was suppressed. Semantic comparison of
+all four lockfiles confirms unchanged third-party entries; only local package
+versions moved from 0.1.21 to 0.1.22. The new SSH packet-loop and shell-output
+corrections have regression evidence, not an independent security audit.
+
 ## v0.1.21 release recheck — 2026-10-03
 
 `cargo audit --json` refreshed RustSec and reports database commit
