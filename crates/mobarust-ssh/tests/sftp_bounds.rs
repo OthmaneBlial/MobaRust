@@ -530,3 +530,99 @@ async fn shutdown_retires_pending_and_buffered_file_reads() {
             .unwrap();
     }
 }
+
+#[tokio::test]
+async fn cancelled_and_timed_out_raw_reads_accept_late_replies_without_closing_the_stream() {
+    use std::future::Future;
+    for cancelled in [false, true] {
+        let (stream, mut peer) = tokio::io::duplex(128);
+        let session = RawSftpSession::new(stream);
+        tokio::time::timeout(DEADLINE, async {
+            let server = async {
+                read_init(&mut peer).await;
+                peer.write_all(&version_packet(32)).await.unwrap();
+            };
+            let (init, ()) = tokio::join!(session.init(), server);
+            init.unwrap();
+            if cancelled {
+                let mut read = Box::pin(session.read("fixture", 0, 2));
+                poll_fn(|cx| {
+                    assert!(read.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                drop(read);
+            } else {
+                session.set_timeout(0);
+                assert!(matches!(
+                    session.read("fixture", 0, 2).await,
+                    Err(russh_sftp::client::error::Error::Timeout)
+                ));
+                session.set_timeout(30);
+            }
+            let retired = request(&mut peer).await;
+            read_request(&retired, 0, 2);
+            let server = async {
+                let live = request(&mut peer).await;
+                read_request(&live, 2, 2);
+                assert_ne!(&live[1..5], &retired[1..5]);
+                data_reply(&mut peer, &retired, b"xx").await;
+                data_reply(&mut peer, &live, b"ok").await;
+            };
+            let (result, ()) = tokio::join!(session.read("fixture", 2, 2), server);
+            assert_eq!(
+                result
+                    .expect("late response must not close a healthy stream")
+                    .data,
+                b"ok"
+            );
+            session.close_session().unwrap();
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(tail.is_empty());
+        })
+        .await
+        .expect("late-response recovery remains bounded");
+    }
+}
+
+#[tokio::test]
+async fn pre_version_and_duplicate_version_replies_still_close_the_stream() {
+    for duplicate in [false, true] {
+        let (stream, mut peer) = tokio::io::duplex(128);
+        let session = RawSftpSession::new(stream);
+        tokio::time::timeout(DEADLINE, async {
+            let server = async {
+                read_init(&mut peer).await;
+                if duplicate {
+                    peer.write_all(&version_packet(32)).await.unwrap();
+                    let pending = request(&mut peer).await;
+                    read_request(&pending, 0, 2);
+                    peer.write_all(&version_packet(32)).await.unwrap();
+                } else {
+                    // A valid ordinary response cannot precede VERSION.
+                    reply(&mut peer, 103, &1_u32.to_be_bytes(), &[0; 4]).await;
+                }
+            };
+            let client = async {
+                let result = if duplicate {
+                    session.init().await.unwrap();
+                    session.read("fixture", 0, 2).await.map(|_| ())
+                } else {
+                    session.init().await.map(|_| ())
+                };
+                assert!(result.is_err());
+                assert!(session.read("fixture", 0, 2).await.is_err());
+            };
+            tokio::join!(client, server);
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(
+                tail.is_empty(),
+                "both workers close while session remains alive"
+            );
+        })
+        .await
+        .expect("initialization protocol errors fail closed promptly");
+    }
+}

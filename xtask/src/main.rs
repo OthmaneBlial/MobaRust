@@ -1402,7 +1402,18 @@ fn run_app_version_probe(executable: &Path, root: &Path) -> Result<(Duration, St
     Ok((started.elapsed(), output))
 }
 
+fn test_sftp_dependency() -> Result<(), String> {
+    // The vendored dependency is excluded from workspace targets; explicitly
+    // exercise its private request-lifetime regressions as well as public APIs.
+    run_sanitized_test(
+        "cargo",
+        ["test", "--locked", "-p", "russh-sftp", "--lib"],
+        None,
+    )
+}
+
 fn test_ssh() -> Result<(), String> {
+    test_sftp_dependency()?;
     if !cfg!(unix) {
         eprintln!(
             "OpenSSH fixtures require macOS or Linux; running portable SSH unit and authentication-wire tests only"
@@ -1425,6 +1436,7 @@ fn test_ssh() -> Result<(), String> {
 fn check_rust() -> Result<(), String> {
     run("cargo", ["fmt", "--all", "--", "--check"], None)?;
     stage_helpers()?;
+    test_sftp_dependency()?;
     run_sanitized_test(
         "cargo",
         ["test", "--locked", "--workspace", "--", "--show-output"],

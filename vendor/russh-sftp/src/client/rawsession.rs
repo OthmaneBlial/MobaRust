@@ -1,10 +1,13 @@
 use bytes::Bytes;
 use dashmap::DashMap as HashMap;
 use std::{
+    future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
@@ -29,6 +32,30 @@ use crate::{
 
 pub type SftpResult<T> = Result<T, Error>;
 type SharedRequests = HashMap<Option<u32>, oneshot::Sender<SftpResult<Packet>>>;
+
+/// Owns the reply slot until completion or cancellation, including nowait I/O.
+pub(crate) struct PendingRequest {
+    rx: oneshot::Receiver<SftpResult<Packet>>,
+    id: Option<u32>,
+    requests: Arc<SharedRequests>,
+}
+
+impl Future for PendingRequest {
+    type Output = Result<SftpResult<Packet>, oneshot::error::RecvError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.rx).poll(cx)
+    }
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.rx.close();
+        // Do not remove a newer live receiver if a request ID was reused.
+        self.requests
+            .remove_if(&self.id, |_, sender| sender.is_closed());
+    }
+}
 
 pub(crate) struct SessionInner {
     version: Option<u32>,
@@ -61,10 +88,13 @@ impl SessionInner {
             return validate;
         }
 
-        Err(Error::UnexpectedBehavior(format!(
-            "Packet {:?} for unknown recipient",
-            id
-        )))
+        if id.is_some() && self.version.is_some() {
+            // Cancellation and timeout cannot retract a transmitted request.
+            // Discard its late reply; never deliver it to a different request.
+            Ok(())
+        } else {
+            Err(Error::UnexpectedPacket)
+        }
     }
 }
 
@@ -198,11 +228,7 @@ impl RawSftpSession {
         self.limits = limits;
     }
 
-    fn send(
-        &self,
-        id: Option<u32>,
-        packet: Packet,
-    ) -> SftpResult<oneshot::Receiver<SftpResult<Packet>>> {
+    fn send(&self, id: Option<u32>, packet: Packet) -> SftpResult<PendingRequest> {
         if self.tx.is_closed() || self.closed.load(Ordering::SeqCst) {
             return Err(Error::UnexpectedBehavior("session closed".into()));
         }
@@ -227,7 +253,11 @@ impl RawSftpSession {
             return Err(err.into());
         }
 
-        Ok(rx)
+        Ok(PendingRequest {
+            rx,
+            id,
+            requests: self.requests.clone(),
+        })
     }
 
     async fn request(&self, id: Option<u32>, packet: Packet) -> SftpResult<Packet> {
@@ -237,10 +267,7 @@ impl RawSftpSession {
         match runtime::timeout(Duration::from_secs(timeout), rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::UnexpectedBehavior("sender dropped".into())),
-            Err(error) => {
-                self.requests.remove(&id);
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -335,10 +362,7 @@ impl RawSftpSession {
     }
 
     /// Sends a close packet without awaiting the server's acknowledgement.
-    pub(crate) fn close_nowait(
-        &self,
-        handle: String,
-    ) -> SftpResult<oneshot::Receiver<SftpResult<Packet>>> {
+    pub(crate) fn close_nowait(&self, handle: String) -> SftpResult<PendingRequest> {
         let id = self.use_next_id();
         self.send(Some(id), Close { id, handle }.into())
     }
@@ -409,7 +433,7 @@ impl RawSftpSession {
         handle: String,
         offset: u64,
         data: Vec<u8>,
-    ) -> SftpResult<oneshot::Receiver<SftpResult<Packet>>> {
+    ) -> SftpResult<PendingRequest> {
         if self.limits.write_len.is_some_and(|w| data.len() as u64 > w) {
             return Err(Error::Limited("write limit reached".to_owned()));
         }
@@ -786,5 +810,156 @@ impl RawSftpSession {
 impl Drop for RawSftpSession {
     fn drop(&mut self) {
         let _ = self.close_session();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+
+    // Test the shared bookkeeping without worker tasks, sockets or files.
+    fn queues() -> (RawSftpSession, SessionInner, mpsc::UnboundedReceiver<Bytes>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let requests = Arc::new(HashMap::new());
+        let closed = Arc::new(AtomicBool::new(false));
+        let inner = SessionInner {
+            version: Some(3),
+            requests: requests.clone(),
+            closed: closed.clone(),
+        };
+        let session = RawSftpSession {
+            tx,
+            requests,
+            closed,
+            next_req_id: AtomicU32::new(1),
+            handles: AtomicU64::new(0),
+            timeout: AtomicU64::new(30),
+            limits: Limits::default(),
+        };
+        (session, inner, rx)
+    }
+
+    fn data(id: u32) -> Packet {
+        Data {
+            id,
+            data: b"ok".to_vec(),
+        }
+        .into()
+    }
+
+    #[tokio::test]
+    async fn dropping_an_async_request_removes_its_reply_slot() {
+        let (session, _inner, mut wire) = queues();
+        let mut read = Box::pin(session.read("fixture", 0, 2));
+        poll_fn(|cx| {
+            assert!(read.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert!(
+            wire.try_recv().is_ok(),
+            "request was accepted for transmission"
+        );
+        assert_eq!(session.requests.len(), 1);
+        drop(read);
+        assert!(
+            session.requests.is_empty(),
+            "cancelled future must release its slot immediately"
+        );
+    }
+
+    #[test]
+    fn dropping_nowait_requests_removes_their_reply_slots() {
+        let (session, _inner, mut wire) = queues();
+        let write = session
+            .write_nowait("fixture".into(), 0, b"ok".to_vec())
+            .unwrap();
+        let close = session.close_nowait("fixture".into()).unwrap();
+        assert_eq!(session.requests.len(), 2);
+        drop(write);
+        assert_eq!(
+            session.requests.len(),
+            1,
+            "abandoned write ack must release its slot"
+        );
+        drop(close);
+        assert!(
+            session.requests.is_empty(),
+            "discarded file-drop close ack must release its slot"
+        );
+        assert!(wire.try_recv().is_ok());
+        assert!(
+            wire.try_recv().is_ok(),
+            "dropping a reply does not retract the queued request"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_removes_the_slot_and_a_late_reply_preserves_live_requests() {
+        let (session, mut inner, _wire) = queues();
+        session.set_timeout(0);
+        assert!(matches!(
+            session.read("fixture", 0, 2).await,
+            Err(Error::Timeout)
+        ));
+        assert!(session.requests.is_empty());
+        let mut live = Box::pin(session.read("fixture", 2, 2));
+        session.set_timeout(30);
+        poll_fn(|cx| {
+            assert!(live.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(session.requests.len(), 1);
+        inner
+            .reply(Some(1), data(1))
+            .expect("late reply is discarded");
+        inner
+            .reply(Some(999), data(999))
+            .expect("unmatched reply cannot affect another request");
+        assert_eq!(session.requests.len(), 1);
+        inner.reply(Some(2), data(2)).unwrap();
+        assert!(session.requests.is_empty());
+        assert_eq!(live.await.unwrap().data, b"ok");
+    }
+
+    #[test]
+    fn retiring_an_old_receiver_preserves_a_reused_live_id() {
+        let (session, _inner, _wire) = queues();
+        let old = session.close_nowait("fixture".into()).unwrap();
+        session.next_req_id.store(1, Ordering::Relaxed);
+        let new = session.close_nowait("fixture".into()).unwrap();
+        drop(old);
+        assert_eq!(session.requests.len(), 1);
+        drop(new);
+        assert!(session.requests.is_empty());
+    }
+
+    #[test]
+    fn initialization_errors_still_fail_closed() {
+        let (session, mut inner, _wire) = queues();
+        assert!(inner
+            .reply(
+                None,
+                Version {
+                    version: 3,
+                    extensions: Default::default()
+                }
+                .into()
+            )
+            .is_err());
+        inner.version = None;
+        assert!(
+            inner.reply(Some(99), data(99)).is_err(),
+            "responses before VERSION are invalid"
+        );
+        let read = session.write_nowait("fixture".into(), 0, vec![]).unwrap();
+        assert!(inner.reply(Some(1), data(1)).is_err());
+        drop(read);
+        assert!(session.requests.is_empty());
     }
 }

@@ -48,7 +48,62 @@ This is public-API regression evidence, not native cancellation/retry acceptance
 or an independent security audit. These later source changes are not in the
 v0.1.23 Mac or v0.1.12 Windows/Linux installers. Wire-request bookkeeping still
 retires on reply, timeout or stream closure; immediate removal for every dropped
-request future remains a separate audit target. GitHub CI remains disabled.
+request future was still a separate audit target in that source snapshot; the
+next section records its subsequent correction. GitHub CI remains disabled.
+
+## SFTP request lifetime and late replies — 2026-10-03
+
+The next audit reproduced reply slots remaining registered after dropped async
+read futures and abandoned nowait write/close acknowledgments. A zero-second
+request timeout removed its slot, but its valid late DATA reply then stopped the
+reader and cancelled another live request. Three private baseline checks and a
+public in-memory late-reply recovery check failed before the correction.
+
+Each raw request now owns a private future wrapping the existing oneshot receiver.
+Dropping that future closes its receiver and removes its abandoned reply slot;
+a conditional removal preserves a newer live receiver if an ID has been reused.
+This applies to shared async requests, pending file writes and the close request
+sent by file drop. There is no new dependency, cleanup task, global sweep or
+retained cancellation-ID list. Public signatures and dependency locks are unchanged.
+
+After successful VERSION negotiation, a parsed ordinary reply without a matching
+request is discarded. It cannot satisfy a different pending request. This also
+covers arbitrary unmatched ordinary IDs; they are not distinguished from late
+responses. Frame-size and deserialization limits still run before dispatch.
+Responses before VERSION, unsolicited/duplicate VERSION, malformed frames and
+oversized declarations still stop both workers and settle pending requests.
+Cancellation releases local bookkeeping; it cannot undo operations already
+transmitted to a remote server. File close/flush must still be awaited to observe
+write errors and acknowledged closure.
+
+```sh
+cargo test --locked -p russh-sftp --lib
+cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo xtask test-ssh
+cargo xtask check
+```
+
+The dependency remains excluded from workspace test discovery, so `test-ssh`
+and the Rust/full-check path explicitly run its private library tests in the
+existing disposable HOME/environment. The five private checks exercise slot
+ownership, queued acknowledgments, timeout/late-reply isolation, initialization
+refusal and receiver replacement. The public pipe checks exercise actual worker
+continuation and fail-closed initialization, alongside the existing response
+and file-reader boundaries. No sockets, credentials or filesystem state are
+needed by these focused checks.
+
+The full `cargo xtask check` passed on macOS ARM64 / Apple M2, including
+all five private SDK tests, all 13 SFTP boundary cases, 42 SSH unit tests,
+15 automated authentication cases and all 16 OpenSSH integration cases.
+Workspace Clippy, frontend tests/type checking/lint/build, release/lab tooling,
+RDP/VNC fixtures, package-layout contracts and fuzz compilation also passed.
+The X11 loopback case passed on this run without changed deadlines/assertions;
+this does not establish the cause of its earlier intermittent failure. Three
+manual labs remain ignored; real Xvfb reports its explicit prerequisite skip.
+
+These are source changes after v0.1.23, pending installers and native GUI
+acceptance. They do not establish remote operation rollback, general server
+compatibility or an independent security audit. GitHub CI remains disabled.
 
 ## SFTP inbound response bounds on main — 2026-10-03
 

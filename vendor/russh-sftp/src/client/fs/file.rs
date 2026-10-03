@@ -13,7 +13,12 @@ use tokio::{
 
 use super::Metadata;
 use crate::{
-    client::{error::Error, rawsession::SftpResult, session::Features, RawSftpSession},
+    client::{
+        error::Error,
+        rawsession::{PendingRequest, SftpResult},
+        session::Features,
+        RawSftpSession,
+    },
     protocol::{Packet, StatusCode},
 };
 
@@ -30,7 +35,7 @@ struct FileState {
     f_seek: StateFn<u64>,
     f_flush: StateFn<()>,
     f_shutdown: StateFn<()>,
-    write_acks: VecDeque<oneshot::Receiver<SftpResult<Packet>>>,
+    write_acks: VecDeque<PendingRequest>,
 }
 
 /// Provides high-level methods for interaction with a remote file.
@@ -122,7 +127,7 @@ fn check_write_result(
 }
 
 fn poll_oldest_write(
-    pending: &mut VecDeque<oneshot::Receiver<SftpResult<Packet>>>,
+    pending: &mut VecDeque<PendingRequest>,
     cx: &mut Context<'_>,
 ) -> Option<Poll<io::Result<()>>> {
     let rx = pending.front_mut()?;
@@ -136,7 +141,7 @@ fn poll_oldest_write(
 }
 
 fn poll_drain_writes(
-    pending: &mut VecDeque<oneshot::Receiver<SftpResult<Packet>>>,
+    pending: &mut VecDeque<PendingRequest>,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<()>> {
     while let Some(poll) = poll_oldest_write(pending, cx) {
