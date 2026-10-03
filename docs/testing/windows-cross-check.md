@@ -65,6 +65,35 @@ run the CLI version path, execute tests, or establish GUI/runtime behavior.
 The executable stays in ignored local build output; no release asset was
 created or replaced.
 
+### VNC helper and desktop test executables
+
+At documentation-only source
+`bf54854a3ce3af2e9551a414707dc2317d0f4edb`, these additional locked link checks
+passed with unchanged application code and lockfiles:
+
+```bash
+cargo build --locked --manifest-path tools/vnc-helper/Cargo.toml \
+  --target x86_64-pc-windows-gnu --target-dir target --config profile.dev.debug=0
+cargo test --locked -p mobarust --no-run --target x86_64-pc-windows-gnu \
+  --config profile.dev.debug=0 --config profile.test.debug=0
+```
+
+| Artifact | Result | Elapsed time | Bytes |
+| --- | --- | --- | --- |
+| `mobarust-vnc-helper.exe` | Exit 0; PE32+ x86-64 | 76.86 seconds | 8,786,351 |
+| `mobarust-09dd85009d4598ca.exe` desktop test harness | Exit 0; PE32+ x86-64 | 34.74 seconds | 75,764,016 |
+
+The helper SHA-256 was
+`f14bef69e96394e0bfe6f419f13ceac14685c78314bf0dbc63b5b0a4791f83e5`;
+the desktop test harness SHA-256 was
+`e715b60ba73cef71959e8eda9df057bb15bbed0a700c8151611d9abf2e6806a2`.
+MinGW `objdump -p` also identified the helper's console subsystem and empty
+PE security directory. Both artifacts remain in ignored local build output.
+
+`--no-run` verifies that Windows-specific desktop test code links into a
+test executable. It does not execute PowerShell, cmd, ConPTY, WSL or any
+protocol fixture, and it does not establish a native Windows test pass.
+
 ## Isolation and reproducibility
 
 Each invocation received a new temporary HOME/ZDOTDIR/XDG directory inside
