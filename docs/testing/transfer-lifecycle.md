@@ -318,6 +318,21 @@ listener binding, active tunnel counts, many-session workloads and native
 saturation/Retry acceptance still need separate bounds or evidence. Published
 v0.1.29 installers do not include this source change; workflows remain disabled.
 
+## v0.1.31 native finite-action recovery — 2026-10-03
+
+A disposable ARM64 installer copy reached the shared 32-job limit with native
+local forwards. Files and Monitor refused their finite requests explicitly;
+Refresh controls remained available and SSH stayed connected. Native Stop
+freed a slot. Listing and explicit monitor Refresh recovered, but Files retained
+its old busy error after a successful explicit Refresh, and the same listing
+error leaked into the global banner on Monitor.
+
+[Native observations and cleanup](native-busy-recovery-v0.1.31.md) distinguish
+that published-artifact defect from the subsequent source correction, which
+scopes directory errors to their listing and clears them on a new request.
+Corrected native acceptance, transfer Retry, all finite actions and sustained
+workloads remain pending. This adds no roadmap checkbox or wider-platform claim.
+
 The subsequent [tunnel worker ownership change](tunnel-lifecycle.md) puts
 accepted tunnel jobs under the shared session cap and drain. Concurrent
 listener-binding requests and tunnel totals across many sessions remain

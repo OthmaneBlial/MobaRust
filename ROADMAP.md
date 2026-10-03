@@ -10,6 +10,13 @@ with eight byte-matched clients and owned fixture cleanup. The full local suite
 passed. Sustained workloads, transfer-control acceptance and platform gates
 remain open; the checklist is unchanged.
 
+A later [v0.1.31 native busy-session check](docs/testing/native-busy-recovery-v0.1.31.md)
+verified directory/monitor refusal at 32 jobs and recovery after native Stop.
+It also exposed a stale Files error after successful Refresh. The source now
+scopes directory errors to their listing and clears them on a new request;
+corrected native acceptance and a new installer remain pending. Transfer Retry
+and all finite actions retain separate gates.
+
 The earlier [v0.1.30 native checks](docs/testing/native-tunnels-v0.1.30.md)
 cover 21 live tunnel controls, shared 32-job admission and Stop/Close/Quit.
 Those packages retain the counter defect. Their retention/admission evidence

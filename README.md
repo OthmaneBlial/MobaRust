@@ -112,6 +112,8 @@ On Mac, move MobaRust to Applications. On Debian/Ubuntu, use `sudo apt install .
 
 All four published assets matched anonymous downloads byte for byte. This fixes the v0.1.30 active/cancelled counter defect. Broader workloads, Intel GUI and Windows/Linux acceptance remain open. Windows/Linux downloads remain v0.1.12; the walkthrough remains v0.1.17. [Native checks](docs/testing/native-tunnels-v0.1.31.md) · [Release limits](docs/release/v0.1.31.md).
 
+**Known v0.1.31 issue:** Files can retain a busy error after a successful Refresh. A [source correction](docs/testing/native-busy-recovery-v0.1.31.md) scopes listing errors and clears them on a new request; corrected native acceptance and a new installer remain pending.
+
 ## 🧭 Progress and next steps
 
 **Updated 2026-10-03.** The roadmap has **57 of 76 checked items (75%)**. This is checklist completion, not production readiness: implementation, tests, downloadable binaries and hardware evidence are separate milestones.
