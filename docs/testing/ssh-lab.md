@@ -198,7 +198,48 @@ SSH connection was started; its owned app and child were also cleaned up.
 The observation failure's cause is unproven. This partial receipt closes neither
 native shell-refusal/stalled-input acceptance nor broad reconnect/emergency-stop
 acceptance. The long review exposed a [layout issue corrected on main](text-input-dialogs.md#long-startup-review-layout-on-main),
-which requires a new packaged native recheck.
+which the subsequent current-source check below exercises.
+
+#### Current-source native shell setup acceptance — 2026-10-03
+
+`cargo xtask package-check` passed for source `0485c22`, including the Mac ARM64
+debug bundle layout, shipped VNC helper and checksum manifest. A fresh disposable
+copy used the production frontend, private portable state and isolated
+HOME/ZDOTDIR/XDG paths with no SSH agent. The preparation tool checked runtime
+byte equality before ad hoc signing the originally unsigned debug copy; signing
+changed its signature bytes. This was not the public v0.1.27 DMG runtime.
+
+The existing five-minute lab supplied three generated pinned profiles, private
+distinct password/OTP factors and only OS-assigned `127.0.0.1` listeners. Native
+UI observations and the fixture's bounded input receipts established:
+
+- Long startup review kept its destination, reconnect warning and controls in
+  view in dark and light modes. Cancel initially had focus. Enter cancelled
+  before any fixture connection; Shift+Tab/Page Down scrolled the command
+  region, and Escape also cancelled before networking.
+- After explicit Continue and distinct password/OTP prompts, shell refusal
+  displayed “SSH server rejected the shell request; check account permissions
+  and server configuration”. No SSH tab was created; the server recorded one
+  shell request and zero input bytes.
+- With no peer input credit, setup displayed “SSH connection timed out” and
+  created no SSH tab. The server recorded one shell request and zero input
+  bytes. This timeout text does not identify the stalled setup phase.
+- A new explicit startup connection succeeded. Closing its SSH tab returned
+  to the local terminal; the server recorded one shell request and exactly
+  8,193 startup bytes once. All three endpoints had no established connection
+  after that close.
+- Native menu Quit retired the app and its active local zsh PTY. The process's
+  isolation was rechecked before Quit, and generated factors were absent from
+  the owned app's persisted state. No forced signal cleanup was needed.
+
+The fixture then completed its existing five-minute deadline with exit 0.
+Its private metadata and disposable HOME were removed, the fixture/app/PTY
+processes were absent, and all three ports had no listener and could be rebound.
+
+These checks establish the stated Mac debug workflows, not full native ordering
+of all 256 KiB of rendered output, OpenSSH/PAM behavior, queued expiry/overflow,
+macro emergency-stop/restart acceptance, Windows/Linux WebViews or updated
+public installers. The earlier v0.1.27 release-copy receipt remains separate.
 GitHub workflows remain disabled.
 
 ### Ask each challenge on main

@@ -7,16 +7,18 @@ provides disposable import profiles for startup output pressure, shell rejection
 and stalled input. The v0.1.27 ARM64 release-copy check observed startup review,
 Escape cancellation before networking, two-factor authentication and a connected
 terminal with startup echo. The server received the 8,193-byte input exactly
-once. Native shell refusal, stalled input and graceful Quit in this lab remain
-unverified; Windows/Linux remain v0.1.12.
+once. A subsequent current-source Mac debug check verified shell refusal and
+stalled-input timeout with zero startup bytes, explicit SSH-tab cleanup and
+native menu Quit releasing its local PTY. Windows/Linux remain v0.1.12.
 
 On main, [startup-command review](docs/testing/text-input-dialogs.md#saved-startup-command-review-on-main)
 now covers saved/imported SSH profiles as well as local profiles. It shows the
 full command and destination, explains automatic reconnect repetition, and
 refuses a stopped macro's pending startup. A subsequent layout correction on
 main keeps long commands in a keyboard-scrollable region with the destination
-and controls visible. Frontend tests and browser checks passed; the correction
-is not yet in the v0.1.27 downloads. Broader native acceptance and updated
+and controls visible. Frontend tests, browser checks, Mac debug packaging and
+native light/dark keyboard review passed; the correction is not yet in the
+v0.1.27 downloads. Broader native acceptance and updated
 Windows/Linux downloads remain pending.
 
 **Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
@@ -182,7 +184,8 @@ preserve targets and retain mode-000/special-entry repair. Native and wider-plat
 acceptance and updated Windows/Linux installers remain pending; the checklist is unchanged.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
-[Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).
+[Native setup checks and remaining rendering/platform gates](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main)
+separate connected/exact-once and refusal/timeout receipts from full GUI output-order evidence.
 
 **Done when:** the [platform matrix](docs/testing/hardware-interoperability.md) records OS/architecture, shell version, source commit, exact command, result, and limits. CI fixtures and GUI/manual results remain separate.
 

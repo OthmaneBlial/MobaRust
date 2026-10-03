@@ -1,4 +1,4 @@
-# Text-input dialogue checks — 2026-10-02
+# Text-input dialogue checks — 2026-10-03
 
 ## Saved startup command review on main
 
@@ -55,9 +55,19 @@ observed visible context/controls at 1280×574 and the app's minimum 1100×680
 size, keyboard Page Down scrolling, Cancel on Enter, Escape cancellation,
 explicit approval and light/dark rendering. Unicode path entry, read-only
 multiline text, password-field cancellation and Create only remained usable.
-These are browser layout/control observations, not native WebKit acceptance.
-The v0.1.27 installers retain the earlier layout; a new packaged native recheck
-and updated downloads remain pending.
+These are browser layout/control observations. A subsequent native WebKit check
+used an isolated copy of source `0485c22` after `cargo xtask package-check`
+passed. Dark/light review kept the destination, reconnect warning, command area
+and controls visible. Cancel initially had focus; Enter cancelled before any
+fixture connection. Shift+Tab focused the command region, Page Down scrolled
+it while the context and controls stayed visible, and Escape cancelled before
+networking. Explicit Continue reached separate password/OTP challenges, then
+the intended shell-refusal, timeout or connected result.
+
+The [native setup receipt](ssh-lab.md#current-source-native-shell-setup-acceptance--2026-10-03)
+records byte counts, explicit SSH-tab closure and menu Quit. This is a Mac ARM64
+debug bundle, not a public installer or other-platform result. The v0.1.27
+installers retain the earlier layout; updated downloads remain pending.
 
 ### Current-source native preflight — 2026-10-03
 

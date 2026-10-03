@@ -247,5 +247,8 @@ The fixture uses generated memory-only credentials and pinned host keys on
 `127.0.0.1`; it does not execute an OS shell or inspect personal state. This is a
 bounded protocol regression, not sustained native rendering or GUI startup
 acceptance. The correction follows v0.1.20 and is included in both verified
-v0.1.21 Mac DMGs. Native acceptance and updated Windows/Linux installers remain
-open; package checks do not establish those gates.
+v0.1.21 Mac DMGs. The later [v0.1.27 release-copy partial receipt and current-source native setup check](ssh-lab.md#v0127-arm64-release-copy-partial-acceptance--2026-10-03)
+add a connected exact-once startup, explicit tab close, shell refusal and
+zero-credit timeout on Mac ARM64. Full native output ordering, sustained
+rendering and updated Windows/Linux installers remain open; package checks
+alone do not establish those gates.
