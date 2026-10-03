@@ -52,6 +52,7 @@ enum ShellReply {
     StartupFlood,
     StartupStall,
     StartupExit,
+    StartupPartialExit,
     StartupOverflow,
     ExitBeforeOutput,
     EofBeforeExit,
@@ -297,13 +298,21 @@ impl server::Handler for Handler {
             self.observations
                 .shell_input_bytes
                 .fetch_add(data.len(), Ordering::SeqCst);
-            if matches!(self.shell_reply, ShellReply::StartupFlood) {
+            if matches!(
+                self.shell_reply,
+                ShellReply::StartupFlood | ShellReply::StartupPartialExit
+            ) {
                 let mut input = self.observations.startup_input.lock().unwrap();
                 assert!(
                     input.len() + data.len() <= 16 * 1024,
                     "bounded fixture input receipt"
                 );
                 input.extend_from_slice(data);
+            }
+            if matches!(self.shell_reply, ShellReply::StartupPartialExit) {
+                session.exit_status_request(channel, 23)?;
+                session.close(channel)?;
+                return Ok(());
             }
             session.data(channel, data.to_vec())?;
         }
@@ -530,7 +539,10 @@ impl Fixture {
             nodelay: true,
             ..Default::default()
         };
-        if matches!(shell_reply, ShellReply::StartupFlood) {
+        if matches!(
+            shell_reply,
+            ShellReply::StartupFlood | ShellReply::StartupPartialExit
+        ) {
             config.window_size = 1024;
         }
         if matches!(
@@ -1139,45 +1151,59 @@ async fn startup_input_keeps_shell_output_draining() {
     for reply in [
         ShellReply::StartupStall,
         ShellReply::StartupExit,
+        ShellReply::StartupPartialExit,
         ShellReply::StartupOverflow,
     ] {
         let fixture = Fixture::start_with_shell(Method::Password, false, None, true, reply).await;
         let mut options = fixture.options(Method::Password, true);
         options.timeout = Duration::from_secs(1);
-        options.startup_command = Some("must-not-replay".into());
+        let command = if matches!(reply, ShellReply::StartupPartialExit) {
+            "must-not-replay".repeat(512)
+        } else {
+            "must-not-replay".into()
+        };
+        let expected_input = format!("{command}\n").into_bytes();
+        options.startup_command = Some(command);
         let connection = SshConnection::connect(options).await.unwrap();
         let result = tokio::time::timeout(Duration::from_secs(3), connection.open_shell(80, 24))
             .await
             .unwrap();
+        let message = result.as_ref().err().unwrap().to_string();
         if matches!(reply, ShellReply::StartupStall) {
-            let message = result.as_ref().err().unwrap().to_string();
             assert_eq!(
                 message,
                 "SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting."
             );
-            assert!(
-                !message.contains("must-not-replay"),
-                "startup text stays private"
-            );
         }
         assert!(
-            matches!(
-                (reply, result),
-                (ShellReply::StartupStall, Err(SshError::StartupInputTimeout))
-                    | (
-                        ShellReply::StartupExit,
-                        Err(SshError::ChannelRequestClosed {
-                            request: "startup input"
-                        })
-                    )
-                    | (
-                        ShellReply::StartupOverflow,
-                        Err(SshError::ShellSetupOutputTooLarge)
-                    )
-            ),
+            !message.contains("must-not-replay"),
+            "startup text stays private"
+        );
+        assert!(
+            message.contains("Check the remote session and startup settings before reconnecting.")
+        );
+        assert!(
+            match (reply, result) {
+                (ShellReply::StartupStall, Err(SshError::StartupInputTimeout)) => true,
+                (
+                    ShellReply::StartupExit | ShellReply::StartupPartialExit,
+                    Err(SshError::StartupInputFailed(source)),
+                ) => matches!(
+                    *source,
+                    SshError::ChannelRequestClosed {
+                        request: "startup input"
+                    } | SshError::Channel(_)
+                ),
+                (ShellReply::StartupOverflow, Err(SshError::StartupInputFailed(source))) =>
+                    matches!(*source, SshError::ShellSetupOutputTooLarge),
+                _ => false,
+            },
             "startup write must observe deadline, shell exit and output limits"
         );
-        if !matches!(reply, ShellReply::StartupExit) {
+        if !matches!(
+            reply,
+            ShellReply::StartupExit | ShellReply::StartupPartialExit
+        ) {
             tokio::time::timeout(
                 Duration::from_secs(1),
                 fixture.observations.channel_closed.notified(),
@@ -1185,12 +1211,25 @@ async fn startup_input_keeps_shell_output_draining() {
             .await
             .expect("failed startup closes its channel before disconnect");
         }
+        let accepted = fixture
+            .observations
+            .shell_input_bytes
+            .load(Ordering::SeqCst);
+        if matches!(reply, ShellReply::StartupPartialExit) {
+            assert!(
+                accepted > 0 && accepted < expected_input.len(),
+                "peer accepted a strict startup prefix"
+            );
+            assert_eq!(
+                *fixture.observations.startup_input.lock().unwrap(),
+                expected_input[..accepted]
+            );
+        } else {
+            assert_eq!(accepted, 0);
+        }
         assert_eq!(
-            fixture
-                .observations
-                .shell_input_bytes
-                .load(Ordering::SeqCst),
-            0
+            fixture.observations.shell_requests.load(Ordering::SeqCst),
+            1
         );
         connection.disconnect().await.unwrap();
         drop(connection);

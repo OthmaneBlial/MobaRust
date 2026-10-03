@@ -329,3 +329,60 @@ Windows/Linux and wider server/load acceptance remain separate gates.
 
 Both v0.1.28 Mac DMGs and their manifests passed local package verification and
 anonymous public-download byte comparison. [Release checks and limits](../release/v0.1.28.md).
+
+## Uncertain startup delivery stops reconnect retries on main — 2026-10-03
+
+After v0.1.28, the desktop reconnect attempt preserves typed SSH failures until
+the retry decision. Previously it converted shell-setup errors to strings and
+retried every failure, including startup-input timeouts: a three-attempt
+regression observed attempts `[1, 2, 3]` when it should stop after `[1]`.
+
+`StartupInputTimeout` now stops the reconnect loop immediately. Other failures
+while writing configured startup input are wrapped as `StartupInputFailed`,
+retain their native source, and stop the loop too. This includes a peer closing
+the shell, a transport/write failure, and output-buffer overflow during the
+write. The static display warning advises checking the remote session and
+startup settings before reconnecting and contains no configured command or
+server detail. These classifications also cover configured startup directories.
+
+Authentication, channel-open and shell-request failures before startup writing
+retain the existing bounded retry policy. Successful reconnects still send the
+reviewed startup input; a previously successful startup is not an exactly-once
+operation across a later connection loss. Approval continues to explain that
+automatic reconnect can rerun the command. After uncertain delivery the user
+must explicitly open a fresh connection and review its startup configuration.
+
+Runnable regressions:
+
+```sh
+cargo test --locked -p mobarust reconnect_policy_
+cargo test --locked -p mobarust-ssh --test authentication startup_input_keeps_shell_output_draining
+cargo test --locked -p mobarust-ssh --test authentication shell_setup_requires_server_acceptance
+cargo xtask check
+```
+
+The retry regression checks timeout, shell closure, overflow and transport
+failures both on the first attempt and after a retryable connection refusal.
+Existing cases retain bounded failure, first-success and in-flight cancellation
+checks. The packet fixture exercises a peer accepting a strict prefix of a
+large startup command before closing, alongside zero-credit timeout, early
+exit and overflow. It checks the typed phase, private display, exact accepted
+prefix, one shell request, socket/worker teardown and listener release. Ordered
+256 KiB output and successful exact-once input remain separate cases in the
+same test. Every endpoint is loopback with generated memory-only credentials
+and pinned host keys; no OS shell or personal SSH state is used.
+
+The targeted retry-policy and startup packet regressions passed locally on
+macOS ARM64 / Apple M2. The full local `cargo xtask check` also passed, including
+109 desktop tests, workspace tests/Clippy, frontend tests/type/lint/build,
+protocol fixtures, helper checks, package-layout contracts and fuzz compilation.
+The real Xvfb case retained its prerequisite skip. An initial full-check attempt
+failed because this run’s disposable wrapper omitted `USER`; restoring the
+fixture-required account name resolved it without changing production code,
+test assertions, deadlines or isolation of HOME/keys/agents.
+
+This correction is on main after the v0.1.28 tag; published installers have not
+been replaced. Native GUI retry-stop acceptance, a controlled OpenSSH peer
+restart and Windows/Linux runtime checks remain open. The v0.1.28 native
+timeout receipt above proves initial-connection behavior, not this new
+reconnect decision. CI remains disabled.

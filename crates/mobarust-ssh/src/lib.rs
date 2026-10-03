@@ -87,6 +87,10 @@ pub enum SshError {
         "SSH startup input timed out; some input may have reached the server. Check the remote session and startup settings before reconnecting."
     )]
     StartupInputTimeout,
+    #[error(
+        "SSH startup input failed; some input may have reached the server. Check the remote session and startup settings before reconnecting."
+    )]
+    StartupInputFailed(#[source] Box<SshError>),
     #[error("SSH connection lifecycle transition failed")]
     Lifecycle,
     #[error("SSH host could not be resolved")]
@@ -1255,7 +1259,9 @@ impl SshConnection {
             )
             .await
             .map_err(|_| SshError::StartupInputTimeout)
-            .and_then(|result| result);
+            .and_then(|result| {
+                result.map_err(|error| SshError::StartupInputFailed(Box::new(error)))
+            });
             if let Err(error) = write {
                 close_failed_shell_setup(reader.channel, writer.channel).await;
                 return Err(error);

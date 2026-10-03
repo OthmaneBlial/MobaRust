@@ -1926,7 +1926,7 @@ async fn reconnect_with_backoff<T, Before, Attempt, AttemptFuture, Delay>(
 where
     Before: FnMut(u8, &str),
     Attempt: FnMut(u8) -> AttemptFuture,
-    AttemptFuture: std::future::Future<Output = Result<T, String>>,
+    AttemptFuture: std::future::Future<Output = Result<T, SshManagerError>>,
     Delay: Fn(u8) -> Duration,
 {
     let mut last_error = initial_error;
@@ -1961,7 +1961,22 @@ where
                     attempt: attempt_number,
                 };
             }
-            Err(error) => last_error = error,
+            Err(error) => {
+                // Startup input can be partially delivered. Preserve its type
+                // until here so another attempt cannot silently replay it.
+                if matches!(
+                    error,
+                    SshManagerError::Transport(
+                        SshError::StartupInputTimeout | SshError::StartupInputFailed(_)
+                    )
+                ) {
+                    return ReconnectOutcome::Failed {
+                        attempts: attempt_number,
+                        last_error: error.to_string(),
+                    };
+                }
+                last_error = error.to_string();
+            }
         }
     }
     ReconnectOutcome::Failed {
@@ -2073,11 +2088,8 @@ async fn run_remote_session(
                             &auth_events,
                             Some(&terminal_id),
                         )
-                        .await
-                        .map_err(|error| error.to_string())?;
-                        let shell = open_shell_at_current_size(&new_connection, &size)
-                            .await
-                            .map_err(|error| error.to_string())?;
+                        .await?;
+                        let shell = open_shell_at_current_size(&new_connection, &size).await?;
                         Ok((new_connection, shell.split()))
                     },
                     |attempt| Duration::from_secs(1_u64 << (attempt - 1).min(5)),
@@ -5488,6 +5500,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconnect_policy_stops_after_uncertain_startup_delivery() {
+        use mobarust_ssh::SshError;
+        for kind in ["timeout", "closed", "overflow", "transport"] {
+            for failure_at in [1, 2] {
+                let (_close_sender, mut close) = watch::channel(false);
+                let mut attempted = Vec::new();
+                let result = reconnect_with_backoff(
+                    &mut close,
+                    "shell channel closed".to_owned(),
+                    3,
+                    |attempt, _error| attempted.push(attempt),
+                    |attempt| async move {
+                        let error = if attempt < failure_at {
+                            SshError::ConnectionRefused
+                        } else {
+                            match kind {
+                                "timeout" => SshError::StartupInputTimeout,
+                                "closed" => SshError::StartupInputFailed(Box::new(
+                                    SshError::ChannelRequestClosed {
+                                        request: "startup input",
+                                    },
+                                )),
+                                "overflow" => SshError::StartupInputFailed(Box::new(
+                                    SshError::ShellSetupOutputTooLarge,
+                                )),
+                                _ => SshError::StartupInputFailed(Box::new(SshError::Channel(
+                                    russh::Error::Disconnect,
+                                ))),
+                            }
+                        };
+                        Err::<(), SshManagerError>(error.into())
+                    },
+                    |_| Duration::ZERO,
+                )
+                .await;
+                assert_eq!(
+                    attempted,
+                    (1..=failure_at).collect::<Vec<_>>(),
+                    "uncertain startup input must not be replayed"
+                );
+                assert!(
+                    matches!(result, ReconnectOutcome::Failed { attempts, last_error }
+                    if attempts == failure_at && last_error.contains("Check the remote session and startup settings before reconnecting."))
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn reconnect_policy_reports_bounded_failure_and_last_error() {
         let (_close_sender, mut close) = watch::channel(false);
         let mut attempts = Vec::new();
@@ -5496,7 +5557,11 @@ mod tests {
             "shell channel closed".to_owned(),
             3,
             |attempt, error| attempts.push((attempt, error.to_owned())),
-            |attempt| async move { Err::<(), String>(format!("fixture failure {attempt}")) },
+            |attempt| async move {
+                Err::<(), SshManagerError>(SshManagerError::InvalidRequest(format!(
+                    "fixture failure {attempt}"
+                )))
+            },
             |_| Duration::ZERO,
         )
         .await;
@@ -5505,8 +5570,8 @@ mod tests {
             attempts,
             vec![
                 (1, "shell channel closed".to_owned()),
-                (2, "fixture failure 1".to_owned()),
-                (3, "fixture failure 2".to_owned()),
+                (2, "invalid SSH request: fixture failure 1".to_owned()),
+                (3, "invalid SSH request: fixture failure 2".to_owned()),
             ]
         );
         assert!(matches!(
@@ -5514,7 +5579,7 @@ mod tests {
             ReconnectOutcome::Failed {
                 attempts: 3,
                 last_error
-            } if last_error == "fixture failure 3"
+            } if last_error == "invalid SSH request: fixture failure 3"
         ));
     }
 
@@ -5590,9 +5655,11 @@ mod tests {
             |_attempt, _error| {},
             |attempt| async move {
                 if attempt == 2 {
-                    Ok::<_, String>("fixture reconnected")
+                    Ok::<_, SshManagerError>("fixture reconnected")
                 } else {
-                    Err(format!("fixture failure {attempt}"))
+                    Err(SshManagerError::InvalidRequest(format!(
+                        "fixture failure {attempt}"
+                    )))
                 }
             },
             |_| Duration::ZERO,
@@ -5625,7 +5692,7 @@ mod tests {
                 },
                 |_attempt| async {
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    Ok::<_, String>(())
+                    Ok::<_, SshManagerError>(())
                 },
                 |_| Duration::ZERO,
             )
