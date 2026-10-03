@@ -35,6 +35,9 @@ except the five files below and line-ending normalization.
   Empty reads/writes do not issue requests; closed handles refuse reads. Clamp
   requested DATA to both the negotiated read limit and the packet payload budget;
   refuse a configuration with no room for file data instead of reporting EOF.
+  Cap WRITE chunks by both data and packet limits, accounting for the encoded
+  packet prefix in the raw server limit; refuse zero-data-budget and closed-handle
+  writes without advancing position or issuing a request.
 - `src/client/session.rs`: clamp a server's 64-bit packet limit before narrowing
   it to the client's 32-bit configured limit, avoiding truncation on conversion.
 
@@ -52,7 +55,9 @@ EOF, malformed frames, impossible sequence counts, a blocked writer and
 normal/excess DATA lengths. They never allocate a multi-gigabyte packet.
 File checks cover cancellation followed by smaller buffers, exact byte order
 and offsets, empty I/O, pending/buffered seek and write, acknowledged handle
-closure, four negotiated limit combinations and a deliberately tiny budget.
+closure, negotiated read/write limit combinations and deliberately tiny budgets.
+Upload checks reconstruct a multi-chunk byte sequence, assert exact offsets and
+encoded packet sizes, and refuse writes after acknowledged closure.
 Private library checks cover immediate async/nowait slot release, timeout,
 late/unmatched replies while another request is pending, initialization refusal,
 and preservation of a newer live receiver when an ID is reused. Public in-memory
@@ -67,6 +72,6 @@ Remove this copy when an upstream release addresses these same boundaries and
 the regressions pass unchanged. Advisory tools check the baseline version;
 they do not review this local patch. Both [v0.1.23 Mac previews](../../docs/release/v0.1.23.md)
 include the first three response-bound changes. The later file-reader and
-64-bit-limit and request-lifetime corrections are source after that release,
+64-bit-limit, request-lifetime and file-write corrections are source after that release,
 pending new installers.
 Older Mac downloads and v0.1.12 Windows/Linux installers contain neither cohort.

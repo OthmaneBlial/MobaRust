@@ -223,6 +223,19 @@ async fn memory_file_with_config(
     max_packet_len: u32,
     file_handle: &str,
 ) -> (SftpSession, File, DuplexStream) {
+    memory_file_with_write_limit(
+        limits.map(|(packet, read)| (packet, read, 0)),
+        max_packet_len,
+        file_handle,
+    )
+    .await
+}
+
+async fn memory_file_with_write_limit(
+    limits: Option<(u64, u64, u64)>,
+    max_packet_len: u32,
+    file_handle: &str,
+) -> (SftpSession, File, DuplexStream) {
     let (stream, mut peer) = tokio::io::duplex(1024);
     let server = async {
         read_init(&mut peer).await;
@@ -235,11 +248,11 @@ async fn memory_file_with_config(
             extensions.push(b'1');
         }
         reply(&mut peer, 2, &3_u32.to_be_bytes(), &extensions).await;
-        if let Some((packet, read)) = limits {
+        if let Some((packet, read, write)) = limits {
             let req = request(&mut peer).await;
             assert_eq!(req[0], 200);
             let mut payload = Vec::new();
-            for value in [packet, read, 0, 0] {
+            for value in [packet, read, write, 0] {
                 payload.extend_from_slice(&value.to_be_bytes());
             }
             reply(&mut peer, 201, &req[1..5], &payload).await;
@@ -625,4 +638,105 @@ async fn pre_version_and_duplicate_version_replies_still_close_the_stream() {
         .await
         .expect("initialization protocol errors fail closed promptly");
     }
+}
+
+#[tokio::test]
+async fn negotiated_file_writes_fit_packet_and_data_limits_without_losing_bytes() {
+    for (packet_limit, write_limit, chunk_limit) in [
+        (512_u64, 512_u64, 100_usize),
+        (64, 512, 32),
+        (512, 8, 8),
+        (1_u64 << 32, 512, 100),
+        (64, 0, 32),
+    ] {
+        let (session, mut file, mut peer) =
+            memory_file_with_write_limit(Some((packet_limit, 0, write_limit)), 128, "fixture")
+                .await;
+        let source: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        let server = async {
+            let mut received = Vec::new();
+            while received.len() < source.len() {
+                let req = request(&mut peer).await;
+                assert_eq!(req[0], 6);
+                assert!(req.len() <= 128, "WRITE body fits the client packet budget");
+                assert!(
+                    req.len() as u64 + 4 <= packet_limit,
+                    "encoded WRITE fits the raw server limit"
+                );
+                assert_eq!(&req[5..9], &7_u32.to_be_bytes());
+                assert_eq!(&req[9..16], b"fixture");
+                assert_eq!(&req[16..24], &(received.len() as u64).to_be_bytes());
+                let count = u32::from_be_bytes(req[24..28].try_into().unwrap()) as usize;
+                assert_eq!(count, chunk_limit.min(source.len() - received.len()));
+                assert_eq!(req.len(), 28 + count);
+                received.extend_from_slice(&req[28..]);
+                status_reply(&mut peer, &req, 0).await;
+            }
+            assert_eq!(received, source);
+            close_peer(&mut peer).await;
+        };
+        let client = async {
+            let first = file.write(&source).await.unwrap();
+            assert_eq!(
+                first, chunk_limit,
+                "oversized advertised data limit must not replace the packet budget"
+            );
+            file.write_all(&source[first..]).await.unwrap();
+            assert_eq!(file_position(&mut file).await, source.len() as u64);
+            file.close().await.unwrap();
+            session.close().await.unwrap();
+        };
+        tokio::time::timeout(DEADLINE, async { tokio::join!(client, server) })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn file_write_refuses_a_budget_without_room_for_data() {
+    let (session, mut file, mut peer) = memory_file_with_config(None, 9, "").await;
+    tokio::time::timeout(DEADLINE, async {
+        let client = async {
+            assert_eq!(
+                file.write(b"x").await.unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            assert_eq!(file_position(&mut file).await, 0);
+            assert_eq!(file.write(&[]).await.unwrap(), 0);
+            drop(file);
+            session.close().await.unwrap();
+        };
+        let server = async {
+            let close = request(&mut peer).await;
+            assert_eq!(close[0], 4, "no zero-length WRITE is sent");
+            let mut tail = Vec::new();
+            peer.read_to_end(&mut tail).await.unwrap();
+            assert!(tail.is_empty());
+        };
+        tokio::join!(client, server);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn closed_file_refuses_nonempty_writes_without_changing_position() {
+    let (session, mut file, mut peer) = memory_file(None).await;
+    tokio::time::timeout(DEADLINE, async {
+        let server = close_peer(&mut peer);
+        let client = async {
+            file.shutdown().await.unwrap();
+            assert_eq!(
+                file.write(b"x").await.unwrap_err().kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(file_position(&mut file).await, 0);
+            assert_eq!(file.write(&[]).await.unwrap(), 0);
+            drop(file);
+            session.close().await.unwrap();
+        };
+        tokio::join!(client, server);
+    })
+    .await
+    .unwrap();
 }

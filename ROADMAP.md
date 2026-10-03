@@ -136,6 +136,10 @@ cancellation/timeout no longer close the usable SFTP stream; initialization and
 malformed-frame errors still fail closed. [Request ownership and wire regression
 checks](docs/security/dependency-audit.md#sftp-request-lifetime-and-late-replies--2026-10-03)
 are source after v0.1.23, pending installers and native acceptance.
+The shared SFTP file writer also splits uploads to fit both data and encoded
+packet limits, and refuses nonempty writes with no payload room or a closed
+handle. [Byte-matched chunk and refusal checks](docs/security/dependency-audit.md#sftp-file-write-packet-budgets-and-closed-handles--2026-10-03)
+are source after v0.1.23; native upload acceptance and installers remain pending.
 Startup input now drains bounded output while waiting for SSH window credit;
 a 256 KiB loopback burst verifies ordered output and exact-once command delivery.
 [Native startup/backpressure acceptance remains pending](docs/testing/ssh-reconnect.md#startup-input-and-output-backpressure-on-main).

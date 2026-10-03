@@ -310,20 +310,38 @@ impl AsyncWrite for File {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
+        if self.closed {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "SFTP file is closed",
+            )));
+        }
         if self.state.write_acks.len() >= self.features.max_concurrent_writes {
             if let Some(poll) = poll_oldest_write(&mut self.state.write_acks, cx) {
                 ready!(poll)?;
             }
         }
 
-        let max_write_len = self
-            .features
-            .limits
-            .and_then(|l| l.write_len)
-            .unwrap_or_else(|| {
-                let overhead = WRITE_OVERHEAD_LENGTH + self.handle.len() as u32;
-                self.features.max_packet_len.saturating_sub(overhead) as u64
-            }) as usize;
+        let overhead = u64::from(WRITE_OVERHEAD_LENGTH) + self.handle.len() as u64;
+        let packet_write_len = u64::from(self.features.max_packet_len).saturating_sub(overhead);
+        let limits = self.features.limits.unwrap_or_default();
+        // Raw requests enforce the server limit on the complete encoded packet,
+        // including its four-byte length prefix; the client budget is payload-only.
+        let server_write_len = limits
+            .packet_len
+            .map(|limit| limit.saturating_sub(overhead + 4))
+            .unwrap_or(packet_write_len);
+        let max_write_len = limits
+            .write_len
+            .unwrap_or(packet_write_len)
+            .min(packet_write_len)
+            .min(server_write_len) as usize;
+        if max_write_len == 0 {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SFTP packet limit leaves no room for file data",
+            )));
+        }
 
         let len = usize::min(buf.len(), max_write_len);
         let data = buf[..len].to_vec();

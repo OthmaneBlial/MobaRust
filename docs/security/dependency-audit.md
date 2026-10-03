@@ -105,6 +105,50 @@ These are source changes after v0.1.23, pending installers and native GUI
 acceptance. They do not establish remote operation rollback, general server
 compatibility or an independent security audit. GitHub CI remains disabled.
 
+## SFTP file-write packet budgets and closed handles — 2026-10-03
+
+The subsequent upload audit reproduced a 128-byte-configured file writer choosing
+all 256 caller bytes when the server advertised a 512-byte write limit. A tiny
+configuration with no room for WRITE data accepted a nonempty write as zero bytes,
+and a successfully closed file still accepted another byte for transmission.
+All three new regression cases failed before the correction.
+
+The shared file writer now caps each chunk by the negotiated data limit, the
+effective client packet payload budget and the server's complete encoded-packet
+limit. Its overhead includes the opaque handle length; the existing raw server
+limit also includes the four-byte packet length prefix. Limit arithmetic stays
+in `u64` until the final configured-client bound permits narrowing. A nonempty
+write with no payload room returns `InvalidInput` without sending WRITE or
+advancing position; a closed handle returns `BrokenPipe`. Empty writes still
+return zero without issuing a request.
+
+```sh
+cargo test --locked -p mobarust-ssh --test sftp_bounds
+cargo xtask check
+```
+
+All 16 focused boundary checks pass. The new upload peer checks five client/server
+limit combinations, including a server packet limit above `u32::MAX`, a smaller
+data limit and an absent data limit. A 256-byte sequence is split into exact
+100-, 32- or 8-byte chunks as appropriate, acknowledged, reconstructed byte for
+byte and closed. Every encoded WRITE is checked against the packet limit, handle,
+exact offset and remaining byte count. Tiny-budget and closed-handle refusal
+checks also verify unchanged position and no extra wire request. All peers are
+bounded in-memory pipes; no sockets, credentials or personal files are used.
+No dependency version, feature, lockfile or public API changed.
+
+The subsequent full `cargo xtask check` passed on macOS ARM64 / Apple M2,
+including five private SDK tests, these 16 public boundary cases, 42 SSH unit
+tests, 15 automated authentication cases and all 16 OpenSSH cases. Workspace
+Clippy, frontend tests/type checking/lint/build, release/lab tooling, RDP/VNC
+fixtures, package-layout contracts and fuzz compilation passed. Three manual
+labs remain ignored, and real Xvfb retains its explicit prerequisite skip.
+No X11 deadline or assertion was changed.
+
+These are source changes after v0.1.23, pending new installers and native upload
+acceptance. They do not establish GUI throughput or broader server compatibility.
+GitHub CI remains disabled.
+
 ## SFTP inbound response bounds on main — 2026-10-03
 
 The workspace now uses a [repository-local russh-sftp 2.4.0 copy](../../vendor/russh-sftp/MOBARUST_PATCH.md).
