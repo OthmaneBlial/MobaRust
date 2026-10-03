@@ -44,6 +44,7 @@ const MAX_QUEUED_FORWARDED_CHANNELS: usize = 16;
 const MAX_QUEUED_X11_CHANNELS: usize = 8;
 pub const MAX_FORWARD_HOST_BYTES: usize = 255;
 const MAX_SFTP_DIRECTORY_ENTRIES: usize = 10_000;
+const MAX_SFTP_DIRECTORY_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SHELL_SETUP_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -134,7 +135,7 @@ pub enum SshError {
     SftpProtocol,
     #[error("SFTP server limit was reached")]
     SftpLimit,
-    #[error("SFTP directory exceeds the 10,000 entry limit")]
+    #[error("SFTP directory exceeds its entry or 16 MiB text limit; open a smaller directory")]
     SftpDirectoryTooLarge,
     #[error("SFTP I/O failed")]
     SftpIo,
@@ -2048,8 +2049,17 @@ fn map_sftp_io_error(error: io::Error) -> SshError {
     }
 }
 
-fn ensure_sftp_directory_capacity(entry_count: usize) -> Result<(), SshError> {
-    if entry_count >= MAX_SFTP_DIRECTORY_ENTRIES {
+fn ensure_sftp_directory_capacity(
+    entry_count: usize,
+    received_entries: usize,
+    text_bytes: usize,
+) -> Result<(), SshError> {
+    // Permit the normal dot entries, but count all server entries so filtering
+    // cannot turn a bounded listing into an endless stream.
+    if entry_count > MAX_SFTP_DIRECTORY_ENTRIES
+        || received_entries > MAX_SFTP_DIRECTORY_ENTRIES + 2
+        || text_bytes > MAX_SFTP_DIRECTORY_TEXT_BYTES
+    {
         Err(SshError::SftpDirectoryTooLarge)
     } else {
         Ok(())
@@ -2466,21 +2476,54 @@ impl SftpConnection {
             .await
             .map_err(map_sftp_error)?;
         let mut entries = Vec::new();
+        let mut received_entries = 0_usize;
+        let mut text_bytes = 0_usize;
+        let deadline = tokio::time::Instant::now() + FILE_OPERATION_TIMEOUT;
         let mut result = Ok(());
         loop {
-            match session.readdir(directory.handle.as_str()).await {
+            let reply =
+                match tokio::time::timeout_at(deadline, session.readdir(directory.handle.as_str()))
+                    .await
+                {
+                    Ok(reply) => reply,
+                    Err(_) => {
+                        result = Err(SshError::Timeout);
+                        break;
+                    }
+                };
+            match reply {
                 Ok(batch) => {
                     if let Err(error) = validate_sftp_directory_batch(batch.files.len()) {
                         result = Err(error);
                         break;
                     }
                     for file in batch.files {
-                        if file.filename == "." || file.filename == ".." {
-                            continue;
+                        let dot_entry = file.filename == "." || file.filename == "..";
+                        received_entries = received_entries.saturating_add(1);
+                        text_bytes = text_bytes
+                            .saturating_add(file.filename.len())
+                            .saturating_add(file.longname.len())
+                            .saturating_add(file.attrs.user.as_deref().map_or(0, str::len))
+                            .saturating_add(file.attrs.group.as_deref().map_or(0, str::len));
+                        if !dot_entry {
+                            // Charge the derived action path before allocating it.
+                            text_bytes = text_bytes
+                                .saturating_add(path.len())
+                                .saturating_add(file.filename.len())
+                                .saturating_add(usize::from(
+                                    !path.is_empty() && !path.ends_with('/'),
+                                ));
                         }
-                        if let Err(error) = ensure_sftp_directory_capacity(entries.len()) {
+                        if let Err(error) = ensure_sftp_directory_capacity(
+                            entries.len().saturating_add(usize::from(!dot_entry)),
+                            received_entries,
+                            text_bytes,
+                        ) {
                             result = Err(error);
                             break;
+                        }
+                        if dot_entry {
+                            continue;
                         }
                         let metadata = file.attrs;
                         let file_type = metadata.permissions.map(|mode| mode & SFTP_FILE_TYPE_MASK);
@@ -4132,11 +4175,25 @@ mod tests {
 
     #[test]
     fn sftp_directory_limit_fails_before_adding_an_extra_entry() {
-        assert!(ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES - 1).is_ok());
-        assert!(matches!(
-            ensure_sftp_directory_capacity(MAX_SFTP_DIRECTORY_ENTRIES),
-            Err(SshError::SftpDirectoryTooLarge)
-        ));
+        assert!(
+            ensure_sftp_directory_capacity(
+                MAX_SFTP_DIRECTORY_ENTRIES,
+                MAX_SFTP_DIRECTORY_ENTRIES + 2,
+                MAX_SFTP_DIRECTORY_TEXT_BYTES,
+            )
+            .is_ok()
+        );
+        for (entries, received, bytes) in [
+            (MAX_SFTP_DIRECTORY_ENTRIES + 1, 0, 0),
+            (0, MAX_SFTP_DIRECTORY_ENTRIES + 3, 0),
+            (0, 0, MAX_SFTP_DIRECTORY_TEXT_BYTES + 1),
+            (usize::MAX, usize::MAX, usize::MAX),
+        ] {
+            assert!(matches!(
+                ensure_sftp_directory_capacity(entries, received, bytes),
+                Err(SshError::SftpDirectoryTooLarge)
+            ));
+        }
     }
 
     #[test]

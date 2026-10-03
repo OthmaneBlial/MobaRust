@@ -100,6 +100,15 @@ selection of a link's target. Known special entries remain chmod-capable without
 opening their contents.
 The confirmation names symbolic links and explains the empty-directory limit.
 
+On main after v0.1.25, browser listings and recursive download planning share
+per-directory limits: 10,000 displayed entries, 10,002 received entries including
+filtered `.`/`..`, and 16 MiB of cumulative decoded filename/longname/owner/group
+text plus derived action paths. The READDIR phase has one 12-second deadline;
+channel setup, OPENDIR, mutex waiting and the subsequent CLOSE are separate.
+This is a text budget, not a whole-process memory or whole-tree time limit.
+Refusal discards the partial listing and awaits directory CLOSE, retaining the
+original listing error if close also fails.
+
 ## Rationale
 
 - The initial single-file transfer slice shipped independently; recursive
@@ -434,3 +443,44 @@ alias a directory through an ancestor link or server mount. LSTAT and SETSTAT/
 REMOVE remain separate requests, so concurrent swaps and dishonest metadata are
 not prevented. Native dialogue/connection lifecycle acceptance, Windows/Linux
 metadata and updated installers remain pending. Published previews are unchanged.
+
+## Bounded directory listings — 2026-10-03
+
+The corrected baseline reproduced three aggregate gaps using authenticated
+loopback replies within the existing 256 KiB packet limit: 10,003 filtered dot
+entries were accepted, 129 long names accumulated, and replies arriving every
+two seconds kept the listing pending beyond the test's 14-second outer bound.
+An earlier single-batch dot fixture exceeded the packet cap; it was split into
+legal batches before these results were recorded. An initial compile ran out
+of disk space and produced no test result.
+
+The shared reader now counts filtered wire entries and cumulative text before
+allocating action paths, and bounds the complete READDIR phase. The regression
+checks typed size/time refusals, exactly one acknowledged directory CLOSE, and
+an ordinary Unicode listing on the same SFTP connection after each refusal.
+A positive control preserves size, mode and exact regular-file classification.
+The existing unit check covers inclusive boundaries and saturating overflow.
+
+```text
+CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo test --locked -p mobarust-ssh --lib --test remote_editor
+CARGO_BUILD_JOBS=2 CARGO_NET_OFFLINE=true cargo xtask check
+```
+
+The focused run passed all 42 SSH unit checks and 15 authenticated SFTP fault
+checks. All fixture listeners bind only `127.0.0.1`, with generated keys and
+in-memory files; personal SSH services, keys and configuration are unused.
+The complete local `cargo xtask check` then passed: 107 desktop tests,
+42 SSH unit tests, 15 authentication cases (three manual labs ignored), all
+25 OpenSSH cases (20.89 seconds), 15 SFTP fault cases, 22 packet/state checks,
+three metadata cases and five private SDK cases. Workspace tests/Clippy,
+frontend tests/typecheck/lint/build, release/isolated-launcher tooling,
+RDP/VNC helper fixtures, unsigned package-layout contracts and fuzz compilation
+passed. The first full run stopped at a test-only `int_plus_one` lint; its
+mathematically equivalent strict comparison preserves the packet boundary.
+The real X11 server fixture explicitly skipped its unavailable Xvfb/safe-socket
+prerequisite; no assertion, packet cap or existing deadline was relaxed.
+
+These checks establish the shared protocol boundary, not native browser or
+whole recursive workflow acceptance. External cancellation/drop, dishonest
+servers and unacknowledged CLOSE replies remain limitations. The new guard is
+source after v0.1.25 and is absent from the published Mac/Windows/Linux previews.

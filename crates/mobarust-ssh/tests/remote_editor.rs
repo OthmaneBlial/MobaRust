@@ -10,7 +10,9 @@ use mobarust_ssh::{
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::keys::{HashAlg, PrivateKey};
 use russh::server::{self, Auth};
-use russh_sftp::protocol::{Attrs, Data, FileAttributes, Handle, OpenFlags, Status, StatusCode};
+use russh_sftp::protocol::{
+    Attrs, Data, File as ProtocolFile, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode,
+};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -36,6 +38,9 @@ enum Fault {
     DownloadReadDenied,
     DownloadCloseDenied,
     DownloadHandleMetadataDenied,
+    DirectoryDotFlood,
+    DirectoryTextFlood,
+    DirectoryDrip,
 }
 
 #[derive(Clone)]
@@ -60,6 +65,7 @@ struct State {
     handle_mode: Option<u32>,
     close_started: Option<oneshot::Sender<()>>,
     close_gate: Option<oneshot::Receiver<()>>,
+    directory_reads: usize,
 }
 
 struct Sftp {
@@ -80,6 +86,54 @@ impl russh_sftp::server::Handler for Sftp {
     type Error = StatusCode;
     fn unimplemented(&self) -> Self::Error {
         StatusCode::OpUnsupported
+    }
+
+    async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+        assert_eq!(path, "/listing");
+        self.state.lock().unwrap().directory_reads = 0;
+        Ok(Handle {
+            id,
+            handle: "directory".into(),
+        })
+    }
+
+    async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, Self::Error> {
+        assert_eq!(handle, "directory");
+        let (fault, reads) = {
+            let mut state = self.state.lock().unwrap();
+            state.directory_reads += 1;
+            (state.fault, state.directory_reads)
+        };
+        let files = match fault {
+            Fault::DirectoryDotFlood if reads <= 11 => {
+                vec![ProtocolFile::dummy("."); if reads == 11 { 3 } else { 1_000 }]
+            }
+            Fault::DirectoryTextFlood if reads <= 129 => {
+                vec![ProtocolFile::dummy("x".repeat(65_536))]
+            }
+            Fault::DirectoryDrip => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                vec![ProtocolFile::dummy(".")]
+            }
+            Fault::None if reads == 1 => {
+                let mut attrs = FileAttributes::empty();
+                attrs.permissions = Some(0o100640);
+                attrs.size = Some(7);
+                vec![
+                    ProtocolFile::dummy("."),
+                    ProtocolFile::dummy(".."),
+                    ProtocolFile::new("café.txt", attrs),
+                ]
+            }
+            _ => return Err(StatusCode::Eof),
+        };
+        let reply = Name { id, files };
+        assert!(
+            russh_sftp::ser::to_bytes(&reply).unwrap().len()
+                < russh_sftp::client::Config::default().max_packet_len as usize,
+            "listing responses stay within the existing packet limit"
+        );
+        Ok(reply)
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
@@ -396,6 +450,7 @@ impl Fixture {
             handle_mode: None,
             close_started: None,
             close_gate: None,
+            directory_reads: 0,
         }));
         let (ended, receiver) = oneshot::channel();
         let handler = Ssh {
@@ -458,6 +513,67 @@ impl Drop for Fixture {
             worker.abort();
         }
     }
+}
+
+#[tokio::test]
+async fn directory_listing_bounds_include_filtered_entries_text_and_drip_replies() {
+    let control = Fixture::connect(Fault::None, false).await;
+    let sftp = control.connection.open_sftp().await.unwrap();
+    let entries = tokio::time::timeout(DEADLINE, sftp.read_dir("/listing"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "café.txt");
+    assert_eq!(entries[0].path, "/listing/café.txt");
+    assert_eq!(entries[0].size, Some(7));
+    assert_eq!(entries[0].permissions, Some(0o100640));
+    assert!(entries[0].is_regular && !entries[0].is_directory && !entries[0].is_symlink);
+    assert_eq!(control.state.lock().unwrap().closes, 1);
+    sftp.close().await.unwrap();
+    control.finish().await;
+    let mut failures = Vec::new();
+    for fault in [
+        Fault::DirectoryDotFlood,
+        Fault::DirectoryTextFlood,
+        Fault::DirectoryDrip,
+    ] {
+        let fixture = Fixture::connect(fault, false).await;
+        let sftp = fixture.connection.open_sftp().await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(14), sftp.read_dir("/listing")).await;
+        let refused = if fault == Fault::DirectoryDrip {
+            matches!(result, Ok(Err(SshError::Timeout)))
+        } else {
+            matches!(result, Ok(Err(SshError::SftpDirectoryTooLarge)))
+        };
+        let closes = fixture.state.lock().unwrap().closes;
+        if !refused || closes != 1 {
+            let outcome = match &result {
+                Ok(Ok(entries)) => format!("accepted {} entries", entries.len()),
+                Ok(Err(error)) => format!("refused: {error}"),
+                Err(_) => "outer test deadline expired".into(),
+            };
+            failures.push(format!(
+                "{fault:?}: {outcome}, acknowledged closes={closes}"
+            ));
+        }
+        if refused && closes == 1 {
+            fixture.state.lock().unwrap().fault = Fault::None;
+            let entries = tokio::time::timeout(DEADLINE, sftp.read_dir("/listing"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "café.txt");
+            assert_eq!(entries[0].path, "/listing/café.txt");
+            assert_eq!(entries[0].size, Some(7));
+            assert_eq!(entries[0].permissions, Some(0o100640));
+            assert_eq!(fixture.state.lock().unwrap().closes, 2);
+        }
+        sftp.close().await.unwrap();
+        fixture.finish().await;
+    }
+    assert!(failures.is_empty(), "directory bounds failed: {failures:?}");
 }
 
 #[tokio::test]

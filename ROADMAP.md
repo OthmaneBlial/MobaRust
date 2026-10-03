@@ -250,6 +250,13 @@ remain pending.
 
 Both [verified v0.1.25 Mac previews](docs/release/v0.1.25.md) include the editor, transfer, named-mutation and SDK handle corrections described above. All four published files were downloaded anonymously and byte-matched. This closes the Mac packaging step only; native workflows and Windows/Linux alignment remain pending, and the checklist stays 56/76.
 
+On main after v0.1.25, [directory listing guards](docs/adr/0008-sftp-transfer-pipeline.md#bounded-directory-listings--2026-10-03)
+bound filtered entries, cumulative text and the READDIR phase in the shared
+browser/recursive-planning reader. Local protocol regressions cover refusal,
+acknowledged close and same-connection recovery. Published installers do not
+include this newer guard; native and cross-platform acceptance remain open,
+and the checklist stays 56/76.
+
 ## Implemented foundation
 
 These existing capabilities should be improved rather than recreated:
