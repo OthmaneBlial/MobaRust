@@ -1159,6 +1159,96 @@ fn idle_shell_survives_the_connection_timeout_without_keepalives() {
 }
 
 #[test]
+fn deleting_remote_entries_unlinks_links_and_preserves_their_targets() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().unwrap();
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let sftp = connection.open_sftp().await.unwrap();
+        let victim = fixture.directory.path().join("delete-victim");
+        let directory = fixture.directory.path().join("delete-victim-directory");
+        let missing = fixture.directory.path().join("delete-missing-victim");
+        fs::write(&victim, b"unchanged file target").unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o640)).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("child"), b"unchanged directory child").unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(sftp.remove_path(directory.to_str().unwrap()).await.is_err());
+        assert!(matches!(
+            sftp.remove_path(missing.to_str().unwrap()).await,
+            Err(SshError::SftpPathMissing)
+        ));
+        let selected = fixture.directory.path().join("delete-selected");
+        let mut failures = Vec::new();
+        for kind in [
+            "regular",
+            "empty-directory",
+            "file-link",
+            "directory-link",
+            "dangling-link",
+            "socket",
+        ] {
+            let socket = match kind {
+                "regular" => {
+                    fs::write(&selected, b"selected file").unwrap();
+                    None
+                }
+                "empty-directory" => {
+                    fs::create_dir(&selected).unwrap();
+                    None
+                }
+                "socket" => Some(std::os::unix::net::UnixListener::bind(&selected).unwrap()),
+                _ => {
+                    std::os::unix::fs::symlink(
+                        match kind {
+                            "file-link" => &victim,
+                            "directory-link" => &directory,
+                            _ => &missing,
+                        },
+                        &selected,
+                    )
+                    .unwrap();
+                    None
+                }
+            };
+            match sftp.remove_path(selected.to_str().unwrap()).await {
+                Ok(()) => assert!(
+                    matches!(
+                        fs::symlink_metadata(&selected),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                    ),
+                    "removed {kind} entry"
+                ),
+                Err(error) => {
+                    failures.push(format!("{kind}: {error}"));
+                    assert!(fs::symlink_metadata(&selected).is_ok());
+                    fs::remove_file(&selected).unwrap();
+                }
+            }
+            drop(socket);
+            assert_eq!(fs::read(&victim).unwrap(), b"unchanged file target");
+            assert_eq!(
+                fs::metadata(&victim).unwrap().permissions().mode() & 0o7777,
+                0o640
+            );
+            assert_eq!(
+                fs::read(directory.join("child")).unwrap(),
+                b"unchanged directory child"
+            );
+            assert_eq!(
+                fs::metadata(&directory).unwrap().permissions().mode() & 0o7777,
+                0o750
+            );
+            assert!(!missing.exists());
+        }
+        sftp.close().await.unwrap();
+        connection.disconnect().await.unwrap();
+        assert!(failures.is_empty(), "entry deletion failures: {failures:?}");
+    });
+}
+
+#[test]
 fn sftp_transfer_parts_are_private_during_copy_and_cleaned_on_errors() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {

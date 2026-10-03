@@ -2908,6 +2908,17 @@ impl SftpConnection {
         self.session.remove_dir(path).await.map_err(map_sftp_error)
     }
 
+    /// Remove one entry or an empty directory, never recursively. Final-path
+    /// symlinks, including dangling/directory links, are unlinked themselves.
+    pub async fn remove_path(&self, path: impl Into<String>) -> Result<(), SshError> {
+        let path = path.into();
+        if self.is_real_directory(&path).await? {
+            self.remove_dir(path).await
+        } else {
+            self.remove_file(path).await
+        }
+    }
+
     pub async fn rename(
         &self,
         old_path: impl Into<String>,

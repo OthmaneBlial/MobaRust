@@ -2569,21 +2569,10 @@ async fn run_file_operation(
             .set_permissions(path, permissions)
             .await
             .map_err(|error| error.to_string()),
-        SshFileOperation::Delete { path } => {
-            let (_, is_directory) = sftp
-                .file_info(&path)
-                .await
-                .map_err(|error| error.to_string())?;
-            if is_directory {
-                sftp.remove_dir(path)
-                    .await
-                    .map_err(|error| error.to_string())
-            } else {
-                sftp.remove_file(path)
-                    .await
-                    .map_err(|error| error.to_string())
-            }
-        }
+        SshFileOperation::Delete { path } => sftp
+            .remove_path(path)
+            .await
+            .map_err(|error| error.to_string()),
     };
     let close_result = sftp.close().await;
     result?;

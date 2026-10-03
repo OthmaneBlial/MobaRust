@@ -82,8 +82,10 @@ cannot turn every copy chunk into an IPC/UI update.
 Directory listing and remote mutations (create directory, rename, delete, and
 bounded POSIX permission changes) use separate native SFTP jobs as well. They are spawned from the SSH
 session loop, so a slow directory operation cannot stop the shell reader from
-forwarding terminal output. Delete inspects remote metadata in Rust instead of
-trusting a frontend-provided file type; deleting the remote root is rejected.
+forwarding terminal output. Delete inspects no-follow remote metadata in Rust
+instead of trusting a frontend-provided file type: final-path links are unlinked,
+and only real empty directories use RMDIR. Literal `/` and `.` mutation paths are rejected.
+The confirmation names symbolic links and explains the empty-directory limit.
 
 ## Rationale
 
@@ -251,4 +253,43 @@ Servers must honor requested permissions/exclusivity. Legacy SCP reopens the
 reserved pathname, and ancestor/final-path swaps remain possible between
 requests. Lost create replies can leave an unconfirmed private part for manual
 inspection; ambiguous ownership is never guessed merely to remove it. Published
+v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged.
+
+## No-follow entry deletion — 2026-10-03
+
+The native Delete branch used STAT and chose REMOVE/RMDIR from the target's
+type. An extracted baseline with the same dispatch reproduced refusal of
+directory and dangling links. The new shared `remove_path` method reuses the
+existing LSTAT directory check: real directories use RMDIR, while other entries
+use REMOVE. It neither follows a final symlink nor recurses into a directory.
+The native branch awaits this result without an early metadata `?`, so its
+existing SFTP close attempt also runs when classification fails. Confirmation
+still pins the connection and requires the user's approval; it now describes
+link deletion and the empty-directory limit.
+
+```text
+cargo test --locked -p mobarust-ssh --test local_sshd deleting_remote_entries_unlinks_links_and_preserves_their_targets -- --exact --show-output
+cargo xtask check
+```
+
+The corrected real OpenSSH case passes on macOS ARM64: it removes a regular
+file, an empty directory, file/directory/dangling links and an owned Unix socket.
+After every operation, the file target's bytes/mode and the nonempty directory
+target's child/mode remain unchanged. Nonempty directory deletion refuses,
+missing paths retain their typed error and a dangling target is never created.
+All paths, keys and processes belong to the disposable loopback fixture.
+
+The final `cargo xtask check` exited successfully: 106 desktop tests, 42 SSH
+unit tests, 15 authenticated fixture tests (three manual probes ignored), all
+23 OpenSSH cases (53.53 seconds), seven SFTP fault tests, 19 packet/offset
+checks and three metadata checks passed. Private SDK/workspace tests, Clippy,
+frontend tests/typecheck/lint/build, release/isolated-launcher tests, RDP/VNC
+helper checks, unsigned package-layout checks and fuzz-target compilation also
+passed. The real X11 server fixture explicitly skipped its unavailable
+Xvfb/safe-socket prerequisite, so external X11 acceptance remains unverified.
+
+Native dialog/connection-close acceptance and Windows/Linux server evidence
+remain pending. The LSTAT and removal requests are separate: concurrent path
+replacement, ancestor links and a dishonest server remain limitations. This
+does not add recursive deletion or change literal root-path validation. Published
 v0.1.24 Mac and v0.1.12 Windows/Linux downloads are unchanged.

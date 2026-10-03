@@ -3227,7 +3227,9 @@ function App() {
   const deleteRemote = useCallback(async (entry: RemoteEntry) => {
     if (!remoteSessionId) return;
     const stillConnected = pinRemoteFileConnection(remoteSessionId);
-    if (!stillConnected() || !await confirmAction(`Delete remote ${entry.isDirectory ? "directory" : "file"} ${quoteRemotePromptPath(entry.path)}?`) || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
+    const kind = entry.isSymlink ? "symbolic link" : entry.isDirectory ? "directory" : "file";
+    const details = entry.isSymlink ? "\n\nThe link itself will be removed; its target will be kept." : entry.isDirectory ? "\n\nOnly empty directories can be deleted." : "";
+    if (!stillConnected() || !await confirmAction(`Delete remote ${kind} ${quoteRemotePromptPath(entry.path)}?${details}`) || !stillConnected() || remoteSessionIdRef.current !== remoteSessionId) return;
     try {
       await invoke("ssh_delete_remote", { terminalId: remoteSessionId, path: entry.path });
       setConnectionError(null);
