@@ -24,7 +24,7 @@ Terminal tabs and splits · SSH with verified host keys · SFTP/SCP · tunnels �
 
 [![Demo video: import a MobaXterm export, open a server group, trust its host key once and open a second shell on the same connection](docs/assets/demo-poster.jpg)](https://othmaneblial.github.io/MobaRust/#demo)
 
-<sub>Click to watch the demo on the website: a real screen recording of the native Mac app against a local OpenSSH server.</sub>
+<sub>Click to watch the 34-second demo on the website (with sound): a real screen recording of the native Mac app against a local OpenSSH server.</sub>
 
 ## Why MobaRust
 
