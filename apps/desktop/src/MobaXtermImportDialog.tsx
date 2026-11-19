@@ -2,7 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, FileUp, LoaderCircle, X } from "lucide-react";
 
-type ImportedSession = { id: string; name: string; hostname: string; port: number; username?: string | null; folder?: string | null } & Record<string, unknown>;
+type ImportedSession = { id: string; name: string; hostname: string; port: number; username?: string | null; folder?: string | null; auth?: { kind: string; keyRef?: string }; jump_host_profiles?: { host: string }[] } & Record<string, unknown>;
 type Candidate = { session: ImportedSession; duplicateOf: string | null };
 type Preview = { candidates: Candidate[]; skipped: string[]; warnings: string[] };
 type Action = "add" | "replace" | "skip";
@@ -49,7 +49,7 @@ export function MobaXtermImportDialog({ onClose, onImported }: { onClose: () => 
       const decisions = preview.candidates.map((candidate, index) => ({ session: candidate.session, action: actions[index], replaceId: actions[index] === "replace" ? candidate.duplicateOf : null }));
       const report = await invoke<ImportReport>("session_apply_import", { decisions });
       const skipped = preview.skipped.length + report.skipped.length;
-      onImported(`Imported ${report.importedCount} MobaXterm session${report.importedCount === 1 ? "" : "s"}${skipped ? ` · ${skipped} skipped` : ""}. Imported sessions use the SSH agent until you edit their authentication.`);
+      onImported(`Imported ${report.importedCount} MobaXterm session${report.importedCount === 1 ? "" : "s"}${skipped ? ` · ${skipped} skipped` : ""}. Check each imported session's notes for keys to copy into ~/.ssh.`);
       onClose();
     } catch (failure) {
       setError(`Import failed; your existing sessions were not changed. ${String(failure)}`);
@@ -64,7 +64,7 @@ export function MobaXtermImportDialog({ onClose, onImported }: { onClose: () => 
   return <div className="palette-backdrop" role="presentation" onMouseDown={() => { if (!busy) onClose(); }}>
     <section className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="mobaxterm-import-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape" && !busy) onClose(); }}>
       <header className="import-dialog-header">
-        <div><h2 id="mobaxterm-import-title">Import MobaXterm sessions</h2><p>Choose an exported <code>.mxtsessions</code> file or a <code>MobaXterm.ini</code>. SSH bookmarks and their folders are imported; passwords are never read.</p></div>
+        <div><h2 id="mobaxterm-import-title">Import MobaXterm sessions</h2><p>Choose a <code>.mxtsessions</code>, <code>.moba</code> or <code>MobaXterm.ini</code> file, even one exported on Windows. SSH and SFTP bookmarks come with their folders, gateways and key names; passwords are never read.</p></div>
         <button type="button" className="icon-button" aria-label="Close import" onClick={onClose} disabled={busy}><X size={16} /></button>
       </header>
       <label className="import-file-picker">
@@ -85,7 +85,7 @@ export function MobaXtermImportDialog({ onClose, onImported }: { onClose: () => 
           <tbody>{preview.candidates.map((candidate, index) => <tr key={`${candidate.session.folder}/${candidate.session.name}`}>
             <td>{candidate.session.folder}</td>
             <td>{candidate.session.name}{candidate.duplicateOf && <small className="import-duplicate">duplicate</small>}</td>
-            <td><code>{candidate.session.username ? `${candidate.session.username}@` : ""}{candidate.session.hostname}{candidate.session.port !== 22 ? `:${candidate.session.port}` : ""}</code>{!candidate.session.username && <small className="import-duplicate">no user</small>}</td>
+            <td><code>{candidate.session.username ? `${candidate.session.username}@` : ""}{candidate.session.hostname}{candidate.session.port !== 22 ? `:${candidate.session.port}` : ""}</code>{!candidate.session.username && <small className="import-duplicate">no user</small>}{candidate.session.jump_host_profiles?.length ? <small className="import-duplicate">via {candidate.session.jump_host_profiles.map((jump) => jump.host).join(" → ")}</small> : null}{candidate.session.auth?.kind === "privateKey" && <small className="import-duplicate">key {candidate.session.auth.keyRef}</small>}</td>
             <td><select aria-label={`Import action for ${candidate.session.name}`} value={actions[index]} onChange={(event) => { const value = event.target.value as Action; setActions((current) => current.map((item, itemIndex) => itemIndex === index ? value : item)); }}>
               <option value="add">{candidate.duplicateOf ? "Keep both" : "Add"}</option>
               {candidate.duplicateOf && <option value="replace">Replace existing</option>}

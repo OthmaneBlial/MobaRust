@@ -71,6 +71,14 @@ garbage and Latin-1 input) and a store test for add/replace/skip and rollback.
 Not yet verified: the dialog against a real MobaXterm export (none available
 on this Mac) and native UI inspection.
 
+## M3b — MobaXterm import from Windows exports (2026-11-19)
+
+- Format checked against a public community study of `.mxtsessions` (MobaXterm 26.3). It showed that `109` is the user-editable icon, not the type. The type is now read from the first `%` field (0 = SSH, 7 = SFTP), and the `;  logout` prefix is accepted. Commits `9b3a94e` and `23416be`.
+- Windows files decode on any OS: Windows-1252 (ANSI), UTF-8 with or without BOM, and UTF-16 with BOM. CRLF line endings and lowercase section names are accepted.
+- Now imported: SFTP bookmarks, the login command (MobaXterm escapes decoded), the comment (into notes), SSH gateways as jump hosts, and key paths mapped to `~/.ssh/<file>`. The agent is kept when that file is missing, and `.ppk` keys get a puttygen hint. `<default>` login is treated as no username. RDP and VNC are named in the skipped list. `.moba` single-session files are accepted.
+- Verified: store unit tests on a CRLF Windows-1252 fixture and its UTF-16LE/BE copies. A real-sshd test (`windows_mobaxterm_export_connects_through_its_gateway_to_local_sshd`) imports a Windows export and connects through a local bastion to a local target with the mapped key. It also proves the login command ran.
+- Not verified: a file written by MobaXterm itself, and clicking through the native import dialog.
+
 ## M4 — One-click session groups (2026-11-19)
 
 - Session folders render as a nested, collapsible tree (`A/B/C`).
