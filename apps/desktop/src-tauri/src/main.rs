@@ -17,8 +17,8 @@ use mobarust_network::{TcpCheckOptions, check_tcp, resolve_host};
 use mobarust_remote_desktop::HelperCommand;
 use mobarust_ssh::{SshFingerprintOptions, inspect_host_key};
 use mobarust_store::{
-    AuditStore, MacroStore, OpenSshImportReport, SessionImportReport, SessionStore, SettingsStore,
-    SnippetStore,
+    AuditStore, ImportDecision, MacroStore, MobaXtermPreview, OpenSshImportReport,
+    SessionImportReport, SessionStore, SettingsStore, SnippetStore,
 };
 use mobarust_vault::{
     CredentialId, CredentialLookup, PlatformVault, PortableVault, SecretMaterial, VaultError,
@@ -488,6 +488,90 @@ fn session_import_openssh(
         .map_err(|_| "session store lock poisoned".to_owned())?
         .import_openssh_config(path)
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MobaXtermPreviewRequest {
+    bytes: Vec<u8>,
+}
+
+#[tauri::command]
+fn session_preview_mobaxterm(
+    store: State<'_, Mutex<SessionStore>>,
+    payload: MobaXtermPreviewRequest,
+) -> Result<MobaXtermPreview, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .preview_mobaxterm_bytes(&payload.bytes)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn session_apply_import(
+    store: State<'_, Mutex<SessionStore>>,
+    decisions: Vec<ImportDecision>,
+) -> Result<SessionImportReport, String> {
+    store
+        .lock()
+        .map_err(|_| "session store lock poisoned".to_owned())?
+        .apply_import(decisions)
+        .map_err(|error| error.to_string())
+}
+
+/// `mobarust --open-group "Folder/Path"` asks the UI to open every saved SSH
+/// session in that group. Only a group name is accepted, never credentials.
+#[tauri::command]
+fn launch_open_group() -> Option<String> {
+    open_group_argument(std::env::args().skip(1))
+}
+
+fn open_group_argument(args: impl Iterator<Item = String>) -> Option<String> {
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        let value = if let Some(value) = arg.strip_prefix("--open-group=") {
+            Some(value.to_owned())
+        } else if arg == "--open-group" {
+            args.next()
+        } else {
+            None
+        };
+        if let Some(value) = value.map(|value| value.trim().to_owned())
+            && !value.is_empty()
+            && value.len() <= 512
+            && !value.chars().any(char::is_control)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod open_group_tests {
+    use super::open_group_argument;
+
+    fn parse(args: &[&str]) -> Option<String> {
+        open_group_argument(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn reads_open_group_forms_and_rejects_bad_values() {
+        assert_eq!(
+            parse(&["--open-group", "My Servers"]).as_deref(),
+            Some("My Servers")
+        );
+        assert_eq!(
+            parse(&["--open-group=Prod/Web"]).as_deref(),
+            Some("Prod/Web")
+        );
+        assert_eq!(parse(&["--open-group"]), None);
+        assert_eq!(parse(&["--open-group", "  "]), None);
+        assert_eq!(parse(&["--open-group", "a\nb"]), None);
+        assert_eq!(parse(&["--open-group", "bad\u{7}"]), None);
+        assert_eq!(parse(&["-psn_0_123"]), None);
+    }
 }
 
 #[tauri::command]
@@ -1968,6 +2052,9 @@ fn main() {
             session_list,
             session_save,
             session_import_openssh,
+            session_preview_mobaxterm,
+            session_apply_import,
+            launch_open_group,
             session_export,
             session_import,
             session_set_favorite,

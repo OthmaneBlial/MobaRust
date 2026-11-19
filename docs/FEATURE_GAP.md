@@ -1,0 +1,24 @@
+# Feature gap: MobaXterm workflows vs MobaRust
+
+MobaXterm behaviour below comes from its public documentation and widely
+described behaviour, not from running it (it is Windows-only and not installed
+here). "Tabby" notes are pending: the Tabby app is not installed on this Mac yet.
+
+| MobaXterm workflow | MobaRust state | Proposed / done | Priority | Verification |
+|---|---|---|---|---|
+| Large tabbed terminal | Was capped at ~half the window | Full-height terminal, focus mode, hideable rail | P0 | Browser preview; native pending |
+| Close tab / close others | Close only | Middle-click, context menu, close others, reopen closed (`Mod+Shift+T`) | P0 | Browser preview |
+| Split terminals | Right/down splits with draggable dividers | Keep | P1 | Existing |
+| Session tree with nested folders | Flat folder labels | Nested collapsible tree from `A/B` paths | P0 | Browser preview |
+| Open a whole folder of sessions | Missing | "Open all" (4 concurrent), progress, cancel, retry, `--open-group` | P0 | Unit + real local sshd (14 sessions) |
+| Import MobaXterm sessions | Missing | `.mxtsessions` / `MobaXterm.ini` SSH bookmarks (host, port, user, folders) with preview and merge decisions | P0 | Fixture tests; real export not tested |
+| Import passwords from MobaXterm | Not supported | Deliberately not imported (encrypted, not portable) | — | By design |
+| Private-key path, gateway, X11 from MobaXterm bookmarks | Not imported | Report as not imported until the field layout is verified | P2 | — |
+| Telnet / RDP / VNC bookmarks | Skipped with a warning | Map once field layouts are verified | P2 | — |
+| SFTP side browser | Files view per SSH session | Make it a dockable side panel | P1 | Existing sshd tests |
+| SSH tunnels | Local/remote/dynamic with manager | Keep; UI polish | P1 | Existing sshd tests |
+| Multi-exec | Broadcast input to chosen tabs | Keep | P1 | Existing |
+| Macros / snippets | Present | Keep | P2 | Existing |
+| Open selected sessions | Missing | Multi-select in tree | P1 | — |
+| Workspace restore | Missing | Optional restore of open tabs | P2 | — |
+| X server | X11 forwarding to an existing display | No built-in X server | — | Existing tests |

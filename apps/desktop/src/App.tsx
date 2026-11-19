@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { RemoteFramebufferQueue } from "./remote-desktop-framebuffer";
 import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
@@ -38,6 +38,8 @@ import { remoteChildPath, remoteParentPath } from "./remote-path";
 import { quoteRemotePromptPath } from "./remote-prompt";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import desktopPackage from "../package.json";
+import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, readUiPref, resolveGroupName, runBounded, writeUiPref } from "./workspace-layout";
+import { MobaXtermImportDialog } from "./MobaXtermImportDialog";
 import {
   preserveRemoteDesktopError,
   REMOTE_DESKTOP_FALLBACK_ERROR,
@@ -66,6 +68,9 @@ import {
   BookOpen,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
+  Info,
+  RotateCcw,
   CircleHelp,
   CircleX,
   Command,
@@ -299,7 +304,13 @@ type WorkspaceTerminal = {
   remoteDesktopRequest?: RemoteDesktopConnectRequest | null;
   remoteHost: string | null;
   status: TerminalStatus;
+  reopen?: ReopenSpec;
 };
+
+type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string } | { kind: "local"; target: LocalTerminalTarget; label: string };
+type GroupRunItem = { id: string; name: string; status: "queued" | "connecting" | "connected" | "failed" | "cancelled"; error?: string };
+type GroupRun = { folder: string; items: GroupRunItem[]; running: boolean };
+const GROUP_OPEN_CONCURRENCY = 4;
 
 type SplitDirection = "none" | "right" | "down";
 
@@ -1498,8 +1509,16 @@ function App() {
   const [sessionNotice, setSessionNotice] = useState<SessionNotice | null>(null);
   const [closing, setClosing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 720px)").matches);
+  const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(Number(readUiPref("sidebarWidth") ?? 260)));
+  const [railOpen, setRailOpen] = useState(() => readUiPref("railOpen") === "1");
+  const [focusMode, setFocusMode] = useState(false);
+  const [closedTabs, setClosedTabs] = useState<ReopenSpec[]>([]);
+  const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [groupRun, setGroupRun] = useState<GroupRun | null>(null);
+  const groupCancelRef = useRef(false);
+  const [mobaXtermImportOpen, setMobaXtermImportOpen] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [now, setNow] = useState(() => new Date());
   const [appVersion, setAppVersion] = useState(desktopPackage.version);
   const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
   const [recentOnly, setRecentOnly] = useState(false);
@@ -1980,7 +1999,30 @@ function App() {
     if (terminalSearchOpen && terminalSearchQuery.trim()) findTerminalMatch("next");
   }, [findTerminalMatch, selectedTerminalId, terminalSearchOpen, terminalSearchQuery]);
 
+  const rememberClosed = useCallback((terminal: WorkspaceTerminal | undefined) => {
+    if (!terminal) return;
+    const spec = terminal.reopen ?? (terminal.remoteProtocol ? null : { kind: "local" as const, target: terminal.localTarget, label: terminal.label });
+    if (spec) setClosedTabs((current) => pushClosed(current, spec));
+  }, []);
+
+  const closeOtherTerminals = useCallback((keepId: string) => {
+    const kept = terminalTabs.find((terminal) => terminal.id === keepId);
+    if (!kept) return;
+    for (const terminal of terminalTabs) {
+      if (terminal.id === keepId) continue;
+      rememberClosed(terminal);
+      nativeTerminalIdsRef.current.delete(terminal.id);
+      terminalAuditStateRef.current.delete(terminal.id);
+      terminalGenerationsRef.current.delete(terminal.id);
+    }
+    setBroadcastTargetIds((current) => current.filter((id) => id === keepId));
+    setTerminalTabs([kept]);
+    setActiveTerminalId(keepId);
+    setTerminalLayout({ kind: "pane", terminalId: keepId });
+  }, [rememberClosed, terminalTabs]);
+
   const closeTerminal = useCallback((workspaceId: string) => {
+    rememberClosed(terminalTabs.find((terminal) => terminal.id === workspaceId));
     nativeTerminalIdsRef.current.delete(workspaceId);
     terminalAuditStateRef.current.delete(workspaceId);
     terminalGenerationsRef.current.delete(workspaceId);
@@ -2000,7 +2042,7 @@ function App() {
     if (activeTerminalId === workspaceId) {
       setActiveTerminalId(remaining[Math.min(closingIndex, remaining.length - 1)].id);
     }
-  }, [activeTerminalId, terminalTabs]);
+  }, [activeTerminalId, rememberClosed, terminalTabs]);
 
   const cycleTerminal = useCallback((direction: 1 | -1) => {
     if (terminalTabs.length < 2) return;
@@ -2431,19 +2473,21 @@ function App() {
     }
   }, []);
 
-  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true) => {
+  // Resolves to null on success, or an error message (used by group opening).
+  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string): Promise<string | null> => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
       setConnectionError("SSH connections require the desktop runtime.");
-      return;
+      return "SSH connections require the desktop runtime.";
     }
     try {
       request = structuredClone(request);
+      const reopenRequest = structuredClone(request);
       const sshSettings = { ...settingsRef.current.ssh };
       const macroAtApproval = macroRunRef.current;
       const stillAllowed = () => !macroAtApproval || (!macroCancelRef.current && macroRunRef.current === macroAtApproval);
-      if (!await confirmSessionStartup(request.startupCommand, `SSH ${request.username}@${request.host}:${request.port}`, sshSettings.reconnectEnabled && sshSettings.reconnectAttempts > 0, stillAllowed) || !stillAllowed()) return;
+      if (!await confirmSessionStartup(request.startupCommand, `SSH ${request.username}@${request.host}:${request.port}`, sshSettings.reconnectEnabled && sshSettings.reconnectAttempts > 0, stillAllowed) || !stillAllowed()) return "Startup command was not approved.";
       const authEvents = new Channel<SshAuthEvent>();
       // Installed before IPC; this channel also owns this session's reconnect
       // prompts. A closed request cannot deliver answers to another attempt.
@@ -2457,11 +2501,13 @@ function App() {
         },
       });
       recordAudit("sessionOpened", "SSH");
+      const terminalLabel = label ?? `${request.username}@${response.host}`;
       const terminal = createWorkspaceTerminal({
-        label: `${request.username}@${response.host}`,
+        label: terminalLabel,
         remoteSessionId: response.terminalId,
         remoteProtocol: "ssh",
         remoteHost: response.host,
+        reopen: { kind: "ssh", request: reopenRequest, label: terminalLabel },
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
@@ -2481,9 +2527,11 @@ function App() {
           }
         }
       }
+      return null;
     } catch (error) {
       recordAudit("connectionFailed", "SSH");
       setConnectionError(String(error));
+      return String(error);
     }
   }, [recordAudit, refreshSavedSessions, requestTerminalFocus]);
 
@@ -2789,11 +2837,73 @@ function App() {
     }
     const request = requestFromSavedSession(session, savedSessions);
     if (!request) {
-      setConnectionError("This SSH profile has incomplete authentication or an unresolved, cyclic, or oversized jump chain (maximum 8 hosts).");
+      const message = session.username?.trim() ? "This SSH profile has incomplete authentication or an unresolved, cyclic, or oversized jump chain (maximum 8 hosts)." : "This SSH profile has no username; edit it before connecting.";
+      setConnectionError(message);
+      return message;
+    }
+    return connectSsh(request, false, session.name);
+  }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
+
+  const reopenSpec = useCallback((spec: ReopenSpec) => {
+    if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label);
+    else startNewTerminal(spec.target, spec.label);
+  }, [connectSsh, startNewTerminal]);
+
+  const reopenClosedTerminal = useCallback(() => {
+    const spec = closedTabs[closedTabs.length - 1];
+    if (!spec) {
+      setSessionNotice("No recently closed tabs to reopen.");
       return;
     }
-    return connectSsh(request, false);
-  }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
+    setClosedTabs((current) => current.slice(0, -1));
+    reopenSpec(spec);
+  }, [closedTabs, reopenSpec]);
+
+  const reconnectTerminal = useCallback((workspaceId: string) => {
+    const terminal = terminalTabs.find((item) => item.id === workspaceId);
+    const spec = terminal?.reopen ?? (terminal && !terminal.remoteProtocol ? { kind: "local" as const, target: terminal.localTarget, label: terminal.label } : null);
+    if (!spec) {
+      setConnectionError("This tab cannot be reconnected automatically; reopen its saved session instead.");
+      return;
+    }
+    closeTerminal(workspaceId);
+    reopenSpec(spec);
+  }, [closeTerminal, reopenSpec, terminalTabs]);
+
+  const openSessionGroup = useCallback(async (path: string, onlyIds?: string[]) => {
+    if (groupRun?.running) {
+      setConnectionError("A session group is already opening. Cancel it before starting another.");
+      return;
+    }
+    const members = savedSessions.filter((session) => session.protocol === "SSH" && inFolder(normalizeFolder(session.folder, "Unfiled"), path) && (!onlyIds || onlyIds.includes(session.id)));
+    if (members.length === 0) {
+      setSessionNotice(`No saved SSH sessions in "${path}".`);
+      return;
+    }
+    groupCancelRef.current = false;
+    const update = (id: string, patch: Partial<GroupRunItem>) => setGroupRun((current) => current && { ...current, items: current.items.map((item) => item.id === id ? { ...item, ...patch } : item) });
+    setGroupRun({ folder: path, running: true, items: members.map((session) => ({ id: session.id, name: session.name, status: "queued" })) });
+    await runBounded(members, GROUP_OPEN_CONCURRENCY, async (session) => {
+      update(session.id, { status: "connecting" });
+      const result = await connectSavedSession(session);
+      update(session.id, typeof result === "string" ? { status: "failed", error: result } : { status: "connected" });
+    }, () => groupCancelRef.current, (session) => update(session.id, { status: "cancelled" }));
+    setGroupRun((current) => current && { ...current, running: false });
+  }, [connectSavedSession, groupRun?.running, savedSessions]);
+
+  const launchGroupCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!IS_TAURI || launchGroupCheckedRef.current || savedSessions.length === 0) return;
+    launchGroupCheckedRef.current = true;
+    void invoke<string | null>("launch_open_group").then((name) => {
+      if (!name) return;
+      const paths = folderTree(savedSessions.filter((session) => session.protocol === "SSH").map((session) => normalizeFolder(session.folder, "Unfiled"))).map((node) => node.path);
+      const resolved = resolveGroupName(name, paths);
+      if (resolved.kind === "match") void openSessionGroup(resolved.path);
+      else if (resolved.kind === "ambiguous") setConnectionError(`--open-group "${name}" matches several groups: ${resolved.paths.join(", ")}. Use the full path, for example "${resolved.paths[0]}".`);
+      else setConnectionError(`--open-group "${name}" does not match any session group.`);
+    }).catch((error) => setConnectionError(`Could not read launch arguments: ${String(error)}`));
+  }, [openSessionGroup, savedSessions]);
 
   const writeToExplicitTargets = useCallback(async (targets: MacroTargetBinding[], data: string) => {
     const beforeSend = () => {
@@ -3628,11 +3738,6 @@ function App() {
   }, [networkScanId]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     if (!IS_TAURI) return;
     let disposed = false;
     void invoke<{ version: string }>("app_snapshot").then(({ version }) => {
@@ -3898,6 +4003,16 @@ function App() {
           return;
         }
       }
+      if (matchesShortcut(event, "Mod+Shift+Enter")) {
+        event.preventDefault();
+        setFocusMode((current) => !current);
+        return;
+      }
+      if (matchesShortcut(event, "Mod+Shift+T")) {
+        event.preventDefault();
+        reopenClosedTerminal();
+        return;
+      }
       if (matchesShortcut(event, settings.keyboard.newTerminal)) {
         event.preventDefault();
         startNewTerminal();
@@ -3953,7 +4068,7 @@ function App() {
       window.removeEventListener("keydown", onEmergencyKeyDown, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, reopenClosedTerminal, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   const filteredSessions = sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
@@ -3972,7 +4087,7 @@ function App() {
   if (closing) return <main className={`app-shell shutdown-state theme-${colorTheme}`}><section role="status" aria-live="polite"><LoaderCircle className="spin" size={24} aria-hidden="true" /><h1>Closing MobaRust</h1><p>Closing local terminals and finishing SSH file cleanup before exiting.</p></section></main>;
 
   return (
-    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} theme-${colorTheme}`}>
+    <main className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} ${focusMode ? "focus-mode" : ""} ${railOpen ? "rail-open" : ""} theme-${colorTheme}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties} onClick={() => tabMenu && setTabMenu(null)}>
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
@@ -3992,6 +4107,9 @@ function App() {
           <span className="muted">{IS_TAURI ? "desktop runtime" : "browser preview"}</span>
         </div>
         <div className="topbar-actions">
+          <button className="topbar-command" onClick={() => setQuickConnectOpen(true)} title="Quick connect"><Network size={14} /> Quick connect <kbd>{formatShortcut(settings.keyboard.quickConnect)}</kbd></button>
+          <button className="topbar-command" onClick={() => setPaletteOpen(true)} title="Command palette"><Command size={14} /> Commands <kbd>{formatShortcut(settings.keyboard.commandPalette)}</kbd></button>
+          <button className="icon-button" aria-label="Macros" title={`Macros (${formatShortcut(settings.keyboard.openMacros)})`} onClick={() => setMacrosOpen(true)}><Play size={16} strokeWidth={1.7} /></button>
           <button className="theme-toggle" aria-label={`Switch to ${colorTheme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${colorTheme === "dark" ? "light" : "dark"} mode`} disabled={themeSaving} onClick={() => void toggleTheme()}>
             {colorTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             <span>{colorTheme === "dark" ? "Light mode" : "Dark mode"}</span>
@@ -4008,7 +4126,6 @@ function App() {
           <button className="icon-button" aria-label="Snippets" title="Snippets" onClick={() => setSnippetsOpen(true)}>
             <BookOpen size={17} strokeWidth={1.7} />
           </button>
-          <div className="avatar">OB</div>
         </div>
       </header>
 
@@ -4042,7 +4159,7 @@ function App() {
           </nav>
 
           <div className="session-list">
-            <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
+            <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import MobaXterm sessions" title="Import MobaXterm sessions (.mxtsessions / MobaXterm.ini)" onClick={() => setMobaXtermImportOpen(true)}><FolderPlus size={14} /></button><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
             {sessionListError && <div className="connect-error" role="alert"><span>{sessionListError}</span><button type="button" className="outline-button" onClick={refreshSavedSessions}>Retry</button></div>}
             <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
             {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
@@ -4059,9 +4176,24 @@ function App() {
               } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
             ))}
             <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
-            {groupSessionsByFolder(filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC")).map(([folder, sessions]) => (
-              <div key={folder} className="session-folder-group">
-                <div className="folder-heading nested-folder"><Folder size={12} /> {folder} <span>{sessions.length}</span></div>
+            {(() => {
+              const remoteRows = filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC");
+              const grouped = new Map(groupSessionsByFolder(remoteRows).map(([folder, sessions]) => [normalizeFolder(folder, "Unfiled"), sessions] as const));
+              const nodes = folderTree(remoteRows.map((session) => normalizeFolder(session.folder, "Unfiled")));
+              const hidden = (path: string) => [...collapsedFolders].some((collapsed) => path !== collapsed && inFolder(path, collapsed));
+              return nodes.filter((node) => !hidden(node.path)).map((node) => {
+                const collapsed = collapsedFolders.has(node.path);
+                const sessions = collapsed ? [] : grouped.get(node.path) ?? [];
+                const sshCount = remoteRows.filter((session) => session.type === "SSH" && inFolder(normalizeFolder(session.folder, "Unfiled"), node.path)).length;
+                return (
+              <div key={node.path} className="session-folder-group" style={{ "--folder-depth": node.depth } as CSSProperties}>
+                <div className="folder-heading nested-folder">
+                  <button type="button" className="folder-toggle" aria-expanded={!collapsed} title={node.path} onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>
+                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
+                  </button>
+                  {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRun?.running} onClick={() => void openSessionGroup(node.path)}><Play size={11} /></button>}
+                  <span>{node.total}</span>
+                </div>
                 {sessions.map((session) => (
                   <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
                     const saved = savedSessions.find((item) => item.id === session.id);
@@ -4075,7 +4207,9 @@ function App() {
                   } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
                 ))}
               </div>
-            ))}
+                );
+              });
+            })()}
             {filteredSessions.length === 0 && <div className="empty-search">No matching sessions</div>}
           </div>
 
@@ -4087,23 +4221,29 @@ function App() {
             <button className={`nav-item ${activeView === "transfers" ? "active" : ""}`} onClick={() => setActiveView("transfers")}><ArrowDownToLine size={15} /> Transfers <span className="nav-count">{activeTransferCount}</span></button>
             <button className={`nav-item ${activeView === "audit" ? "active" : ""}`} onClick={() => setActiveView("audit")}><History size={15} /> Audit history <span className="nav-count">{auditEvents.length}</span></button>
           </div>
+          <div className="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize session sidebar" aria-valuemin={200} aria-valuemax={480} aria-valuenow={sidebarWidth} tabIndex={0}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              const startX = event.clientX;
+              const startWidth = sidebarWidth;
+              let latest = startWidth;
+              const move = (moveEvent: PointerEvent) => { latest = clampSidebarWidth(startWidth + moveEvent.clientX - startX); setSidebarWidth(latest); };
+              const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); writeUiPref("sidebarWidth", String(latest)); };
+              window.addEventListener("pointermove", move);
+              window.addEventListener("pointerup", up);
+            }}
+            onDoubleClick={() => { setSidebarWidth(260); writeUiPref("sidebarWidth", "260"); }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+              event.preventDefault();
+              const next = clampSidebarWidth(sidebarWidth + (event.key === "ArrowRight" ? 16 : -16));
+              setSidebarWidth(next);
+              writeUiPref("sidebarWidth", String(next));
+            }} />
         </aside>
 
         <section className="workspace">
           {!sidebarOpen && <button className="floating-sidebar-button" onClick={() => setSidebarOpen(true)} aria-label="Expand sidebar"><PanelLeftClose size={16} /></button>}
-          <div className="workspace-heading">
-            <div>
-              <div className="eyebrow"><span>WORKSPACE / 01</span><span className="eyebrow-slash">/</span><span className="muted">{remoteProtocol ? remoteProtocol.toUpperCase() : "LOCAL"}</span></div>
-              <h1>{remoteHost ?? "Local workstation"}</h1>
-              <p className="workspace-subtitle">{remoteProtocol === "ssh" ? "Interactive SSH shell with native host-key verification." : remoteProtocol === "telnet" ? "Legacy Telnet terminal. Traffic is unencrypted." : remoteProtocol === "serial" ? "Serial terminal with explicit device parameters." : remoteProtocol === "rdp" ? "Remote desktop through a controlled native helper." : remoteProtocol === "vnc" ? "VNC desktop through a controlled native helper." : "A quiet command surface for the machine in front of you."}</p>
-            </div>
-            <div className="heading-actions">
-              <button className="outline-button" onClick={() => setPaletteOpen(true)}><Command size={15} /> Command palette <span>{formatShortcut(settings.keyboard.commandPalette)}</span></button>
-              <button className="outline-button" onClick={() => setMacrosOpen(true)}><Play size={15} /> Macros <span>{formatShortcut(settings.keyboard.openMacros)}</span></button>
-              <button className="outline-button" onClick={() => setQuickConnectOpen(true)}><Network size={15} /> Quick connect <span>{formatShortcut(settings.keyboard.quickConnect)}</span></button>
-              <button className="primary-button" onClick={() => startNewTerminal()}><Plus size={15} /> New terminal</button>
-            </div>
-          </div>
           {connectionError && !quickConnectOpen && activeView !== "files" && <div className="connect-error workspace-error" role="alert"><span>{connectionError}</span><button type="button" className="outline-button" aria-label="Dismiss error" onClick={() => setConnectionError(null)}>Dismiss</button></div>}
           {sessionNotice && <div className={`workspace-notice${typeof sessionNotice === "string" ? "" : " workspace-notice-review"}`} role="status">
             {typeof sessionNotice === "string" ? <CheckCircle2 size={14} /> : <CircleHelp size={14} />}
@@ -4114,11 +4254,6 @@ function App() {
 
           <div className="workspace-grid" id="workspace-view-panel" role="tabpanel" aria-labelledby={`workspace-tab-${activeView}`} tabIndex={0}>
             <div className="main-column">
-              <div className="context-strip">
-                <div className="context-title"><span className={`terminal-tab-dot terminal-tab-dot-${terminalStatus}`} /> {remoteHost ?? "localhost"} <span className="context-separator">/</span> <span className="muted">{terminalStatus === "connected" ? "shell ready" : terminalStatus}</span></div>
-                <div className="context-metrics">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? <><span><LayoutDashboard size={13} /> framebuffer</span><span><ArrowUpFromLine size={13} /> native input</span><span><ShieldCheck size={13} /> helper isolated</span></> : <><span><TerminalIcon size={13} /> PTY</span><span><ArrowUpFromLine size={13} /> bidirectional</span><span><Radio size={13} /> 32 KB batches</span></>}</div>
-              </div>
-
               <div className="view-tabs" role="tablist" aria-label="Workspace views">
                 <button type="button" id="workspace-tab-terminal" aria-controls="workspace-view-panel" tabIndex={activeView === "terminal" ? 0 : -1} className={activeView === "terminal" ? "selected" : ""} onClick={() => setActiveView("terminal")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "terminal"}><TerminalIcon size={15} /> Terminal</button>
                 <button type="button" id="workspace-tab-files" aria-controls="workspace-view-panel" tabIndex={activeView === "files" ? 0 : -1} className={activeView === "files" ? "selected" : ""} onClick={() => setActiveView("files")} onKeyDown={handleWorkspaceTabKeyDown} role="tab" aria-selected={activeView === "files"}><Folder size={15} /> Files <span className="tab-badge">SSH</span></button>
@@ -4134,7 +4269,9 @@ function App() {
                     <div className="terminal-tab-strip" role="group" aria-label="Terminal sessions">{terminalTabs.map((terminal) => {
                       const selected = terminal.id === selectedTerminalId;
                       return (
-                        <div key={terminal.id} className={`terminal-tab ${selected ? "selected" : ""}`}>
+                        <div key={terminal.id} className={`terminal-tab ${selected ? "selected" : ""}`} title={terminal.remoteHost ? `${terminal.label} · ${terminal.remoteHost}` : terminal.label}
+                          onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTerminal(terminal.id); } }}
+                          onContextMenu={(event) => { event.preventDefault(); setTabMenu({ id: terminal.id, x: event.clientX, y: event.clientY }); }}>
                           <button type="button" className="terminal-tab-select" aria-pressed={selected} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}>
                             <span className={`terminal-tab-dot terminal-tab-dot-${terminal.status}`} />
                             <span>{terminal.label}</span>
@@ -4144,14 +4281,27 @@ function App() {
                         </div>
                       );
                     })}</div>
-                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={() => startNewTerminal()}><Plus size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA" : "UTF-8"}</span><span className="terminal-chip">{remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "native" : "256 colors"}</span><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={openSettings}><MoreHorizontal size={16} /></button></div>
+                  <div className="terminal-toolbar-actions"><button type="button" className={`terminal-broadcast-button ${broadcastEnabled ? "active" : ""}`} aria-label="Configure broadcast input" title="Configure broadcast input" onClick={() => setBroadcastOpen(true)}><Radio size={14} /> {broadcastEnabled ? `${broadcastTargetIds.length} targets` : "Broadcast"}</button><button type="button" className="terminal-new-tab" aria-label="New terminal tab" title="New terminal tab" onClick={() => startNewTerminal()}><Plus size={14} /></button><button type="button" aria-label="Reopen closed tab" title={`Reopen closed tab (${formatShortcut("Mod+Shift+T")})`} onClick={reopenClosedTerminal} disabled={closedTabs.length === 0}><RotateCcw size={14} /></button><button type="button" aria-label="Split terminal right" title="Split right" onClick={() => openSplit("right")}><PanelRight size={14} /></button><button type="button" aria-label="Split terminal down" title="Split down" onClick={() => openSplit("down")}><PanelBottom size={14} /></button><button type="button" className={macroRecording ? "terminal-record-button active" : ""} aria-label={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} title={macroRecording ? "Stop macro recording" : "Record macro from terminal input"} onClick={macroRecording ? stopMacroRecording : startMacroRecording} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Radio size={14} /></button><button type="button" aria-label="Search terminal" title="Search terminal" onClick={() => setTerminalSearchOpen(true)} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Search size={14} /></button><button type="button" aria-label="Copy terminal selection" title="Copy selected terminal text" onClick={() => void copyTerminalSelection()} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Copy size={14} /></button><button type="button" aria-label="Clear terminal scrollback" title="Clear terminal scrollback" onClick={clearTerminalScrollback} disabled={remoteProtocol === "rdp" || remoteProtocol === "vnc"}><Trash2 size={14} /></button><button type="button" aria-label={railOpen ? "Hide session details" : "Show session details"} aria-pressed={railOpen} title="Session details" onClick={() => setRailOpen((current) => { writeUiPref("railOpen", current ? "0" : "1"); return !current; })}><Info size={14} /></button><button type="button" aria-label={focusMode ? "Exit focus mode" : "Maximize terminal"} aria-pressed={focusMode} title={`${focusMode ? "Restore layout" : "Maximize terminal"} (${formatShortcut("Mod+Shift+Enter")})`} onClick={() => setFocusMode((current) => !current)}>{focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button><button type="button" aria-label="Terminal options" title="Open terminal settings" onClick={openSettings}><MoreHorizontal size={16} /></button></div>
                   </div>
                   {terminalSearchOpen && <div className="terminal-search-bar" role="search"><Search size={14} /><input autoFocus value={terminalSearchQuery} onChange={(event) => updateTerminalSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeTerminalSearch(); } if (event.key === "Enter") { event.preventDefault(); findTerminalMatch(event.shiftKey ? "previous" : "next"); } }} placeholder="Find in terminal" aria-label="Find in terminal" /><span>{terminalSearchResult.resultCount > 0 ? `${terminalSearchResult.resultIndex + 1}/${terminalSearchResult.resultCount}` : terminalSearchQuery ? "No match" : "Search"}</span><label><input type="checkbox" checked={terminalSearchCaseSensitive} onChange={(event) => setTerminalSearchCaseSensitive(event.target.checked)} /> Aa</label><button type="button" aria-label="Previous terminal match" title="Previous match" onClick={() => findTerminalMatch("previous")} disabled={!terminalSearchQuery}><ArrowUpFromLine size={13} /></button><button type="button" aria-label="Next terminal match" title="Next match" onClick={() => findTerminalMatch("next")} disabled={!terminalSearchQuery}><ArrowDownToLine size={13} /></button><button type="button" aria-label="Close terminal search" title="Close search" onClick={closeTerminalSearch}><X size={14} /></button></div>}
                   {macroRecording && <div className="macro-recording-banner" role="alert"><Radio size={15} /><div><strong>RECORDING INPUT · {macroRecording.terminalLabel}</strong><span>Only terminal input is captured locally. Do not type passwords, tokens, or private keys.</span></div><button type="button" className="danger-button" onClick={stopMacroRecording}><Square size={13} /> Stop recording</button></div>}
                   {broadcastEnabled && <div className="broadcast-banner" role="alert"><ShieldAlert size={15} /><div><strong>BROADCAST INPUT ACTIVE</strong><span>{broadcastTargetIds.length} explicitly selected terminal{broadcastTargetIds.length === 1 ? "" : "s"} · every keystroke is fanned out</span></div><button type="button" className="danger-button" onClick={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }}><Square size={13} /> Emergency disable <kbd>Esc</kbd></button></div>}
                   {macroRun && <div className="macro-run-banner" role="status"><LoaderCircle className="spin" size={15} /><div><strong>MACRO RUNNING · {macroRun.title}</strong><span>Step {macroRun.step}/{macroRun.total} · {macroRun.targets.join(", ")}</span></div><button type="button" className="danger-button" onClick={cancelMacro}><Square size={13} /> Cancel macro <kbd>Esc</kbd></button></div>}
+                  {groupRun && <div className="group-run-panel" role="status" aria-live="polite">
+                    <div className="group-run-heading">
+                      {groupRun.running ? <LoaderCircle className="spin" size={14} /> : <CheckCircle2 size={14} />}
+                      <strong>{groupRun.folder}</strong>
+                      <span>{groupRun.items.filter((item) => item.status === "connected").length}/{groupRun.items.length} connected{groupRun.items.some((item) => item.status === "failed") ? ` · ${groupRun.items.filter((item) => item.status === "failed").length} failed` : ""}{groupRun.items.some((item) => item.status === "cancelled") ? ` · ${groupRun.items.filter((item) => item.status === "cancelled").length} cancelled` : ""}</span>
+                      <span className="terminal-status-spacer" />
+                      {groupRun.running ? <button type="button" className="outline-button" onClick={() => { groupCancelRef.current = true; }}><Square size={12} /> Cancel queued</button> : <>
+                        {groupRun.items.some((item) => item.status === "failed" || item.status === "cancelled") && <button type="button" className="outline-button" onClick={() => void openSessionGroup(groupRun.folder, groupRun.items.filter((item) => item.status === "failed" || item.status === "cancelled").map((item) => item.id))}><RefreshCw size={12} /> Retry failed</button>}
+                        <button type="button" className="outline-button" aria-label="Dismiss group progress" onClick={() => setGroupRun(null)}><X size={12} /></button>
+                      </>}
+                    </div>
+                    <ul>{groupRun.items.map((item) => <li key={item.id} className={`group-run-${item.status}`} title={item.error}><span className={`terminal-tab-dot terminal-tab-dot-${item.status === "connected" ? "connected" : item.status === "failed" ? "error" : item.status === "connecting" ? "starting" : "closed"}`} />{item.name}<small>{item.status}</small></li>)}</ul>
+                  </div>}
                   <div className={`terminal-frame terminal-tabs-frame ${terminalLayout.kind === "split" ? "terminal-frame-has-layout" : "terminal-frame-single"}`}><TerminalLayoutView node={terminalLayout} terminals={terminalTabs} renderPane={renderTerminalPane} onFocus={setActiveTerminalId} onStartResize={beginSplitResize} onAdjustResize={adjustSplitRatio} onResetResize={resetSplitRatio} /></div>
-                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback {settings.terminal.scrollbackLines.toLocaleString()}</span><span>{settings.appearance.fontSize}px · Mod +/- zoom</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>{formatShortcut(settings.keyboard.quickConnect)} for quick connect</span></div>
+                  <div className="terminal-statusbar"><span><span className="status-square" /> {terminalStatus === "connected" ? "connected" : terminalStatus}</span><span>{remoteProtocol ? `${remoteProtocol} transport` : "local process"}</span><span>scrollback {settings.terminal.scrollbackLines.toLocaleString()}</span><span>{settings.appearance.fontSize}px · Mod +/- zoom</span><span className="terminal-status-spacer" />{remoteProtocol === "telnet" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectTelnet()}><RefreshCw size={12} /> Reconnect Telnet</button>}{remoteProtocol === "serial" && remoteSessionId && (terminalStatus === "reconnecting" || terminalStatus === "error") && <button type="button" className="terminal-status-action" onClick={() => void reconnectSerial()}><RefreshCw size={12} /> Reconnect serial</button>}<span>v{appVersion}</span></div>
               </section>
               {activeView === "files" && remoteSessionId && remoteProtocol === "ssh" ? (
                 <RemoteFilesView entries={remoteListingSessionId === remoteSessionId && sftpStatus === "ready" ? remoteEntries : []} path={remoteListingSessionId === remoteSessionId ? remotePath : "."} status={remoteListingSessionId === remoteSessionId ? sftpStatus : "loading"} error={connectionError ?? (remoteListingSessionId === remoteSessionId ? remoteDirectoryError : null)} localDropActive={localDropActive} transfers={transfers.filter((transfer) => transfer.terminalId === remoteSessionId)} onOpenTerminal={() => setActiveView("terminal")} onNavigate={navigateRemote} onDownload={startDownload} onUpload={startUpload} onCreateDirectory={createRemoteDirectory} onRename={renameRemote} onDelete={deleteRemote} onSetPermissions={setRemotePermissions} onCopyPath={copyRemotePath} onEdit={openRemoteTextFile} onCancelTransfer={cancelTransfer} onRetryTransfer={retryTransfer} />
@@ -4169,13 +4319,9 @@ function App() {
                 <EmptyProtocolView view={activeView} onAction={activeView === "tunnels" || activeView === "monitor" ? () => setQuickConnectOpen(true) : undefined} />
               )}
 
-              <div className="lower-grid">
-                <InfoCard icon={ShieldCheck} label="Security boundary" title="Saved secrets stay native" detail="Saved sessions use credential references. The native vault stores saved passwords and passphrases." action="Read threat model" onAction={() => setHelpOpen(true)} />
-                <InfoCard icon={ArrowUpFromLine} label="Transport" title="Backpressure is explicit" detail="PTY output is bounded before it reaches the renderer, keeping noisy jobs responsive." action="View architecture" onAction={() => setHelpOpen(true)} />
-              </div>
             </div>
 
-            <aside className="right-rail">
+            {railOpen && <aside className="right-rail">
               <div className="rail-heading"><span>Session brief</span><button aria-label="Session options" title="Open connection options" onClick={() => setQuickConnectOpen(true)}><MoreHorizontal size={15} /></button></div>
                 <div className="machine-card">
                 <div className="machine-icon"><Server size={18} /></div>
@@ -4183,12 +4329,11 @@ function App() {
                 <span className={`machine-live machine-state-${terminalStatus}`}>{terminalStatus === "connected" ? "LIVE" : terminalStatus.toUpperCase()}</span>
               </div>
               <div className="rail-group"><div className="rail-label">Runtime</div><Metric label="Surface" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "remote desktop" : remoteHost ? "remote shell" : "zsh"} /><Metric label="Renderer" value={remoteProtocol === "rdp" || remoteProtocol === "vnc" ? "RGBA framebuffer" : "xterm-256color"} /><Metric label="Process" value={terminalStatus === "connected" ? "running" : "idle"} /></div>
-              <div className="rail-group"><div className="rail-label">Workspace notes</div><p className="rail-copy">Use tabs and split panes to keep work in view. Files and SSH tunnels follow the active SSH session.</p></div>
+
               <div className="rail-callout"><div className="callout-icon"><Network size={15} /></div><div><strong>{remoteHost && terminalStatus !== "connected" ? `${remoteProtocol?.toUpperCase()} ${terminalStatus}` : remoteProtocol === "telnet" ? "Telnet transport active" : remoteProtocol === "serial" ? "Serial transport active" : remoteProtocol === "rdp" ? "RDP helper active" : remoteProtocol === "vnc" ? "VNC helper active" : remoteHost ? "SSH transport active" : "Connect securely"}</strong><p>{remoteHost && terminalStatus !== "connected" ? "Transport is not connected. Reopen the saved session or use Quick connect to try again." : remoteProtocol === "telnet" ? "This legacy terminal is unencrypted; use SSH for protected administration." : remoteProtocol === "serial" ? "Serial traffic depends on the connected hardware; MobaRust does not add encryption." : remoteProtocol === "rdp" ? "The remote desktop is isolated behind the native helper boundary; certificate and gateway options remain explicit." : remoteProtocol === "vnc" ? "The VNC framebuffer and input stay in the native helper boundary; legacy VNC transport is not SSH-level encryption." : remoteHost ? "Host-key verification and native PTY negotiation are active for this shell." : "Known-host verification and PTY negotiation are ready for a real SSH connection."}</p><button onClick={() => setQuickConnectOpen(true)}>{remoteHost ? "Open another session" : "Quick connect"} <ExternalLink size={12} /></button></div></div>
-            </aside>
+            </aside>}
           </div>
 
-          <footer className="workspace-footer"><span><span className="footer-led" /> MobaRust core · v{appVersion}</span><span>Rust PTY bridge</span><span>{navigator.platform.includes("Mac") ? "macOS" : navigator.platform.includes("Win") ? "Windows" : "Linux"} · local mode</span><span className="footer-spacer" /><span>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</span></footer>
         </section>
       </div>
 
@@ -4203,6 +4348,13 @@ function App() {
       {editingRemoteFile && <RemoteEditorModal key={`${editingRemoteFile.sessionId}:${editingRemoteFile.document.path}:${editingRemoteFile.document.revision}`} document={editingRemoteFile.document} onClose={() => setEditingRemoteFile(null)} onReload={reloadRemoteTextFile} onSave={saveRemoteTextFile} onSaveAs={saveRemoteTextFileAs} />}
       {snippetsOpen && <SnippetsModal snippets={snippets} onClose={() => setSnippetsOpen(false)} onSave={saveSnippet} onDelete={deleteSnippet} onCopy={copySnippet} />}
       {macrosOpen && <MacrosModal key={recordedMacroDraft?.id ?? "macros"} initialDraft={recordedMacroDraft ?? undefined} macros={macros} terminals={terminalTabs} savedSessions={savedSessions} onClose={() => { setMacrosOpen(false); setRecordedMacroDraft(null); }} onSave={saveMacro} onDelete={deleteMacro} onRun={runMacro} />}
+      {tabMenu && <div className="tab-context-menu" role="menu" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setTabMenu(null); } }}>
+        <button type="button" role="menuitem" autoFocus onClick={() => { closeTerminal(tabMenu.id); setTabMenu(null); }}>Close tab <kbd>{formatShortcut(settings.keyboard.closeTab)}</kbd></button>
+        <button type="button" role="menuitem" disabled={terminalTabs.length < 2} onClick={() => { closeOtherTerminals(tabMenu.id); setTabMenu(null); }}>Close other tabs</button>
+        <button type="button" role="menuitem" onClick={() => { reconnectTerminal(tabMenu.id); setTabMenu(null); }}>Reconnect / restart</button>
+        <button type="button" role="menuitem" disabled={closedTabs.length === 0} onClick={() => { reopenClosedTerminal(); setTabMenu(null); }}>Reopen closed tab <kbd>{formatShortcut("Mod+Shift+T")}</kbd></button>
+      </div>}
+      {mobaXtermImportOpen && <MobaXtermImportDialog onClose={() => setMobaXtermImportOpen(false)} onImported={(message) => { refreshSavedSessions(); setSessionNotice(message); setConnectionError(null); }} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
     </main>
   );
@@ -4742,10 +4894,6 @@ function EmptyProtocolView({ view, onAction }: { view: "files" | "tunnels" | "mo
   const isFiles = view === "files";
   const isMonitor = view === "monitor";
   return <section className="empty-protocol"><div className="empty-protocol-art"><div className="empty-ring ring-one" /><div className="empty-ring ring-two" />{isFiles ? <Folder size={24} /> : isMonitor ? <Gauge size={24} /> : <Network size={24} />}</div><span className="eyebrow">{isFiles ? "REMOTE FILES" : isMonitor ? "REMOTE MONITOR" : "NETWORK FABRIC"}</span><h2>{isFiles ? "Open an SSH session to browse files" : isMonitor ? "Connect an SSH session to inspect it" : "No tunnels are active"}</h2><p>{isFiles ? "SFTP listing, streaming transfers, cancellation, and path safety are ready for a connected SSH session." : isMonitor ? "The monitor sends a single bounded read-only query and leaves unsupported platform metrics blank." : "Create a tunnel from a connected SSH session. The manager will expose endpoints, ownership, state, and byte counts."}</p>{onAction ? <button className="outline-button" onClick={onAction}><Network size={14} /> Quick connect</button> : <button className="outline-button" disabled><Settings2 size={14} /> Delivery map</button>}</section>;
-}
-
-function InfoCard({ icon: Icon, label, title, detail, action, onAction }: { icon: LucideIcon; label: string; title: string; detail: string; action: string; onAction: () => void }) {
-  return <article className="info-card"><div className="info-card-top"><span className="info-icon"><Icon size={15} /></span><span>{label}</span><button aria-label={`More information about ${label}`} title={`More information about ${label}`} onClick={onAction}><MoreHorizontal size={15} /></button></div><h3>{title}</h3><p>{detail}</p><button className="text-button" onClick={onAction}>{action} <ExternalLink size={12} /></button></article>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

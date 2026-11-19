@@ -12,6 +12,6 @@ The desktop session list exposes an import action. It reads the user-selected co
 
 1. OpenSSH `~/.ssh/config` — implemented for `Host`, `HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump`, and `ServerAliveInterval` import boundaries. The path must be supplied explicitly; MobaRust never reads it automatically.
 2. Publicly documented or user-exported formats from open-source tools such as PuTTY, Remmina, Tabby, electerm, and mRemoteNG.
-3. MobaXterm migration only where the input format is publicly documented or supplied by the user; no proprietary binary dependency or unauthorized reverse engineering.
+3. MobaXterm migration (partial, shipped): **Import MobaXterm sessions** in the session list reads an exported `.mxtsessions` file or `MobaXterm.ini` chosen by the user. SSH bookmarks (type 109) are imported with name, nested folder, host, port and username, after a preview where each row can be added, kept as a duplicate, replace an existing session, or skipped. Not imported: passwords (never read), private-key paths, gateway/jump hosts, X11, terminal/font settings, and non-SSH bookmarks (listed as skipped). Imported sessions use the SSH agent until edited. Validated with sanitized fixtures only, not a real MobaXterm export.
 
 Unsupported directives must remain visible in an import report. Imports create configuration and credential references, never silently copied passwords.

@@ -19,6 +19,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod mobaxterm;
+pub use mobaxterm::{
+    ImportAction, ImportDecision, MobaXtermCandidate, MobaXtermPreview, decode_mobaxterm_bytes,
+    parse_mobaxterm_sessions,
+};
+
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 const CURRENT_AUDIT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_AUDIT_EVENTS: usize = 1_000;
@@ -54,15 +60,15 @@ pub enum StoreError {
         #[source]
         source: io::Error,
     },
-    #[error("could not read OpenSSH config")]
+    #[error("could not read import file")]
     ImportRead {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("OpenSSH config is too large (maximum 1 MiB)")]
+    #[error("import file is too large (maximum 1 MiB)")]
     ImportTooLarge(PathBuf),
-    #[error("OpenSSH config path is not a regular file")]
+    #[error("import path is not a regular file")]
     ImportPathUnsafe(PathBuf),
     #[error("settings file contains invalid data")]
     SettingsDecode {
@@ -1018,6 +1024,89 @@ impl SessionStore {
         })
     }
 
+    /// Reads and parses a MobaXterm session export without changing the store.
+    pub fn preview_mobaxterm(
+        &self,
+        path: impl Into<PathBuf>,
+    ) -> Result<MobaXtermPreview, StoreError> {
+        let path = path.into();
+        let bytes = read_import_bytes(&path)?;
+        self.preview_mobaxterm_bytes(&bytes)
+    }
+
+    /// Parses MobaXterm export bytes chosen by the user (bounded to 1 MiB).
+    pub fn preview_mobaxterm_bytes(&self, bytes: &[u8]) -> Result<MobaXtermPreview, StoreError> {
+        if bytes.len() > MAX_OPENSSH_CONFIG_BYTES {
+            return Err(StoreError::ImportTooLarge(PathBuf::from(
+                "<mobaxterm-import>",
+            )));
+        }
+        Ok(parse_mobaxterm_sessions(
+            &decode_mobaxterm_bytes(bytes),
+            &self.sessions,
+        ))
+    }
+
+    /// Applies reviewed import decisions in one durable write. Nothing changes
+    /// if any decision is invalid or persisting fails.
+    pub fn apply_import(
+        &mut self,
+        decisions: Vec<ImportDecision>,
+    ) -> Result<SessionImportReport, StoreError> {
+        let previous = self.sessions.clone();
+        let mut imported_count = 0;
+        let mut skipped = Vec::new();
+        for decision in decisions {
+            let mut session = decision.session;
+            match decision.action {
+                ImportAction::Skip => {
+                    skipped.push(format!("{}: skipped", session.name));
+                    continue;
+                }
+                ImportAction::Add => {
+                    session.id = SessionId::new();
+                    if let Err(error) = session.validate() {
+                        self.sessions = previous;
+                        return Err(error.into());
+                    }
+                    self.sessions.push(session);
+                }
+                ImportAction::Replace => {
+                    if let Err(error) = session.validate() {
+                        self.sessions = previous;
+                        return Err(error.into());
+                    }
+                    let Some(existing) = decision
+                        .replace_id
+                        .and_then(|id| self.sessions.iter_mut().find(|item| item.id == id))
+                    else {
+                        skipped.push(format!(
+                            "{}: replacement target no longer exists",
+                            session.name
+                        ));
+                        continue;
+                    };
+                    // Keep identity and user state of the replaced session.
+                    session.id = existing.id;
+                    session.favorite = existing.favorite;
+                    session.last_used_at = existing.last_used_at;
+                    *existing = session;
+                }
+            }
+            imported_count += 1;
+        }
+        if imported_count > 0
+            && let Err(error) = self.persist()
+        {
+            self.sessions = previous;
+            return Err(error);
+        }
+        Ok(SessionImportReport {
+            imported_count,
+            skipped,
+        })
+    }
+
     fn persist(&self) -> Result<(), StoreError> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|source| StoreError::Write {
@@ -1233,6 +1322,31 @@ fn read_openssh_config(path: &Path) -> Result<String, StoreError> {
         return Err(StoreError::ImportTooLarge(path.to_path_buf()));
     }
     Ok(contents)
+}
+
+fn read_import_bytes(path: &Path) -> Result<Vec<u8>, StoreError> {
+    let file = open_store_file(path).map_err(|source| StoreError::ImportRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| StoreError::ImportRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(StoreError::ImportPathUnsafe(path.to_path_buf()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_OPENSSH_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| StoreError::ImportRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if bytes.len() > MAX_OPENSSH_CONFIG_BYTES {
+        return Err(StoreError::ImportTooLarge(path.to_path_buf()));
+    }
+    Ok(bytes)
 }
 
 /// A broken symlink is an existing unsafe path, not a missing store.
@@ -1542,6 +1656,81 @@ mod tests {
             telnet_profile: None,
             remote_desktop_profile: None,
         }
+    }
+
+    #[test]
+    fn mobaxterm_import_applies_add_replace_skip_atomically() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("sessions.json");
+        let fixture = directory.path().join("sample.mxtsessions");
+        fs::write(
+            &fixture,
+            include_str!("../tests/fixtures/sample.mxtsessions"),
+        )
+        .unwrap();
+        let mut store = SessionStore::open(&path).unwrap();
+        let preview = store.preview_mobaxterm(&fixture).unwrap();
+        assert_eq!(preview.candidates.len(), 3);
+        let decisions = preview
+            .candidates
+            .iter()
+            .map(|c| ImportDecision {
+                session: c.session.clone(),
+                action: ImportAction::Add,
+                replace_id: None,
+            })
+            .collect();
+        assert_eq!(store.apply_import(decisions).unwrap().imported_count, 3);
+        let original = store.list()[0].clone();
+        store.set_favorite(original.id, true).unwrap();
+
+        let again = store.preview_mobaxterm(&fixture).unwrap();
+        let first = &again.candidates[0];
+        assert_eq!(first.duplicate_of, Some(original.id));
+        let mut changed = first.session.clone();
+        changed.hostname = "replaced.example.test".into();
+        let report = store
+            .apply_import(vec![
+                ImportDecision {
+                    session: changed,
+                    action: ImportAction::Replace,
+                    replace_id: first.duplicate_of,
+                },
+                ImportDecision {
+                    session: again.candidates[1].session.clone(),
+                    action: ImportAction::Skip,
+                    replace_id: None,
+                },
+            ])
+            .unwrap();
+        assert_eq!((report.imported_count, report.skipped.len()), (1, 1));
+        let reopened = SessionStore::open(&path).unwrap();
+        assert_eq!(reopened.list().len(), 3);
+        assert_eq!(reopened.list()[0].id, original.id);
+        assert!(reopened.list()[0].favorite);
+        assert_eq!(reopened.list()[0].hostname, "replaced.example.test");
+
+        // An invalid decision rolls back the whole batch.
+        let mut invalid = again.candidates[2].session.clone();
+        invalid.hostname.clear();
+        let valid = again.candidates[1].session.clone();
+        assert!(
+            store
+                .apply_import(vec![
+                    ImportDecision {
+                        session: valid,
+                        action: ImportAction::Add,
+                        replace_id: None
+                    },
+                    ImportDecision {
+                        session: invalid,
+                        action: ImportAction::Add,
+                        replace_id: None
+                    },
+                ])
+                .is_err()
+        );
+        assert_eq!(store.list().len(), 3);
     }
 
     #[test]

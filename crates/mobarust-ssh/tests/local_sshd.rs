@@ -1973,6 +1973,96 @@ fn cancelled_upload_promotion_preserves_original_and_removes_complete_part() {
     });
 }
 
+/// Mirrors the desktop "Open all" group workflow: 14 saved sessions opened
+/// with at most four handshakes in flight (sshd's default MaxStartups drops
+/// excess unauthenticated connections), then all 14 shells used at once.
+#[test]
+fn fourteen_session_group_opens_with_bounded_handshakes_and_cleans_up() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let started = std::time::Instant::now();
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+        let mut handshakes = Vec::new();
+        for index in 0..14 {
+            let options = fixture.options();
+            let gate = gate.clone();
+            handshakes.push(tokio::spawn(async move {
+                let _permit = gate.acquire_owned().await.expect("handshake permit");
+                let began = std::time::Instant::now();
+                let connection = SshConnection::connect(options)
+                    .await
+                    .unwrap_or_else(|error| panic!("session {index} failed: {error}"));
+                (index, connection, began.elapsed())
+            }));
+        }
+        let mut connections = Vec::new();
+        let mut slowest = Duration::ZERO;
+        for handshake in handshakes {
+            let (index, connection, elapsed) = handshake.await.expect("join handshake");
+            slowest = slowest.max(elapsed);
+            connections.push((index, connection));
+        }
+        let connected_after = started.elapsed();
+        assert_eq!(connections.len(), 14);
+
+        // Every shell runs, resizes and exits concurrently.
+        let connections: Vec<_> = connections
+            .into_iter()
+            .map(|(index, connection)| (index, std::sync::Arc::new(connection)))
+            .collect();
+        let mut tasks = Vec::new();
+        for (index, connection) in &connections {
+            let (index, connection) = (*index, connection.clone());
+            tasks.push(tokio::spawn(async move {
+                let shell = connection.open_shell(80, 24).await.expect("open PTY");
+                let (mut reader, writer) = shell.split();
+                writer.resize(132, 40).await.expect("resize PTY");
+                writer
+                    .write(format!("stty size; printf 'GROUP_%s\\n' {index}; exit\n").as_bytes())
+                    .await
+                    .expect("write command");
+                let mut output = Vec::new();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while let Some(message) = reader.next_output().await {
+                        match message.expect("read PTY") {
+                            SshOutput::Stdout(bytes) | SshOutput::Stderr(bytes) => output.extend(bytes),
+                            SshOutput::ExitStatus(_) => break,
+                            SshOutput::Control => {}
+                        }
+                    }
+                })
+                .await
+                .expect("group shell deadline");
+                (index, String::from_utf8_lossy(&output).into_owned())
+            }));
+        }
+        let mut outputs = Vec::new();
+        for task in tasks {
+            outputs.push(task.await.expect("join group shell"));
+        }
+        for (index, output) in &outputs {
+            assert!(output.contains(&format!("GROUP_{index}")), "session {index}: {output}");
+            assert!(output.contains("40 132"), "session {index} did not see the resize: {output}");
+        }
+        let used_after = started.elapsed();
+        for (_, connection) in &connections {
+            connection.disconnect().await.expect("disconnect group session");
+        }
+        drop(connections);
+        eprintln!(
+            "14-session group: connected in {connected_after:?} (slowest handshake {slowest:?}), all shells done in {used_after:?}"
+        );
+        // The fixture daemon must still accept a fresh session afterwards.
+        let after = SshConnection::connect(fixture.options())
+            .await
+            .expect("daemon healthy after group close");
+        assert!(shell_output(&after, b"printf HEALTHY; exit\n").await.contains("HEALTHY"));
+        after.disconnect().await.expect("disconnect health check");
+    });
+}
+
 #[test]
 fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
