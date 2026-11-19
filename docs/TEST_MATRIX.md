@@ -13,7 +13,7 @@ Kinds of evidence, from strongest to weakest:
 Nothing simulated is listed as real end-to-end.
 
 Run all real-localhost suites with cleanup check: `./tools/local-protocol-lab.sh`
-(2026-11-19 run: all passed; 14-session group connected in 455 ms, shells done in 780 ms under full-suite load; no fixture `sshd` left).
+(2026-11-19 runs: all passed. Latest run after the import work: 14-session group connected in 558 ms, shells done in 870 ms under full-suite load; no fixture `sshd` left).
 
 | Area | Evidence (2026-11-19, this Mac) | Gaps |
 |---|---|---|
@@ -40,4 +40,5 @@ Run all real-localhost suites with cleanup check: `./tools/local-protocol-lab.sh
 | `--open-group` parsing and resolution | Unit | Native launch not tested |
 | Terminal-first layout, focus mode, tab menu | Browser preview at 1440×900 and 1100×680 | Native screenshots blocked (no Screen Recording permission for the shell) |
 | Desktop managers (PTY, SSH manager, backpressure, shutdown) | `cargo test -p mobarust`: 117 passed | — |
-| Linux / Windows | Not run this round | Existing docs record earlier cross-checks |
+| Native macOS app (release build) | Native: DMG `hdiutil verify` VALID, arm64 ad hoc bundle; window in 370 ms warm / 1.49 s first launch; idle CPU 0.1–0.2 %; 105 MB RSS main plus WebKit helpers; SIGTERM exit about 100 ms with no helpers left (`benchmarks/2026-11-19-native-macos.md`) | Screenshots and clicks in the native window are blocked: no Screen Recording or input-automation access in this session |
+| Linux / Windows | Not run this round. The Quality workflow is disabled on GitHub by the maintainer, and the Release workflow runs only on tags or a manual dispatch, so no remote CI was started | Existing docs record earlier cross-checks |

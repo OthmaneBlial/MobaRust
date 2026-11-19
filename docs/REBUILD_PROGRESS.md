@@ -134,13 +134,15 @@ instance; no single-instance forwarding yet).
 - Found that every app render rebuilt the whole session tree. At 5,000 sessions a tab click took 284 ms. With the tree memoized and folder counts computed in one pass, it now takes 6 ms, and first paint dropped from 952 to 520 ms.
 - The Rust synthetic harness shows no regression against the October receipt.
 
+## M8/M11 — Packaging, native receipt and report (2026-11-19)
+
+- The full localhost protocol lab is green after the import work: 14 sessions connected in 558 ms, and no fixture `sshd` was left running.
+- Built a local release DMG with the release config: 8.64 MiB, verified, arm64, ad hoc signed. The native app opens its window in 370 ms warm and 1.49 s on first launch. It idles at 0.1–0.2 % CPU and exits about 100 ms after SIGTERM, with no WebKit helpers left. Receipt: `benchmarks/2026-11-19-native-macos.md`.
+- Final report: `docs/REBUILD_2_0_REPORT.md`.
+
 ## Next steps
 
-1. Native UI inspection once Screen Recording / computer-use access is
-   available; otherwise keep using browser-preview plus native logs.
-2. Extend localhost integration coverage across protocols (Telnet fixture,
-   serial PTY pairs, tunnels and remote editing already have sshd tests) and
-   record results in `docs/TEST_MATRIX.md`.
-3. Session explorer polish: multi-select "open selected", group favorites,
-   workspace restore.
-4. README, logo and site refresh with real screenshots.
+1. Native click-through and screenshots, once the testing tool has Screen Recording and Accessibility access.
+2. Tagged release and Linux/Windows installers through the existing workflow, when authorized.
+3. GitHub Pages deploy of `site/`, when authorized.
+4. A Tabby UX comparison, if Tabby gets installed.
