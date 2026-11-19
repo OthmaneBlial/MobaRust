@@ -25,7 +25,7 @@ interface.
 | Next / previous tab | Ctrl-Tab / Ctrl-Shift-Tab, optional MRU order | Configurable next/previous shortcuts | Keep; MRU order not needed yet |
 | Split panes | Nested splits, rearrange panes with a modifier | Split right/down, focus pane shortcut | Keep; nested rearranging is a later idea |
 | Focus on the terminal | Tabs on any side, fullscreen, Quake-style dropdown | Collapsible sidebar (⇧⌘B), focus mode (⌘⇧↵) | MobaRust's focus mode covers the need; no global dropdown |
-| Rename / move tabs | ⌘R rename, ⌘⇧←/→ move | Not available | **Gap.** Worth adding: long days with many servers benefit from naming and ordering tabs |
+| Rename / move tabs | ⌘R rename, ⌘⇧←/→ move | **Added:** "Rename tab…" in the tab menu (the name then stays, instead of following the shell title) and Move left/right with ⌃⇧PageUp/PageDown, which works even with focus in the terminal. ⌘⇧→ was already MobaRust's split-right shortcut | Done; checked in the browser preview |
 | Copy on select, right-click paste | Optional (PuTTY style) | Copy button and normal shortcuts | **Gap**, low priority: familiar to MobaXterm users, add as an opt-in setting |
 | Multiline paste warning | Yes | Yes, and required for broadcast | Same |
 | SSH connection manager | Profiles with groups, jump hosts, port forwarding tab, "reuse session for multiple tabs" | Nested folders, jump hosts, tunnels, one-click group opening with 4 connections at a time | MobaRust is stronger for groups; **session reuse is a gap** worth studying (one SSH connection, several shells) |
@@ -36,8 +36,7 @@ interface.
 
 ## Takeaways for MobaRust
 
-1. Add tab rename and keyboard tab reordering. Both are small, and both help with
-   long sessions across many servers.
+1. Done: tab rename and keyboard tab reordering.
 2. Consider opt-in copy-on-select with right-click paste for users coming from
    MobaXterm and PuTTY.
 3. Study SSH connection reuse for extra shells on the same host. It cuts

@@ -309,6 +309,8 @@ type WorkspaceTerminal = {
   reopen?: ReopenSpec;
   hue?: string;
   savedId?: string;
+  // Set when the user renamed the tab, so shell titles stop overwriting it.
+  pinnedLabel?: boolean;
 };
 
 type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string; origin?: TerminalOrigin } | { kind: "local"; target: LocalTerminalTarget; label: string };
@@ -1795,7 +1797,27 @@ function App() {
   const handleTerminalTitle = useCallback((workspaceId: string, title: string) => {
     const safeTitle = sanitizeTerminalTitle(title);
     if (!safeTitle) return;
-    setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId ? { ...terminal, label: safeTitle } : terminal));
+    setTerminalTabs((current) => current.map((terminal) => terminal.id === workspaceId && !terminal.pinnedLabel ? { ...terminal, label: safeTitle } : terminal));
+  }, []);
+
+  const renameTerminal = useCallback(async (workspaceId: string) => {
+    const current = terminalTabsRef.current.find((terminal) => terminal.id === workspaceId);
+    if (!current) return;
+    const next = await promptText("Tab name (leave empty to follow the shell title)", current.label);
+    if (next === null) return;
+    const safeLabel = sanitizeTerminalTitle(next);
+    setTerminalTabs((tabs) => tabs.map((terminal) => terminal.id === workspaceId ? { ...terminal, label: safeLabel || terminal.label, pinnedLabel: Boolean(safeLabel) } : terminal));
+  }, []);
+
+  const moveTerminal = useCallback((workspaceId: string, direction: 1 | -1) => {
+    setTerminalTabs((tabs) => {
+      const index = tabs.findIndex((terminal) => terminal.id === workspaceId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= tabs.length) return tabs;
+      const next = [...tabs];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   }, []);
 
   const handleTerminalBell = useCallback((workspaceId: string) => {
@@ -4014,6 +4036,13 @@ function App() {
     // Capture emergency keys before xterm and modal inputs stop propagation.
     const isEmergency = (event: KeyboardEvent) => event.key === "Escape" || matchesShortcut(event, settings.keyboard.emergencyBroadcastDisable);
     const onEmergencyKeyDown = (event: KeyboardEvent) => {
+      // xterm stops PageUp/PageDown for scrolling, so tab moves are caught here too.
+      if (matchesShortcut(event, "Ctrl+Shift+PageUp") || matchesShortcut(event, "Ctrl+Shift+PageDown")) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveTerminal(selectedTerminalId, event.key === "PageUp" ? -1 : 1);
+        return;
+      }
       if (!isEmergency(event)) return;
       const activeExecution = broadcastEnabledRef.current || macroRunRef.current || macroRecordingRef.current;
       if (terminalSearchOpen) closeTerminalSearch();
@@ -4126,7 +4155,7 @@ function App() {
       window.removeEventListener("keydown", onEmergencyKeyDown, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, reopenClosedTerminal, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
+  }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, moveTerminal, openSplit, reopenClosedTerminal, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
   // Typing stays instant: the list catches up with the deferred query.
   const deferredSearch = useDeferredValue(search);
@@ -4440,6 +4469,9 @@ function App() {
       {tabMenu && <div className="tab-context-menu" role="menu" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setTabMenu(null); } }}>
         <button type="button" role="menuitem" autoFocus onClick={() => { closeTerminal(tabMenu.id); setTabMenu(null); }}>Close tab <kbd>{formatShortcut(settings.keyboard.closeTab)}</kbd></button>
         <button type="button" role="menuitem" disabled={terminalTabs.length < 2} onClick={() => { closeOtherTerminals(tabMenu.id); setTabMenu(null); }}>Close other tabs</button>
+        <button type="button" role="menuitem" onClick={() => { const id = tabMenu.id; setTabMenu(null); void renameTerminal(id); }}>Rename tab…</button>
+        <button type="button" role="menuitem" disabled={terminalTabs[0]?.id === tabMenu.id} onClick={() => { moveTerminal(tabMenu.id, -1); setTabMenu(null); }}>Move tab left <kbd>{formatShortcut("Ctrl+Shift+PageUp")}</kbd></button>
+        <button type="button" role="menuitem" disabled={terminalTabs[terminalTabs.length - 1]?.id === tabMenu.id} onClick={() => { moveTerminal(tabMenu.id, 1); setTabMenu(null); }}>Move tab right <kbd>{formatShortcut("Ctrl+Shift+PageDown")}</kbd></button>
         <button type="button" role="menuitem" onClick={() => { reconnectTerminal(tabMenu.id); setTabMenu(null); }}>Reconnect / restart</button>
         <button type="button" role="menuitem" disabled={closedTabs.length === 0} onClick={() => { reopenClosedTerminal(); setTabMenu(null); }}>Reopen closed tab <kbd>{formatShortcut("Mod+Shift+T")}</kbd></button>
         <button type="button" role="menuitemcheckbox" aria-checked={restoreTabs} onClick={() => { const next = !restoreTabs; setRestoreTabs(next); writeUiPref("restoreTabs", next ? "1" : "0"); setTabMenu(null); }}>{restoreTabs ? <Check size={13} /> : <span className="menu-check-spacer" />} Restore tabs on next launch</button>
