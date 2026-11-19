@@ -113,3 +113,40 @@ export function groupHue(folder: string | null | undefined): string | undefined 
   for (const char of top) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
   return `var(--g${(hash % GROUP_HUES) + 1})`;
 }
+
+const MAX_PINNED_GROUPS = 50;
+const MAX_RESTORED_TABS = 20;
+const RESTORABLE_SHELLS = ["default", "powershell", "cmd", "bash", "zsh", "fish"] as const;
+const shortText = (value: unknown, max: number): value is string => typeof value === "string" && value.length > 0 && value.length <= max && ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+
+/** Pinned group paths from local storage; anything malformed is dropped. */
+export function parsePinnedGroups(raw: string | null): string[] {
+  let value: unknown;
+  try { value = JSON.parse(raw ?? "[]"); } catch { return []; }
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => shortText(item, 512)))].slice(0, MAX_PINNED_GROUPS);
+}
+
+type RestoredShell = (typeof RESTORABLE_SHELLS)[number];
+export type RestoredTab = { savedId: string; label: string } | { shell?: RestoredShell; cwd?: string; label: string };
+
+/** Tabs to reopen from local storage. Only saved-session ids and plain shells from a fixed list are accepted. */
+export function parseRestoredTabs(raw: string | null): RestoredTab[] {
+  let value: unknown;
+  try { value = JSON.parse(raw ?? "[]"); } catch { return []; }
+  if (!Array.isArray(value)) return [];
+  const tabs: RestoredTab[] = [];
+  for (const item of value.slice(0, MAX_RESTORED_TABS)) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    if (!shortText(entry.label, 200)) continue;
+    if ("savedId" in entry) {
+      if (shortText(entry.savedId, 128)) tabs.push({ savedId: entry.savedId, label: entry.label });
+      continue;
+    }
+    if (entry.shell !== undefined && !RESTORABLE_SHELLS.includes(entry.shell as RestoredShell)) continue;
+    if (entry.cwd !== undefined && !shortText(entry.cwd, 4096)) continue;
+    tabs.push({ shell: entry.shell as RestoredShell | undefined, cwd: entry.cwd as string | undefined, label: entry.label });
+  }
+  return tabs;
+}

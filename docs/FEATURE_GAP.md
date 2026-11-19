@@ -21,4 +21,5 @@ here). "Tabby" notes are pending: the Tabby app is not installed on this Mac yet
 | Macros / snippets | Present | Keep | P2 | Existing |
 | Open selected sessions | Done (browser preview) | Group picker: tick sessions, open N, 4 at a time | P1 | — |
 | Workspace restore | Done (browser preview) | Opt-in from the tab menu; stores only saved-session ids and plain local shells | P2 | — |
+| Favorite (pinned) groups | Done (browser preview) | Star on a group pins it above the tree with Open all / choose; stored per device | P2 | — |
 | X server | X11 forwarding to an existing display | No built-in X server | — | Existing tests |

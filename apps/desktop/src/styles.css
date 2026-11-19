@@ -640,3 +640,17 @@ label small { font-size: 11px; }
 .virtual-rows { position: relative; margin-top: 2px; }
 .virtual-row { position: absolute; left: 0; right: 0; overflow: hidden; }
 .virtual-row > .folder-heading { margin-top: 2px; }
+.pinned-groups { display: grid; gap: 2px; margin: 2px 0 8px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--text) 3%, transparent); }
+.pinned-group { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 4px 0 8px; border-radius: 6px; color: var(--text); font-size: 12px; font-weight: 600; }
+.pinned-group > svg { color: var(--folder-hue, var(--faint)); flex: none; }
+.pinned-group-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-group-count { min-width: 18px; color: var(--faint); font-family: var(--mono); font-size: 11px; text-align: right; }
+.folder-pin:not(.selected) { opacity: 0; }
+.folder-heading:hover .folder-pin, .folder-pin:focus-visible { opacity: 1; }
+.folder-pin.selected { color: var(--warn); }
+.nested-folder svg { color: var(--faint); }
+.nested-folder .folder-open-all svg, .pinned-group .folder-open-all svg { color: var(--mint); }
+.nested-folder .folder-pin.selected svg { color: var(--warn); }
+.folder-open-all { flex: none; border-radius: 5px; }
+.pinned-group { overflow: hidden; }
+.pinned-group .folder-open-all { opacity: .8; }

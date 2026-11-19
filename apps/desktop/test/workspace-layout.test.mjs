@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import console from "node:console";
 import { setTimeout } from "node:timers";
-import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, resolveGroupName, runBounded, groupHue } from "../src/workspace-layout.ts";
+import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, resolveGroupName, runBounded, groupHue, parsePinnedGroups, parseRestoredTabs } from "../src/workspace-layout.ts";
 
 assert.equal(clampSidebarWidth(50), 200);
 assert.equal(clampSidebarWidth(9999), 480);
@@ -10,6 +10,18 @@ assert.equal(clampSidebarWidth(Number.NaN), 260);
 assert.equal(groupHue(""), undefined);
 assert.equal(groupHue("Production/Web"), groupHue("Production/Database"));
 assert.match(groupHue("Staging"), /^var\(--g[1-6]\)$/);
+
+assert.deepEqual(parsePinnedGroups('["Prod","Prod",3,"","a\\u0007b"]'), ["Prod"]);
+assert.deepEqual(parsePinnedGroups("not json"), []);
+assert.deepEqual(parseRestoredTabs(JSON.stringify([
+  { savedId: "abc", label: "web-01" },
+  { shell: "zsh", cwd: "/tmp", label: "local" },
+  { shell: "/bin/evil", label: "x" },
+  { savedId: 7, label: "bad id" },
+  { label: "" },
+  "junk",
+])), [{ savedId: "abc", label: "web-01" }, { shell: "zsh", cwd: "/tmp", label: "local" }]);
+assert.equal(parseRestoredTabs(JSON.stringify(Array.from({ length: 50 }, () => ({ label: "s" })))).length, 20);
 
 let stack = [];
 for (let i = 0; i < 15; i += 1) stack = pushClosed(stack, i);

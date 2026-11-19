@@ -38,7 +38,7 @@ import { remoteChildPath, remoteParentPath } from "./remote-path";
 import { quoteRemotePromptPath } from "./remote-prompt";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import desktopPackage from "../package.json";
-import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, readUiPref, resolveGroupName, runBounded, writeUiPref, groupHue } from "./workspace-layout";
+import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, readUiPref, resolveGroupName, runBounded, writeUiPref, groupHue, parsePinnedGroups, parseRestoredTabs } from "./workspace-layout";
 import { MobaXtermImportDialog } from "./MobaXtermImportDialog";
 import {
   preserveRemoteDesktopError,
@@ -1530,6 +1530,12 @@ function App() {
   const [closedTabs, setClosedTabs] = useState<ReopenSpec[]>([]);
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [pinnedGroups, setPinnedGroups] = useState<string[]>(() => parsePinnedGroups(readUiPref("pinnedGroups")));
+  const togglePinnedGroup = useCallback((path: string) => setPinnedGroups((current) => {
+    const next = current.includes(path) ? current.filter((item) => item !== path) : [...current, path];
+    writeUiPref("pinnedGroups", JSON.stringify(next));
+    return next;
+  }), []);
   const [groupRun, setGroupRun] = useState<GroupRun | null>(null);
   const groupCancelRef = useRef(false);
   const [mobaXtermImportOpen, setMobaXtermImportOpen] = useState(false);
@@ -2943,13 +2949,11 @@ function App() {
     if (tabsRestoredRef.current || !sessionsLoadedRef.current) return;
     tabsRestoredRef.current = true;
     if (!restoreTabs) return;
-    let saved: RestorableTab[] = [];
-    try { saved = JSON.parse(readUiPref("restoreTabsList") ?? "[]"); } catch { return; }
-    if (!Array.isArray(saved)) return;
+    const saved = parseRestoredTabs(readUiPref("restoreTabsList"));
     // The app always starts with one plain shell; let it stand in for the first saved plain shell.
     let plainShells = terminalTabsRef.current.filter((terminal) => !terminal.remoteProtocol && !terminal.savedId).length;
     const sessionsToOpen: SavedSession[] = [];
-    for (const tab of saved.slice(0, 20)) {
+    for (const tab of saved) {
       if ("savedId" in tab) {
         const session = savedSessions.find((item) => item.id === tab.savedId);
         if (session) sessionsToOpen.push(session);
@@ -4179,6 +4183,7 @@ function App() {
                   </button>
                   {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRunning} onClick={() => void sessionActionsRef.current.openSessionGroup(node.path)}><Play size={11} /></button>}
                   {sshCount > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in ${node.path}`} title="Choose sessions to open" disabled={groupRunning} onClick={() => setGroupPickPath(node.path)}><ListChecks size={11} /></button>}
+                  <button type="button" className={`folder-open-all folder-pin ${pinnedGroups.includes(node.path) ? "selected" : ""}`} aria-pressed={pinnedGroups.includes(node.path)} aria-label={`${pinnedGroups.includes(node.path) ? "Unpin" : "Pin"} group ${node.path}`} title={pinnedGroups.includes(node.path) ? "Unpin group" : "Pin group to the top"} onClick={() => togglePinnedGroup(node.path)}><Star size={11} fill={pinnedGroups.includes(node.path) ? "currentColor" : "none"} /></button>
                   <span>{node.total}</span>
                 </div>) });
                 for (const session of sessions) items.push({ key: `session:${session.id ?? session.name}`, height: SESSION_ITEM_HEIGHT, depth: node.depth, node: (
@@ -4193,9 +4198,21 @@ function App() {
                     if (saved) void sessionActionsRef.current.deleteSavedSession(saved);
                   } : undefined} onToggleFavorite={() => void sessionActionsRef.current.toggleFavorite(session)} />) });
               }
-              return <VirtualRows items={items} />;
+              const pinned = pinnedGroups.filter((path) => nodes.some((node) => node.path === path));
+              return <>
+                {pinned.length > 0 && <div className="pinned-groups" aria-label="Pinned groups">{pinned.map((path) => {
+                  const count = sshCounts.get(path) ?? 0;
+                  return <div key={path} className="pinned-group" style={{ "--folder-hue": groupHue(path) } as CSSProperties}>
+                    <Star size={11} fill="currentColor" aria-hidden="true" /><span className="pinned-group-name" title={path}>{path}</span>
+                    {count > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${count} SSH sessions in pinned group ${path}`} title={`Open all ${count} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRunning} onClick={() => void sessionActionsRef.current.openSessionGroup(path)}><Play size={11} /></button>}
+                    {count > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in pinned group ${path}`} title="Choose sessions to open" disabled={groupRunning} onClick={() => setGroupPickPath(path)}><ListChecks size={11} /></button>}
+                    <span className="pinned-group-count">{count}</span>
+                  </div>;
+                })}</div>}
+                <VirtualRows items={items} />
+              </>;
             })()}
-  </>, [collapsedFolders, filteredSessions, groupRunning, localSessionCount, remoteSessionCount]);
+  </>, [collapsedFolders, filteredSessions, groupRunning, localSessionCount, pinnedGroups, remoteSessionCount, togglePinnedGroup]);
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
 
