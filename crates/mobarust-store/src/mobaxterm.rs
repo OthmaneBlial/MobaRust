@@ -49,13 +49,39 @@ pub struct ImportDecision {
     pub replace_id: Option<SessionId>,
 }
 
-/// Decode file bytes: UTF-8 (with optional BOM), otherwise Latin-1 so a
-/// Windows code-page export still yields readable ASCII hosts.
+/// Decode file bytes as Windows writes them: UTF-8 (optional BOM), UTF-16
+/// with a BOM, otherwise Windows-1252 (MobaXterm's ANSI export encoding).
 pub fn decode_mobaxterm_bytes(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, u16::from_le_bytes);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, u16::from_be_bytes);
+    }
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_owned(),
-        Err(_) => bytes.iter().map(|&byte| byte as char).collect(),
+        Err(_) => bytes.iter().map(|&byte| windows_1252(byte)).collect(),
+    }
+}
+
+fn decode_utf16(bytes: &[u8], word: fn([u8; 2]) -> u16) -> String {
+    let words: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| word([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16_lossy(&words)
+}
+
+fn windows_1252(byte: u8) -> char {
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8D}', 'Ž',
+        '\u{8F}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9D}',
+        'ž', 'Ÿ',
+    ];
+    match byte {
+        0x80..=0x9F => HIGH[usize::from(byte - 0x80)],
+        _ => char::from(byte),
     }
 }
 
@@ -98,12 +124,12 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
         };
         let key = key.trim();
         let value = value.trim();
-        match key {
-            "SubRep" => {
+        match key.to_ascii_lowercase().as_str() {
+            "subrep" => {
                 folder = folder_from_subrep(value);
                 continue;
             }
-            "ImgNum" => continue,
+            "imgnum" => continue,
             _ => {}
         }
         if key.is_empty() {
@@ -227,9 +253,10 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
 }
 
 fn is_bookmark_section(name: &str) -> bool {
-    name == "Bookmarks"
+    let name = name.to_ascii_lowercase();
+    name == "bookmarks"
         || name
-            .strip_prefix("Bookmarks_")
+            .strip_prefix("bookmarks_")
             .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
 }
 
@@ -314,5 +341,69 @@ mod tests {
         let text = decode_mobaxterm_bytes(b"[Bookmarks]\ncaf\xe9=#109#0%h%22%u\n");
         let preview = parse_mobaxterm_sessions(&text, &[]);
         assert_eq!(preview.candidates[0].session.name, "café");
+    }
+
+    const WINDOWS_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/windows-cp1252.mxtsessions");
+
+    fn assert_windows_export(preview: &MobaXtermPreview) {
+        let rows: Vec<_> = preview
+            .candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.session.name.as_str(),
+                    c.session.folder.as_deref(),
+                    c.session.hostname.as_str(),
+                    c.session.port,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Serveur café",
+                    Some("MobaXterm import"),
+                    "cafe.example.test",
+                    22
+                ),
+                (
+                    "Facturation €",
+                    Some("Clients/Acme/Prod"),
+                    "billing.example.test",
+                    2222
+                ),
+                (
+                    "Ops’ box",
+                    Some("Clients/Acme/Prod"),
+                    "ops.example.test",
+                    22
+                ),
+            ]
+        );
+        assert!(!format!("{preview:?}").contains("SECRET-SHOULD-NOT-LEAK"));
+    }
+
+    #[test]
+    fn imports_windows_cp1252_crlf_export() {
+        let text = decode_mobaxterm_bytes(WINDOWS_FIXTURE);
+        assert_windows_export(&parse_mobaxterm_sessions(&text, &[]));
+    }
+
+    #[test]
+    fn imports_utf16_exports_with_bom() {
+        let text = decode_mobaxterm_bytes(WINDOWS_FIXTURE);
+        let mut le = vec![0xFF, 0xFE];
+        let mut be = vec![0xFE, 0xFF];
+        for unit in text.encode_utf16() {
+            le.extend(unit.to_le_bytes());
+            be.extend(unit.to_be_bytes());
+        }
+        for bytes in [le, be] {
+            assert_windows_export(&parse_mobaxterm_sessions(
+                &decode_mobaxterm_bytes(&bytes),
+                &[],
+            ));
+        }
     }
 }

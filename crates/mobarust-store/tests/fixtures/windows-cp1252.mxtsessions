@@ -1,0 +1,13 @@
+[Bookmarks]
+SubRep=
+ImgNum=42
+Serveur café=#109#0%cafe.example.test%22%opé%%-1%-1%%%%%0%0%0%_ProfileDir_\.ssh\id_ed25519%%-1%0%0%0%%1080%%0%0%1#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1#0# #-1
+
+[bookmarks_1]
+SubRep=Clients\Acme\Prod
+ImgNum=41
+Facturation €=#109#0%billing.example.test%2222%deploy%%-1%-1%%%%%0%0%0%C:\Users\Ops\Documents\keys\acme.ppk%%-1%0%0%0%%1080%%0%0%1#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1#0# #-1
+Ops’ box=#109#0%ops.example.test%%root#MobaFont%10#0# #-1
+
+[Passwords]
+ssh22:deploy@billing.example.test=SECRET-SHOULD-NOT-LEAK

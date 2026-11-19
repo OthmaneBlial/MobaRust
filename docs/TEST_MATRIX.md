@@ -32,7 +32,7 @@ Run all real-localhost suites with cleanup check: `./tools/local-protocol-lab.sh
 | Serial | Real local PTY pair: `local_pty.rs` | No hardware |
 | VNC | `tools/vnc-helper`: 26 unit + 17 tests against a loopback RFB fixture server written for the tests | macOS Screen Sharing not used; fixture is not a real VNC server |
 | RDP | `tools/rdp-helper`: 31 unit + 2 local helper-process tests | No RDP server available locally; RDP sessions not verified end-to-end |
-| MobaXterm import | Unit / fixture | No real MobaXterm export available |
+| MobaXterm import | Unit / fixture: Windows-1252 + CRLF export, UTF-16LE/BE with BOM, lowercase sections, nested folders, secrets never read | No file produced by MobaXterm itself available; fixtures are synthetic |
 | Open selected sessions in a group | Browser preview with sample sessions: picker ticks 4 of 6, only those 4 attempted (they fail with "requires the desktop runtime" in preview) | Native SSH open not driven |
 | Restore tabs on next launch | Browser preview: on → 4 tabs restored after reload with no duplicate shell; off → 1 tab | Native relaunch not tested |
 | Pinned groups | Browser preview with 300 sessions: pin, survive reload, counts, picker and Open all from the strip, unpin. Unit-tested parser drops malformed storage | Native not driven |
