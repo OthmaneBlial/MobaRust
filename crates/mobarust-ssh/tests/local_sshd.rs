@@ -3184,6 +3184,76 @@ async fn native_file_editor_lab() {
     stopped.expect("manual native file lab deadline");
 }
 
+#[test]
+fn windows_mobaxterm_export_connects_through_its_gateway_to_local_sshd() {
+    use mobarust_core::AuthMethod;
+    use mobarust_store::{
+        decode_mobaxterm_bytes, parse_mobaxterm_sessions, use_agent_for_missing_keys,
+    };
+
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let bastion = LocalSshd::start().expect("start bastion fixture");
+        let target = LocalSshd::start().expect("start target fixture");
+        wait_for_port(bastion.port).await;
+        wait_for_port(target.port).await;
+        // What MobaXterm on Windows writes: Windows-1252, CRLF, `C:` stored as
+        // `_CurrentDrive_`, ';' as `__PTVIRG__`, gateway lists in fields 8-10/15.
+        let line = format!(
+            ";  logout#109#0%127.0.0.1%{}%{}%%-1%-1%echo MOBARUST_START_$((6*7))__PTVIRG__ true%127.0.0.1%{}%{}%0%0%0%_CurrentDrive_:\\Users\\Ops\\.ssh\\client_key%_CurrentDrive_:\\Users\\Ops\\.ssh\\client_key%-1%0%0%0%%1080%%0%0%1#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,192%0%-1%0%%xterm%-1%0%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%0%-1%-1#0#Labo __DIEZE__1#-1",
+            target.port, target.username, bastion.port, bastion.username
+        );
+        let export = format!(
+            "[Bookmarks]\r\nSubRep=\r\nImgNum=42\r\n\r\n[Bookmarks_1]\r\nSubRep=Labo\\Caf\u{e9}\r\nImgNum=41\r\nCible \u{20ac}={line}\r\n\r\n[Passwords]\r\nssh22:x@127.0.0.1=NOT-READ\r\n"
+        );
+        let bytes: Vec<u8> = export
+            .chars()
+            .map(|c| match c {
+                '\u{20ac}' => 0x80,
+                c => u8::try_from(u32::from(c)).expect("Windows-1252 fixture"),
+            })
+            .collect();
+
+        let mut preview = parse_mobaxterm_sessions(&decode_mobaxterm_bytes(&bytes), &[]);
+        use_agent_for_missing_keys(&mut preview, |key| key == "~/.ssh/client_key");
+        assert_eq!(preview.candidates.len(), 1, "skipped: {:?}", preview.skipped);
+        let session = &preview.candidates[0].session;
+        assert_eq!(session.name, "Cible €");
+        assert_eq!(session.folder.as_deref(), Some("Labo/Café"));
+        assert!(!format!("{preview:?}").contains("NOT-READ"));
+        let key_for = |auth: &AuthMethod, fixture: &LocalSshd| match auth {
+            AuthMethod::PrivateKey { key_ref, .. } => {
+                assert_eq!(key_ref, "~/.ssh/client_key");
+                fixture.client_key.clone()
+            }
+            other => panic!("expected the mapped private key, got {other:?}"),
+        };
+        let jump = &session.jump_host_profiles[0];
+        let mut jump_options = bastion.options();
+        jump_options.host = jump.host.clone();
+        jump_options.port = jump.port;
+        jump_options.credentials =
+            SshCredentials::private_key(jump.username.clone(), key_for(&jump.auth, &bastion), None::<String>);
+        let mut target_options = target.options();
+        target_options.host = session.hostname.clone();
+        target_options.port = session.port;
+        target_options.startup_command = session.startup_command.clone();
+        target_options.credentials = SshCredentials::private_key(
+            session.username.clone().expect("imported username"),
+            key_for(&session.auth, &target),
+            None::<String>,
+        );
+
+        let connection = SshConnection::connect_with_jump_chain(target_options, vec![jump_options])
+            .await
+            .expect("connect with the imported MobaXterm session");
+        let output = shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'IMPORT_OK'; exit\n").await;
+        assert!(output.contains("MOBARUST_IMPORT_OK"), "{output}");
+        assert!(output.contains("MOBARUST_START_42"), "{output}");
+        connection.disconnect().await.expect("disconnect imported session");
+    });
+}
+
 struct LocalSshd {
     child: Child,
     directory: tempfile::TempDir,

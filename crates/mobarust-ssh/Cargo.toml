@@ -21,5 +21,6 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+mobarust-store = { path = "../mobarust-store" }
 serde_json.workspace = true
 tempfile = "3.23"

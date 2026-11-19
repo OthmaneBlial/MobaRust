@@ -2951,6 +2951,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mobarust-core",
+ "mobarust-store",
  "russh",
  "russh-sftp",
  "serde",

@@ -11,9 +11,9 @@ here). "Tabby" notes are pending: the Tabby app is not installed on this Mac yet
 | Split terminals | Right/down splits with draggable dividers | Keep | P1 | Existing |
 | Session tree with nested folders | Flat folder labels | Nested collapsible tree from `A/B` paths | P0 | Browser preview |
 | Open a whole folder of sessions | Missing | "Open all" (4 concurrent), progress, cancel, retry, `--open-group` | P0 | Unit + real local sshd (14 sessions) |
-| Import MobaXterm sessions | Missing | `.mxtsessions` / `MobaXterm.ini` SSH bookmarks (host, port, user, folders) with preview and merge decisions | P0 | Fixture tests; real export not tested |
+| Import MobaXterm sessions | Done | `.mxtsessions` / `.moba` / `MobaXterm.ini` SSH and SFTP bookmarks (folders, host, port, user, login command) with preview and merge decisions; Windows-1252, UTF-8 and UTF-16 files on any OS | P0 | Fixture tests plus a real local OpenSSH connection through an imported gateway; no file written by MobaXterm itself |
 | Import passwords from MobaXterm | Not supported | Deliberately not imported (encrypted, not portable) | — | By design |
-| Private-key path, gateway, X11 from MobaXterm bookmarks | Not imported | Report as not imported until the field layout is verified | P2 | — |
+| Private-key path, gateway, X11 from MobaXterm bookmarks | Key and gateway done; X11/proxy not imported | Key paths map to `~/.ssh/<file name>` (agent kept when that file is missing; `.ppk` gets a puttygen hint); SSH gateways become jump hosts | P2 | Field layout from the community format study (MobaXterm 26.3); end-to-end test with local sshd |
 | Telnet / RDP / VNC bookmarks | Skipped with a warning | Map once field layouts are verified | P2 | — |
 | SFTP side browser | Files view per SSH session | Make it a dockable side panel | P1 | Existing sshd tests |
 | SSH tunnels | Local/remote/dynamic with manager | Keep; UI polish | P1 | Existing sshd tests |

@@ -9,10 +9,13 @@
 
 use std::collections::BTreeSet;
 
-use mobarust_core::{AuthMethod, Protocol, SessionId, SessionRecord};
+use mobarust_core::{
+    AuthMethod, JumpHostRecord, MAX_SSH_JUMP_HOSTS, Protocol, SessionId, SessionRecord,
+};
 use serde::{Deserialize, Serialize};
 
-pub const MOBAXTERM_SSH_TYPE: &str = "109";
+pub const MOBAXTERM_SSH_TYPE: &str = "0";
+const MOBAXTERM_SFTP_TYPE: &str = "7";
 const ROOT_FOLDER: &str = "MobaXterm import";
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,55 +141,111 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
                 .push(format!("[{section_name}] bookmark without a name"));
             continue;
         }
+        // Layout: <reconnect flag>#<icon>#<type%host%port%user%...>#<terminal>#<start mode>#<comment>#...
+        // The icon is user-editable; the session type is the first '%' field.
         let segments: Vec<&str> = value.split('#').collect();
-        if segments.len() < 3 || !segments[0].is_empty() {
+        if segments.len() < 3 {
             preview
                 .skipped
                 .push(format!("{key}: unrecognized bookmark format"));
             continue;
         }
-        let kind = segments[1].trim();
-        if kind != MOBAXTERM_SSH_TYPE {
-            other_types.insert(kind.to_owned());
-            preview.skipped.push(format!(
-                "{key}: session type {kind} is not supported (SSH only)"
-            ));
-            continue;
-        }
-        let fields: Vec<&str> = segments[2].split('%').collect();
-        let host = fields.get(1).map(|value| value.trim()).unwrap_or_default();
+        let fields: Vec<&str> = segments[2].split('%').map(str::trim).collect();
+        let field = |index: usize| fields.get(index).copied().unwrap_or_default();
+        // Field indexes for the private key, gateway hosts/ports/users/keys and login command.
+        let (key_index, gateway, command_index) = match field(0) {
+            MOBAXTERM_SSH_TYPE => (14, Some([8, 9, 10, 15]), Some(7)),
+            MOBAXTERM_SFTP_TYPE => (9, None, None),
+            kind => {
+                let label = session_type_label(kind);
+                other_types.insert(label.clone());
+                preview.skipped.push(format!(
+                    "{key}: {label} sessions are not imported (SSH and SFTP only)"
+                ));
+                continue;
+            }
+        };
+        let host = field(1);
         if host.is_empty() || host.chars().any(char::is_control) {
             preview.skipped.push(format!("{key}: missing remote host"));
             continue;
         }
-        let port = match fields.get(2).map(|value| value.trim()) {
-            None | Some("") => 22,
-            Some(value) => match value.parse::<u16>() {
-                Ok(port) if port > 0 => port,
-                _ => {
-                    preview.skipped.push(format!("{key}: invalid port"));
-                    continue;
-                }
-            },
+        let Some(port) = parse_port(field(2)) else {
+            preview.skipped.push(format!("{key}: invalid port"));
+            continue;
         };
-        let username = fields
-            .get(3)
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
-            .map(str::to_owned);
+        let username = clean_user(field(3));
         if !seen.insert((folder.clone(), key.to_owned())) {
             preview
                 .skipped
                 .push(format!("{folder}/{key}: duplicate bookmark in file"));
             continue;
         }
-        let notes = if username.is_none() {
-            Some(
-                "Imported from MobaXterm without a username; set one before connecting.".to_owned(),
-            )
-        } else {
-            Some("Imported from MobaXterm (host, port and username only).".to_owned())
-        };
+        let mut notes = vec!["Imported from MobaXterm.".to_owned()];
+        if username.is_none() {
+            notes.push(
+                "No username was saved (MobaXterm default login); set one before connecting."
+                    .into(),
+            );
+        }
+        let (auth, key_note) = key_auth(field(key_index));
+        notes.extend(key_note);
+        let mut jump_host_profiles = Vec::new();
+        if let Some([hosts, ports, users, keys]) = gateway {
+            let hosts = split_pipe(field(hosts));
+            let (ports, users, keys) = (
+                split_pipe(field(ports)),
+                split_pipe(field(users)),
+                split_pipe(field(keys)),
+            );
+            if hosts.len() > MAX_SSH_JUMP_HOSTS {
+                preview
+                    .skipped
+                    .push(format!("{key}: too many SSH gateways"));
+                continue;
+            }
+            for (index, gateway_host) in hosts.iter().enumerate() {
+                let Some(gateway_port) = parse_port(ports.get(index).map_or("", String::as_str))
+                else {
+                    break;
+                };
+                let gateway_user = users
+                    .get(index)
+                    .and_then(|user| clean_user(user))
+                    .or_else(|| username.clone());
+                let Some(gateway_user) = gateway_user else {
+                    notes.push(format!(
+                        "Gateway {gateway_host} has no username; add it before connecting."
+                    ));
+                    break;
+                };
+                let (gateway_auth, gateway_note) =
+                    key_auth(keys.get(index).map_or("", String::as_str));
+                notes.extend(gateway_note.map(|note| format!("Gateway {gateway_host}: {note}")));
+                jump_host_profiles.push(JumpHostRecord {
+                    host: gateway_host.clone(),
+                    port: gateway_port,
+                    username: gateway_user,
+                    auth: gateway_auth,
+                    known_hosts_path: None,
+                    pinned_fingerprint: None,
+                    server_alive_interval: None,
+                });
+            }
+            if jump_host_profiles.len() != hosts.len() {
+                notes.push("Some SSH gateways could not be imported; check the jump hosts.".into());
+                jump_host_profiles.clear();
+            }
+        }
+        let startup_command = command_index
+            .map(|index| unescape(field(index)))
+            .filter(|command| !command.trim().is_empty());
+        notes.extend(
+            segments
+                .get(5)
+                .map(|value| unescape(value.trim()))
+                .filter(|comment| !comment.trim().is_empty()),
+        );
         let session = SessionRecord {
             id: SessionId::new(),
             name: key.to_owned(),
@@ -194,7 +253,7 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
             hostname: host.to_owned(),
             port,
             username,
-            auth: AuthMethod::Agent,
+            auth,
             last_used_at: None,
             known_hosts_path: None,
             pinned_fingerprint: None,
@@ -205,11 +264,14 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
             tags: vec!["imported".into(), "mobaxterm".into()],
             favorite: false,
             startup_directory: None,
-            startup_command: None,
+            startup_command,
             environment: Vec::new(),
-            jump_hosts: Vec::new(),
-            jump_host_profiles: Vec::new(),
-            notes,
+            jump_hosts: jump_host_profiles
+                .iter()
+                .map(|jump| jump.host.clone())
+                .collect(),
+            jump_host_profiles,
+            notes: Some(notes.join(" ")),
             serial_profile: None,
             telnet_profile: None,
             remote_desktop_profile: None,
@@ -232,7 +294,7 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
     }
     if !preview.candidates.is_empty() {
         preview.warnings.push(
-            "Only host, port and username are imported. Passwords, private-key paths, gateway/jump hosts, X11, terminal and font settings are not imported; imported sessions use the SSH agent until edited.".into(),
+            "Imported: name, folder, host, port, username, login command, SSH gateways and private-key file names (mapped to ~/.ssh). Never imported: passwords, X11, proxy, terminal and font settings.".into(),
         );
     }
     if !ignored_sections.is_empty() {
@@ -245,11 +307,113 @@ pub fn parse_mobaxterm_sessions(contents: &str, existing: &[SessionRecord]) -> M
     if !other_types.is_empty() {
         let names: Vec<_> = other_types.into_iter().collect();
         preview.warnings.push(format!(
-            "Unsupported MobaXterm session type codes skipped: {}",
+            "Unsupported MobaXterm session types skipped: {}",
             names.join(", ")
         ));
     }
     preview
+}
+
+/// Keep the SSH agent for keys not present in ~/.ssh on this machine, so an
+/// import never turns a working agent login into a missing-key failure.
+pub fn use_agent_for_missing_keys(
+    preview: &mut MobaXtermPreview,
+    key_exists: impl Fn(&str) -> bool,
+) {
+    fn check(auth: &mut AuthMethod, missing: &mut Vec<String>, key_exists: &impl Fn(&str) -> bool) {
+        if let AuthMethod::PrivateKey { key_ref, .. } = auth
+            && !key_exists(key_ref)
+        {
+            missing.push(key_ref.clone());
+            *auth = AuthMethod::Agent;
+        }
+    }
+    for candidate in &mut preview.candidates {
+        let session = &mut candidate.session;
+        let mut missing = Vec::new();
+        check(&mut session.auth, &mut missing, &key_exists);
+        for jump in &mut session.jump_host_profiles {
+            check(&mut jump.auth, &mut missing, &key_exists);
+        }
+        if !missing.is_empty() {
+            let notes = session.notes.get_or_insert_with(String::new);
+            notes.push_str(&format!(
+                " Not found on this computer: {}. Copy the key there and select it; the SSH agent is used until then.",
+                missing.join(", ")
+            ));
+        }
+    }
+}
+
+fn parse_port(value: &str) -> Option<u16> {
+    if value.is_empty() {
+        return Some(22);
+    }
+    value.parse::<u16>().ok().filter(|port| *port > 0)
+}
+
+/// "<default>" means MobaXterm's global default login, which is not exported.
+fn clean_user(value: &str) -> Option<String> {
+    Some(value.trim())
+        .filter(|user| {
+            !user.is_empty() && *user != "<default>" && !user.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+}
+
+fn split_pipe(value: &str) -> Vec<String> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    value
+        .split("__PIPE__")
+        .map(|part| part.trim().to_owned())
+        .collect()
+}
+
+fn unescape(value: &str) -> String {
+    value
+        .replace("__PTVIRG__", ";")
+        .replace("__DBLQUO__", "\"")
+        .replace("__PIPE__", "|")
+        .replace("__PERCENT__", "%")
+        .replace("__DIEZE__", "#")
+}
+
+/// Windows key paths cannot be used elsewhere; point at the same file name in
+/// ~/.ssh, where users copy their keys. PuTTY .ppk keys need converting first.
+fn key_auth(path: &str) -> (AuthMethod, Option<String>) {
+    let file = path.rsplit(['\\', '/']).next().unwrap_or_default().trim();
+    if file.is_empty() || file.chars().any(char::is_control) {
+        return (AuthMethod::Agent, None);
+    }
+    if file.to_ascii_lowercase().ends_with(".ppk") {
+        return (
+            AuthMethod::Agent,
+            Some(format!(
+                "MobaXterm used the PuTTY key {file}; convert it with `puttygen {file} -O private-openssh -o ~/.ssh/<name>` and select it, or load it in your SSH agent."
+            )),
+        );
+    }
+    (
+        AuthMethod::PrivateKey {
+            key_ref: format!("~/.ssh/{file}"),
+            credential_ref: None,
+        },
+        Some(format!(
+            "Key mapped from {} to ~/.ssh/{file}.",
+            path.replace("_CurrentDrive_", "C")
+        )),
+    )
+}
+
+fn session_type_label(kind: &str) -> String {
+    match kind {
+        "4" => "RDP".into(),
+        "5" => "VNC".into(),
+        "11" => "Browser".into(),
+        other => format!("type {other}"),
+    }
 }
 
 fn is_bookmark_section(name: &str) -> bool {
@@ -310,7 +474,12 @@ mod tests {
         assert_eq!(web.session.hostname, "web01.example.test");
         assert_eq!(web.session.port, 2222);
         assert_eq!(web.session.username.as_deref(), Some("deploy"));
-        assert!(preview.skipped.iter().any(|s| s.contains("type 91")));
+        assert!(
+            preview
+                .skipped
+                .iter()
+                .any(|s| s.contains("RDP sessions are not imported"))
+        );
         assert!(preview.skipped.iter().any(|s| s.contains("invalid port")));
         assert!(
             preview
@@ -318,7 +487,7 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("missing remote host"))
         );
-        assert!(preview.warnings.iter().any(|w| w.contains("Passwords")));
+        assert!(preview.warnings.iter().any(|w| w.contains("passwords")));
         // The credential section is named but never parsed into anything.
         let serialized = serde_json::to_string(&preview).unwrap();
         assert!(!serialized.contains("SECRET-SHOULD-NOT-LEAK"));
@@ -350,11 +519,13 @@ mod tests {
             .candidates
             .iter()
             .map(|c| {
+                let s = &c.session;
                 (
-                    c.session.name.as_str(),
-                    c.session.folder.as_deref(),
-                    c.session.hostname.as_str(),
-                    c.session.port,
+                    s.name.as_str(),
+                    s.folder.as_deref(),
+                    s.hostname.as_str(),
+                    s.port,
+                    s.username.as_deref(),
                 )
             })
             .collect();
@@ -365,22 +536,66 @@ mod tests {
                     "Serveur café",
                     Some("MobaXterm import"),
                     "cafe.example.test",
-                    22
+                    22,
+                    Some("opé")
                 ),
                 (
                     "Facturation €",
                     Some("Clients/Acme/Prod"),
                     "billing.example.test",
-                    2222
+                    2222,
+                    Some("deploy")
                 ),
                 (
                     "Ops’ box",
                     Some("Clients/Acme/Prod"),
                     "ops.example.test",
-                    22
+                    22,
+                    None
+                ),
+                (
+                    "Files",
+                    Some("Clients/Acme/Prod"),
+                    "files.example.test",
+                    2022,
+                    Some("sftpuser")
                 ),
             ]
         );
+        let cafe = &preview.candidates[0].session;
+        assert_eq!(
+            cafe.auth,
+            AuthMethod::PrivateKey {
+                key_ref: "~/.ssh/id_ed25519".into(),
+                credential_ref: None
+            }
+        );
+        assert_eq!(cafe.startup_command.as_deref(), Some("cd /var/log; ls"));
+        assert!(cafe.notes.as_deref().unwrap().contains("Rack #4"));
+        let billing = &preview.candidates[1].session;
+        assert_eq!(billing.auth, AuthMethod::Agent);
+        assert!(
+            billing
+                .notes
+                .as_deref()
+                .unwrap()
+                .contains("puttygen acme.ppk")
+        );
+        assert_eq!(billing.jump_hosts, ["bastion.example.test"]);
+        let jump = &billing.jump_host_profiles[0];
+        assert_eq!(
+            (jump.host.as_str(), jump.port, jump.username.as_str()),
+            ("bastion.example.test", 2200, "jump")
+        );
+        assert_eq!(
+            jump.auth,
+            AuthMethod::PrivateKey {
+                key_ref: "~/.ssh/jump_ed25519".into(),
+                credential_ref: None
+            }
+        );
+        assert!(preview.skipped.iter().any(|s| s.starts_with("Desk: VNC")));
+        assert!(preview.skipped.iter().any(|s| s.starts_with("Win: RDP")));
         assert!(!format!("{preview:?}").contains("SECRET-SHOULD-NOT-LEAK"));
     }
 
@@ -405,5 +620,24 @@ mod tests {
                 &[],
             ));
         }
+    }
+
+    #[test]
+    fn missing_mapped_keys_fall_back_to_agent() {
+        let text = decode_mobaxterm_bytes(WINDOWS_FIXTURE);
+        let mut preview = parse_mobaxterm_sessions(&text, &[]);
+        use_agent_for_missing_keys(&mut preview, |key| key == "~/.ssh/jump_ed25519");
+        let cafe = &preview.candidates[0].session;
+        assert_eq!(cafe.auth, AuthMethod::Agent);
+        assert!(
+            cafe.notes
+                .as_deref()
+                .unwrap()
+                .contains("Not found on this computer: ~/.ssh/id_ed25519")
+        );
+        assert!(matches!(
+            preview.candidates[1].session.jump_host_profiles[0].auth,
+            AuthMethod::PrivateKey { .. }
+        ));
     }
 }

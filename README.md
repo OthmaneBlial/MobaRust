@@ -26,7 +26,7 @@ If you left Windows and MobaXterm behind, you lost a tool that keeps hundreds of
 
 - **The terminal gets the window.** The sidebar can be resized or collapsed (`⇧⌘B`). Focus mode (`⇧⌘↵`) hides everything but the terminal. Tabs and splits resize the PTY correctly.
 - **Open a whole group at once.** Nested folders open with one click, or tick just the hosts you need. Connections open four at a time, with a status light per host, and you can cancel or retry the failures.
-- **Bring your MobaXterm sessions.** The importer reads `.mxtsessions` and `.ini` exports. It shows a preview and lets you choose merge, replace or skip for each duplicate. It never imports passwords.
+- **Bring your MobaXterm sessions.** The importer reads `.mxtsessions`, `.moba` and `MobaXterm.ini` files exported on Windows, on any operating system. It shows a preview and lets you choose merge, replace or skip for each duplicate. It never imports passwords.
 - **Safety stays visible but quiet.** Host keys are always verified. Saved sessions hold only references to your credentials. Broadcast input and macros need explicit targets.
 
 <table>
@@ -65,7 +65,7 @@ The name can be a full path, a case-insensitive match, or a unique leaf folder n
 | SFTP/SCP transfers, remote text editing | Working; tested against a real local OpenSSH server |
 | Local, remote and SOCKS5 tunnels | Working; traffic tested through real OpenSSH |
 | One-click groups (open all, open selected, `--open-group`) | Working; 14 concurrent sessions tested on loopback |
-| MobaXterm import | **Partial:** SSH host, port, user and folders only |
+| MobaXterm import | Working for SSH and SFTP bookmarks: folders, host, port, user, login command, SSH gateways, key file names. Windows exports open on any OS. Tested end to end against real local OpenSSH with synthetic exports. RDP, VNC, Telnet and serial bookmarks are listed, not imported |
 | Telnet, serial | Working; unencrypted transports are labelled |
 | VNC, RDP | **Experimental**; RDP is not in normal installers |
 

@@ -70,7 +70,7 @@ export function MobaXtermImportDialog({ onClose, onImported }: { onClose: () => 
       <label className="import-file-picker">
         <FileUp size={16} />
         <span>{fileName ?? "Choose file…"}</span>
-        <input type="file" accept=".mxtsessions,.ini,.txt" autoFocus onChange={(event) => void choose(event.target.files?.[0])} disabled={busy} />
+        <input type="file" accept=".mxtsessions,.moba,.ini,.txt" autoFocus onChange={(event) => void choose(event.target.files?.[0])} disabled={busy} />
       </label>
       {busy && <p className="import-status"><LoaderCircle className="spin" size={14} /> Working…</p>}
       {error && <div className="connect-error" role="alert"><span>{error}</span></div>}

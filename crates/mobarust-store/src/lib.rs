@@ -22,7 +22,7 @@ use uuid::Uuid;
 mod mobaxterm;
 pub use mobaxterm::{
     ImportAction, ImportDecision, MobaXtermCandidate, MobaXtermPreview, decode_mobaxterm_bytes,
-    parse_mobaxterm_sessions,
+    parse_mobaxterm_sessions, use_agent_for_missing_keys,
 };
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
@@ -1041,10 +1041,15 @@ impl SessionStore {
                 "<mobaxterm-import>",
             )));
         }
-        Ok(parse_mobaxterm_sessions(
-            &decode_mobaxterm_bytes(bytes),
-            &self.sessions,
-        ))
+        let mut preview = parse_mobaxterm_sessions(&decode_mobaxterm_bytes(bytes), &self.sessions);
+        let home = std::env::home_dir();
+        use_agent_for_missing_keys(&mut preview, |key_ref| {
+            key_ref
+                .strip_prefix("~/")
+                .zip(home.as_ref())
+                .is_some_and(|(relative, home)| home.join(relative).is_file())
+        });
+        Ok(preview)
     }
 
     /// Applies reviewed import decisions in one durable write. Nothing changes
