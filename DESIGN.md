@@ -26,3 +26,5 @@ The terminal palettes live in `apps/desktop/src/theme.ts` and follow the same ra
 - **Focus:** a 2px orange `:focus-visible` outline everywhere. Selection is tinted orange. Scrollbars are thin.
 - **Shape:** buttons are 6–7px radius, and dialogs and menus are 10px.
 - The terminal gets the space. Focus mode hides all chrome.
+
+The public website has its own world, documented in [docs/WEBSITE_DESIGN.md](docs/WEBSITE_DESIGN.md).

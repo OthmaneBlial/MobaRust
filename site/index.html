@@ -3,161 +3,335 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#1d1e20">
-    <meta name="description" content="Free, open-source MobaXterm alternative built with Rust. SSH, SFTP, local terminals and tunnels in one desktop app.">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://othmaneblial.github.io/MobaRust/">
-    <meta property="og:title" content="MobaRust — Free, open-source MobaXterm alternative">
-    <meta property="og:description" content="Free, open-source MobaXterm alternative built with Rust. SSH, files, local terminals and tunnels in one app.">
-    <meta property="og:image" content="https://othmaneblial.github.io/MobaRust/media/mobarust-demo-poster.jpg">
-    <meta property="og:image:alt" content="MobaRust running a real local terminal in its desktop workspace">
-    <meta name="twitter:card" content="summary_large_image">
-    <title>MobaRust — Free, open-source MobaXterm alternative</title>
+    <title>MobaRust — Free MobaXterm alternative for Mac, Linux and Windows</title>
+    <meta name="description" content="MobaRust is a free, open-source MobaXterm alternative for macOS, Linux and Windows. SSH with verified host keys, SFTP, tunnels, tabs and splits, one-click server groups and MobaXterm session import.">
     <link rel="canonical" href="https://othmaneblial.github.io/MobaRust/">
+    <meta name="theme-color" content="#160c07">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="MobaRust">
+    <meta property="og:title" content="MobaRust — Ship your whole fleet. Free.">
+    <meta property="og:description" content="A free, open-source MobaXterm alternative for Mac. Open whole server groups in one click and bring your MobaXterm sessions with you.">
+    <meta property="og:url" content="https://othmaneblial.github.io/MobaRust/">
+    <meta property="og:image" content="https://othmaneblial.github.io/MobaRust/media/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="MobaRust: ship your whole fleet. A free MobaXterm alternative for Mac.">
+    <meta name="twitter:card" content="summary_large_image">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=2.0">
-    <script src="app.js?v=2.0" defer></script>
+    <link rel="preload" href="fonts/big-shoulders-stencil.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="styles.css">
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "MobaRust",
+        "description": "Free, open-source MobaXterm alternative: SSH with verified host keys, SFTP, tunnels, tabs and splits, one-click server groups and MobaXterm session import.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Windows, Linux",
+        "url": "https://othmaneblial.github.io/MobaRust/",
+        "downloadUrl": "https://github.com/OthmaneBlial/MobaRust/releases",
+        "softwareVersion": "0.1.31",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "codeRepository": "https://github.com/OthmaneBlial/MobaRust"
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          { "@type": "Question", "name": "Is MobaRust free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. MobaRust is free and open source under the Apache 2.0 license. There is no account and no sign-in." } },
+          { "@type": "Question", "name": "Can I import my MobaXterm sessions on a Mac?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. MobaRust reads .mxtsessions, .moba and MobaXterm.ini files, including files exported on Windows. SSH and SFTP bookmarks come with their folders, gateways, login commands and key file names. Passwords are never read." } },
+          { "@type": "Question", "name": "Which platforms does MobaRust run on?", "acceptedAnswer": { "@type": "Answer", "text": "macOS comes first, on Apple Silicon and Intel. Preview builds also exist for Windows and Linux." } },
+          { "@type": "Question", "name": "Is MobaRust affiliated with MobaXterm?", "acceptedAnswer": { "@type": "Answer", "text": "No. MobaRust is an independent open-source project and is not affiliated with Mobatek or MobaXterm." } }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header">
-      <div class="header-inner">
-        <a class="brand" href="index.html" aria-label="MobaRust home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path class="mk-chev" d="M8 8.5L15 14L8 19.5"/><rect class="mk-cur" x="17" y="17.5" width="8" height="3.4" rx=".8"/><circle class="mk-lamp" cx="9" cy="25.5" r="1.6"/><circle class="mk-lamp" cx="13.5" cy="25.5" r="1.6"/></svg></span><span>MobaRust</span></a>
-        <span class="grille" aria-hidden="true"></span>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="rail">
+      <div class="wrap rail-inner">
+        <a class="brand" href="./" aria-label="MobaRust home"><img src="favicon.svg" alt="" width="30" height="30">MobaRust</a>
         <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
-        <nav class="site-nav" id="site-nav" aria-label="Main navigation">
-          <a href="#groups">Groups</a>
-          <a href="#features">Features</a>
-          <a href="#demo">Demo</a>
+        <nav class="nav" id="site-nav" aria-label="Main">
+          <a href="#fleet">Groups</a>
+          <a href="#import">MobaXterm import</a>
+          <a href="#safety">Safety</a>
           <a href="docs.html">Docs</a>
-          <a class="nav-source" href="https://github.com/OthmaneBlial/MobaRust">GitHub <span aria-hidden="true">↗</span></a>
-          <a class="nav-download" href="#download">Download</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust">GitHub</a>
+          <a class="btn btn-yellow btn-small" href="#download">Download free</a>
         </nav>
       </div>
     </header>
 
     <main id="main">
-      <section class="hero page-wrap">
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="lamp lamp-on" aria-hidden="true"></span> Open source · Rust-native · macOS first</p>
-          <h1>Every server<br>one click away.</h1>
-          <p class="hero-lede">MobaRust is a free MobaXterm alternative for macOS, Linux and Windows. It gives you terminal tabs and splits, SSH with verified host keys, SFTP, tunnels, and whole server groups opened at once.</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#download">Download the preview</a>
-            <a class="button button-quiet" href="https://github.com/OthmaneBlial/MobaRust">View the source <span aria-hidden="true">↗</span></a>
+      <section class="wall steel" aria-labelledby="hero-title">
+        <div class="wrap wall-inner">
+          <p class="wall-code" aria-hidden="true"><span>MBRU 001402 · 22G1</span><span>Free · open source · Apache-2.0</span></p>
+          <p class="wall-title" aria-hidden="true">Ship your<br>whole <span>fleet.</span></p>
+
+          <div class="wall-grid">
+            <article class="manifest" id="download" aria-labelledby="hero-title">
+              <div class="manifest-head"><strong>Cargo manifest · MobaRust</strong><span>No. 0.1.31</span></div>
+              <div class="stamp" aria-hidden="true"><span>Free<b>€0</b>forever</span></div>
+              <h1 id="hero-title">A free MobaXterm alternative for your Mac.</h1>
+              <p class="lede">Tabs and splits, SSH with verified host keys, SFTP and tunnels. Open a whole group of servers in one click, and bring your MobaXterm sessions with you.</p>
+              <div class="manifest-actions">
+                <a class="btn btn-yellow" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>
+                  Download for Mac
+                </a>
+                <a class="alt" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg">Intel Mac</a>
+              </div>
+              <table class="lines">
+                <caption class="visually-hidden">Downloads by platform</caption>
+                <thead><tr><th scope="col">Platform</th><th scope="col">Build</th><th scope="col">File</th></tr></thead>
+                <tbody>
+                  <tr><td>macOS · Apple Silicon</td><td class="mono">0.1.31 preview</td><td><a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg">DMG</a></td></tr>
+                  <tr><td>macOS · Intel</td><td class="mono">0.1.31 preview</td><td><a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg">DMG</a></td></tr>
+                  <tr><td>Windows · x64</td><td class="mono">0.1.12 preview</td><td><a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe">EXE</a></td></tr>
+                  <tr><td>Linux · x64</td><td class="mono">0.1.12 preview</td><td><a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb">DEB</a><a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage">AppImage</a></td></tr>
+                </tbody>
+              </table>
+              <p class="manifest-note">These are preview builds, ad hoc signed and not notarized. The group opener, MobaXterm import and the interface shown on this page are on the main branch and ship in the next release. <a href="docs.html#source">Build from source</a> to use them today.</p>
+            </article>
+
+            <figure class="door">
+              <img src="media/workspace-dark.webp" width="2400" height="1500" alt="The MobaRust workspace: a session tree with Production and Web server groups beside a full-height terminal tab" fetchpriority="high">
+              <figcaption>Current main branch · browser preview</figcaption>
+            </figure>
           </div>
-          <div class="meter" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-          <p class="meter-caption">14 SSH sessions to a real local OpenSSH server, 4 at a time: connected in 209 ms in our loopback test.</p>
         </div>
-        <figure class="hero-shot">
-          <img src="media/hero-workspace.jpg" alt="MobaRust workspace with nested Production and Web session groups beside a full-height terminal" width="1920" height="1200" fetchpriority="high">
-          <figcaption>Current <code>main</code>, browser preview of the real UI.</figcaption>
-        </figure>
-      </section>
 
-      <section class="band" id="groups">
-        <div class="page-wrap split">
-          <div class="split-copy">
-            <p class="eyebrow">Session groups</p>
-            <h2>Open the whole fleet, or just the hosts you need.</h2>
-            <p>Groups nest as deep as your infrastructure does. Open all of a group with one click, or tick a few servers. Connections run four at a time, so your server's SSH limits don't drop them. Every host gets a status light, and failures can be retried on their own.</p>
-            <pre class="cli"><span class="cli-prompt">$</span> mobarust --open-group "Production/Web"</pre>
+        <div class="totals">
+          <div class="wrap">
+            <dl>
+              <div><dt>Real SSH sessions opened together, 14 hosts</dt><dd>558<small>ms</small></dd></div>
+              <div><dt>From launch to window, warm start</dt><dd>370<small>ms</small></dd></div>
+              <div><dt>Connections at a time, cancel or retry the rest</dt><dd>4</dd></div>
+              <div><dt>Passwords stored in session files</dt><dd>0</dd></div>
+            </dl>
+            <p class="src">Measured on an Apple M2 Mac with a release build and local OpenSSH servers. Receipts: <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/TEST_MATRIX.md">test matrix</a> and <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/benchmarks/2026-11-19-native-macos.md">native benchmark</a>.</p>
           </div>
-          <figure class="shot"><img src="media/group-picker-crop.jpg" alt="Choosing four of six web servers to open from the Production/Web group" width="1280" height="800" ></figure>
         </div>
       </section>
 
-      <section class="page-wrap section-pad" id="features">
-        <p class="eyebrow">What's inside</p>
-        <h2 class="section-title">Built for long days in the terminal.</h2>
-        <div class="feature-grid">
-          <article class="feature"><h3>The terminal gets the window</h3><p>Resizable or hidden sidebar, focus mode, tabs and splits that resize the PTY, scrollback search, font zoom, and reopen for closed tabs.</p></article>
-          <article class="feature"><h3>SSH you can trust</h3><p>Keys, agent, password and keyboard-interactive auth. Jump hosts and reconnect. Unknown host keys are never accepted silently.</p></article>
-          <article class="feature"><h3>Files beside the prompt</h3><p>SFTP and SCP with progress, cancel and retry. Remote text editing checks for conflicts before saving.</p></article>
-          <article class="feature"><h3>Tunnels with real numbers</h3><p>Local, remote and SOCKS5 forwards with explicit bind addresses and live byte counts.</p></article>
-          <article class="feature"><h3>Leave MobaXterm cleanly</h3><p>Import <code>.mxtsessions</code> exports with a preview and a choice for each duplicate. SSH and SFTP bookmarks come with their folders, gateways and login commands. Passwords are never imported.</p></article>
-          <article class="feature"><h3>Honest about the edges</h3><p>Telnet and serial are labelled unencrypted. VNC and RDP are experimental, and RDP is not included in normal installers.</p></article>
-        </div>
-      </section>
-
-      <section class="band band-light">
-        <div class="page-wrap split split-reverse">
-          <div class="split-copy">
-            <p class="eyebrow">Light and dark</p>
-            <h2>A calm instrument, not a dashboard.</h2>
-            <p>Graphite and warm aluminium themes. Orange is used only for the primary action, and connection state shows in round status lights. Keyboard focus is visible everywhere.</p>
+      <section class="section steel steel-deep" id="fleet" aria-labelledby="fleet-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="fleet-title">One click opens the whole group.</h2>
+            <p>Keep your servers in nested folders. Open a folder and every host in it connects, four at a time, each with its own status light. Tick only the hosts you need when you don't want all of them.</p>
           </div>
-          <figure class="shot"><img src="media/workspace-light.jpg" alt="The MobaRust workspace in its warm light theme" width="1920" height="1200" ></figure>
-        </div>
-      </section>
+          <div class="yard-grid">
+            <div class="yard" data-yard>
+              <div class="yard-bar"><strong>Opening Production</strong><span>4 at a time</span><span class="count" data-yard-count aria-live="polite">0 of 14 connected</span></div>
+              <ol class="yard-row" aria-label="Sample hosts in the Production group">
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-01</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-02</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-03</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-04</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-05</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">web-06</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">api-01</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">api-02</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">api-03</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">db-01</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">db-02</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">cache-01</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">queue-01</span></li>
+                <li class="box steel" data-state="off"><span class="lamp"></span><span class="host">bastion</span></li>
+              </ol>
+              <div class="yard-foot">
+                <button class="btn btn-line btn-small" type="button" data-yard-run>Open the group again</button>
+                <p>An illustration with sample hosts, at the opener's real pace of four at a time. In our loopback test, 14 real sessions connected in 558 ms.</p>
+              </div>
+            </div>
 
-      <section class="page-wrap section-pad" id="demo">
-        <p class="eyebrow">Recorded on macOS</p>
-        <h2 class="section-title">A real work session in 94 seconds.</h2>
-        <div class="video-frame">
-          <video id="desktop-demo" controls playsinline preload="metadata" poster="media/mobarust-demo-poster.jpg" aria-label="MobaRust desktop demonstration. Silent screen capture with on-screen chapter titles." aria-describedby="demo-note">
-            <source src="media/mobarust-desktop-demo.mp4" type="video/mp4">
-            <track kind="captions" src="media/mobarust-demo.en.vtt" srclang="en" label="English">
-            Your browser cannot play this video. <a href="media/mobarust-desktop-demo.mp4">Download the MP4 demo.</a>
-          </video>
-        </div>
-        <div class="demo-chapters" aria-label="Demo chapters">
-          <button type="button" data-demo-time="3"><span>00:03</span> Local terminal</button>
-          <button type="button" data-demo-time="13"><span>00:13</span> Split panes</button>
-          <button type="button" data-demo-time="23"><span>00:23</span> Real SSH</button>
-          <button type="button" data-demo-time="33"><span>00:33</span> SFTP files</button>
-          <button type="button" data-demo-time="52"><span>00:52</span> SSH tunnel</button>
-          <button type="button" data-demo-time="72"><span>01:12</span> Snippets</button>
-          <button type="button" data-demo-time="82"><span>01:22</span> Themes</button>
-        </div>
-        <p class="note" id="demo-note">Recorded in MobaRust 0.1.17, before the 2.0 redesign. The SSH, file and HTTP traffic uses disposable loopback fixtures, not a production host.</p>
-      </section>
-
-      <section class="band" id="trust">
-        <div class="page-wrap trust-grid">
-          <div>
-            <p class="eyebrow">Trust</p>
-            <h2>Your hosts. Your machine.</h2>
-            <p>MobaRust is local-first and needs no account. Rust owns protocols, processes and persistence, and the interface gets only typed capabilities.</p>
-            <a class="text-link" href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md">Read the threat model <span aria-hidden="true">↗</span></a>
+            <div>
+              <ul class="points">
+                <li><b>Open all or some</b><span>Open the whole folder, or tick the hosts you need in a short list.</span></li>
+                <li><b>Bounded and visible</b><span>Four connections at a time. Each host shows queued, connecting, connected or failed.</span></li>
+                <li><b>Cancel and retry</b><span>Cancel what is still queued, and retry only the hosts that failed.</span></li>
+                <li><b>Pin and restore</b><span>Pin the groups you open every day. Reopen yesterday's tabs on launch if you want.</span></li>
+              </ul>
+              <p class="cli"><span>$ </span>mobarust --open-group "Production/Web"</p>
+            </div>
           </div>
-          <ul class="trust-list">
-            <li><span class="lamp lamp-on" aria-hidden="true"></span><p><strong>Host keys stay explicit.</strong> Unknown SSH hosts are never trusted silently.</p></li>
-            <li><span class="lamp lamp-on" aria-hidden="true"></span><p><strong>Secrets stay in the OS vault.</strong> Session files hold only references.</p></li>
-            <li><span class="lamp lamp-on" aria-hidden="true"></span><p><strong>Broadcast is deliberate.</strong> Multi-exec and macros need explicit targets and can be stopped at once.</p></li>
-            <li><span class="lamp lamp-on" aria-hidden="true"></span><p><strong>Tests stay on loopback.</strong> Real OpenSSH runs with throwaway keys and is cleaned up after each test.</p></li>
-          </ul>
+          <figure class="picker">
+            <img src="media/group-picker.webp" width="1280" height="800" alt="Choosing four of six web servers to open from the Production/Web group" loading="lazy">
+            <figcaption>Pick four of six hosts and open them. Browser preview of the main branch.</figcaption>
+          </figure>
         </div>
       </section>
 
-      <section class="page-wrap section-pad" id="download">
-        <p class="eyebrow">Download</p>
-        <h2 class="section-title">Try the preview.</h2>
-        <p class="lede">These preview builds predate the 2.0 workspace, group opening and import shown above; build <code>main</code> from source to try those. Builds are not publisher-signed, and macOS is ad hoc signed and not notarized.</p>
-        <div class="download-grid">
-          <a class="download-card" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg"><span class="download-os">macOS · Apple Silicon</span><strong>DMG</strong><span>v0.1.31</span></a>
-          <a class="download-card" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg"><span class="download-os">macOS · Intel</span><strong>DMG</strong><span>v0.1.31</span></a>
-          <a class="download-card" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe"><span class="download-os">Windows · x64</span><strong>Installer</strong><span>v0.1.12</span></a>
-          <a class="download-card" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb"><span class="download-os">Debian / Ubuntu</span><strong>DEB</strong><span>v0.1.12</span></a>
-          <a class="download-card" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage"><span class="download-os">Other Linux</span><strong>AppImage</strong><span>v0.1.12</span></a>
-          <a class="download-card download-card-quiet" href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31"><span class="download-os">Release notes</span><strong>SHA-256 files</strong><span>Checksums and install help ↗</span></a>
+      <section class="section paper-section" id="import" aria-labelledby="import-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="import-title">Unload your MobaXterm sessions on a Mac.</h2>
+            <p>Export your sessions from MobaXterm on Windows, then open the file in MobaRust on any operating system. You see a preview first, and you decide what happens to each duplicate.</p>
+          </div>
+          <div class="transfer">
+            <div class="raw">
+              <span class="lbl">Exported on Windows · .mxtsessions</span>
+              <pre><span class="k">[Bookmarks_1]</span>
+<span class="k">SubRep</span>=Clients\Acme\Prod
+<span class="k">billing</span>=#109#0%<span class="s">billing.acme.example</span>%<span class="s">2222</span>%<span class="s">deploy</span>%%-1%-1%%<span class="s">bastion.acme.example</span>%<span class="s">22</span>%<span class="s">jump</span>%0%0%0%<span class="s">_CurrentDrive_:\Users\you\.ssh\id_ed25519</span>%%-1%0%0%0%%1080%%0%0%1#MobaFont%10%0%0%…</pre>
+            </div>
+            <div class="arrow" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h26M23 11l9 9-9 9"/></svg></div>
+            <div class="card-out">
+              <span class="lbl">Imported into MobaRust</span>
+              <dl>
+                <dt>Name</dt><dd>billing</dd>
+                <dt>Folder</dt><dd>Clients/Acme/Prod</dd>
+                <dt>Target</dt><dd>deploy@billing.acme.example:2222</dd>
+                <dt>Gateway</dt><dd>jump@bastion.acme.example:22</dd>
+                <dt>Key</dt><dd>~/.ssh/id_ed25519, or the SSH agent if that file is not on this Mac</dd>
+                <dt>Password</dt><dd class="never">Never read</dd>
+              </dl>
+            </div>
+          </div>
+          <p class="demo-note">Example bookmark with sample hosts. The mapping is what the importer does, and it is covered by a test that connects an imported Windows export through a gateway to a real OpenSSH server.</p>
+          <div class="import-facts">
+            <div><h3>Windows files, any OS</h3><p>Reads .mxtsessions, .moba and MobaXterm.ini in Windows-1252, UTF-8 or UTF-16, with Windows line endings.</p></div>
+            <div><h3>More than host and port</h3><p>SSH and SFTP bookmarks keep their folders, users, ports, gateways, login commands and comments.</p></div>
+            <div><h3>Honest about the rest</h3><p>RDP, VNC, Telnet and serial bookmarks are listed, not guessed. Credential sections are never opened.</p></div>
+          </div>
         </div>
-        <p class="note">Checksums confirm integrity, not publisher identity. <a href="docs.html#limits">Read the known limits.</a></p>
+      </section>
+
+      <section class="section steel" aria-labelledby="bench-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="bench-title">Built for long days in the terminal.</h2>
+            <p>The terminal gets the window. Collapse the sidebar with ⇧⌘B, or hide everything but the shell with focus mode. Dark and light themes are both tuned for hours of reading.</p>
+          </div>
+          <div class="bench">
+            <figure>
+              <img src="media/workspace-light.webp" width="2400" height="1500" alt="The MobaRust workspace in its light theme" loading="lazy">
+              <figcaption>Light theme. Browser preview of the main branch.</figcaption>
+            </figure>
+            <table class="cargo">
+              <caption class="visually-hidden">What MobaRust can do today</caption>
+              <thead><tr><th scope="col">On board</th><th scope="col">Detail</th><th scope="col">Status</th></tr></thead>
+              <tbody>
+                <tr><td>Terminals</td><td>Local shells, tabs, splits, search and zoom</td><td><span class="tag">Working</span></td></tr>
+                <tr><td>SSH</td><td>Keys, agent, password, jump hosts, reconnect</td><td><span class="tag">Working</span></td></tr>
+                <tr><td>Files</td><td>SFTP and SCP transfers, remote text editing</td><td><span class="tag">Working</span></td></tr>
+                <tr><td>Tunnels</td><td>Local, remote and SOCKS5 forwarding</td><td><span class="tag">Working</span></td></tr>
+                <tr><td>Telnet, serial</td><td>Unencrypted transports are labelled</td><td><span class="tag">Working</span></td></tr>
+                <tr><td>VNC, RDP</td><td>RDP is not in normal installers</td><td><span class="tag tag-exp">Experimental</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section steel steel-deep" id="safety" aria-labelledby="safety-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="safety-title">Sealed at the source.</h2>
+            <p>MobaRust has no cloud account. Your hosts and credentials stay on your machine, and the risky actions always ask.</p>
+          </div>
+          <div class="seals">
+            <div class="seal">
+              <h3>Host keys are always checked.</h3>
+              <p>An unknown host key is refused until you choose to trust it. Security is never loosened to make a connection work.</p>
+              <span class="seal-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 4.2-3 7.6-7 9-4-1.4-7-4.8-7-9V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg>Verified</span>
+            </div>
+            <div class="seal">
+              <h3>Secrets stay in your vault.</h3>
+              <p>Saved sessions hold references, never passwords or keys. Credentials stay in your operating system's secure store.</p>
+              <span class="seal-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l3 3M14 9l2 2"/></svg>Vaulted</span>
+            </div>
+            <div class="seal">
+              <h3>Broadcast needs targets.</h3>
+              <p>Typing into many servers at once only reaches the targets you select, and multiline pastes ask before they run.</p>
+              <span class="seal-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 000 8.4M16.2 7.8a6 6 0 010 8.4M5 5a10 10 0 000 14M19 5a10 10 0 010 14"/></svg>Explicit</span>
+            </div>
+          </div>
+          <p class="seal-link">Read the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md">threat model</a> and the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/SECURITY.md">security policy</a>.</p>
+        </div>
+      </section>
+
+      <section class="section steel" id="pricing" aria-labelledby="pricing-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="pricing-title">Free. The whole cargo.</h2>
+            <p>No trial, no account, no feature held back.</p>
+          </div>
+          <div class="rates">
+            <article class="rate" aria-labelledby="rate-free">
+              <div class="rate-price">
+                <span class="tier" id="rate-free">Open source edition</span>
+                <span class="amount">€0</span>
+                <p>Apache 2.0 license</p>
+              </div>
+              <div class="rate-body">
+                <h3>Everything on this page, on every platform.</h3>
+                <ul class="rate-list">
+                  <li>SSH, SFTP, SCP and tunnels</li>
+                  <li>One-click server groups</li>
+                  <li>MobaXterm session import</li>
+                  <li>Tabs, splits and focus mode</li>
+                  <li>macOS, Windows and Linux</li>
+                  <li>No account, no sign-in</li>
+                </ul>
+                <a class="btn btn-yellow" href="#download">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>
+                  Download free
+                </a>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section paper-section" id="faq" aria-labelledby="faq-title">
+        <div class="wrap">
+          <div class="section-head"><h2 id="faq-title">Questions at the gate.</h2></div>
+          <div class="faq">
+            <details><summary>Is MobaRust free?</summary><p>Yes. MobaRust is free and open source under the Apache 2.0 license. There is no account and no sign-in.</p></details>
+            <details><summary>Can I import my MobaXterm sessions on a Mac?</summary><p>Yes. MobaRust reads .mxtsessions, .moba and MobaXterm.ini files, including files exported on Windows. SSH and SFTP bookmarks come with their folders, gateways, login commands and key file names. Passwords are never read. RDP, VNC, Telnet and serial bookmarks are listed but not imported.</p></details>
+            <details><summary>Which platforms does it run on?</summary><p>macOS comes first, on Apple Silicon and Intel. Preview builds also exist for Windows and Linux; they are older than the Mac build.</p></details>
+            <details><summary>Why does macOS warn me when I open it?</summary><p>The preview builds are ad hoc signed and not notarized by Apple, so macOS asks before the first launch. The <a href="docs.html#install">install guide</a> shows how to open it safely without turning off system security.</p></details>
+            <details><summary>Is it ready for daily work?</summary><p>It is a preview. SSH, SFTP, tunnels and group opening are tested against real OpenSSH servers on this machine's loopback. RDP and VNC are experimental. The <a href="docs.html#limits">known limits</a> are listed in the docs.</p></details>
+            <details><summary>Is MobaRust affiliated with MobaXterm?</summary><p>No. MobaRust is an independent open-source project and is not affiliated with Mobatek or MobaXterm.</p></details>
+          </div>
+        </div>
+      </section>
+
+      <section class="close steel" aria-labelledby="close-title">
+        <div class="wrap">
+          <h2 class="h2" id="close-title">Sign for it.</h2>
+          <p>Download MobaRust for your Mac, import your sessions, and open your first group in a minute.</p>
+          <div class="close-actions">
+            <a class="btn btn-yellow" href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>
+              Download for Mac
+            </a>
+            <a class="btn btn-line" href="https://github.com/OthmaneBlial/MobaRust">View the source on GitHub</a>
+          </div>
+        </div>
       </section>
     </main>
 
-    <footer class="site-footer">
-      <div class="page-wrap footer-main">
-        <a class="brand brand-footer" href="index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path class="mk-chev" d="M8 8.5L15 14L8 19.5"/><rect class="mk-cur" x="17" y="17.5" width="8" height="3.4" rx=".8"/><circle class="mk-lamp" cx="9" cy="25.5" r="1.6"/><circle class="mk-lamp" cx="13.5" cy="25.5" r="1.6"/></svg></span><span>MobaRust</span></a>
-        <p>Free and open source. Built for people who run servers.</p>
+    <footer class="foot">
+      <div class="wrap foot-inner">
+        <a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26">MobaRust</a>
         <nav aria-label="Footer">
-          <a href="docs.html">Documentation</a>
+          <a href="docs.html">Docs</a>
           <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">Roadmap</a>
-          <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE">Apache 2.0</a>
           <a href="https://github.com/OthmaneBlial/MobaRust/issues">Issues</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE">Apache 2.0</a>
         </nav>
+        <p class="legal">© <span data-year>2026</span> MobaRust. Independent project, not affiliated with Mobatek or MobaXterm.</p>
       </div>
-      <div class="page-wrap footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span>Independent project · Not affiliated with Mobatek</span></div>
     </footer>
+    <script src="app.js" defer></script>
   </body>
 </html>

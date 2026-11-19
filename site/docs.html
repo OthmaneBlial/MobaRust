@@ -3,146 +3,183 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#1d1e20">
-    <meta name="description" content="Documentation for the free, open-source MobaXterm alternative built with Rust: installation, workflows, security and preview limits.">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="MobaRust documentation">
-    <meta property="og:description" content="What works today, how to install it, and what still needs proof.">
-    <meta property="og:image" content="https://othmaneblial.github.io/MobaRust/media/mobarust-demo-poster.jpg">
-    <title>MobaRust documentation — Install, use, understand the limits</title>
+    <title>MobaRust docs — Install, import MobaXterm sessions, known limits</title>
+    <meta name="description" content="Install the free MobaRust preview on macOS, Windows or Linux, import MobaXterm sessions, and read the security boundaries, known limits and test evidence.">
     <link rel="canonical" href="https://othmaneblial.github.io/MobaRust/docs.html">
+    <meta name="theme-color" content="#160c07">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="MobaRust">
+    <meta property="og:title" content="MobaRust docs: install, import, limits">
+    <meta property="og:description" content="Install the free MobaRust preview, bring your MobaXterm sessions, and see exactly what is tested.">
+    <meta property="og:url" content="https://othmaneblial.github.io/MobaRust/docs.html">
+    <meta property="og:image" content="https://othmaneblial.github.io/MobaRust/media/og.png">
+    <meta name="twitter:card" content="summary_large_image">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=2.0">
-    <script src="app.js?v=2.0" defer></script>
+    <link rel="preload" href="fonts/big-shoulders-stencil.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header">
-      <div class="header-inner">
-        <a class="brand" href="index.html" aria-label="MobaRust home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path class="mk-chev" d="M8 8.5L15 14L8 19.5"/><rect class="mk-cur" x="17" y="17.5" width="8" height="3.4" rx=".8"/><circle class="mk-lamp" cx="9" cy="25.5" r="1.6"/><circle class="mk-lamp" cx="13.5" cy="25.5" r="1.6"/></svg></span><span>MobaRust</span></a>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="rail">
+      <div class="wrap rail-inner">
+        <a class="brand" href="./" aria-label="MobaRust home"><img src="favicon.svg" alt="" width="30" height="30">MobaRust</a>
         <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
-        <nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="index.html#groups">Groups</a><a href="index.html#features">Features</a><a href="index.html#demo">Demo</a><a href="docs.html" aria-current="page">Docs</a><a class="nav-source" href="https://github.com/OthmaneBlial/MobaRust">GitHub <span aria-hidden="true">↗</span></a><a class="nav-download" href="#install">Download preview</a></nav>
+        <nav class="nav" id="site-nav" aria-label="Main">
+          <a href="./#fleet">Groups</a>
+          <a href="./#import">MobaXterm import</a>
+          <a href="./#safety">Safety</a>
+          <a href="docs.html" aria-current="page">Docs</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust">GitHub</a>
+          <a class="btn btn-yellow btn-small" href="#install">Download free</a>
+        </nav>
       </div>
     </header>
 
     <main id="main">
-      <section class="docs-hero page-wrap">
-        <p class="eyebrow"><span class="eyebrow-line"></span> MobaRust / Field guide</p>
-        <h1>Facts before<br><em>features.</em></h1>
-        <p>Install the preview, see what it does, and understand what still needs real-world proof. This guide follows the code and release evidence.</p>
-        <div class="docs-meta"><span>MAC VERSION 0.1.31</span><span>APACHE 2.0</span><span>LOCAL-FIRST</span></div>
+      <section class="wall steel docs-hero" aria-labelledby="docs-title">
+        <div class="wrap wall-inner">
+          <p class="wall-code" aria-hidden="true"><span>MBRU 001402 · Field guide</span><span>Mac 0.1.31 · Apache-2.0</span></p>
+          <h1 class="wall-title" id="docs-title">Read the <span>manifest.</span></h1>
+          <p>Install the preview, bring your MobaXterm sessions, and see exactly what is tested and what still needs proof. This guide follows the code and the release evidence.</p>
+        </div>
       </section>
 
-      <div class="docs-layout page-wrap">
-        <aside class="docs-nav" aria-label="On this page">
-          <p>ON THIS PAGE</p>
-          <a href="#install">Install the preview</a>
-          <a href="#workflows">Supported workflows</a>
-          <a href="#trust">Security boundaries</a>
-          <a href="#limits">Known limits</a>
-          <a href="#source">Build from source</a>
-          <a href="#evidence">Validation evidence</a>
-        </aside>
+      <div class="paper-section">
+        <div class="wrap docs-layout">
+          <nav class="toc" aria-label="On this page">
+            <p>On this page</p>
+            <ol>
+              <li><a href="#install">Install the preview</a></li>
+              <li><a href="#import">Import from MobaXterm</a></li>
+              <li><a href="#workflows">What it does</a></li>
+              <li><a href="#security">Security boundaries</a></li>
+              <li><a href="#limits">Known limits</a></li>
+              <li><a href="#source">Build from source</a></li>
+              <li><a href="#evidence">Evidence</a></li>
+            </ol>
+          </nav>
 
-        <article class="docs-content">
-          <section id="install">
-            <p class="docs-kicker">01 / Install</p>
-            <h2>Choose your desktop.</h2>
-            <p>Mac v0.1.31 and Windows/Linux v0.1.12 are desktop previews without publisher signing. Choose an installer below. GitHub's autogenerated source archives are not installers.</p>
-            <div class="docs-downloads">
-              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe"><span>WINDOWS · X64</span><strong>Windows installer</strong><small>v0.1.12 · WebView2 is installed if needed</small></a>
-              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg"><span>MACOS · APPLE SILICON</span><strong>Apple Silicon</strong><small>v0.1.31 · drag MobaRust to Applications</small></a>
-              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg"><span>MACOS · INTEL</span><strong>Intel Mac</strong><small>v0.1.31 · drag MobaRust to Applications</small></a>
-              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb"><span>LINUX · DEBIAN</span><strong>Ubuntu / Debian</strong><small>v0.1.12 · DEB · x64</small></a>
-              <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage"><span>LINUX · PORTABLE</span><strong>Other Linux desktops</strong><small>v0.1.12 · WebKitGTK 4.1 and FUSE may be required</small></a>
-              <a class="docs-download-all" href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31"><span>MAC · CHECKSUMS · NOTES</span><strong>Mac release files</strong><small>SHA-256 files and install instructions ↗</small></a>
-            </div>
-            <aside class="docs-callout"><strong>No publisher signature.</strong> Windows may show SmartScreen. macOS may block first launch because the app is not Developer ID signed or notarized. Follow the OS's per-app review flow only if you trust the download. Never disable system security globally.</aside>
-            <p>Checksum files help detect download corruption. They do not verify who published an installer.</p>
-          </section>
+          <article class="doc">
+            <section id="install" aria-labelledby="install-title">
+              <h2 id="install-title">Install the preview</h2>
+              <p>The Mac build is version 0.1.31. The Windows and Linux builds are version 0.1.12. All of them are previews without publisher signing. GitHub's automatic source archives are not installers.</p>
+              <div class="downloads">
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg"><span>macOS · Apple Silicon</span><strong>DMG 0.1.31</strong><small>Drag MobaRust to Applications</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg"><span>macOS · Intel</span><strong>DMG 0.1.31</strong><small>Drag MobaRust to Applications</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe"><span>Windows · x64</span><strong>Installer 0.1.12</strong><small>Installs WebView2 if needed</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb"><span>Ubuntu / Debian · x64</span><strong>DEB 0.1.12</strong><small>For apt-based desktops</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage"><span>Other Linux · x64</span><strong>AppImage 0.1.12</strong><small>WebKitGTK 4.1 and FUSE may be needed</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31"><span>Release notes</span><strong>SHA-256 files</strong><small>Checksums and install notes</small></a>
+              </div>
+              <p class="callout">macOS may block the first launch because the app is ad hoc signed and not notarized, and Windows may show SmartScreen. Use your system's per-app review flow only if you trust the download, and never turn off system security globally. Checksums detect a corrupted download; they do not prove who published it.</p>
+              <p>The group opener, MobaXterm import and the new interface are on the main branch and are not in these downloads yet. <a href="#source">Build from source</a> to use them today.</p>
+            </section>
 
-          <section id="workflows">
-            <p class="docs-kicker">02 / Workflows</p>
-            <h2>Built for the SSH workday.</h2>
-            <div class="docs-table-wrap">
-              <table class="docs-table">
-                <thead><tr><th>Area</th><th>Available now</th><th>Boundary</th></tr></thead>
+            <section id="import" aria-labelledby="import-title">
+              <h2 id="import-title">Import from MobaXterm</h2>
+              <p>In MobaXterm on Windows, export your sessions to a file. In MobaRust, choose <strong>Import MobaXterm sessions</strong> in the session list and pick the file. It works on macOS, Linux and Windows.</p>
+              <table>
+                <thead><tr><th scope="col">Item</th><th scope="col">What happens</th></tr></thead>
                 <tbody>
-                  <tr><th>SSH</th><td>Host-key verification, agent/password/key-reference authentication, PTY resize, keepalives, bounded reconnect and jump hosts. The current Mac preview also queues competing password/OTP challenges.</td><td>Verify the fingerprint before trusting a new host. Native queued expiry/overflow acceptance remains pending.</td></tr>
-                  <tr><th>SFTP / SCP</th><td>Browser, streaming transfer, recursive SFTP, progress, cancellation, explicit overwrite, rollback and mode preservation. Unsafe and ambiguous filenames fail closed; unknown sizes stay unknown.</td><td>Recursive SCP is not supported. Remote and local directory path swaps still have documented race limits.</td></tr>
-                  <tr><th>Sessions</th><td>Folders, tags, favorites, recents, search, OpenSSH config import, and secret-free profile export.</td><td>Profiles keep credential references, not secret contents.</td></tr>
-                  <tr><th>Local terminals</th><td>Native PTY, typed shell targets, resize, split panes, persistent tabs, and streamed UTF-8.</td><td>Broader Windows/Linux GUI and WSL acceptance remains open.</td></tr>
-                  <tr><th>Operator tools</th><td>Tunnels, bounded SOCKS5, snippets, cancellable macros, explicit multi-exec, diagnostics, and optional monitoring.</td><td>Broadcast targets require explicit selection.</td></tr>
-                  <tr><th>Telnet / serial</th><td>Native Telnet negotiation and serial lifecycle controls.</td><td>Telnet is unencrypted. Serial hardware coverage is incomplete.</td></tr>
-                  <tr><th>RDP / VNC</th><td>Isolated experimental helpers and deterministic local fixtures.</td><td>RDP is excluded from installers. VNC remote TCP is unencrypted and opt-in.</td></tr>
+                  <tr><td>Files</td><td><code>.mxtsessions</code>, single-session <code>.moba</code> files and <code>MobaXterm.ini</code>, in Windows-1252, UTF-8 or UTF-16, with Windows or Unix line endings.</td></tr>
+                  <tr><td>Imported</td><td>SSH and SFTP bookmarks with name, nested folder, host, port, username, login command, comment and SSH gateways (as jump hosts).</td></tr>
+                  <tr><td>Keys</td><td>A path such as <code>C:\Users\you\.ssh\id_ed25519</code> becomes <code>~/.ssh/id_ed25519</code> when that file exists. Otherwise the SSH agent is used and the session notes say which file to copy. PuTTY <code>.ppk</code> keys get a <code>puttygen</code> conversion hint.</td></tr>
+                  <tr><td>Never read</td><td>Passwords and every credential section of the file.</td></tr>
+                  <tr><td>Not imported</td><td>X11, proxy, terminal, font and colour settings. RDP, VNC, Telnet and serial bookmarks are listed as skipped.</td></tr>
+                  <tr><td>Duplicates</td><td>Before anything is saved, a preview lets you add, replace or skip each duplicate. The import is written in one step, so a failure leaves your sessions unchanged.</td></tr>
                 </tbody>
               </table>
-            </div>
-          </section>
+              <p class="callout">The field layout follows a public community study of the MobaXterm format, not vendor documentation. It is tested with Windows-style exports, including a real connection to a local OpenSSH server through an imported gateway, but not with a file written by MobaXterm itself. Please report any file that does not import.</p>
+            </section>
 
-          <section id="trust">
-            <p class="docs-kicker">03 / Security</p>
-            <h2>Clear edges, deliberate actions.</h2>
-            <ul class="docs-list">
-              <li>SSH host-key verification rejects unknown keys until the operator chooses a trust source.</li>
-              <li>Session configuration is separate from passwords and private keys. Native code resolves saved credential references. Interactive SSH answers pass from the dialog to their original challenge and are not saved in profiles.</li>
-              <li>Secrets are excluded from ordinary profile data, logs, and helper process arguments.</li>
-              <li>There is no unrestricted shell command bridge from the renderer.</li>
-              <li>Multiline shell paste is confirmed. Multi-exec shows selected targets and an emergency disable path.</li>
-              <li>Network jobs use bounded input/output, timeouts, cancellation, and cleanup.</li>
-              <li>Repository tests use disposable state and loopback fixtures. They do not inspect personal SSH files or connect to real hosts.</li>
-            </ul>
-            <p>Read the full <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md">threat model</a>, <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/safe-testing.md">safe testing policy</a>, and <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/dependency-audit.md">dependency audit</a>.</p>
-          </section>
+            <section id="workflows" aria-labelledby="workflows-title">
+              <h2 id="workflows-title">What it does</h2>
+              <table>
+                <thead><tr><th scope="col">Area</th><th scope="col">Available</th><th scope="col">Boundary</th></tr></thead>
+                <tbody>
+                  <tr><td>SSH</td><td>Host-key verification, agent, password and key authentication, PTY resize, keepalives, bounded reconnect and jump hosts.</td><td>Verify the fingerprint before trusting a new host.</td></tr>
+                  <tr><td>Groups</td><td>Nested folders, open all or selected hosts, four connections at a time, cancel and retry, pinned groups, <code>--open-group</code>.</td><td>On the main branch; not in the 0.1.31 download.</td></tr>
+                  <tr><td>SFTP / SCP</td><td>File browser, streaming and recursive SFTP transfers, progress, cancellation, explicit overwrite and mode preservation.</td><td>Recursive SCP is not supported.</td></tr>
+                  <tr><td>Sessions</td><td>Folders, tags, favorites, recents, search, OpenSSH config import, MobaXterm import and secret-free export.</td><td>Profiles keep credential references, not secrets.</td></tr>
+                  <tr><td>Terminals</td><td>Native PTY, tabs, splits, focus mode, search, zoom and UTF-8 streaming.</td><td>Broader Windows and Linux GUI testing is open.</td></tr>
+                  <tr><td>Operator tools</td><td>Tunnels, SOCKS5, snippets, cancellable macros, explicit multi-exec, diagnostics and optional monitoring.</td><td>Broadcast targets must be selected explicitly.</td></tr>
+                  <tr><td>Telnet / serial</td><td>Telnet negotiation and serial lifecycle controls.</td><td>Telnet is unencrypted. Serial hardware coverage is incomplete.</td></tr>
+                  <tr><td>RDP / VNC</td><td>Isolated experimental helpers.</td><td>RDP is not in installers. VNC over TCP is unencrypted and opt-in.</td></tr>
+                </tbody>
+              </table>
+            </section>
 
-          <section id="limits">
-            <p class="docs-kicker">04 / Known limits</p>
-            <h2>Preview means work remains.</h2>
-            <ul class="docs-list">
-              <li>Mac v0.1.31 installers were built and checked locally. The GitHub Actions release workflow is disabled.</li>
-              <li>Known v0.1.31 issue: Files can retain a busy error after a successful Refresh and show that directory error on Monitor. A <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-busy-recovery-v0.1.31.md">source correction and native receipt</a> track recovery; corrected native acceptance and a new installer remain pending.</li>
-              <li>The installers lack publisher signatures. Mac packages have ad hoc signatures but are not notarized.</li>
-              <li>Build success does not prove full GUI clean-install behavior or remote-server interoperability.</li>
-              <li>v0.1.31 fixes live and stopped tunnel totals across local, SOCKS5 and remote forwarding. The ARM64 installer copy passed counter, SSH-tab Close and normal Quit checks with eight byte-matched clients and owned fixture cleanup. See the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-tunnels-v0.1.31.md">native receipt and limits</a>. Larger transfer lists, finite-action saturation/Retry and sustained workloads remain pending. Earlier <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-tunnels-v0.1.30.md">v0.1.30 checks</a> cover 21 live controls and shared 32-job refusal/recovery; those packages retain the counter defect. Uncertain forwarding attempts still close their SSH transport and end other work on that connection.</li>
-              <li>The v0.1.29 ARM64 installer copy passed Escape before connection, approved startup, interruption and replacement startup timeout. No third connection appeared for 63.59 seconds while the fixture remained live. Normal Quit released the app/local PTY; the fixture removed private state and released its loopback port. Native acceptance of other startup-write failures and broader output ordering remains open.</li>
-              <li>The v0.1.27 preview adds explicit UTF-8/Windows-1252 Open while retaining strict UTF-8 defaults and bounded SFTP listings. The ARM64 installer copy passed legacy Open/Save/reopen, UTF-8 conversion/reopen, exact bytes/modes and normal Quit. Warning/recovery focus, native listing-limit refusals, queued expiry/overflow and sustained GUI workloads remain pending.</li>
-              <li>RDP/VNC remain experiments. RDP is not packaged; VNC remote TCP has no transport encryption.</li>
-              <li>Windows/Linux hardware, WSL, clipboard, serial devices, and broader platform behavior need target-environment evidence.</li>
-            </ul>
-            <p>MobaRust is independent and is not affiliated with Mobatek or MobaXterm. There is no claim of feature-for-feature parity. The <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">roadmap</a> has 57 of 76 checked items (75%), a checklist measure rather than a production-readiness score. Next: sustained failure/recovery, transfer-control acceptance, aligned Windows/Linux installers and signing. Wider SSH recovery/authentication and platform evidence remain open.</p>
-          </section>
+            <section id="security" aria-labelledby="security-title">
+              <h2 id="security-title">Security boundaries</h2>
+              <ul>
+                <li>SSH host-key verification refuses unknown keys until you choose a trust source.</li>
+                <li>Session settings are kept apart from passwords and private keys. Native code resolves saved credential references, and interactive SSH answers are never saved in profiles.</li>
+                <li>Secrets are kept out of profile data, logs and helper process arguments.</li>
+                <li>The interface has no unrestricted shell command bridge.</li>
+                <li>Multiline paste asks first. Multi-exec shows its targets and has an emergency stop.</li>
+                <li>Network jobs have bounded input and output, timeouts, cancellation and cleanup.</li>
+                <li>Repository tests use throwaway state and loopback servers. They never read personal SSH files or connect to real hosts.</li>
+              </ul>
+              <p>Read the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/threat-model.md">threat model</a>, the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/safe-testing.md">safe testing policy</a> and the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/security/dependency-audit.md">dependency audit</a>.</p>
+            </section>
 
-          <section id="source">
-            <p class="docs-kicker">05 / Build from source</p>
-            <h2>Run the local path.</h2>
-            <p>Requirements: Rust 1.90 or newer, Node.js 22, pnpm, and the <a href="https://v2.tauri.app/start/prerequisites/">Tauri prerequisites</a> for your operating system.</p>
-            <div class="command-block">
-              <button class="copy-button" type="button" data-copy-target="clone-command">Copy</button>
-              <pre id="clone-command"><code>git clone https://github.com/OthmaneBlial/MobaRust.git
+            <section id="limits" aria-labelledby="limits-title">
+              <h2 id="limits-title">Known limits</h2>
+              <ul>
+                <li>Installers are built and checked locally. They have no publisher signature, and the Mac packages are ad hoc signed and not notarized.</li>
+                <li>The 0.1.31 Mac preview can keep a busy error in Files after a successful refresh. A fix is in the source; a corrected installer is pending. <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-busy-recovery-v0.1.31.md">Receipt</a>.</li>
+                <li>A tunnel forwarding attempt with an uncertain outcome closes its SSH connection and ends other work on it. <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-tunnels-v0.1.31.md">Tunnel receipt</a>.</li>
+                <li>A successful build does not prove clean-install behavior or compatibility with every SSH server.</li>
+                <li>RDP and VNC are experiments. RDP is not packaged, and VNC over TCP has no transport encryption.</li>
+                <li>Windows and Linux hardware, WSL, clipboard and serial devices need testing on those systems.</li>
+              </ul>
+              <p>MobaRust is independent and not affiliated with Mobatek or MobaXterm. It does not claim feature-for-feature parity. See the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">roadmap</a> for what comes next.</p>
+            </section>
+
+            <section id="source" aria-labelledby="source-title">
+              <h2 id="source-title">Build from source</h2>
+              <p>You need Rust 1.90 or newer, Node.js 22, pnpm 10 and the Tauri prerequisites for your system.</p>
+              <div class="codebox">
+                <button class="btn btn-small" type="button" data-copy-target="build-commands">Copy</button>
+                <pre id="build-commands">git clone https://github.com/OthmaneBlial/MobaRust.git
 cd MobaRust
 pnpm install --dir apps/desktop --frozen-lockfile
 cargo xtask check
-pnpm --dir apps/desktop tauri dev</code></pre>
-              <p class="copy-status" role="status" aria-live="polite">Copies commands only. Nothing is executed.</p>
-            </div>
-            <p>The validation path uses isolated home directories, disposable fixtures, and loopback networking. It does not need personal SSH files, Keychain, GitHub keys, SSH agents, real hosts, or attached hardware.</p>
-          </section>
+pnpm --dir apps/desktop tauri dev</pre>
+              </div>
+              <p class="copy-status" aria-live="polite">Copy only puts the commands on your clipboard. Nothing runs.</p>
+              <p>The checks use isolated home folders, throwaway fixtures and loopback networking. They do not need your SSH files, Keychain, SSH agent, real hosts or hardware. <code>./tools/local-protocol-lab.sh</code> runs every real-protocol suite on this machine and checks that nothing is left running.</p>
+            </section>
 
-          <section id="evidence">
-            <p class="docs-kicker">06 / Evidence</p>
-            <h2>Check the current receipts.</h2>
-            <p>Quality checks run locally with <code>cargo xtask check</code>. GitHub Actions release builds are disabled.</p>
-            <p>The <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31">v0.1.31 Mac release</a> contains locally built ARM and Intel DMGs with SHA-256 files. Their disk images, package layout, architectures, ad hoc signatures and CLI version checks passed; all four published files were downloaded and compared byte for byte. Package inventory checks found no private lab state or environment metadata. Intel CLI execution used Rosetta on Apple Silicon with a 60-second process deadline. <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.12">Windows and Linux v0.1.12</a> remain available. These receipts do not replace native GUI, clean-install or hardware evidence.</p>
-            <p>The current source passes the complete local check, including 114 desktop tests, four remote-forwarding cases, five private SDK tests, 22 public in-memory SFTP boundary cases and 15 editor/transfer fault cases. Coverage also includes 25 OpenSSH cases and both encrypted SFTP channel paths. The loopback OpenSSH lab also checks 16 MiB interrupted SFTP/SCP copies and full retries, plus byte-matched 8 MiB PTY/SFTP streams through two IPv6 bastions with ordinary and frequent-rekey settings. See the <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/release/v0.1.31.md">v0.1.31 validation receipt</a> for commands and limits.</p>
-            <p>Report bugs with the operating system, architecture, and reproduction steps in <a href="https://github.com/OthmaneBlial/MobaRust/issues">GitHub Issues</a>. Remove credentials, hostnames, IP addresses, and private connection details first.</p>
-          </section>
-        </article>
+            <section id="evidence" aria-labelledby="evidence-title">
+              <h2 id="evidence-title">Evidence</h2>
+              <p>Every claim on this site points to a receipt in the repository.</p>
+              <ul>
+                <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/TEST_MATRIX.md">Test matrix</a>: what is tested against real local OpenSSH, what uses fixtures, and what is still open.</li>
+                <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/benchmarks/2026-11-19-native-macos.md">Native macOS benchmark</a>: launch time, idle CPU and memory, and clean shutdown of the release build on an Apple M2.</li>
+                <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/release/v0.1.31.md">v0.1.31 release receipt</a>: package layout, architectures, signatures and checksums.</li>
+              </ul>
+              <p>Report bugs in <a href="https://github.com/OthmaneBlial/MobaRust/issues">GitHub Issues</a> with your system, architecture and steps. Remove credentials, hostnames, IP addresses and private details first.</p>
+            </section>
+          </article>
+        </div>
       </div>
     </main>
 
-    <footer class="site-footer">
-      <div class="page-wrap footer-main"><a class="brand brand-footer" href="index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path class="mk-chev" d="M8 8.5L15 14L8 19.5"/><rect class="mk-cur" x="17" y="17.5" width="8" height="3.4" rx=".8"/><circle class="mk-lamp" cx="9" cy="25.5" r="1.6"/><circle class="mk-lamp" cx="13.5" cy="25.5" r="1.6"/></svg></span><span>MobaRust</span></a><p>Free and open source.<br>Built for people who operate systems.</p><nav aria-label="Footer"><a href="index.html">Home</a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">Roadmap</a><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE">Apache 2.0</a><a href="https://github.com/OthmaneBlial/MobaRust/issues">Issues</a></nav></div>
-      <div class="page-wrap footer-bottom"><span>© <span data-year>2026</span> MobaRust</span><span>Independent project · Not affiliated with Mobatek</span></div>
+    <footer class="foot">
+      <div class="wrap foot-inner">
+        <a class="brand" href="./"><img src="favicon.svg" alt="" width="26" height="26">MobaRust</a>
+        <nav aria-label="Footer">
+          <a href="./">Home</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/ROADMAP.md">Roadmap</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust/issues">Issues</a>
+          <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/LICENSE">Apache 2.0</a>
+        </nav>
+        <p class="legal">© <span data-year>2026</span> MobaRust. Independent project, not affiliated with Mobatek or MobaXterm.</p>
+      </div>
     </footer>
+    <script src="app.js" defer></script>
   </body>
 </html>

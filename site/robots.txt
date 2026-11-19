@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /og.html
+
+Sitemap: https://othmaneblial.github.io/MobaRust/sitemap.xml
