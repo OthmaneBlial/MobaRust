@@ -22,9 +22,9 @@ Terminal tabs and splits · SSH with verified host keys · SFTP/SCP · tunnels �
 
 ### See it run
 
-[![40-second demo: import a MobaXterm export, open a 14-server group, trust its host key once and restore tabs after a restart](docs/assets/demo-poster.jpg)](https://othmaneblial.github.io/MobaRust/#demo)
+[![Demo video: import a MobaXterm export, open a server group, trust its host key once and open a second shell on the same connection](docs/assets/demo-poster.jpg)](https://othmaneblial.github.io/MobaRust/#demo)
 
-<sub>Click to watch the 40-second demo on the website: captioned screenshots of the native 0.2.0 Mac app, taken during testing against a local OpenSSH server.</sub>
+<sub>Click to watch the demo on the website: a real screen recording of the native Mac app against a local OpenSSH server.</sub>
 
 ## Why MobaRust
 
