@@ -441,6 +441,9 @@ struct SessionState {
     attached: bool,
     pending_output: Vec<String>,
     output_decoder: Utf8OutputDecoder,
+    // Weak, so a registry entry never keeps a transport alive; lets another
+    // tab open a shell on this authenticated connection.
+    connection: std::sync::Weak<SshConnection>,
 }
 
 struct RemoteSessionContext {
@@ -727,7 +730,6 @@ impl SshManager {
             return Err(SshManagerError::Closed);
         }
         validate_ssh_connection_policy(&request)?;
-        let host = request.host.clone();
         let (size, size_receiver) = watch::channel((request.cols.max(1), request.rows.max(1)));
         let connection = tokio::select! {
             biased;
@@ -740,6 +742,70 @@ impl SshManager {
             _ = shutdown.changed() => return Err(SshManagerError::Closed),
             result = open_shell_at_current_size(&connection, &size_receiver) => result?,
         };
+        self.start_session(
+            app,
+            vault,
+            request,
+            auth_events,
+            connection,
+            shell,
+            size,
+            size_receiver,
+            true,
+        )
+    }
+
+    /// Opens another shell over the authenticated transport of an open SSH tab:
+    /// no new TCP connection, host key check or authentication. The new tab keeps
+    /// its own input queue and workers; it reconnects on its own if the shell is lost.
+    pub async fn connect_shared(
+        &self,
+        app: AppHandle,
+        vault: Arc<dyn CredentialLookup>,
+        source_terminal_id: &str,
+        request: SshConnectRequest,
+        auth_events: Channel<SshAuthEvent>,
+    ) -> Result<SshConnectResponse, SshManagerError> {
+        let mut shutdown = self.shutdown.subscribe();
+        if *shutdown.borrow() {
+            return Err(SshManagerError::Closed);
+        }
+        validate_ssh_connection_policy(&request)?;
+        let connection = self.session_connection(source_terminal_id)?;
+        let (size, size_receiver) = watch::channel((request.cols.max(1), request.rows.max(1)));
+        let shell = tokio::select! {
+            biased;
+            _ = shutdown.changed() => return Err(SshManagerError::Closed),
+            result = open_shell_at_current_size(&connection, &size_receiver) => result?,
+        };
+        // X11 channels arrive on the transport; the source tab's bridge serves them.
+        self.start_session(
+            app,
+            vault,
+            request,
+            auth_events,
+            connection,
+            shell,
+            size,
+            size_receiver,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_session(
+        &self,
+        app: AppHandle,
+        vault: Arc<dyn CredentialLookup>,
+        request: SshConnectRequest,
+        auth_events: Channel<SshAuthEvent>,
+        connection: Arc<SshConnection>,
+        shell: mobarust_ssh::SshShell,
+        size: watch::Sender<(u32, u32)>,
+        size_receiver: watch::Receiver<(u32, u32)>,
+        bridge_x11: bool,
+    ) -> Result<SshConnectResponse, SshManagerError> {
+        let host = request.host.clone();
         let (reader, writer) = shell.split();
         let terminal_id = Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
@@ -762,26 +828,28 @@ impl SshManager {
                     attached: false,
                     pending_output: Vec::new(),
                     output_decoder: Utf8OutputDecoder::default(),
+                    connection: Arc::downgrade(&connection),
                 },
             );
         }
 
-        self.start_x11_bridge(
-            Arc::clone(&connection),
-            close_receiver.clone(),
-            app.clone(),
-            terminal_id.clone(),
-        );
+        if bridge_x11 {
+            self.start_x11_bridge(
+                Arc::clone(&connection),
+                close_receiver.clone(),
+                app.clone(),
+                terminal_id.clone(),
+            );
+        }
 
         let manager = self.clone();
         let id_for_task = terminal_id.clone();
-        let reconnect_vault = Arc::clone(&vault);
         let context = RemoteSessionContext {
             app,
             manager,
             terminal_id: id_for_task,
             request,
-            vault: reconnect_vault,
+            vault,
             close: close_receiver,
             size: size_receiver,
             auth_events,
@@ -792,6 +860,38 @@ impl SshManager {
         });
 
         Ok(SshConnectResponse { terminal_id, host })
+    }
+
+    fn session_connection(&self, terminal_id: &str) -> Result<Arc<SshConnection>, SshManagerError> {
+        self.sessions
+            .lock()
+            .map_err(|_| SshManagerError::Closed)?
+            .get(terminal_id)
+            .and_then(|session| session.connection.upgrade())
+            .ok_or_else(|| SshManagerError::MissingSession(terminal_id.into()))
+    }
+
+    fn set_session_connection(&self, terminal_id: &str, connection: &Arc<SshConnection>) {
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(session) = sessions.get_mut(terminal_id)
+        {
+            session.connection = Arc::downgrade(connection);
+        }
+    }
+
+    /// Detaches this tab from `connection` and reports whether another tab still
+    /// uses it. Done under one lock so two tabs closing together cannot both skip
+    /// the disconnect.
+    fn release_connection(&self, terminal_id: &str, connection: &Arc<SshConnection>) -> bool {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return false;
+        };
+        if let Some(session) = sessions.get_mut(terminal_id) {
+            session.connection = std::sync::Weak::new();
+        }
+        sessions
+            .values()
+            .any(|session| std::ptr::eq(session.connection.as_ptr(), Arc::as_ptr(connection)))
     }
 
     pub fn answer_authentication(
@@ -2092,7 +2192,9 @@ async fn run_remote_session(
                 };
                 reconnects_since_stable_shell = next_count;
                 connection_is_live = false;
-                let _ = connection.disconnect().await;
+                if !manager.release_connection(&terminal_id, &connection) {
+                    let _ = connection.disconnect().await;
+                }
                 let outcome = reconnect_with_backoff(
                     &mut close,
                     error,
@@ -2134,6 +2236,7 @@ async fn run_remote_session(
                             }
                         };
                         connection = Arc::new(new_connection);
+                        manager.set_session_connection(&terminal_id, &connection);
                         reader = new_reader;
                         writer = new_writer;
                         manager.start_x11_bridge(
@@ -2177,7 +2280,7 @@ async fn run_remote_session(
         }
     }
 
-    if connection_is_live {
+    if connection_is_live && !manager.release_connection(&terminal_id, &connection) {
         let _ = connection.disconnect().await;
     }
     manager.remove(&terminal_id);
@@ -4780,6 +4883,7 @@ mod tests {
                 attached: false,
                 pending_output: Vec::new(),
                 output_decoder: mobarust_core::Utf8OutputDecoder::default(),
+                connection: std::sync::Weak::new(),
             },
         );
         commands
@@ -5743,6 +5847,7 @@ mod tests {
                     attached: false,
                     pending_output: Vec::new(),
                     output_decoder: Utf8OutputDecoder::default(),
+                    connection: std::sync::Weak::new(),
                 },
             );
             let (close_observed, wait_for_close) = oneshot::channel();

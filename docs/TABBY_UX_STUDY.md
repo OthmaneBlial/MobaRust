@@ -28,7 +28,7 @@ interface.
 | Rename / move tabs | ⌘R rename, ⌘⇧←/→ move | **Added:** "Rename tab…" in the tab menu (the name then stays, instead of following the shell title) and Move left/right with ⌃⇧PageUp/PageDown, which works even with focus in the terminal. ⌘⇧→ was already MobaRust's split-right shortcut | Done; checked in the browser preview |
 | Copy on select, right-click paste | Optional (PuTTY style) | **Added:** opt-in "Copy on select" in terminal settings (off by default). Right-click paste not added: pasting stays explicit so the multiline paste check always applies | Done; checked in the browser preview |
 | Multiline paste warning | Yes | Yes, and required for broadcast | Same |
-| SSH connection manager | Profiles with groups, jump hosts, port forwarding tab, "reuse session for multiple tabs" | Nested folders, jump hosts, tunnels, one-click group opening with 4 connections at a time | MobaRust is stronger for groups; **session reuse is a gap** worth studying (one SSH connection, several shells) |
+| SSH connection manager | Profiles with groups, jump hosts, port forwarding tab, "reuse session for multiple tabs" | Nested folders, jump hosts, tunnels, one-click group opening with 4 connections at a time | **Added:** "New shell on this connection" in an SSH tab's menu opens another shell over the same authenticated connection (no new handshake or login). Each shell keeps its own input queue and reconnects on its own; the connection closes with its last shell |
 | Secrets | Encrypted container for SSH secrets and config | OS keychain references; optional portable vault | Equivalent goal |
 | File transfer | Zmodem in SSH sessions, SFTP | SFTP browser with progress, SCP, remote editing | MobaRust is broader; Zmodem not planned |
 | Serial, Telnet | Yes | Yes | Same |
@@ -38,7 +38,8 @@ interface.
 
 1. Done: tab rename and keyboard tab reordering.
 2. Done: opt-in copy on select. Right-click paste is left out on purpose.
-3. Study SSH connection reuse for extra shells on the same host. It cuts
-   connection time and the number of authentication prompts.
+3. Done: SSH connection reuse for extra shells on the same host, from the tab
+   menu. Checked against local OpenSSH by an automated test; the native click
+   path is not yet observed.
 4. Keep what already differs on purpose: groups opened in one click,
    MobaXterm import, and safety prompts on broadcast.

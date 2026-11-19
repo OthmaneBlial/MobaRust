@@ -149,6 +149,31 @@ fn fixture_shell_uses_only_the_disposable_home() {
 }
 
 #[test]
+fn shells_sharing_one_transport_survive_each_other() {
+    // The desktop "New shell on this connection" relies on this: extra shells
+    // on one authenticated transport, independent of each other's lifetime.
+    let runtime = tokio::runtime::Runtime::new().expect("create shared-shell runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options()).await.unwrap();
+        let (first_reader, first_writer) = connection.open_shell(80, 24).await.unwrap().split();
+        let output =
+            shell_output(&connection, b"printf 'MOBARUST_%s\\n' 'SECOND_OK'; exit\n").await;
+        assert!(output.contains("MOBARUST_SECOND_OK"), "{output}");
+        let _ = first_writer.close().await;
+        drop(first_reader);
+        let output = shell_output(
+            &connection,
+            b"printf 'MOBARUST_%s\\n' 'AFTER_CLOSE_OK'; exit\n",
+        )
+        .await;
+        assert!(output.contains("MOBARUST_AFTER_CLOSE_OK"), "{output}");
+        connection.disconnect().await.unwrap();
+    });
+}
+
+#[test]
 fn remote_editor_encoding_changes_preserve_byte_conflicts_and_permissions() {
     let runtime = tokio::runtime::Runtime::new().expect("create editor test runtime");
     runtime.block_on(async {

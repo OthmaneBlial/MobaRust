@@ -1368,6 +1368,22 @@ async fn ssh_connect(
 }
 
 #[tauri::command]
+async fn ssh_open_shared(
+    app: tauri::AppHandle,
+    manager: State<'_, SshManager>,
+    vault: State<'_, CredentialResolver>,
+    source_terminal_id: String,
+    request: SshConnectRequest,
+    auth_events: tauri::ipc::Channel<ssh::SshAuthEvent>,
+) -> Result<ssh::SshConnectResponse, String> {
+    let vault: Arc<dyn CredentialLookup> = Arc::new(vault.inner().clone());
+    manager
+        .connect_shared(app, vault, &source_terminal_id, request, auth_events)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn ssh_authentication_answer(
     manager: State<'_, SshManager>,
     request_id: String,
@@ -2104,6 +2120,7 @@ fn main() {
             remote_desktop_clipboard,
             remote_desktop_stop,
             ssh_connect,
+            ssh_open_shared,
             ssh_authentication_answer,
             ssh_write,
             ssh_resize,

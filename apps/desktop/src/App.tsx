@@ -2535,7 +2535,8 @@ function App() {
   }, []);
 
   // Resolves to null on success, or an error message (used by group opening).
-  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string, origin?: TerminalOrigin): Promise<string | null> => {
+  // shareFrom: native terminal id of an open SSH tab whose authenticated connection carries the new shell.
+  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string, origin?: TerminalOrigin, shareFrom?: string): Promise<string | null> => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
@@ -2553,14 +2554,14 @@ function App() {
       // Installed before IPC; this channel also owns this session's reconnect
       // prompts. A closed request cannot deliver answers to another attempt.
       authEvents.onmessage = createSshAuthHandler(setConnectionError);
-      const response = await invoke<SshConnectResponse>("ssh_connect", {
-        authEvents,
-        request: {
-          ...request,
-          reconnectAttempts: sshSettings.reconnectEnabled ? sshSettings.reconnectAttempts : 0,
-          connectTimeoutMs: sshSettings.connectTimeoutMs,
-        },
-      });
+      const connectRequest = {
+        ...request,
+        reconnectAttempts: sshSettings.reconnectEnabled ? sshSettings.reconnectAttempts : 0,
+        connectTimeoutMs: sshSettings.connectTimeoutMs,
+      };
+      const response = shareFrom
+        ? await invoke<SshConnectResponse>("ssh_open_shared", { authEvents, sourceTerminalId: shareFrom, request: connectRequest })
+        : await invoke<SshConnectResponse>("ssh_connect", { authEvents, request: connectRequest });
       recordAudit("sessionOpened", "SSH");
       const terminalLabel = label ?? `${request.username}@${response.host}`;
       const terminal = createWorkspaceTerminal({
@@ -2911,6 +2912,12 @@ function App() {
     if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label, spec.origin);
     else startNewTerminal(spec.target, spec.label);
   }, [connectSsh, startNewTerminal]);
+
+  const openSharedShell = useCallback((workspaceId: string) => {
+    const terminal = terminalTabsRef.current.find((item) => item.id === workspaceId);
+    if (!terminal?.remoteSessionId || terminal.reopen?.kind !== "ssh") return;
+    void connectSsh(terminal.reopen.request, false, terminal.reopen.label, terminal.reopen.origin, terminal.remoteSessionId);
+  }, [connectSsh]);
 
   const reopenClosedTerminal = useCallback(() => {
     const spec = closedTabs[closedTabs.length - 1];
@@ -4522,6 +4529,7 @@ function App() {
         <button type="button" role="menuitem" disabled={terminalTabs[0]?.id === tabMenu.id} onClick={() => { moveTerminal(tabMenu.id, -1); setTabMenu(null); }}>Move tab left <kbd>{formatShortcut("Ctrl+Shift+PageUp")}</kbd></button>
         <button type="button" role="menuitem" disabled={terminalTabs[terminalTabs.length - 1]?.id === tabMenu.id} onClick={() => { moveTerminal(tabMenu.id, 1); setTabMenu(null); }}>Move tab right <kbd>{formatShortcut("Ctrl+Shift+PageDown")}</kbd></button>
         <button type="button" role="menuitem" onClick={() => { reconnectTerminal(tabMenu.id); setTabMenu(null); }}>Reconnect / restart</button>
+        {terminalTabs.some((terminal) => terminal.id === tabMenu.id && terminal.remoteProtocol === "ssh" && terminal.remoteSessionId && terminal.reopen?.kind === "ssh") && <button type="button" role="menuitem" onClick={() => { openSharedShell(tabMenu.id); setTabMenu(null); }}>New shell on this connection</button>}
         <button type="button" role="menuitem" disabled={closedTabs.length === 0} onClick={() => { reopenClosedTerminal(); setTabMenu(null); }}>Reopen closed tab <kbd>{formatShortcut("Mod+Shift+T")}</kbd></button>
         <button type="button" role="menuitemcheckbox" aria-checked={restoreTabs} onClick={() => { const next = !restoreTabs; setRestoreTabs(next); writeUiPref("restoreTabs", next ? "1" : "0"); setTabMenu(null); }}>{restoreTabs ? <Check size={13} /> : <span className="menu-check-spacer" />} Restore tabs on next launch</button>
       </div>}

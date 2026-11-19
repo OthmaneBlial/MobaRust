@@ -15,7 +15,7 @@
 
 1. Record a real screen capture of the native app for the website (the current demo is captioned native screenshots). Needs Screen Recording and Accessibility permission for the shell running the agent.
 2. Hand-test the v0.2.0 Windows, Linux and Intel Mac installers on real machines: install, first launch past SmartScreen/Gatekeeper, a local shell, one SSH group, uninstall.
-3. SSH connection reuse: several shells on one host over a single authenticated connection ([Tabby study](docs/TABBY_UX_STUDY.md), takeaway 3).
+3. Observe "New shell on this connection" in the native app (added on `main` after v0.2.0; covered by a local OpenSSH test, not yet clicked through).
 4. Signing: Windows publisher signing and macOS Developer ID/notarization need real credentials.
 
 **Rules:** GitHub Quality and Release installers workflows stay disabled; enable "Release installers" only for an authorized tag, then disable it again. Keep fixtures disposable and loopback-only; do not use personal SSH config, keys or agent. Distinguish source checks, native observations and published installer evidence.
@@ -24,7 +24,7 @@
 
 Earlier preview receipts stay valid for their own artifacts: [v0.1.31 tunnels](docs/testing/native-tunnels-v0.1.31.md), [v0.1.31 busy-session recovery](docs/testing/native-busy-recovery-v0.1.31.md), [v0.1.30 tunnels](docs/testing/native-tunnels-v0.1.30.md), [v0.1.29 notes](docs/release/v0.1.29.md), [setup lab](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main), [Windows cross-check](docs/testing/windows-cross-check.md) and [Linux SSH runtime](docs/testing/linux-ssh-vm.md).
 
-**Checklist completion: 68 of 87 items (78%).** Items differ in scope; this is not a production-readiness score.
+**Checklist completion: 69 of 87 items (79%).** Items differ in scope; this is not a production-readiness score.
 
 A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification.
 
@@ -34,7 +34,7 @@ A checked item means its stated implementation or test exists. It does not imply
 | --- | --- | --- |
 | **Published previews** | v0.2.0 for macOS ARM64/x64, Windows x64 and Linux x64 (DEB, AppImage), built on native runners | Hand-test Windows, Linux and Intel Mac installs; signing and notarization. |
 | **Workspace** | Terminal-first layout, collapsible sidebar, focus mode, tab rename/move, copy on select, tab restore, dark and light themes | Real screen-capture demo; broader Windows/Linux GUI checks. |
-| **Sessions and groups** | Nested folders, MobaXterm and OpenSSH import, one-click group open (4 at a time), pins, explicit host key trust | SSH connection reuse for extra shells on one host. |
+| **Sessions and groups** | Nested folders, MobaXterm and OpenSSH import, one-click group open (4 at a time), pins, explicit host key trust | Native click-through of connection reuse. |
 | **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, remote editing | Broader authentication/server matrix and sustained workloads. |
 | **Quality checks** | `cargo xtask check` green at `a79eecc`; native macOS click-through of the 2.0 flows | GitHub Quality workflow stays disabled by request. |
 | **Remote desktop** | Isolated RDP/VNC helpers and loopback fixtures | RDP dependency/certificate gates; real-server sessions; packaging. |
@@ -53,7 +53,7 @@ Sources: [test matrix](docs/TEST_MATRIX.md), [native benchmark](benchmarks/2026-
 - [x] Instrument Panel redesign with dark and light themes and a 4.5:1 contrast pass; virtualized session tree for large lists.
 - [x] Native macOS click-through of every 2.0 flow, including 14/14 real SSH connections, pins and tab restore across relaunch.
 - [x] New website with a 40-second demo, rewritten README, and v0.2.0 installers for all platforms with SHA-256 files.
-- [ ] SSH connection reuse for extra shells on the same host.
+- [x] SSH connection reuse for extra shells on the same host: "New shell on this connection" in the SSH tab menu (on `main`, after v0.2.0).
 - [ ] Real screen-capture demo of the native app.
 
 ## Completed in the current improvement cycle
