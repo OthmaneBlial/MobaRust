@@ -1,11 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- MobaRust mark: an instrument-panel prompt. Graphite tile, aluminium chevron, orange cursor, group lamps. -->
   <defs>
-    <linearGradient id="mark" x1="11" y1="13" x2="54" y2="52" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#efff93"/>
-      <stop offset="1" stop-color="#9bc48a"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34363a"/>
+      <stop offset="1" stop-color="#1a1b1d"/>
     </linearGradient>
+    <linearGradient id="alu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f2ec"/>
+      <stop offset="1" stop-color="#bdbbb5"/>
+    </linearGradient>
+    <radialGradient id="green" cx=".4" cy=".35" r=".7">
+      <stop offset="0" stop-color="#8fe29d"/>
+      <stop offset="1" stop-color="#3a9a4d"/>
+    </radialGradient>
+    <radialGradient id="amber" cx=".4" cy=".35" r=".7">
+      <stop offset="0" stop-color="#ffe08a"/>
+      <stop offset="1" stop-color="#d49a22"/>
+    </radialGradient>
+    <filter id="glow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="14"/></filter>
   </defs>
-  <rect width="64" height="64" rx="15" fill="#070a09"/>
-  <rect x="5" y="5" width="54" height="54" rx="13" fill="#142018" stroke="#3b4d3d"/>
-  <path d="M11 49V15H18L32 29L46 15H53V49H45V28L32 41L19 28V49H11Z" fill="url(#mark)"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#tile)"/>
+  <rect x="66" y="66" width="892" height="892" rx="198" fill="none" stroke="#5a5d62" stroke-width="4" opacity=".7"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#0d0e0f" stroke-width="6" opacity=".6"/>
+  <path d="M268 292 L460 452 L268 612" fill="none" stroke="url(#alu)" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="520" y="544" width="236" height="92" rx="18" fill="#ee6a2c"/>
+  <g>
+    <circle cx="300" cy="774" r="40" fill="#47b05c" filter="url(#glow)" opacity=".7"/>
+    <circle cx="420" cy="774" r="40" fill="#47b05c" filter="url(#glow)" opacity=".7"/>
+    <circle cx="540" cy="774" r="40" fill="#e7b53c" filter="url(#glow)" opacity=".6"/>
+    <circle cx="300" cy="774" r="34" fill="url(#green)"/>
+    <circle cx="420" cy="774" r="34" fill="url(#green)"/>
+    <circle cx="540" cy="774" r="34" fill="url(#amber)"/>
+    <circle cx="660" cy="774" r="34" fill="#3d4044"/>
+  </g>
 </svg>

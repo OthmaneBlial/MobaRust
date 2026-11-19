@@ -113,6 +113,13 @@ instance; no single-instance forwarding yet).
 - The browser preview now has sample saved sessions, including a 6-host Production/Web group, so group features can be exercised there.
 - Scripted contrast and text-size audit across all views and dialogs in both themes. Fixed `--faint`, the light orange and green, 10px text and label hints.
 
+## M6 — Brand, README and site (2026-11-19)
+
+- New original mark: graphite tile, aluminium prompt chevron, orange cursor and a row of status lights. `icon.svg` is the source. `icon.png` is now 1024 px (the release workflow derives every size from it) and `icon.ico` is multi-size. The same mark is used in the app top bar and as the favicon. Rasterized with macOS `qlmanage` and PIL; nothing was installed.
+- README rewritten around the 2.0 workflow, with new screenshots. They are captured from the browser preview of `main` with the installed Chrome over CDP and labelled as such. The README states that the downloads predate these changes.
+- `site/` redesigned in the Instrument Panel style. Docs share the stylesheet. Checked at 1440 and 390 px wide, with no horizontal scroll. Not deployed: Pages is served from another repository, and publishing needs approval.
+- Fixes found from full-resolution captures: hover-only row actions so session names fit, the search shortcut no longer wraps, compact error banners, group-run spacing, and the light search field.
+
 ## Next steps
 
 1. Native UI inspection once Screen Recording / computer-use access is

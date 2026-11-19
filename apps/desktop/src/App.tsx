@@ -4143,7 +4143,9 @@ function App() {
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <svg className="brand-symbol" viewBox="0 0 32 32">
-              <path className="brand-glyph" d="M5.5 27V7.5H10L16 13.5L22 7.5H26.5V27H21.5V13L16 18.5L10.5 13V27H5.5Z" />
+              <path className="brand-glyph" d="M8 8.5L15 14L8 19.5" />
+              <rect className="brand-cursor" x="17" y="17.5" width="8" height="3.4" rx=".8" />
+              <circle className="brand-lamp" cx="9" cy="25.5" r="1.6" /><circle className="brand-lamp" cx="13.5" cy="25.5" r="1.6" />
             </svg>
           </div>
           <div>

@@ -619,3 +619,20 @@ label small { font-size: 11px; }
 .group-picker-list code { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .group-picker-list input { accent-color: var(--amber); }
 .menu-check-spacer { display: inline-block; width: 13px; }
+.brand-mark { width: 26px; height: 26px; padding: 0; border: 1px solid var(--strip-edge); border-radius: 7px; background: linear-gradient(#34363a, #1a1b1d); box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 10%, transparent); }
+.brand-symbol .brand-glyph { fill: none; stroke: #e4e2dc; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.brand-symbol .brand-cursor { fill: #ee6a2c; }
+.brand-symbol .brand-lamp { fill: #47b05c; }
+.brand-name { font-size: 13.5px; font-weight: 650; letter-spacing: -.005em; }
+/* Session rows: actions appear on hover or keyboard focus so names get the width. */
+.search-key { white-space: nowrap; }
+.session-row-actions .session-action, .session-row-actions .session-favorite:not(.selected) { display: none; }
+.session-row:hover .session-row-actions :is(.session-action, .session-favorite), .session-row:focus-within .session-row-actions :is(.session-action, .session-favorite) { display: inline-grid; }
+.session-type { font-size: 10.5px; color: var(--faint); }
+.local-type { color: var(--mint); }
+.connect-error { border-radius: 8px; font-size: 12px; }
+.connect-error span { font-family: inherit; font-size: 12px; color: var(--text); }
+.connect-error > button { align-self: flex-start; width: auto; }
+.workspace > :is(.connect-error, .workspace-notice) { flex-direction: row; align-items: center; justify-content: space-between; }
+.group-run-panel ul { gap: 6px 16px; }
+.search-box input { background: transparent !important; border: 0 !important; }
