@@ -19,6 +19,6 @@ here). "Tabby" notes are pending: the Tabby app is not installed on this Mac yet
 | SSH tunnels | Local/remote/dynamic with manager | Keep; UI polish | P1 | Existing sshd tests |
 | Multi-exec | Broadcast input to chosen tabs | Keep | P1 | Existing |
 | Macros / snippets | Present | Keep | P2 | Existing |
-| Open selected sessions | Missing | Multi-select in tree | P1 | — |
-| Workspace restore | Missing | Optional restore of open tabs | P2 | — |
+| Open selected sessions | Done (browser preview) | Group picker: tick sessions, open N, 4 at a time | P1 | — |
+| Workspace restore | Done (browser preview) | Opt-in from the tab menu; stores only saved-session ids and plain local shells | P2 | — |
 | X server | X11 forwarding to an existing display | No built-in X server | — | Existing tests |

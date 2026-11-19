@@ -106,6 +106,13 @@ instance; no single-instance forwarding yet).
 - Checked: `pnpm check`, `pnpm lint`, `pnpm test:unit`, `impeccable detect` (0 findings). Browser preview at 1440×900 in dark and 1100×680 in light.
 - Not checked: native screenshots, which are blocked because the shell lacks Screen Recording permission.
 
+## M4b — Open selected, tab restore, contrast pass (2026-11-19)
+
+- Group picker next to "Open all": tick sessions and open them, 4 at a time, with the same progress, cancel and retry.
+- Opt-in "Restore tabs on next launch" in the tab menu. It stores only saved-session ids and plain local shells, never hosts or credentials. Saved sessions reopen through the normal path, so startup-command confirmation still applies.
+- The browser preview now has sample saved sessions, including a 6-host Production/Web group, so group features can be exercised there.
+- Scripted contrast and text-size audit across all views and dialogs in both themes. Fixed `--faint`, the light orange and green, 10px text and label hints.
+
 ## Next steps
 
 1. Native UI inspection once Screen Recording / computer-use access is

@@ -66,6 +66,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   BookOpen,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -97,6 +98,7 @@ import {
   Play,
   Radio,
   RefreshCw,
+  ListChecks,
   Search,
   Server,
   Settings2,
@@ -306,9 +308,13 @@ type WorkspaceTerminal = {
   status: TerminalStatus;
   reopen?: ReopenSpec;
   hue?: string;
+  savedId?: string;
 };
 
-type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string; hue?: string } | { kind: "local"; target: LocalTerminalTarget; label: string };
+type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string; origin?: TerminalOrigin } | { kind: "local"; target: LocalTerminalTarget; label: string };
+type TerminalOrigin = { hue?: string; savedId?: string };
+// Persisted for "Restore tabs on next launch": saved-session ids and plain local shells only, never hosts or credentials.
+type RestorableTab = { savedId: string; label: string } | { shell?: LocalShell; cwd?: string; label: string };
 type GroupRunItem = { id: string; name: string; status: "queued" | "connecting" | "connected" | "failed" | "cancelled"; error?: string };
 type GroupRun = { folder: string; items: GroupRunItem[]; running: boolean };
 const GROUP_OPEN_CONCURRENCY = 4;
@@ -747,10 +753,15 @@ type NetworkDiagnosticEvent = {
   error?: string | null;
 };
 
-const previewSessions: SessionListItem[] = [
-  { name: "Local workstation", detail: "zsh · localhost", type: "LOCAL", folder: "Local terminals", active: true, favorite: true, tags: ["local"], lastUsedAt: 3 },
-  { name: "Production bastion", detail: "ops@bastion.example", type: "SSH", folder: "Production", active: false, favorite: true, tags: ["production"], lastUsedAt: 2 },
-  { name: "Staging cluster", detail: "dev@staging.example", type: "SSH", folder: "Staging", active: false, favorite: false, tags: ["staging"], lastUsedAt: 1 },
+// Browser preview only: sample saved sessions so the tree and group opening can be exercised without the desktop runtime.
+const previewSession = (id: string, name: string, protocol: string, hostname: string, username: string | null, folder: string, favorite = false): SavedSession => ({
+  id, name, protocol, hostname, port: protocol === "LOCAL" ? 0 : 22, username, folder, jump_hosts: [], tags: [], favorite, startup_directory: null, startup_command: null, environment: [], notes: null, auth: { kind: "agent" },
+});
+const previewSavedSessions: SavedSession[] = [
+  previewSession("preview-local", "Local workstation", "LOCAL", "localhost", null, "Local terminals", true),
+  previewSession("preview-bastion", "Production bastion", "SSH", "bastion.example", "ops", "Production", true),
+  ...[1, 2, 3, 4, 5, 6].map((n) => previewSession(`preview-web-${n}`, `web-0${n}`, "SSH", `10.0.1.${10 + n}`, "deploy", "Production/Web")),
+  previewSession("preview-staging", "Staging cluster", "SSH", "staging.example", "dev", "Staging"),
 ];
 
 function quickActions(keyboard: AppSettings["keyboard"]): Array<{ label: string; hint: string; icon: LucideIcon; shell?: LocalShellChoice }> {
@@ -1519,11 +1530,15 @@ function App() {
   const [groupRun, setGroupRun] = useState<GroupRun | null>(null);
   const groupCancelRef = useRef(false);
   const [mobaXtermImportOpen, setMobaXtermImportOpen] = useState(false);
+  const [groupPickPath, setGroupPickPath] = useState<string | null>(null);
+  const [restoreTabs, setRestoreTabs] = useState(() => readUiPref("restoreTabs") === "1");
+  const sessionsLoadedRef = useRef(!IS_TAURI);
+  const tabsRestoredRef = useRef(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [appVersion, setAppVersion] = useState(desktopPackage.version);
-  const [sessionRows, setSessionRows] = useState<SessionListItem[]>(IS_TAURI ? [] : previewSessions);
+  const [sessionRows, setSessionRows] = useState<SessionListItem[]>(() => IS_TAURI ? [] : previewSavedSessions.map(toSessionListItem));
   const [recentOnly, setRecentOnly] = useState(false);
-  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>(IS_TAURI ? [] : previewSavedSessions);
   const [snippets, setSnippets] = useState<SnippetRecord[]>([]);
   const [macros, setMacros] = useState<MacroRecord[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
@@ -1653,13 +1668,14 @@ function App() {
     }
   }, [activeTerminal, activeTerminalId, terminalLayout]);
 
-  const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }, label?: string) => {
+  const startNewTerminal = useCallback((target: LocalTerminalTarget = { type: "default" }, label?: string, savedId?: string) => {
     const shellLabel = target.type === "default" && target.shell && target.shell !== "default"
       ? target.shell === "powershell" ? "PowerShell" : target.shell
       : "local shell";
     const terminal = createWorkspaceTerminal({
       label: label ?? (target.type === "wsl" ? `WSL · ${target.distribution}` : shellLabel),
       localTarget: target,
+      savedId,
     });
     setTerminalTabs((current) => [...current, terminal]);
     setActiveTerminalId(terminal.id);
@@ -2135,6 +2151,7 @@ function App() {
     if (!IS_TAURI) return;
     void invoke<SavedSession[]>("session_list")
       .then((sessions) => {
+        sessionsLoadedRef.current = true;
         setSavedSessions(sessions);
         setSessionRows(sessions.map(toSessionListItem));
         setSessionListError(null);
@@ -2475,7 +2492,7 @@ function App() {
   }, []);
 
   // Resolves to null on success, or an error message (used by group opening).
-  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string, hue?: string): Promise<string | null> => {
+  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string, origin?: TerminalOrigin): Promise<string | null> => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
@@ -2508,8 +2525,9 @@ function App() {
         remoteSessionId: response.terminalId,
         remoteProtocol: "ssh",
         remoteHost: response.host,
-        reopen: { kind: "ssh", request: reopenRequest, label: terminalLabel, hue },
-        hue,
+        reopen: { kind: "ssh", request: reopenRequest, label: terminalLabel, origin },
+        hue: origin?.hue,
+        savedId: origin?.savedId,
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
@@ -2739,7 +2757,7 @@ function App() {
       cwd: session.startup_directory?.trim() ? session.startup_directory : undefined,
       environment: session.environment?.length ? session.environment : undefined,
       startupCommand: startupCommand || undefined,
-    }, session.name);
+    }, session.name, session.id);
     setSessionNotice(`Opened local profile ${session.name}.`);
   }, [recordAudit, startNewTerminal, touchSavedSession]);
 
@@ -2843,11 +2861,11 @@ function App() {
       setConnectionError(message);
       return message;
     }
-    return connectSsh(request, false, session.name, groupHue(session.folder));
+    return connectSsh(request, false, session.name, { hue: groupHue(session.folder), savedId: session.id });
   }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
   const reopenSpec = useCallback((spec: ReopenSpec) => {
-    if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label, spec.hue);
+    if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label, spec.origin);
     else startNewTerminal(spec.target, spec.label);
   }, [connectSsh, startNewTerminal]);
 
@@ -2906,6 +2924,37 @@ function App() {
       else setConnectionError(`--open-group "${name}" does not match any session group.`);
     }).catch((error) => setConnectionError(`Could not read launch arguments: ${String(error)}`));
   }, [openSessionGroup, savedSessions]);
+
+  useEffect(() => {
+    if (!restoreTabs || !tabsRestoredRef.current) return;
+    const tabs: RestorableTab[] = terminalTabs.flatMap((terminal): RestorableTab[] => {
+      if (terminal.savedId) return [{ savedId: terminal.savedId, label: terminal.label }];
+      const target = terminal.localTarget;
+      if (terminal.remoteProtocol || target.type !== "default" || target.environment?.length || target.startupCommand) return [];
+      return [{ shell: target.shell, cwd: target.cwd, label: terminal.label }];
+    });
+    writeUiPref("restoreTabsList", JSON.stringify(tabs.slice(0, 20)));
+  }, [restoreTabs, terminalTabs]);
+
+  useEffect(() => {
+    if (tabsRestoredRef.current || !sessionsLoadedRef.current) return;
+    tabsRestoredRef.current = true;
+    if (!restoreTabs) return;
+    let saved: RestorableTab[] = [];
+    try { saved = JSON.parse(readUiPref("restoreTabsList") ?? "[]"); } catch { return; }
+    if (!Array.isArray(saved)) return;
+    // The app always starts with one plain shell; let it stand in for the first saved plain shell.
+    let plainShells = terminalTabsRef.current.filter((terminal) => !terminal.remoteProtocol && !terminal.savedId).length;
+    const sessionsToOpen: SavedSession[] = [];
+    for (const tab of saved.slice(0, 20)) {
+      if ("savedId" in tab) {
+        const session = savedSessions.find((item) => item.id === tab.savedId);
+        if (session) sessionsToOpen.push(session);
+      } else if (plainShells > 0) plainShells -= 1;
+      else startNewTerminal({ type: "default", shell: tab.shell, cwd: tab.cwd }, tab.label);
+    }
+    void runBounded(sessionsToOpen, GROUP_OPEN_CONCURRENCY, async (session) => { await connectSavedSession(session); }, () => false, () => undefined);
+  }, [connectSavedSession, restoreTabs, savedSessions, startNewTerminal]);
 
   const writeToExplicitTargets = useCallback(async (targets: MacroTargetBinding[], data: string) => {
     const beforeSend = () => {
@@ -4192,6 +4241,7 @@ function App() {
                     {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
                   </button>
                   {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRun?.running} onClick={() => void openSessionGroup(node.path)}><Play size={11} /></button>}
+                  {sshCount > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in ${node.path}`} title="Choose sessions to open" disabled={groupRun?.running} onClick={() => setGroupPickPath(node.path)}><ListChecks size={11} /></button>}
                   <span>{node.total}</span>
                 </div>
                 {sessions.map((session) => (
@@ -4353,7 +4403,9 @@ function App() {
         <button type="button" role="menuitem" disabled={terminalTabs.length < 2} onClick={() => { closeOtherTerminals(tabMenu.id); setTabMenu(null); }}>Close other tabs</button>
         <button type="button" role="menuitem" onClick={() => { reconnectTerminal(tabMenu.id); setTabMenu(null); }}>Reconnect / restart</button>
         <button type="button" role="menuitem" disabled={closedTabs.length === 0} onClick={() => { reopenClosedTerminal(); setTabMenu(null); }}>Reopen closed tab <kbd>{formatShortcut("Mod+Shift+T")}</kbd></button>
+        <button type="button" role="menuitemcheckbox" aria-checked={restoreTabs} onClick={() => { const next = !restoreTabs; setRestoreTabs(next); writeUiPref("restoreTabs", next ? "1" : "0"); setTabMenu(null); }}>{restoreTabs ? <Check size={13} /> : <span className="menu-check-spacer" />} Restore tabs on next launch</button>
       </div>}
+      {groupPickPath && <GroupPicker path={groupPickPath} sessions={savedSessions.filter((session) => session.protocol === "SSH" && inFolder(normalizeFolder(session.folder, "Unfiled"), groupPickPath))} onClose={() => setGroupPickPath(null)} onOpen={(ids) => { setGroupPickPath(null); void openSessionGroup(groupPickPath, ids); }} />}
       {mobaXtermImportOpen && <MobaXtermImportDialog onClose={() => setMobaXtermImportOpen(false)} onImported={(message) => { refreshSavedSessions(); setSessionNotice(message); setConnectionError(null); }} />}
       {broadcastOpen && <BroadcastModal terminals={terminalTabs} selectedIds={broadcastTargetIds} enabled={broadcastEnabled} onClose={() => setBroadcastOpen(false)} onToggle={(id) => setBroadcastTargetIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onEnable={() => { if (broadcastTargetIds.length === 0) { setConnectionError("Select at least one ready terminal before enabling broadcast."); return; } setBroadcastEnabled(true); setBroadcastOpen(false); setConnectionError(null); setSessionNotice("Broadcast mode enabled. Review the red banner before typing."); }} onDisable={() => { setBroadcastEnabled(false); setBroadcastOpen(false); setSessionNotice("Broadcast mode disabled. No further input will fan out."); }} />}
     </main>
@@ -4466,6 +4518,25 @@ function groupSessionsByFolder(sessions: SessionListItem[]): Array<[string, Sess
     groups.set(folder, [...(groups.get(folder) ?? []), session]);
   });
   return [...groups.entries()].sort(([first], [second]) => first.localeCompare(second));
+}
+
+function GroupPicker({ path, sessions, onClose, onOpen }: { path: string; sessions: SavedSession[]; onClose: () => void; onOpen: (ids: string[]) => void }) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(sessions.map((session) => session.id)));
+  const toggle = (id: string) => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  return <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="import-dialog group-picker" role="dialog" aria-modal="true" aria-labelledby="group-picker-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}>
+      <header className="import-dialog-header">
+        <h2 id="group-picker-title">Open sessions in {path}</h2>
+        <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="import-summary"><span>{selected.size} of {sessions.length} selected · {GROUP_OPEN_CONCURRENCY} connect at a time</span><span>Select <button type="button" className="link-button" onClick={() => setSelected(new Set(sessions.map((session) => session.id)))}>all</button> · <button type="button" className="link-button" onClick={() => setSelected(new Set())}>none</button></span></div>
+      <ul className="group-picker-list">{sessions.map((session) => <li key={session.id}><label><input type="checkbox" checked={selected.has(session.id)} onChange={() => toggle(session.id)} /> <span>{session.name}</span> <code>{session.username ? `${session.username}@` : ""}{session.hostname}{session.port !== 22 ? `:${session.port}` : ""}</code></label></li>)}</ul>
+      <footer className="import-dialog-footer">
+        <button type="button" className="outline-button" onClick={onClose}>Cancel</button>
+        <button type="button" className="primary-button" autoFocus disabled={selected.size === 0} onClick={() => onOpen(sessions.filter((session) => selected.has(session.id)).map((session) => session.id))}>Open {selected.size}</button>
+      </footer>
+    </section>
+  </div>;
 }
 
 function SessionRow({ name, detail, type, active, favorite, onSelect, onEdit, onDelete, onToggleFavorite }: SessionListItem & { onSelect: () => void; onEdit?: () => void; onDelete?: () => void; onToggleFavorite: () => void }) {
