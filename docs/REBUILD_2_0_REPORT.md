@@ -18,7 +18,7 @@ Scope: the MobaRust 2.0 goal (terminal-first workspace, MobaXterm import, one-cl
 
 ## Partially tested
 
-- **Native GUI flows.** Clicked through natively on 2026-11-19 once the user granted access: import, group picker and run, tab rename and move, copy on select, quit (see the native section of TEST_MATRIX.md and `docs/evidence/native-macos/`). Not driven natively: a group open against real `sshd`, tab restore and pins.
+- **Native GUI flows.** Clicked through natively on 2026-11-19 once the user granted access: import, group picker and run, tab rename and move, copy on select, quit (see the native section of TEST_MATRIX.md and `docs/evidence/native-macos/`). A group open of 14 imported sessions against a real loopback `sshd` connected 14/14 after two fixes (queued startup reviews, explicit host key trust). Not driven natively: tab restore and pins.
 - **MobaXterm field meanings.** They follow a public community study of the format (MobaXterm 26.3), not vendor documentation. No file written by MobaXterm itself was available on this Mac.
 - **Telnet, VNC.** These were tested against fixture servers written for the tests, not real daemons. **RDP** has helper unit tests only.
 
@@ -34,5 +34,5 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Remaining work
 
-1. Native check of a group open against real `sshd`, tab restore and pins.
+1. Native check of tab restore and pins.
 2. Tag `v0.2.0` when authorized. The version is already bumped and `cargo xtask check` passes (237 s); draft notes are in `release/v0.2.0.md`. The tag runs the existing release workflow, which builds the Linux and Windows installers.

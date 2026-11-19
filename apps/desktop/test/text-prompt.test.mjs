@@ -98,12 +98,19 @@ for (const action of ["cancel", "close", "button", "pagehide", "submit"]) {
   assert.equal(review.attributes.role, "region");
   assert.equal(review.attributes["aria-label"], "Startup command");
   assert.equal(globalThis.document.activeElement, current.querySelector('button[type="button"]'), "startup approval initially focuses Cancel");
-  assert.equal(await confirmSessionStartup("another command", "another host"), false, "a pending review must not queue an unreviewed startup");
+  // Group opens review several startups at once: the next one waits for its own review.
+  const queued = confirmSessionStartup("another command", "another host");
+  assert.equal(latest(), current, "a second review waits instead of replacing the open one");
   if (action === "submit") current.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true }));
   else if (action === "button") current.querySelector('button[type="button"]').dispatchEvent(new Event("click"));
   else if (action === "pagehide") window.dispatchEvent(new Event("pagehide"));
   else current.dispatchEvent(new Event(action, { cancelable: true }));
   assert.equal(await startup, action === "submit", action);
+  await new Promise(resolve => globalThis.setTimeout(resolve));
+  assert.notEqual(latest(), current, "the queued review opens once the first closes");
+  assert.equal(latest().querySelector("label").afterNode.textContent, "another command");
+  latest().dispatchEvent(new Event("cancel", { cancelable: true }));
+  assert.equal(await queued, false, "a queued startup still needs its own approval");
 }
 const longStartupCommand = "x".repeat(16 * 1024);
 const localStartup = confirmSessionStartup(longStartupCommand, "the new local shell");

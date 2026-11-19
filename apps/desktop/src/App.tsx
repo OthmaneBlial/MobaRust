@@ -322,6 +322,7 @@ type RestorableTab = { savedId: string; label: string } | { shell?: LocalShell; 
 type GroupRunItem = { id: string; name: string; status: "queued" | "connecting" | "connected" | "failed" | "cancelled"; error?: string };
 type GroupRun = { folder: string; items: GroupRunItem[]; running: boolean };
 const GROUP_OPEN_CONCURRENCY = 4;
+const OBSERVED_FINGERPRINT = /observed fingerprint: (SHA256:[A-Za-z0-9+/]+=*)/;
 
 type SplitDirection = "none" | "right" | "down";
 
@@ -2953,6 +2954,42 @@ function App() {
     setGroupRun((current) => current && { ...current, running: false });
   }, [connectSavedSession, groupRun?.running, savedSessions]);
 
+  // Sessions without any trust source refuse new keys. Offer an explicit, per-key
+  // confirmation that pins the observed fingerprint; a changed pinned key stays refused.
+  const untrustedGroupKeys = useMemo(() => {
+    const keys = new Map<string, { fingerprint: string; target: string; sessions: SavedSession[] }>();
+    for (const item of groupRun?.running ? [] : groupRun?.items ?? []) {
+      const fingerprint = item.status === "failed" ? item.error?.match(OBSERVED_FINGERPRINT)?.[1] : undefined;
+      const session = fingerprint ? savedSessions.find((candidate) => candidate.id === item.id) : undefined;
+      if (!fingerprint || !session || session.known_hosts_path || session.pinned_fingerprint) continue;
+      const target = `${session.hostname}:${session.port}`;
+      const entry = keys.get(`${target} ${fingerprint}`) ?? { fingerprint, target, sessions: [] };
+      entry.sessions.push(session);
+      keys.set(`${target} ${fingerprint}`, entry);
+    }
+    return [...keys.values()];
+  }, [groupRun, savedSessions]);
+
+  const trustGroupHostKeys = useCallback(async () => {
+    let pinned = 0;
+    for (const { fingerprint, target, sessions } of untrustedGroupKeys) {
+      const names = sessions.map((session) => session.name).join(", ");
+      if (!await confirmAction(`Trust this host key for ${target} (${names})?\n\n${fingerprint}\n\nAccept it only if it matches the server's own key, for example from ssh-keygen -lf on the server. It will be pinned to these sessions.`)) break;
+      try {
+        for (const session of sessions) {
+          await invoke<SavedSession>("session_save", { session: { ...session, pinned_fingerprint: fingerprint } });
+          pinned += 1;
+        }
+      } catch (error) {
+        setConnectionError(`Could not pin the host key for ${target}: ${String(error)}`);
+        break;
+      }
+    }
+    if (pinned === 0) return;
+    refreshSavedSessions();
+    setSessionNotice(`Pinned host keys for ${pinned} session${pinned === 1 ? "" : "s"}. Use Retry failed to connect.`);
+  }, [refreshSavedSessions, untrustedGroupKeys]);
+
   const launchGroupCheckedRef = useRef(false);
   useEffect(() => {
     if (!IS_TAURI || launchGroupCheckedRef.current || savedSessions.length === 0) return;
@@ -4424,6 +4461,7 @@ function App() {
                       <span className="terminal-status-spacer" />
                       {groupRun.running ? <button type="button" className="outline-button" onClick={() => { groupCancelRef.current = true; }}><Square size={12} /> Cancel queued</button> : <>
                         {groupRun.items.some((item) => item.status === "failed" || item.status === "cancelled") && <button type="button" className="outline-button" onClick={() => void openSessionGroup(groupRun.folder, groupRun.items.filter((item) => item.status === "failed" || item.status === "cancelled").map((item) => item.id))}><RefreshCw size={12} /> Retry failed</button>}
+                        {untrustedGroupKeys.length > 0 && <button type="button" className="outline-button" onClick={() => void trustGroupHostKeys()}><ShieldCheck size={12} /> Trust host keys…</button>}
                         <button type="button" className="outline-button" aria-label="Dismiss group progress" onClick={() => setGroupRun(null)}><X size={12} /></button>
                       </>}
                     </div>

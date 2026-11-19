@@ -11,11 +11,21 @@ export async function confirmAction(message: string): Promise<boolean> {
 }
 
 /** Review configured shell input before opening a local or SSH session. */
-export async function confirmSessionStartup(command: string | undefined, destination: string, reconnect = false, stillAllowed: () => boolean = () => true): Promise<boolean> {
-  if (!stillAllowed()) return false;
-  if (command?.trim() && await openDialogue(`Send this profile's startup command to ${destination}?${reconnect ? " It will also run again after automatic SSH reconnects." : ""}`, undefined, { reviewText: command }) === null) return false;
-  return stillAllowed();
+export function confirmSessionStartup(command: string | undefined, destination: string, reconnect = false, stillAllowed: () => boolean = () => true): Promise<boolean> {
+  if (!command?.trim()) return Promise.resolve(stillAllowed());
+  // Group opens connect several sessions at once: queue their reviews (each still
+  // shown and approved on its own) instead of denying every one but the first.
+  const ask = async () => stillAllowed()
+    && await openDialogue(`Send this profile's startup command to ${destination}?${reconnect ? " It will also run again after automatic SSH reconnects." : ""}`, undefined, { reviewText: command }) !== null
+    && stillAllowed();
+  const review = startupReviews > 0 ? startupQueue.then(ask) : ask();
+  startupReviews += 1;
+  const done = () => { startupReviews -= 1; };
+  startupQueue = review.then(done, done);
+  return review;
 }
+let startupReviews = 0;
+let startupQueue: Promise<unknown> = Promise.resolve();
 
 /** Cancel/closing returns null; create-only is an explicit, distinct choice. */
 export async function chooseOverwrite(message: string): Promise<boolean | null> {
