@@ -2,7 +2,8 @@
 
 MobaXterm behaviour below comes from its public documentation and widely
 described behaviour, not from running it (it is Windows-only and not installed
-here). "Tabby" notes are pending: the Tabby app is not installed on this Mac yet.
+here). Tabby notes (Tabby 1.0.238, from its public docs) are in
+[TABBY_UX_STUDY.md](TABBY_UX_STUDY.md).
 
 | MobaXterm workflow | MobaRust state | Proposed / done | Priority | Verification |
 |---|---|---|---|---|

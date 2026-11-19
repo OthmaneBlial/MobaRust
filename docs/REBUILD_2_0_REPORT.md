@@ -31,7 +31,7 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 - **Native GUI testing.** Re-checked on 2026-11-19: `screencapture` returns a black frame and System Events times out, so Screen Recording and Accessibility are still not granted. Changing those settings is the user's step.
 - **Linux and Windows builds.** The Quality workflow is disabled on GitHub at the maintainer's request, and the Release workflow runs only on tags or a manual dispatch. No remote CI or release was started. Windows was not run on this Mac, by rule.
 - **Public release.** Not created. The downloads in the README are still 0.1.31 (macOS) and 0.1.12 (Windows, Linux), and predate this work.
-- **Tabby comparison.** Tabby was not installed at the time of this report.
+- **Tabby comparison.** Done from Tabby 1.0.238's public docs and defaults: [TABBY_UX_STUDY.md](TABBY_UX_STUDY.md). Hands-on observation of its window is blocked by the same missing Screen Recording access.
 
 ## Remaining work
 
