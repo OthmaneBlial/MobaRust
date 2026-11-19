@@ -679,10 +679,10 @@ fn stream_output<R: Read + Send + 'static>(
 
 fn cleanup_stream_session(manager: &TerminalManager, terminal_id: &str) {
     // Keep the cleanup owner registered until it is reaped, including at EOF.
-    if let Err(error) = manager.close(terminal_id) {
-        if !matches!(error, TerminalError::Missing(_)) {
-            tracing::warn!(event = "local_terminal_stream_cleanup_failed", error = %error);
-        }
+    if let Err(error) = manager.close(terminal_id)
+        && !matches!(error, TerminalError::Missing(_))
+    {
+        tracing::warn!(event = "local_terminal_stream_cleanup_failed", error = %error);
     }
 }
 

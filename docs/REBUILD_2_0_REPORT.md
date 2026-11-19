@@ -36,4 +36,4 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 ## Remaining work
 
 1. Native click-through of the import dialog, Open all, restore and pins once Screen Recording and Accessibility access is granted to the testing tool.
-2. Version bump and a tagged release when authorized, to produce Linux and Windows installers through the existing workflow.
+2. Tag `v0.2.0` when authorized. The version is already bumped and `cargo xtask check` passes (237 s); draft notes are in `release/v0.2.0.md`. The tag runs the existing release workflow, which builds the Linux and Windows installers.
