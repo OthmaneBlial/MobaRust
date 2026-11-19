@@ -1,109 +1,64 @@
 # MobaRust roadmap
 
-**Updated 2026-10-03.** The next goal is a dependable remote workstation across Windows, macOS, and Linux. Work is ordered by reliability, security, and operator value.
+**Updated 2026-11-19.** MobaRust 2.0 rebuild is published as [v0.2.0](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.2.0): a terminal-first workspace, MobaXterm import and one-click server groups, with installers for macOS (Apple Silicon and Intel), Windows and Linux built from the same source.
 
 ## Next agent: start here
 
-The maintainer requested this handoff and a stop. Continue only on a new request.
-
 **Positioning:** always keep **Free, open-source MobaXterm alternative built with Rust**.
-**Progress:** 57/76 checklist items (75%), not a production-readiness score.
+**Progress:** see the checklist count below; it is not a production-readiness score.
 
-**Finished on main:** bounded terminal input, deferred local startup, owned PTY
-cleanup at Quit, named terminal inputs/focus outline, and remote attachment
-closure ordering. The remote editor now has **Reload from server**: dirty drafts
-require approval, failed reads preserve the draft, and connection changes before
-or during the read refuse the result. Reload safety regressions, frontend type
-checking and edited-file lint passed; native Reload acceptance remains pending.
+**Downloads:** all five installers are v0.2.0 (macOS ARM64/x64 DMG, Windows x64 setup, Linux x64 DEB and AppImage), unsigned previews. The downloaded Apple Silicon DMG matched its SHA-256 file, passed `hdiutil verify` and printed `MobaRust 0.2.0`. Windows, Linux and Intel Mac installers were built and started on GitHub's native runners but not used by hand.
 
-**Downloads:** Mac ARM64/x64 previews are v0.1.31; Windows/Linux downloads are
-v0.1.12. Later main fixes are not included in those installers. Older Windows
-link and Linux SSH receipts do not validate the newer terminal changes.
+**What 0.2.0 verified natively** (Apple M2, isolated lab copy, real mouse and keyboard): local shell, MobaXterm import through the file picker, a 14-host group against a local OpenSSH server (14/14 connected after trusting its key once), tab rename and move, copy on select, pins and tab restore across a relaunch, and quit. See the [native section of the test matrix](docs/TEST_MATRIX.md) and the [2.0 report](docs/REBUILD_2_0_REPORT.md).
 
 **Next work, in order:**
 
-1. Check native remote-editor Reload: cancel discard, failed read, unchanged
-   revision, external conflict and reconnect during read. Check the recent pane
-   labels/focus and attachment closure changes in the same disposable Mac lab.
-2. Verify Files Refresh after busy-session recovery, then publish a new Mac
-   preview containing the current fixes. Preserve existing release tags/assets.
-3. Run current-source Windows ConPTY/WSL and Linux desktop acceptance when those
-   runtimes and enough disk space are available. Then align platform installers.
+1. Record a real screen capture of the native app for the website (the current demo is captioned native screenshots). Needs Screen Recording and Accessibility permission for the shell running the agent.
+2. Hand-test the v0.2.0 Windows, Linux and Intel Mac installers on real machines: install, first launch past SmartScreen/Gatekeeper, a local shell, one SSH group, uninstall.
+3. SSH connection reuse: several shells on one host over a single authenticated connection ([Tabby study](docs/TABBY_UX_STUDY.md), takeaway 3).
+4. Signing: Windows publisher signing and macOS Developer ID/notarization need real credentials.
 
-**Rules:** GitHub Quality and Release installers workflows stay disabled.
-Keep fixtures disposable and loopback-only; do not expose ports to the internet
-or use personal SSH config, keys or agent. Run focused checks for each change,
-commit/push small milestones, and distinguish source checks, native observations
-and published installer evidence. Do not repeat full suites without a reason.
+**Rules:** GitHub Quality and Release installers workflows stay disabled; enable "Release installers" only for an authorized tag, then disable it again. Keep fixtures disposable and loopback-only; do not use personal SSH config, keys or agent. Distinguish source checks, native observations and published installer evidence.
 
-**Code/evidence:** [editor](apps/desktop/src/remote-editor.ts),
-[desktop UI](apps/desktop/src/App.tsx),
-[editor safety checks](apps/desktop/test/remote-editor-security.test.mjs),
-[terminal receipts](docs/testing/terminal-input.md),
-[native editor receipts](docs/testing/native-workflow.md),
-[busy-session receipt](docs/testing/native-busy-recovery-v0.1.31.md).
+**Code/evidence:** [desktop UI](apps/desktop/src/App.tsx), [dialog queue](apps/desktop/src/text-prompt.ts), [MobaXterm import](crates/mobarust-store/src/mobaxterm.rs), [release notes](docs/release/v0.2.0.md), [native evidence](docs/evidence/native-macos/).
 
-The sections below retain the detailed history and remaining gates.
+Earlier preview receipts stay valid for their own artifacts: [v0.1.31 tunnels](docs/testing/native-tunnels-v0.1.31.md), [v0.1.31 busy-session recovery](docs/testing/native-busy-recovery-v0.1.31.md), [v0.1.30 tunnels](docs/testing/native-tunnels-v0.1.30.md), [v0.1.29 notes](docs/release/v0.1.29.md), [setup lab](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main), [Windows cross-check](docs/testing/windows-cross-check.md) and [Linux SSH runtime](docs/testing/linux-ssh-vm.md).
 
-The [v0.1.31 Mac previews](docs/release/v0.1.31.md) fix under-reported active
-and cancelled tunnel traffic. Both architectures passed package checks and
-anonymous downloaded byte comparison. The ARM64 installer copy passed
-[live/stopped totals, SSH-tab Close and normal Quit](docs/testing/native-tunnels-v0.1.31.md)
-with eight byte-matched clients and owned fixture cleanup. The full local suite
-passed. Sustained workloads, transfer-control acceptance and platform gates
-remain open; the checklist is unchanged.
+**Checklist completion: 68 of 87 items (78%).** Items differ in scope; this is not a production-readiness score.
 
-A later [v0.1.31 native busy-session check](docs/testing/native-busy-recovery-v0.1.31.md)
-verified directory/monitor refusal at 32 jobs and recovery after native Stop.
-It also exposed a stale Files error after successful Refresh. The source now
-scopes directory errors to their listing and clears them on a new request;
-corrected native acceptance and a new installer remain pending. Transfer Retry
-and all finite actions retain separate gates.
-
-The earlier [v0.1.30 native checks](docs/testing/native-tunnels-v0.1.30.md)
-cover 21 live tunnel controls, shared 32-job admission and Stop/Close/Quit.
-Those packages retain the counter defect. Their retention/admission evidence
-keeps its original artifact scope.
-
-The earlier [v0.1.29 Mac previews](docs/release/v0.1.29.md) stop automatic reconnect
-retries after uncertain startup delivery. A disposable copy of the verified
-ARM64 DMG passed Escape cancellation before connection, approved startup
-exactly once, private fixture interruption, replacement password/OTP challenges
-and the phase-specific timeout. No third connection appeared for 63.59 seconds
-while the listener stayed available. Normal menu Quit released the app/local
-PTY; the fixture deadline removed private state and released its loopback port.
-
-Earlier [setup receipts](docs/testing/ssh-lab.md#repeatable-native-shell-setup-lab-on-main)
-cover connected exact-once startup, shell refusal and explicit SSH-tab cleanup.
-Those results retain their recorded source/artifact scope. Broader native
-successful-startup/output-ordering, queued expiry/overflow, sustained workloads
-and updated Windows/Linux downloads remain pending.
-
-Current source also passed [Windows GNU executable/test linking](docs/testing/windows-cross-check.md)
-and an [offline Linux ARM64 SSH runtime](docs/testing/linux-ssh-vm.md): seven
-harnesses, 128 passed, zero failed, five ignored; real Xvfb skipped. These add
-backend/platform evidence without closing GUI, installer or broader runtime gates.
-
-**Checklist completion: 57 of 76 items (75%).** Items differ in scope; this is not a production-readiness score.
-
-A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification. Changes on `main` and published downloads are separate milestones.
+A checked item means its stated implementation or test exists. It does not imply signed installers, broad server compatibility, or hardware certification.
 
 ## Where the project stands
 
 | Area | Progress | What remains |
 | --- | --- | --- |
-| **Published previews** | macOS ARM64/x64 v0.1.31; Windows/Linux x64 v0.1.12 | Align platform releases; verify clean install/uninstall; signing and notarization. |
-| **Core workstation** | Rust/Tauri shell, xterm.js, tabs, nested splits, settings, session organization, and native PTY | Complete the shell/platform and GUI evidence matrix. |
-| **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, and remote editing | Broader authentication/server matrix, restart recovery, and sustained workloads. |
-| **Quality checks** | Full local macOS ARM64 suite; one completed green Ubuntu/macOS/Windows run | GitHub workflows are disabled by request. New Linux shell variants and repeated Windows startups still need runtime evidence. |
-| **Remote desktop** | Isolated RDP/VNC helpers and controlled loopback fixtures | RDP dependency/certificate gates; real-server sessions; platform packaging and long-run stability. |
-| **Hardware and distribution** | Unix serial PTY fixtures and unsigned package-layout checks | Real serial adapters, external X servers, GUI behavior, and trusted installers. |
+| **Published previews** | v0.2.0 for macOS ARM64/x64, Windows x64 and Linux x64 (DEB, AppImage), built on native runners | Hand-test Windows, Linux and Intel Mac installs; signing and notarization. |
+| **Workspace** | Terminal-first layout, collapsible sidebar, focus mode, tab rename/move, copy on select, tab restore, dark and light themes | Real screen-capture demo; broader Windows/Linux GUI checks. |
+| **Sessions and groups** | Nested folders, MobaXterm and OpenSSH import, one-click group open (4 at a time), pins, explicit host key trust | SSH connection reuse for extra shells on one host. |
+| **SSH and files** | Interactive SSH, jump chains, reconnect, SFTP/SCP, recursive transfers, tunnels, remote editing | Broader authentication/server matrix and sustained workloads. |
+| **Quality checks** | `cargo xtask check` green at `a79eecc`; native macOS click-through of the 2.0 flows | GitHub Quality workflow stays disabled by request. |
+| **Remote desktop** | Isolated RDP/VNC helpers and loopback fixtures | RDP dependency/certificate gates; real-server sessions; packaging. |
+| **Hardware and distribution** | Unix serial PTY fixtures, unsigned installers with SHA-256 files | Real serial adapters, external X servers, trusted installers. |
 
-Sources: [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md), and [release notes](docs/release/v0.1.31.md).
+Sources: [test matrix](docs/TEST_MATRIX.md), [native benchmark](benchmarks/2026-11-19-native-macos.md), [native/platform evidence](docs/testing/hardware-interoperability.md), [SSH lab](docs/testing/ssh-lab.md), [dependency audit](docs/security/dependency-audit.md).
+
+## Completed for v0.2.0
+
+- [x] Terminal-first workspace: resizable or collapsible sidebar (⇧⌘B), focus mode, tab menu and reliable tab closing.
+- [x] Import MobaXterm `.mxtsessions`, `.moba` and `MobaXterm.ini` files exported on Windows (Windows-1252, UTF-8, UTF-16, CRLF), with a preview and one atomic write; passwords are never read.
+- [x] Open a whole group in one click: nested folders, all or selected hosts, four at a time, cancel and retry, pins, opt-in tab restore and `mobarust --open-group`.
+- [x] Trust imported host keys explicitly: one confirmation per observed fingerprint, pinned to the listed sessions; changed pinned keys stay refused.
+- [x] Queue startup-command reviews during a group open instead of failing every session after the first.
+- [x] Tab rename (name kept against shell titles), ⌃⇧PageUp/PageDown move with terminal focus, opt-in copy on select.
+- [x] Instrument Panel redesign with dark and light themes and a 4.5:1 contrast pass; virtualized session tree for large lists.
+- [x] Native macOS click-through of every 2.0 flow, including 14/14 real SSH connections, pins and tab restore across relaunch.
+- [x] New website with a 40-second demo, rewritten README, and v0.2.0 installers for all platforms with SHA-256 files.
+- [ ] SSH connection reuse for extra shells on the same host.
+- [ ] Real screen-capture demo of the native app.
 
 ## Completed in the current improvement cycle
 
-These changes are included in the v0.1.17 Mac preview. Windows/Linux installers remain v0.1.12.
+These changes were included in the v0.1.17 Mac preview and reached Windows/Linux in v0.2.0.
 
 - [x] Keep established quiet SSH sessions alive beyond their setup deadline.
 - [x] Preserve exit status sent after channel EOF, so normal shell exit does not become a reconnect.
@@ -140,7 +95,7 @@ At that v0.1.17 milestone, the SSH lab had **42 unit tests, eight Rust authentic
 - [ ] Measure sustained native pipe/Tauri/rendering throughput and end-to-end input latency under large-frame workloads; codec timings and bounded fixture success do not establish GUI responsiveness. Mac v0.1.18 contains matching version-2 app/helper cohorts; Windows/Linux packaging remains pending.
 - [x] Verify macOS ARM64 settings JSON cancellation, malformed/out-of-range rejection, valid multiline import, unchanged persisted bytes and visible error focus in light/dark mode; also reject conflicting shortcut saves. [Receipt](docs/testing/text-input-dialogs.md#settings-error-visibility-and-normal-shutdown--2026-10-02).
 - [x] Observe native macOS menu Quit exiting successfully and releasing an active local zsh PTY in the isolated debug app. The v0.1.18 ARM64 release copy additionally released its active VNC helper; active SSH/transfer shutdown remains separate.
-- [ ] Finish in-flight native transfer cancellation/collision recovery, cross-platform editor discard and dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Mac v0.1.18 includes these source changes; Windows/Linux v0.1.12 does not.
+- [ ] Finish in-flight native transfer cancellation/collision recovery, cross-platform editor discard and dialogue acceptance. [Checks and next acceptance gate](docs/testing/text-input-dialogs.md) separate completed observations from pending evidence. Mac v0.1.18 included these source changes; Windows/Linux received them in v0.2.0.
 
 ### Included in the v0.1.19 Mac preview, after v0.1.18
 
@@ -150,7 +105,7 @@ At that v0.1.17 milestone, the SSH lab had **42 unit tests, eight Rust authentic
 - [x] Drain session-owned transfer workers before SSH disconnect; verify native 32 MiB SFTP Cancel, byte-matched download Retry and active-upload SSH-tab closure on macOS ARM64. [Receipt and remaining gates](docs/testing/transfer-lifecycle.md).
 - [x] Defer normal app exit until SSH sessions drain; reject new work during shutdown and route macOS menu Quit through cleanup. Verify native menu Quit during a 32 MiB SFTP upload and window close during download, preserving originals and removing parts on macOS ARM64. [Receipt and remaining exit gates](docs/testing/transfer-lifecycle.md#application-shutdown-correction--2026-10-02).
 - [x] Retire native SSH command queues on loss/closure, cancel queued file/tunnel actions visibly, and give a reconnected shell a fresh queue under the same terminal ID. Verify close refusal, late permits, no input replay, fresh delivery and loopback listener release with deterministic regressions; GUI loss/race acceptance remains pending. [Checks and limits](docs/testing/queued-ssh-commands.md).
-- [ ] Align these corrections across the installer cohort: both checked v0.1.25 Mac DMGs include them; Windows/Linux remain v0.1.12. Published older DMGs remain unchanged.
+- [x] Align these corrections across the installer cohort: v0.2.0 ships them on macOS, Windows and Linux. Published older installers remain unchanged.
 
 ## Next, in priority order
 
@@ -207,7 +162,7 @@ and installer limits](vendor/russh-sftp/MOBARUST_PATCH.md) remain separate from
 native file-browser/editor acceptance.
 These accepted-operation, SFTP setup and response-bound corrections are packaged
 in both verified [v0.1.23 Mac previews](docs/release/v0.1.23.md). Windows/Linux
-remain v0.1.12; the newer package checks do not close native workflow gates.
+received them in v0.2.0; package checks do not close native workflow gates.
 After v0.1.23, the shared file reader also preserves unconsumed bytes when a
 cancelled read resumes with a smaller buffer, retires old read state on position
 changes/closure and clamps negotiated READ sizes to the client packet budget.
@@ -286,7 +241,7 @@ The v0.1.29 Mac installers include the uncertain-startup retry stop; ordinary pr
 
 ### 4. Align and verify the next preview release
 
-- [ ] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures.
+- [x] Build Windows/Linux previews containing the latest source fixes alongside both Mac architectures (v0.2.0, all jobs green on native runners).
 - [ ] Verify startup, native helper/resources, clean installation/uninstallation, and downloaded SHA-256 manifests per target.
 - [x] Validate v0.1.31 Mac notes, versions, architectures, artifact names and all four anonymously downloaded, byte-matched files and SHA-256 manifests; Windows/Linux remain pending.
 - [ ] Establish Windows publisher signing, macOS Developer ID/notarization, and a maintainable signed distribution path.
@@ -299,7 +254,7 @@ Included in the v0.1.30 Mac previews, [session operation admission](docs/testing
 bounds finite file/monitor, active/waiting transfer and tunnel workers to 32
 per SSH session. Excess work receives an explicit busy failure; input and independent
 resize remain available. Native saturation/Retry, many-session/IPC pressure
-and wider-platform checks remain pending; Windows/Linux downloads remain v0.1.12.
+and wider-platform checks remain pending; Windows/Linux downloads got this in v0.2.0.
 
 Finite actions and transfer/tunnel starts also use [immediate command queue
 admission](docs/testing/transfer-lifecycle.md#immediate-command-queue-admission-after-v0129--2026-10-03):
