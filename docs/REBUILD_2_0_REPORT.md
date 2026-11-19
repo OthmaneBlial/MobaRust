@@ -34,4 +34,4 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Remaining work
 
-1. Tag `v0.2.0` when authorized. The version is already bumped and `cargo xtask check` passes (237 s); draft notes are in `release/v0.2.0.md`. The tag runs the existing release workflow, which builds the Linux and Windows installers.
+1. Tag `v0.2.0` when authorized. The version is already bumped and `cargo xtask check` passes (rerun at `a79eecc`, 160 s); draft notes are in `release/v0.2.0.md`. The tag runs the existing release workflow, which builds the Linux and Windows installers.
