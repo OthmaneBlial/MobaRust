@@ -149,7 +149,7 @@ instance; no single-instance forwarding yet).
 - Native click-through on Apple M2 with an isolated lab copy and a loopback `sshd`: MobaXterm import through the file picker, a 14-host group (14/14 after queued startup reviews and explicit host key trust), pins, tab restore across relaunch, quit. Evidence: `docs/evidence/native-macos/`, TEST_MATRIX.md.
 - `v0.2.0` released with all five installers built on native runners; the Apple Silicon DMG matched its SHA-256 and passed `hdiutil verify`.
 - SSH connection reuse ("New shell on this connection", `ee80e40`): loopback test `shells_sharing_one_transport_survive_each_other`, then clicked through natively with no second login.
-- Website and README demo replaced by a real screen recording of the native app (`f375312`), with the local user name pixelated; checked live on GitHub Pages.
+- Website and README demo replaced by a real screen recording of the native app (`f375312`), then cut to 34 s with a Kokoro voiceover at the user's request (`cb6c8a0`). The local user name is pixelated; checked live on GitHub Pages (34.07 s, 1280x800, AAC audio).
 
 ## Next steps
 
