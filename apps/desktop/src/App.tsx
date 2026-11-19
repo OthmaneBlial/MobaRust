@@ -1813,10 +1813,12 @@ function App() {
     const current = terminalTabsRef.current.find((terminal) => terminal.id === workspaceId);
     if (!current) return;
     const next = await promptText("Tab name (leave empty to follow the shell title)", current.label);
+    // The dialog took focus; give it back to the shell the user was typing in.
+    requestTerminalFocus(selectedTerminalIdRef.current);
     if (next === null) return;
     const safeLabel = sanitizeTerminalTitle(next);
     setTerminalTabs((tabs) => tabs.map((terminal) => terminal.id === workspaceId ? { ...terminal, label: safeLabel || terminal.label, pinnedLabel: Boolean(safeLabel) } : terminal));
-  }, []);
+  }, [requestTerminalFocus]);
 
   const moveTerminal = useCallback((workspaceId: string, direction: 1 | -1) => {
     setTerminalTabs((tabs) => {

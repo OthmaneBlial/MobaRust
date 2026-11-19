@@ -18,7 +18,7 @@ Scope: the MobaRust 2.0 goal (terminal-first workspace, MobaXterm import, one-cl
 
 ## Partially tested
 
-- **Native GUI flows.** The native release app launches, idles and quits cleanly, as measured. Clicking through the native window and taking native screenshots were not possible in this session: there is no Screen Recording or input-automation access, and granting it is a security setting the user must change. This affects the import dialog, Open all, tab restore and pins, which were verified in the browser preview and by Rust tests instead.
+- **Native GUI flows.** Clicked through natively on 2026-11-19 once the user granted access: import, group picker and run, tab rename and move, copy on select, quit (see the native section of TEST_MATRIX.md and `docs/evidence/native-macos/`). Not driven natively: a group open against real `sshd`, tab restore and pins.
 - **MobaXterm field meanings.** They follow a public community study of the format (MobaXterm 26.3), not vendor documentation. No file written by MobaXterm itself was available on this Mac.
 - **Telnet, VNC.** These were tested against fixture servers written for the tests, not real daemons. **RDP** has helper unit tests only.
 
@@ -28,12 +28,11 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Blocked or awaiting the user
 
-- **Native GUI testing.** Re-checked on 2026-11-19: `screencapture` returns a black frame and System Events times out, so Screen Recording and Accessibility are still not granted. Changing those settings is the user's step.
 - **Linux and Windows builds.** The Quality workflow is disabled on GitHub at the maintainer's request, and the Release workflow runs only on tags or a manual dispatch. No remote CI or release was started. Windows was not run on this Mac, by rule.
 - **Public release.** Not created. The downloads in the README are still 0.1.31 (macOS) and 0.1.12 (Windows, Linux), and predate this work.
 - **Tabby comparison.** Done from Tabby 1.0.238's public docs and defaults: [TABBY_UX_STUDY.md](TABBY_UX_STUDY.md). Hands-on observation of its window is blocked by the same missing Screen Recording access.
 
 ## Remaining work
 
-1. Native click-through of the import dialog, Open all, restore and pins once Screen Recording and Accessibility access is granted to the testing tool.
+1. Native check of a group open against real `sshd`, tab restore and pins.
 2. Tag `v0.2.0` when authorized. The version is already bumped and `cargo xtask check` passes (237 s); draft notes are in `release/v0.2.0.md`. The tag runs the existing release workflow, which builds the Linux and Windows installers.
