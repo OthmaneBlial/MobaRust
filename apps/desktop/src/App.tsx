@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { RemoteFramebufferQueue } from "./remote-desktop-framebuffer";
 import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
@@ -4124,10 +4124,12 @@ function App() {
     };
   }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, reopenClosedTerminal, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
+  // Typing stays instant: the list catches up with the deferred query.
+  const deferredSearch = useDeferredValue(search);
   const filteredSessions = useMemo(() => sessionRows.filter((session) => {
-    const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(deferredSearch.toLowerCase());
     return matchesSearch && (!favoritesOnly || session.favorite) && (!recentOnly || session.lastUsedAt != null);
-  }).sort((first, second) => (second.lastUsedAt ?? 0) - (first.lastUsedAt ?? 0)), [favoritesOnly, recentOnly, search, sessionRows]);
+  }).sort((first, second) => (second.lastUsedAt ?? 0) - (first.lastUsedAt ?? 0)), [deferredSearch, favoritesOnly, recentOnly, sessionRows]);
   const localSessionCount = filteredSessions.filter((session) => session.type === "LOCAL").length;
   const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
   // The session tree can hold thousands of imported rows: rebuild it only when its data changes, not on every app render.
@@ -4164,12 +4166,13 @@ function App() {
                 for (let depth = 1; depth <= parts.length; depth += 1) { const path = parts.slice(0, depth).join("/"); sshCounts.set(path, (sshCounts.get(path) ?? 0) + 1); }
               }
               const hidden = (path: string) => [...collapsedFolders].some((collapsed) => path !== collapsed && inFolder(path, collapsed));
-              return nodes.filter((node) => !hidden(node.path)).map((node) => {
+              const items: VirtualItem[] = [];
+              for (const node of nodes) {
+                if (hidden(node.path)) continue;
                 const collapsed = collapsedFolders.has(node.path);
                 const sessions = collapsed ? [] : grouped.get(node.path) ?? [];
                 const sshCount = sshCounts.get(node.path) ?? 0;
-                return (
-              <div key={node.path} className="session-folder-group" style={{ "--folder-depth": node.depth } as CSSProperties}>
+                items.push({ key: `folder:${node.path}`, height: FOLDER_ITEM_HEIGHT, depth: node.depth, node: (
                 <div className="folder-heading nested-folder" style={{ "--folder-hue": groupHue(node.path) } as CSSProperties}>
                   <button type="button" className="folder-toggle" aria-expanded={!collapsed} title={node.path} onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>
                     {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
@@ -4177,9 +4180,9 @@ function App() {
                   {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRunning} onClick={() => void sessionActionsRef.current.openSessionGroup(node.path)}><Play size={11} /></button>}
                   {sshCount > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in ${node.path}`} title="Choose sessions to open" disabled={groupRunning} onClick={() => setGroupPickPath(node.path)}><ListChecks size={11} /></button>}
                   <span>{node.total}</span>
-                </div>
-                {sessions.map((session) => (
-                  <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                </div>) });
+                for (const session of sessions) items.push({ key: `session:${session.id ?? session.name}`, height: SESSION_ITEM_HEIGHT, depth: node.depth, node: (
+                  <SessionRow {...session} onSelect={() => {
                     const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
                     if (saved) sessionActionsRef.current.connectSavedSession(saved);
                   }} onEdit={session.id ? () => {
@@ -4188,11 +4191,9 @@ function App() {
                   } : undefined} onDelete={session.id ? () => {
                     const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
                     if (saved) void sessionActionsRef.current.deleteSavedSession(saved);
-                  } : undefined} onToggleFavorite={() => void sessionActionsRef.current.toggleFavorite(session)} />
-                ))}
-              </div>
-                );
-              });
+                  } : undefined} onToggleFavorite={() => void sessionActionsRef.current.toggleFavorite(session)} />) });
+              }
+              return <VirtualRows items={items} />;
             })()}
   </>, [collapsedFolders, filteredSessions, groupRunning, localSessionCount, remoteSessionCount]);
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
@@ -4539,6 +4540,42 @@ function groupSessionsByFolder(sessions: SessionListItem[]): Array<[string, Sess
     groups.set(folder, [...(groups.get(folder) ?? []), session]);
   });
   return [...groups.entries()].sort(([first], [second]) => first.localeCompare(second));
+}
+
+type VirtualItem = { key: string; height: number; depth: number; node: ReactNode };
+const FOLDER_ITEM_HEIGHT = 28;
+const SESSION_ITEM_HEIGHT = 43;
+const VIRTUAL_OVERSCAN_PX = 600;
+
+// Renders only the rows near the visible part of the scrolling `.session-list`, so a tree of thousands of sessions costs the same as one screenful.
+function VirtualRows({ items }: { items: VirtualItem[] }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState({ top: 0, height: 900 });
+  const offsets = useMemo(() => {
+    const result = [0];
+    for (const item of items) result.push(result[result.length - 1] + item.height);
+    return result;
+  }, [items]);
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const scroller = host?.closest<HTMLElement>(".session-list");
+    if (!host || !scroller) return;
+    const update = () => setView((current) => {
+      const next = { top: scroller.scrollTop - host.offsetTop, height: scroller.clientHeight };
+      return Math.abs(next.top - current.top) < 40 && next.height === current.height ? current : next;
+    });
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(scroller);
+    return () => { scroller.removeEventListener("scroll", update); observer.disconnect(); };
+  }, []);
+  const firstVisible = (y: number) => { let low = 0; let high = items.length; while (low < high) { const mid = (low + high) >> 1; if (offsets[mid + 1] <= y) low = mid + 1; else high = mid; } return low; };
+  const start = firstVisible(view.top - VIRTUAL_OVERSCAN_PX);
+  const end = Math.min(items.length, firstVisible(view.top + view.height + VIRTUAL_OVERSCAN_PX) + 1);
+  return <div ref={hostRef} className="virtual-rows" style={{ height: offsets[items.length] }}>
+    {items.slice(start, end).map((item, index) => <div key={item.key} className="virtual-row" style={{ top: offsets[start + index], height: item.height, paddingLeft: item.depth * 10 }}>{item.node}</div>)}
+  </div>;
 }
 
 function GroupPicker({ path, sessions, onClose, onOpen }: { path: string; sessions: SavedSession[]; onClose: () => void; onOpen: (ids: string[]) => void }) {
