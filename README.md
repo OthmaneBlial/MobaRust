@@ -8,7 +8,7 @@
 
 Terminal tabs and splits · SSH with verified host keys · SFTP/SCP · tunnels · one-click server groups · MobaXterm import
 
-[![Mac preview](https://img.shields.io/badge/mac_preview-v0.1.31-ee6a2c?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31)
+[![Preview](https://img.shields.io/badge/preview-v0.2.0-ee6a2c?style=for-the-badge)](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.2.0)
 [![Rust + Tauri](https://img.shields.io/badge/built_with-Rust_%2B_Tauri-3d4044?style=for-the-badge)](docs/architecture.md)
 [![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-3d4044?style=for-the-badge)](LICENSE)
 
@@ -77,13 +77,13 @@ The evidence for every row, and its gaps, is in [`docs/TEST_MATRIX.md`](docs/TES
 
 | Platform | Download | Version |
 | --- | --- | --- |
-| macOS · Apple Silicon | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg) | 0.1.31 |
-| macOS · Intel | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg) | 0.1.31 |
-| Windows · x64 | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe) | 0.1.12 |
-| Ubuntu / Debian · x64 | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb) | 0.1.12 |
-| Other Linux · x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage) | 0.1.12 |
+| macOS · Apple Silicon | [ARM64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-macos-arm64.dmg) | 0.2.0 |
+| macOS · Intel | [x64 DMG](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-macos-x64.dmg) | 0.2.0 |
+| Windows · x64 | [Installer](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-windows-x64.exe) | 0.2.0 |
+| Ubuntu / Debian · x64 | [DEB](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-linux-x64.deb) | 0.2.0 |
+| Other Linux · x64 | [AppImage](https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-linux-x64.AppImage) | 0.2.0 |
 
-These are **preview builds**. They predate the terminal-first workspace, group opening, MobaXterm import and the new design on `main`. macOS builds are ad hoc signed and not notarized. Windows and Linux builds are older still. [Release notes and SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31) · [Installation help](docs/release/preview-notes.md)
+These are **preview builds**: macOS builds are ad hoc signed and not notarized, and no build has a publisher signature. [Release notes and SHA-256 files](https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.2.0) · [Installation help](docs/release/preview-notes.md)
 
 ## Build from source
 

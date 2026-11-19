@@ -40,7 +40,7 @@
     <main id="main">
       <section class="wall steel docs-hero" aria-labelledby="docs-title">
         <div class="wrap wall-inner">
-          <p class="wall-code" aria-hidden="true"><span>MBRU 001402 · Field guide</span><span>Mac 0.1.31 · Apache-2.0</span></p>
+          <p class="wall-code" aria-hidden="true"><span>MBRU 001402 · Field guide</span><span>0.2.0 · Apache-2.0</span></p>
           <h1 class="wall-title" id="docs-title">Read the <span>manifest.</span></h1>
           <p>Install the preview, bring your MobaXterm sessions, and see exactly what is tested and what still needs proof. This guide follows the code and the release evidence.</p>
         </div>
@@ -64,17 +64,16 @@
           <article class="doc">
             <section id="install" aria-labelledby="install-title">
               <h2 id="install-title">Install the preview</h2>
-              <p>The Mac build is version 0.1.31. The Windows and Linux builds are version 0.1.12. All of them are previews without publisher signing. GitHub's automatic source archives are not installers.</p>
+              <p>Every build is version 0.2.0. They are previews without publisher signing. GitHub's automatic source archives are not installers.</p>
               <div class="downloads">
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-arm64.dmg"><span>macOS · Apple Silicon</span><strong>DMG 0.1.31</strong><small>Drag MobaRust to Applications</small></a>
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.31/MobaRust-0.1.31-macos-x64.dmg"><span>macOS · Intel</span><strong>DMG 0.1.31</strong><small>Drag MobaRust to Applications</small></a>
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-windows-x64.exe"><span>Windows · x64</span><strong>Installer 0.1.12</strong><small>Installs WebView2 if needed</small></a>
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.deb"><span>Ubuntu / Debian · x64</span><strong>DEB 0.1.12</strong><small>For apt-based desktops</small></a>
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.1.12/MobaRust-0.1.12-linux-x64.AppImage"><span>Other Linux · x64</span><strong>AppImage 0.1.12</strong><small>WebKitGTK 4.1 and FUSE may be needed</small></a>
-                <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.1.31"><span>Release notes</span><strong>SHA-256 files</strong><small>Checksums and install notes</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-macos-arm64.dmg"><span>macOS · Apple Silicon</span><strong>DMG 0.2.0</strong><small>Drag MobaRust to Applications</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-macos-x64.dmg"><span>macOS · Intel</span><strong>DMG 0.2.0</strong><small>Drag MobaRust to Applications</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-windows-x64.exe"><span>Windows · x64</span><strong>Installer 0.2.0</strong><small>Installs WebView2 if needed</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-linux-x64.deb"><span>Ubuntu / Debian · x64</span><strong>DEB 0.2.0</strong><small>For apt-based desktops</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/download/v0.2.0/MobaRust-0.2.0-linux-x64.AppImage"><span>Other Linux · x64</span><strong>AppImage 0.2.0</strong><small>WebKitGTK 4.1 and FUSE may be needed</small></a>
+                <a href="https://github.com/OthmaneBlial/MobaRust/releases/tag/v0.2.0"><span>Release notes</span><strong>SHA-256 files</strong><small>Checksums and install notes</small></a>
               </div>
               <p class="callout">macOS may block the first launch because the app is ad hoc signed and not notarized, and Windows may show SmartScreen. Use your system's per-app review flow only if you trust the download, and never turn off system security globally. Checksums detect a corrupted download; they do not prove who published it.</p>
-              <p>The group opener, MobaXterm import and the new interface are on the main branch and are not in these downloads yet. <a href="#source">Build from source</a> to use them today.</p>
             </section>
 
             <section id="import" aria-labelledby="import-title">
@@ -100,7 +99,7 @@
                 <thead><tr><th scope="col">Area</th><th scope="col">Available</th><th scope="col">Boundary</th></tr></thead>
                 <tbody>
                   <tr><td>SSH</td><td>Host-key verification, agent, password and key authentication, PTY resize, keepalives, bounded reconnect and jump hosts.</td><td>Verify the fingerprint before trusting a new host.</td></tr>
-                  <tr><td>Groups</td><td>Nested folders, open all or selected hosts, four connections at a time, cancel and retry, pinned groups, <code>--open-group</code>.</td><td>On the main branch; not in the 0.1.31 download.</td></tr>
+                  <tr><td>Groups</td><td>Nested folders, open all or selected hosts, four connections at a time, cancel and retry, pinned groups, <code>--open-group</code>.</td><td>Imported sessions need their host key trusted once.</td></tr>
                   <tr><td>SFTP / SCP</td><td>File browser, streaming and recursive SFTP transfers, progress, cancellation, explicit overwrite and mode preservation.</td><td>Recursive SCP is not supported.</td></tr>
                   <tr><td>Sessions</td><td>Folders, tags, favorites, recents, search, OpenSSH config import, MobaXterm import and secret-free export.</td><td>Profiles keep credential references, not secrets.</td></tr>
                   <tr><td>Terminals</td><td>Native PTY, tabs, splits, focus mode, search, zoom and UTF-8 streaming.</td><td>Broader Windows and Linux GUI testing is open.</td></tr>
@@ -128,8 +127,7 @@
             <section id="limits" aria-labelledby="limits-title">
               <h2 id="limits-title">Known limits</h2>
               <ul>
-                <li>Installers are built and checked locally. They have no publisher signature, and the Mac packages are ad hoc signed and not notarized.</li>
-                <li>The 0.1.31 Mac preview can keep a busy error in Files after a successful refresh. A fix is in the source; a corrected installer is pending. <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-busy-recovery-v0.1.31.md">Receipt</a>.</li>
+                <li>Installers are built on GitHub's native runners. They have no publisher signature, and the Mac packages are ad hoc signed and not notarized.</li>
                 <li>A tunnel forwarding attempt with an uncertain outcome closes its SSH connection and ends other work on it. <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/testing/native-tunnels-v0.1.31.md">Tunnel receipt</a>.</li>
                 <li>A successful build does not prove clean-install behavior or compatibility with every SSH server.</li>
                 <li>RDP and VNC are experiments. RDP is not packaged, and VNC over TCP has no transport encryption.</li>
@@ -159,7 +157,7 @@ pnpm --dir apps/desktop tauri dev</pre>
               <ul>
                 <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/TEST_MATRIX.md">Test matrix</a>: what is tested against real local OpenSSH, what uses fixtures, and what is still open.</li>
                 <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/benchmarks/2026-11-19-native-macos.md">Native macOS benchmark</a>: launch time, idle CPU and memory, and clean shutdown of the release build on an Apple M2.</li>
-                <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/release/v0.1.31.md">v0.1.31 release receipt</a>: package layout, architectures, signatures and checksums.</li>
+                <li><a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/release/v0.2.0.md">v0.2.0 release notes</a>: package layout, architectures, signatures and checksums.</li>
               </ul>
               <p>Report bugs in <a href="https://github.com/OthmaneBlial/MobaRust/issues">GitHub Issues</a> with your system, architecture and steps. Remove credentials, hostnames, IP addresses and private details first.</p>
             </section>
