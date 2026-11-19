@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent as ReactUIEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { RemoteFramebufferQueue } from "./remote-desktop-framebuffer";
 import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
@@ -762,6 +762,9 @@ const previewSavedSessions: SavedSession[] = [
   previewSession("preview-bastion", "Production bastion", "SSH", "bastion.example", "ops", "Production", true),
   ...[1, 2, 3, 4, 5, 6].map((n) => previewSession(`preview-web-${n}`, `web-0${n}`, "SSH", `10.0.1.${10 + n}`, "deploy", "Production/Web")),
   previewSession("preview-staging", "Staging cluster", "SSH", "staging.example", "dev", "Staging"),
+  // Browser preview only: ?previewScale=N adds N generated sessions to measure large session trees.
+  ...Array.from({ length: IS_TAURI ? 0 : Math.min(5000, Number(new URLSearchParams(globalThis.location?.search ?? "").get("previewScale")) || 0) }, (_, n) =>
+    previewSession(`preview-scale-${n}`, `host-${n}`, "SSH", `10.${(n >> 8) & 255}.${n & 255}.1`, "ops", `Fleet/Region ${n % 8}/Rack ${n % 40}`)),
 ];
 
 function quickActions(keyboard: AppSettings["keyboard"]): Array<{ label: string; hint: string; icon: LucideIcon; shell?: LocalShellChoice }> {
@@ -4121,12 +4124,77 @@ function App() {
     };
   }, [adjustTerminalFontSize, broadcastEnabled, cancelMacro, closing, closeTerminal, closeTerminalSearch, cycleTerminal, editingRemoteFile, focusPane, macroRecording, macroRun, openSplit, reopenClosedTerminal, selectedTerminalId, settings.keyboard, startNewTerminal, stopMacroRecording, terminalSearchOpen]);
 
-  const filteredSessions = sessionRows.filter((session) => {
+  const filteredSessions = useMemo(() => sessionRows.filter((session) => {
     const matchesSearch = `${session.name} ${session.detail} ${session.type} ${session.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase());
     return matchesSearch && (!favoritesOnly || session.favorite) && (!recentOnly || session.lastUsedAt != null);
-  }).sort((first, second) => (second.lastUsedAt ?? 0) - (first.lastUsedAt ?? 0));
+  }).sort((first, second) => (second.lastUsedAt ?? 0) - (first.lastUsedAt ?? 0)), [favoritesOnly, recentOnly, search, sessionRows]);
   const localSessionCount = filteredSessions.filter((session) => session.type === "LOCAL").length;
   const remoteSessionCount = filteredSessions.filter((session) => session.type !== "LOCAL").length;
+  // The session tree can hold thousands of imported rows: rebuild it only when its data changes, not on every app render.
+  const sessionActionsRef = useRef({ savedSessions, connectSavedSession, openSavedLocalSession, startNewTerminal, deleteSavedSession, toggleFavorite, openSessionGroup });
+  useEffect(() => {
+    sessionActionsRef.current = { savedSessions, connectSavedSession, openSavedLocalSession, startNewTerminal, deleteSavedSession, toggleFavorite, openSessionGroup };
+  });
+  const groupRunning = Boolean(groupRun?.running);
+  const sessionTree = useMemo(() => <>
+            <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
+            {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
+              <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                if (saved) sessionActionsRef.current.openSavedLocalSession(saved);
+                else sessionActionsRef.current.startNewTerminal();
+              }} onEdit={session.id ? () => {
+                const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                if (saved) setEditingSession(saved);
+              } : undefined} onDelete={session.id ? () => {
+                const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                if (saved) void sessionActionsRef.current.deleteSavedSession(saved);
+              } : undefined} onToggleFavorite={() => void sessionActionsRef.current.toggleFavorite(session)} />
+            ))}
+            <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
+            {(() => {
+              const remoteRows = filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC");
+              const grouped = new Map(groupSessionsByFolder(remoteRows).map(([folder, sessions]) => [normalizeFolder(folder, "Unfiled"), sessions] as const));
+              const nodes = folderTree(remoteRows.map((session) => normalizeFolder(session.folder, "Unfiled")));
+              // One pass: count SSH sessions under every ancestor folder.
+              const sshCounts = new Map<string, number>();
+              for (const session of remoteRows) {
+                if (session.type !== "SSH") continue;
+                const parts = normalizeFolder(session.folder, "Unfiled").split("/");
+                for (let depth = 1; depth <= parts.length; depth += 1) { const path = parts.slice(0, depth).join("/"); sshCounts.set(path, (sshCounts.get(path) ?? 0) + 1); }
+              }
+              const hidden = (path: string) => [...collapsedFolders].some((collapsed) => path !== collapsed && inFolder(path, collapsed));
+              return nodes.filter((node) => !hidden(node.path)).map((node) => {
+                const collapsed = collapsedFolders.has(node.path);
+                const sessions = collapsed ? [] : grouped.get(node.path) ?? [];
+                const sshCount = sshCounts.get(node.path) ?? 0;
+                return (
+              <div key={node.path} className="session-folder-group" style={{ "--folder-depth": node.depth } as CSSProperties}>
+                <div className="folder-heading nested-folder" style={{ "--folder-hue": groupHue(node.path) } as CSSProperties}>
+                  <button type="button" className="folder-toggle" aria-expanded={!collapsed} title={node.path} onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>
+                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
+                  </button>
+                  {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRunning} onClick={() => void sessionActionsRef.current.openSessionGroup(node.path)}><Play size={11} /></button>}
+                  {sshCount > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in ${node.path}`} title="Choose sessions to open" disabled={groupRunning} onClick={() => setGroupPickPath(node.path)}><ListChecks size={11} /></button>}
+                  <span>{node.total}</span>
+                </div>
+                {sessions.map((session) => (
+                  <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
+                    const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                    if (saved) sessionActionsRef.current.connectSavedSession(saved);
+                  }} onEdit={session.id ? () => {
+                    const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                    if (saved) setEditingSession(saved);
+                  } : undefined} onDelete={session.id ? () => {
+                    const saved = sessionActionsRef.current.savedSessions.find((item) => item.id === session.id);
+                    if (saved) void sessionActionsRef.current.deleteSavedSession(saved);
+                  } : undefined} onToggleFavorite={() => void sessionActionsRef.current.toggleFavorite(session)} />
+                ))}
+              </div>
+                );
+              });
+            })()}
+  </>, [collapsedFolders, filteredSessions, groupRunning, localSessionCount, remoteSessionCount]);
   const activeTransferCount = transfers.filter((transfer) => !["completed", "cancelled", "failed"].includes(transfer.state)).length;
   const activeTunnelCount = tunnels.filter((tunnel) => !["stopped", "failed"].includes(tunnel.state)).length;
 
@@ -4212,56 +4280,7 @@ function App() {
           <div className="session-list">
             <div className="list-heading"><span>{recentOnly ? "Recent sessions" : favoritesOnly ? "Favorite sessions" : "Sessions"}</span><span className="list-actions"><button aria-label="Import MobaXterm sessions" title="Import MobaXterm sessions (.mxtsessions / MobaXterm.ini)" onClick={() => setMobaXtermImportOpen(true)}><FolderPlus size={14} /></button><button aria-label="Import OpenSSH config" title="Import OpenSSH config" onClick={importOpenSshConfig}><Upload size={14} /></button><button aria-label="Import MobaRust session export" title="Import MobaRust session export" onClick={importSessions}><ArrowDownToLine size={14} /></button><button aria-label="Export MobaRust sessions" title="Export secret-free session definitions" onClick={exportSessions}><ArrowUpFromLine size={14} /></button></span></div>
             {sessionListError && <div className="connect-error" role="alert"><span>{sessionListError}</span><button type="button" className="outline-button" onClick={refreshSavedSessions}>Retry</button></div>}
-            <div className="folder-heading"><ChevronDown size={13} /> Local terminals <span>{localSessionCount}</span></div>
-            {filteredSessions.filter((session) => session.type === "LOCAL").map((session) => (
-              <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
-                const saved = savedSessions.find((item) => item.id === session.id);
-                if (saved) openSavedLocalSession(saved);
-                else startNewTerminal();
-              }} onEdit={session.id ? () => {
-                const saved = savedSessions.find((item) => item.id === session.id);
-                if (saved) setEditingSession(saved);
-              } : undefined} onDelete={session.id ? () => {
-                const saved = savedSessions.find((item) => item.id === session.id);
-                if (saved) void deleteSavedSession(saved);
-              } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
-            ))}
-            <div className="folder-heading muted-folder"><ChevronDown size={13} /> Remote sessions <span>{remoteSessionCount}</span></div>
-            {(() => {
-              const remoteRows = filteredSessions.filter((session) => session.type === "SSH" || session.type === "SERIAL" || session.type === "RDP" || session.type === "VNC");
-              const grouped = new Map(groupSessionsByFolder(remoteRows).map(([folder, sessions]) => [normalizeFolder(folder, "Unfiled"), sessions] as const));
-              const nodes = folderTree(remoteRows.map((session) => normalizeFolder(session.folder, "Unfiled")));
-              const hidden = (path: string) => [...collapsedFolders].some((collapsed) => path !== collapsed && inFolder(path, collapsed));
-              return nodes.filter((node) => !hidden(node.path)).map((node) => {
-                const collapsed = collapsedFolders.has(node.path);
-                const sessions = collapsed ? [] : grouped.get(node.path) ?? [];
-                const sshCount = remoteRows.filter((session) => session.type === "SSH" && inFolder(normalizeFolder(session.folder, "Unfiled"), node.path)).length;
-                return (
-              <div key={node.path} className="session-folder-group" style={{ "--folder-depth": node.depth } as CSSProperties}>
-                <div className="folder-heading nested-folder" style={{ "--folder-hue": groupHue(node.path) } as CSSProperties}>
-                  <button type="button" className="folder-toggle" aria-expanded={!collapsed} title={node.path} onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>
-                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
-                  </button>
-                  {sshCount > 0 && <button type="button" className="folder-open-all" aria-label={`Open all ${sshCount} SSH sessions in ${node.path}`} title={`Open all ${sshCount} SSH session${sshCount === 1 ? "" : "s"} (${GROUP_OPEN_CONCURRENCY} at a time)`} disabled={groupRun?.running} onClick={() => void openSessionGroup(node.path)}><Play size={11} /></button>}
-                  {sshCount > 1 && <button type="button" className="folder-open-all" aria-label={`Choose sessions to open in ${node.path}`} title="Choose sessions to open" disabled={groupRun?.running} onClick={() => setGroupPickPath(node.path)}><ListChecks size={11} /></button>}
-                  <span>{node.total}</span>
-                </div>
-                {sessions.map((session) => (
-                  <SessionRow key={session.id ?? session.name} {...session} onSelect={() => {
-                    const saved = savedSessions.find((item) => item.id === session.id);
-                    if (saved) connectSavedSession(saved);
-                  }} onEdit={session.id ? () => {
-                    const saved = savedSessions.find((item) => item.id === session.id);
-                    if (saved) setEditingSession(saved);
-                  } : undefined} onDelete={session.id ? () => {
-                    const saved = savedSessions.find((item) => item.id === session.id);
-                    if (saved) void deleteSavedSession(saved);
-                  } : undefined} onToggleFavorite={() => void toggleFavorite(session)} />
-                ))}
-              </div>
-                );
-              });
-            })()}
+            {sessionTree}
             {filteredSessions.length === 0 && <div className="empty-search">No matching sessions</div>}
           </div>
 

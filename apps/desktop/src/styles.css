@@ -636,3 +636,4 @@ label small { font-size: 11px; }
 .workspace > :is(.connect-error, .workspace-notice) { flex-direction: row; align-items: center; justify-content: space-between; }
 .group-run-panel ul { gap: 6px 16px; }
 .search-box input { background: transparent !important; border: 0 !important; }
+.session-folder-group { content-visibility: auto; contain-intrinsic-size: auto 240px; }

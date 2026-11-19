@@ -120,6 +120,12 @@ instance; no single-instance forwarding yet).
 - `site/` redesigned in the Instrument Panel style. Docs share the stylesheet. Checked at 1440 and 390 px wide, with no horizontal scroll. Not deployed: Pages is served from another repository, and publishing needs approval.
 - Fixes found from full-resolution captures: hover-only row actions so session names fit, the search shortcut no longer wraps, compact error banners, group-run spacing, and the light search field.
 
+## M7 — Performance pass (2026-11-19)
+
+- Measured bundle size, load, heap and session-tree scale in headless Chrome. Receipt: `benchmarks/2026-11-19-ui-scale.md`.
+- Found that every app render rebuilt the whole session tree. At 5,000 sessions a tab click took 284 ms. With the tree memoized and folder counts computed in one pass, it now takes 6 ms, and first paint dropped from 952 to 520 ms.
+- The Rust synthetic harness shows no regression against the October receipt.
+
 ## Next steps
 
 1. Native UI inspection once Screen Recording / computer-use access is
