@@ -2063,6 +2063,132 @@ fn fourteen_session_group_opens_with_bounded_handshakes_and_cleans_up() {
     });
 }
 
+/// Tunnel traffic through real OpenSSH: direct-tcpip (local and dynamic
+/// tunnels use this path), a refused target that must not break the
+/// transport, and a remote forward that is used and then released.
+#[test]
+fn tunnels_carry_traffic_through_real_sshd_and_release_ports() {
+    let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");
+    runtime.block_on(async {
+        let fixture = LocalSshd::start().expect("start local sshd fixture");
+        wait_for_port(fixture.port).await;
+        let connection = SshConnection::connect(fixture.options())
+            .await
+            .expect("connect to local sshd");
+
+        // Loopback echo target that only sshd connects to.
+        let echo = TcpListener::bind("127.0.0.1:0").await.expect("bind echo");
+        let echo_port = echo.local_addr().unwrap().port();
+        let echo_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = echo.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut buffer = vec![0_u8; 64 * 1024];
+                    while let Ok(read) = socket.read(&mut buffer).await {
+                        if read == 0 || socket.write_all(&buffer[..read]).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+
+        let payload: Vec<u8> = (0..256 * 1024).map(|index| (index % 251) as u8).collect();
+        let mut stream = connection
+            .open_direct_tcpip("127.0.0.1", u32::from(echo_port))
+            .await
+            .expect("open direct-tcpip through sshd");
+        let (mut reader, mut writer) = tokio::io::split(&mut stream);
+        let expected = payload.clone();
+        let (_, echoed) = tokio::join!(
+            async {
+                writer
+                    .write_all(&payload)
+                    .await
+                    .expect("send tunnel payload");
+                writer.flush().await.expect("flush tunnel payload");
+            },
+            async {
+                let mut echoed = vec![0_u8; expected.len()];
+                tokio::time::timeout(Duration::from_secs(10), reader.read_exact(&mut echoed))
+                    .await
+                    .expect("tunnel echo deadline")
+                    .expect("read tunnel echo");
+                echoed
+            }
+        );
+        assert_eq!(echoed, expected, "256 KiB must round-trip byte-exact");
+        drop(stream);
+
+        // A refused target fails the channel, not the session.
+        let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_port = closed.local_addr().unwrap().port();
+        drop(closed);
+        assert!(
+            connection
+                .open_direct_tcpip("127.0.0.1", u32::from(closed_port))
+                .await
+                .is_err(),
+            "connecting to a closed port must fail"
+        );
+        assert!(
+            shell_output(&connection, b"printf STILL_UP; exit\n")
+                .await
+                .contains("STILL_UP")
+        );
+
+        // Remote forward: sshd listens, we receive the channel and echo back.
+        let bound = connection
+            .request_remote_forward("127.0.0.1", 0)
+            .await
+            .expect("request remote forward");
+        assert_ne!(bound, 0);
+        let mut client = TcpStream::connect(("127.0.0.1", bound))
+            .await
+            .expect("connect to sshd remote-forward listener");
+        let forwarded =
+            tokio::time::timeout(Duration::from_secs(5), connection.next_forwarded_channel())
+                .await
+                .expect("forwarded channel deadline")
+                .expect("forwarded channel");
+        let mut remote = forwarded.into_stream();
+        client.write_all(b"remote-forward-ping").await.unwrap();
+        let mut received = [0_u8; 19];
+        remote
+            .read_exact(&mut received)
+            .await
+            .expect("read forwarded bytes");
+        assert_eq!(&received, b"remote-forward-ping");
+        remote.write_all(b"pong").await.unwrap();
+        remote.flush().await.unwrap();
+        let mut reply = [0_u8; 4];
+        client
+            .read_exact(&mut reply)
+            .await
+            .expect("read reply via sshd");
+        assert_eq!(&reply, b"pong");
+        drop((client, remote));
+
+        connection
+            .cancel_remote_forward("127.0.0.1", u32::from(bound))
+            .await
+            .expect("cancel remote forward");
+        let mut released = false;
+        for _ in 0..40 {
+            if TcpStream::connect(("127.0.0.1", bound)).await.is_err() {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(released, "sshd must stop listening after cancel");
+        connection.disconnect().await.expect("disconnect");
+        echo_task.abort();
+    });
+}
+
 #[test]
 fn connects_to_a_reproducible_local_sshd_fixture_with_a_real_pty_shell() {
     let runtime = tokio::runtime::Runtime::new().expect("create SSH test runtime");

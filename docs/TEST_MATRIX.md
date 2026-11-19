@@ -12,6 +12,9 @@ Kinds of evidence, from strongest to weakest:
 
 Nothing simulated is listed as real end-to-end.
 
+Run all real-localhost suites with cleanup check: `./tools/local-protocol-lab.sh`
+(2026-11-19 run: all passed; 14-session group connected in 455 ms, shells done in 780 ms under full-suite load; no fixture `sshd` left).
+
 | Area | Evidence (2026-11-19, this Mac) | Gaps |
 |---|---|---|
 | SSH auth (key, agent, password, keyboard-interactive, wrong credentials) | Real local: `authentication.rs`, `local_sshd.rs` | Native UI prompts not re-checked this round |
@@ -21,13 +24,16 @@ Nothing simulated is listed as real end-to-end.
 | Handshake timeout / cancel | Real local | — |
 | SFTP / SCP transfers, interruption and retry, permissions, links | Real local: `local_sshd.rs`, `sftp_bounds.rs`, `sftp_metadata.rs` | — |
 | Remote text editing (encodings, conflicts, permissions) | Real local: `remote_editor.rs` | — |
-| Tunnels (local, remote, dynamic) and cleanup | Real local: `forwarding.rs` | — |
+| Tunnels through real OpenSSH | Real local: `tunnels_carry_traffic_through_real_sshd_and_release_ports` — 256 KiB byte-exact over direct-tcpip (local/dynamic tunnel path), refused target fails only the channel, remote forward round trip, listener released after cancel | Desktop listener layer (`ssh.rs`) covered by its own unit tests, not driven through the native UI |
+| Remote-forward approval/revocation edge cases | In-process russh server: `forwarding.rs` (protocol-level, not OpenSSH) | — |
 | Jump hosts (IPv4/IPv6, rekey) | Real local | — |
 | X11 forwarding | Real local to a loopback display fixture; Xvfb test skipped when absent | — |
-| Telnet | Unit tests in `mobarust-telnet` | No local Telnet server on macOS; loopback fixture to add |
+| Telnet | Loopback TCP fixture server inside the tests (negotiation, NAWS resize, plaintext round trip, reconnect after peer disconnect) | macOS ships no `telnetd`; the server side is a test fixture, not a real Telnet daemon |
 | Serial | Real local PTY pair: `local_pty.rs` | No hardware |
-| RDP / VNC | Helper unit and fixture tests | No local RDP/VNC server; not verified end-to-end |
+| VNC | `tools/vnc-helper`: 26 unit + 17 tests against a loopback RFB fixture server written for the tests | macOS Screen Sharing not used; fixture is not a real VNC server |
+| RDP | `tools/rdp-helper`: 31 unit + 2 local helper-process tests | No RDP server available locally; RDP sessions not verified end-to-end |
 | MobaXterm import | Unit / fixture | No real MobaXterm export available |
 | `--open-group` parsing and resolution | Unit | Native launch not tested |
 | Terminal-first layout, focus mode, tab menu | Browser preview at 1440×900 and 1100×680 | Native screenshots blocked (no Screen Recording permission for the shell) |
+| Desktop managers (PTY, SSH manager, backpressure, shutdown) | `cargo test -p mobarust`: 117 passed | — |
 | Linux / Windows | Not run this round | Existing docs record earlier cross-checks |
