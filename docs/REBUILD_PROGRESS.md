@@ -140,9 +140,12 @@ instance; no single-instance forwarding yet).
 - Built a local release DMG with the release config: 8.64 MiB, verified, arm64, ad hoc signed. The native app opens its window in 370 ms warm and 1.49 s on first launch. It idles at 0.1–0.2 % CPU and exits about 100 ms after SIGTERM, with no WebKit helpers left. Receipt: `benchmarks/2026-11-19-native-macos.md`.
 - Final report: `docs/REBUILD_2_0_REPORT.md`.
 
+## Website (2026-11-19)
+
+- Rebuilt `site/` as the "freight manifest" world (see `docs/WEBSITE_DESIGN.md`), checked at 1440 and 390 px, and published to https://othmaneblial.github.io/MobaRust/ with the user's approval.
+
 ## Next steps
 
 1. Native click-through and screenshots, once the testing tool has Screen Recording and Accessibility access.
 2. Tagged release and Linux/Windows installers through the existing workflow, when authorized.
-3. GitHub Pages deploy of `site/`, when authorized.
-4. A Tabby UX comparison, if Tabby gets installed.
+3. A Tabby UX comparison, if Tabby gets installed.
