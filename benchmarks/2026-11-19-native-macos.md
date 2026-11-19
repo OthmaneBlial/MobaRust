@@ -28,3 +28,11 @@ The time to the window is measured from process spawn until CoreGraphics reports
 
 - Screenshots of the native window. `screencapture -l` returned "could not create image from window" because this terminal has no Screen Recording permission, and changing security settings is out of scope. UI captures come from the browser preview of the same React build (see `2026-11-19-ui-scale.md`).
 - Terminal input latency and resize smoothness in the native window, because no input automation was available.
+
+## 0.2.0 rebuild (commit `cb46c02`)
+
+Same build command. `MobaRust_0.2.0_aarch64.dmg`, 9,061,911 bytes, SHA-256
+`7c4787ac46b3beda1363b4c2379fd42b1ffe238b603fb30d11ce4a4b02862aa3`, `hdiutil verify` VALID,
+strict `codesign` check passes, arm64, CLI reports 0.2.0. Running after 6 s at 0.1 % CPU and
+103 MiB resident with an isolated home folder; clean exit on SIGTERM. Native clicks and
+screenshots remain blocked (no Screen Recording or Accessibility access).
