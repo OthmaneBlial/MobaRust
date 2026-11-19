@@ -185,6 +185,9 @@ p { margin: 0; text-wrap: pretty; }
 /* Workbench: what is on board. */
 .bench { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 56px; align-items: start; }
 .bench figure { margin: 0; }
+.demo { margin: 0; }
+.demo video { display: block; width: 100%; height: auto; background: #0e0f11; border-radius: 3px; box-shadow: 0 0 0 1px #000, 0 24px 60px rgba(0, 0, 0, .35); }
+.demo figcaption { margin-top: 14px; font: 500 .78rem/1.5 var(--mono); color: var(--corten-200); }
 .bench img { border-radius: 4px; box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .8); }
 .cargo { width: 100%; border-collapse: collapse; }
 .cargo th { text-align: left; font: 600 .72rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted-on-dark); padding: 0 12px 10px 0; border-bottom: 2px solid var(--paper); }

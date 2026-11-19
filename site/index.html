@@ -59,6 +59,7 @@
         <a class="brand" href="./" aria-label="MobaRust home"><img src="favicon.svg" alt="" width="30" height="30">MobaRust</a>
         <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
         <nav class="nav" id="site-nav" aria-label="Main">
+          <a href="#demo">Demo</a>
           <a href="#fleet">Groups</a>
           <a href="#import">MobaXterm import</a>
           <a href="#safety">Safety</a>
@@ -118,6 +119,22 @@
             </dl>
             <p class="src">Measured on an Apple M2 Mac with a release build and local OpenSSH servers. Receipts: <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/docs/TEST_MATRIX.md">test matrix</a> and <a href="https://github.com/OthmaneBlial/MobaRust/blob/main/benchmarks/2026-11-19-native-macos.md">native benchmark</a>.</p>
           </div>
+        </div>
+      </section>
+
+      <section class="section steel" id="demo" aria-labelledby="demo-title">
+        <div class="wrap">
+          <div class="section-head">
+            <h2 id="demo-title">See it run.</h2>
+            <p>Forty seconds in the Mac app: import a MobaXterm export, open a 14-server group, trust its host key once, and get every tab back after a restart.</p>
+          </div>
+          <figure class="demo">
+            <video controls playsinline preload="metadata" poster="media/mobarust-demo-poster.jpg" width="1280" height="800" aria-describedby="demo-note">
+              <source src="media/mobarust-desktop-demo.mp4" type="video/mp4">
+              <a href="media/mobarust-desktop-demo.mp4">Download the demo video (MP4, 1.3 MB)</a>
+            </video>
+            <figcaption id="demo-note">Captioned screenshots of the 0.2.0 release build on an Apple M2 Mac, taken during native testing against a local OpenSSH server. The local machine name is blurred.</figcaption>
+          </figure>
         </div>
       </section>
 

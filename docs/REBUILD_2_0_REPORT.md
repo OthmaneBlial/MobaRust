@@ -34,4 +34,4 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Remaining work
 
-None for the 2.0 rebuild. `v0.2.0` was tagged and published on 2026-11-19 as a pre-release: the release workflow built all five installers on native runners (all jobs green), and the downloaded Apple Silicon DMG matched its SHA-256 file, passed `hdiutil verify` and printed `MobaRust 0.2.0`. The workflow was re-disabled afterwards. Open follow-ups: SSH connection reuse (Tabby study) and a demo video.
+None for the 2.0 rebuild. `v0.2.0` was tagged and published on 2026-11-19 as a pre-release: the release workflow built all five installers on native runners (all jobs green), and the downloaded Apple Silicon DMG matched its SHA-256 file, passed `hdiutil verify` and printed `MobaRust 0.2.0`. The workflow was re-disabled afterwards. A 40-second demo (captioned native screenshots) is on the website and linked from the README. Open follow-up: SSH connection reuse (Tabby study).

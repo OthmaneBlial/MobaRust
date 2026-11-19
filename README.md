@@ -18,7 +18,13 @@ Terminal tabs and splits · SSH with verified host keys · SFTP/SCP · tunnels �
 
 <img src="docs/assets/workspace-dark.jpg" alt="MobaRust workspace: a session tree with nested Production and Web groups beside a full-height terminal" width="100%" />
 
-<sub>Screenshots show the current `main` branch in browser-preview mode (the real React UI without the native runtime). The downloadable installers are older; see [Download](#download).</sub>
+<sub>Screenshots show 0.2.0 in browser-preview mode (the real React UI without the native runtime).</sub>
+
+### See it run
+
+[![40-second demo: import a MobaXterm export, open a 14-server group, trust its host key once and restore tabs after a restart](docs/assets/demo-poster.jpg)](https://othmaneblial.github.io/MobaRust/#demo)
+
+<sub>Click to watch the 40-second demo on the website: captioned screenshots of the native 0.2.0 Mac app, taken during testing against a local OpenSSH server.</sub>
 
 ## Why MobaRust
 
