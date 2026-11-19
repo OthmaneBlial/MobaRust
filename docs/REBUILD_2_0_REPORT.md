@@ -18,7 +18,7 @@ Scope: the MobaRust 2.0 goal (terminal-first workspace, MobaXterm import, one-cl
 
 ## Partially tested
 
-- **Native GUI flows.** Clicked through natively on 2026-11-19 once the user granted access: import, group picker and run, tab rename and move, copy on select, quit (see the native section of TEST_MATRIX.md and `docs/evidence/native-macos/`). A group open of 14 imported sessions against a real loopback `sshd` connected 14/14 after two fixes (queued startup reviews, explicit host key trust). Pins and tab restore were also checked natively across a quit and relaunch.
+- **Native GUI flows.** Clicked through natively on 2026-11-19 once the user granted access: import, group picker and run, tab rename and move, copy on select, quit (see the native section of TEST_MATRIX.md and `docs/evidence/native-macos/`). A group open of 14 imported sessions against a real loopback `sshd` connected 14/14 after two fixes (queued startup reviews, explicit host key trust). Pins and tab restore were also checked natively across a quit and relaunch. "New shell on this connection" (SSH connection reuse, `ee80e40`) was clicked through natively: the new tab opened without a second login (`sshd` logged 6 authentications for 6 sessions) and ran commands.
 - **MobaXterm field meanings.** They follow a public community study of the format (MobaXterm 26.3), not vendor documentation. No file written by MobaXterm itself was available on this Mac.
 - **Telnet, VNC.** These were tested against fixture servers written for the tests, not real daemons. **RDP** has helper unit tests only.
 
@@ -28,10 +28,10 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Blocked or awaiting the user
 
-- **Linux and Windows builds.** The Quality workflow is disabled on GitHub at the maintainer's request, and the Release workflow runs only on tags or a manual dispatch. No remote CI or release was started. Windows was not run on this Mac, by rule.
-- **Public release.** Not created. The downloads in the README are still 0.1.31 (macOS) and 0.1.12 (Windows, Linux), and predate this work.
-- **Tabby comparison.** Done from Tabby 1.0.238's public docs and defaults: [TABBY_UX_STUDY.md](TABBY_UX_STUDY.md). Hands-on observation of its window is blocked by the same missing Screen Recording access.
+- **Linux, Windows and Intel Mac runtime.** The v0.2.0 installers were built and started on GitHub's native runners, but no one has installed them by hand on a real machine. Windows was not run on this Mac, by rule.
+- **Signing.** Windows publisher signing and macOS Developer ID/notarization need the maintainer's credentials.
+- **Tabby comparison.** Done from Tabby 1.0.238's public docs and defaults: [TABBY_UX_STUDY.md](TABBY_UX_STUDY.md). Tabby was not installed, by rule.
 
 ## Remaining work
 
-None for the 2.0 rebuild. `v0.2.0` was tagged and published on 2026-11-19 as a pre-release: the release workflow built all five installers on native runners (all jobs green), and the downloaded Apple Silicon DMG matched its SHA-256 file, passed `hdiutil verify` and printed `MobaRust 0.2.0`. The workflow was re-disabled afterwards. A 40-second demo (captioned native screenshots) is on the website and linked from the README. Open follow-up: SSH connection reuse (Tabby study).
+None for the 2.0 rebuild. `v0.2.0` was tagged and published on 2026-11-19 as a pre-release: the release workflow built all five installers on native runners (all jobs green), and the downloaded Apple Silicon DMG matched its SHA-256 file, passed `hdiutil verify` and printed `MobaRust 0.2.0`. The workflow was re-disabled afterwards. A real screen recording of the native app (87 s, `f375312`) is on the website and linked from the README. SSH connection reuse from the Tabby study is done (`ee80e40`) and checked natively.

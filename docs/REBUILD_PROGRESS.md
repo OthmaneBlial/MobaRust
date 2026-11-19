@@ -144,8 +144,14 @@ instance; no single-instance forwarding yet).
 
 - Rebuilt `site/` as the "freight manifest" world (see `docs/WEBSITE_DESIGN.md`), checked at 1440 and 390 px, and published to https://othmaneblial.github.io/MobaRust/ with the user's approval.
 
+## Native validation, release and demo (2026-11-19)
+
+- Native click-through on Apple M2 with an isolated lab copy and a loopback `sshd`: MobaXterm import through the file picker, a 14-host group (14/14 after queued startup reviews and explicit host key trust), pins, tab restore across relaunch, quit. Evidence: `docs/evidence/native-macos/`, TEST_MATRIX.md.
+- `v0.2.0` released with all five installers built on native runners; the Apple Silicon DMG matched its SHA-256 and passed `hdiutil verify`.
+- SSH connection reuse ("New shell on this connection", `ee80e40`): loopback test `shells_sharing_one_transport_survive_each_other`, then clicked through natively with no second login.
+- Website and README demo replaced by a real screen recording of the native app (`f375312`), with the local user name pixelated; checked live on GitHub Pages.
+
 ## Next steps
 
-1. Native click-through and screenshots, once the testing tool has Screen Recording and Accessibility access.
-2. Tagged release and Linux/Windows installers through the existing workflow, when authorized.
-3. A Tabby UX comparison, if Tabby gets installed.
+1. Hand-test the v0.2.0 Windows, Linux and Intel Mac installers on real machines (not possible on this Mac).
+2. Publisher signing and notarization, once the maintainer has credentials.
