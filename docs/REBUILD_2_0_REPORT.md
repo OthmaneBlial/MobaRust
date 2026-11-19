@@ -12,7 +12,8 @@ Scope: the MobaRust 2.0 goal (terminal-first workspace, MobaXterm import, one-cl
 | Instrument Panel redesign: tokens, dark and light themes, lamps, group hues, focus, contrast | Browser preview: scripted contrast audit of every view and dialog in both themes (4.5:1 minimum, 10.5 px minimum) | `4327650`, `dc7837a` |
 | SSH, SFTP, SCP, tunnels, jump hosts, X11, reconnect, remote editing | Real local: `./tools/local-protocol-lab.sh` all green, no fixture `sshd` left | `b183dd7` and earlier |
 | Performance: memoized and virtualized session tree, deferred search | Browser preview: tab switch 6 ms at 5,000 sessions. The project target is hundreds of sessions | `4794419`, `1d5dd8f` |
-| Brand: original mark, icons, README, `site/` redesign | Rendered at 1440 and 390 px; README screenshots labelled as browser preview | `a4bc954` |
+| Brand: original mark, icons, README | README screenshots labelled as browser preview | `a4bc954` |
+| Website: "freight manifest" redesign, SEO meta, OG card, sitemap | Rendered at 1440 and 390 px; live at https://othmaneblial.github.io/MobaRust/ (all pages and assets return 200) | `9fb3070` |
 | macOS packaging | Local release DMG (8.64 MiB, verified, arm64, ad hoc signed). Native window in 370 ms warm; idle CPU 0.1–0.2 %; clean SIGTERM exit. See [`benchmarks/2026-11-19-native-macos.md`](../benchmarks/2026-11-19-native-macos.md) | this report |
 
 ## Partially tested
@@ -27,7 +28,7 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 ## Blocked or awaiting the user
 
-- **GitHub Pages deploy.** `site/` is ready, but Pages is served from a separate repository. Publishing needs an explicit yes.
+- **Native GUI testing.** Re-checked on 2026-11-19: `screencapture` returns a black frame and System Events times out, so Screen Recording and Accessibility are still not granted. Changing those settings is the user's step.
 - **Linux and Windows builds.** The Quality workflow is disabled on GitHub at the maintainer's request, and the Release workflow runs only on tags or a manual dispatch. No remote CI or release was started. Windows was not run on this Mac, by rule.
 - **Public release.** Not created. The downloads in the README are still 0.1.31 (macOS) and 0.1.12 (Windows, Linux), and predate this work.
 - **Tabby comparison.** Tabby was not installed at the time of this report.
@@ -36,4 +37,3 @@ Passwords (credential sections are never read), X11 options, proxy settings, ter
 
 1. Native click-through of the import dialog, Open all, restore and pins once Screen Recording and Accessibility access is granted to the testing tool.
 2. Version bump and a tagged release when authorized, to produce Linux and Windows installers through the existing workflow.
-3. Deploy `site/` to GitHub Pages when authorized.
