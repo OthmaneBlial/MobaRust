@@ -44,3 +44,7 @@ secrets/
 .vscode/
 *.swp
 *.tmp
+
+# Impeccable scratch (decision mocks, question state)
+.impeccable/mocks/
+.impeccable/questions/

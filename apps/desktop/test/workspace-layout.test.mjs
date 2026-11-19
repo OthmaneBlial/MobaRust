@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import console from "node:console";
 import { setTimeout } from "node:timers";
-import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, resolveGroupName, runBounded } from "../src/workspace-layout.ts";
+import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, resolveGroupName, runBounded, groupHue } from "../src/workspace-layout.ts";
 
 assert.equal(clampSidebarWidth(50), 200);
 assert.equal(clampSidebarWidth(9999), 480);
 assert.equal(clampSidebarWidth(Number.NaN), 260);
+
+assert.equal(groupHue(""), undefined);
+assert.equal(groupHue("Production/Web"), groupHue("Production/Database"));
+assert.match(groupHue("Staging"), /^var\(--g[1-6]\)$/);
 
 let stack = [];
 for (let i = 0; i < 15; i += 1) stack = pushClosed(stack, i);

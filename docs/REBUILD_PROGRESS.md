@@ -97,6 +97,15 @@ Not yet verified: the "Open all" button driving the native app end-to-end, and
 `--open-group` in a running native build (a second launch on macOS starts a new
 instance; no single-instance forwarding yet).
 
+## M2 — Instrument Panel redesign (2026-11-19)
+
+- Picked the direction with the impeccable workflow (PRODUCT.md, decision sketches, user choice: "Instrument Panel"). Documented in `DESIGN.md`.
+- Every hard-coded colour now comes from a token. Dark and light have their own graphite and aluminium ramps, and new xterm palettes match them.
+- Lamp states on tabs, the tree and the group-open meter. Group hues from `groupHue()` (unit-tested). Aluminium top strip. Removed the decorative "operations deck" and "LOCAL CORE ONLINE" copy.
+- Sans labels, larger minimum text (10.5px), orange focus rings, themed selection and scrollbars.
+- Checked: `pnpm check`, `pnpm lint`, `pnpm test:unit`, `impeccable detect` (0 findings). Browser preview at 1440×900 in dark and 1100×680 in light.
+- Not checked: native screenshots, which are blocked because the shell lacks Screen Recording permission.
+
 ## Next steps
 
 1. Native UI inspection once Screen Recording / computer-use access is

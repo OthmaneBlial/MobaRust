@@ -38,7 +38,7 @@ import { remoteChildPath, remoteParentPath } from "./remote-path";
 import { quoteRemotePromptPath } from "./remote-prompt";
 import { normalizeDroppedUploadPaths } from "./transfer-input";
 import desktopPackage from "../package.json";
-import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, readUiPref, resolveGroupName, runBounded, writeUiPref } from "./workspace-layout";
+import { clampSidebarWidth, folderTree, inFolder, normalizeFolder, pushClosed, readUiPref, resolveGroupName, runBounded, writeUiPref, groupHue } from "./workspace-layout";
 import { MobaXtermImportDialog } from "./MobaXtermImportDialog";
 import {
   preserveRemoteDesktopError,
@@ -305,9 +305,10 @@ type WorkspaceTerminal = {
   remoteHost: string | null;
   status: TerminalStatus;
   reopen?: ReopenSpec;
+  hue?: string;
 };
 
-type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string } | { kind: "local"; target: LocalTerminalTarget; label: string };
+type ReopenSpec = { kind: "ssh"; request: SshConnectRequest; label: string; hue?: string } | { kind: "local"; target: LocalTerminalTarget; label: string };
 type GroupRunItem = { id: string; name: string; status: "queued" | "connecting" | "connected" | "failed" | "cancelled"; error?: string };
 type GroupRun = { folder: string; items: GroupRunItem[]; running: boolean };
 const GROUP_OPEN_CONCURRENCY = 4;
@@ -2474,7 +2475,7 @@ function App() {
   }, []);
 
   // Resolves to null on success, or an error message (used by group opening).
-  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string): Promise<string | null> => {
+  const connectSsh = useCallback(async (request: SshConnectRequest, offerSave = true, label?: string, hue?: string): Promise<string | null> => {
     setConnectionError(null);
     setSessionNotice(null);
     if (!IS_TAURI) {
@@ -2507,7 +2508,8 @@ function App() {
         remoteSessionId: response.terminalId,
         remoteProtocol: "ssh",
         remoteHost: response.host,
-        reopen: { kind: "ssh", request: reopenRequest, label: terminalLabel },
+        reopen: { kind: "ssh", request: reopenRequest, label: terminalLabel, hue },
+        hue,
       });
       setTerminalTabs((current) => [...current, terminal]);
       setActiveTerminalId(terminal.id);
@@ -2841,11 +2843,11 @@ function App() {
       setConnectionError(message);
       return message;
     }
-    return connectSsh(request, false, session.name);
+    return connectSsh(request, false, session.name, groupHue(session.folder));
   }, [connectRemoteDesktop, connectSerial, connectSsh, connectTelnet, openSavedLocalSession, recordAudit, savedSessions, touchSavedSession]);
 
   const reopenSpec = useCallback((spec: ReopenSpec) => {
-    if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label);
+    if (spec.kind === "ssh") void connectSsh(spec.request, false, spec.label, spec.hue);
     else startNewTerminal(spec.target, spec.label);
   }, [connectSsh, startNewTerminal]);
 
@@ -4097,14 +4099,12 @@ function App() {
           </div>
           <div>
             <div className="brand-name">MobaRust</div>
-            <div className="brand-kicker">operations deck</div>
+            
           </div>
         </div>
         <div className="topbar-center">
-          <span className="live-dot" />
-          <span>LOCAL CORE ONLINE</span>
-          <span className="topbar-divider" />
-          <span className="muted">{IS_TAURI ? "desktop runtime" : "browser preview"}</span>
+          <span className="topbar-grille" aria-hidden="true" />
+          {!IS_TAURI && <span className="muted">Browser preview</span>}
         </div>
         <div className="topbar-actions">
           <button className="topbar-command" onClick={() => setQuickConnectOpen(true)} title="Quick connect"><Network size={14} /> Quick connect <kbd>{formatShortcut(settings.keyboard.quickConnect)}</kbd></button>
@@ -4187,7 +4187,7 @@ function App() {
                 const sshCount = remoteRows.filter((session) => session.type === "SSH" && inFolder(normalizeFolder(session.folder, "Unfiled"), node.path)).length;
                 return (
               <div key={node.path} className="session-folder-group" style={{ "--folder-depth": node.depth } as CSSProperties}>
-                <div className="folder-heading nested-folder">
+                <div className="folder-heading nested-folder" style={{ "--folder-hue": groupHue(node.path) } as CSSProperties}>
                   <button type="button" className="folder-toggle" aria-expanded={!collapsed} title={node.path} onClick={() => setCollapsedFolders((current) => { const next = new Set(current); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>
                     {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<Folder size={12} /> <span className="folder-name">{node.name}</span>
                   </button>
@@ -4269,7 +4269,7 @@ function App() {
                     <div className="terminal-tab-strip" role="group" aria-label="Terminal sessions">{terminalTabs.map((terminal) => {
                       const selected = terminal.id === selectedTerminalId;
                       return (
-                        <div key={terminal.id} className={`terminal-tab ${selected ? "selected" : ""}`} title={terminal.remoteHost ? `${terminal.label} · ${terminal.remoteHost}` : terminal.label}
+                        <div key={terminal.id} className={`terminal-tab ${selected ? "selected" : ""}`} style={terminal.hue ? { "--tab-hue": terminal.hue } as CSSProperties : undefined} title={terminal.remoteHost ? `${terminal.label} · ${terminal.remoteHost}` : terminal.label}
                           onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTerminal(terminal.id); } }}
                           onContextMenu={(event) => { event.preventDefault(); setTabMenu({ id: terminal.id, x: event.clientX, y: event.clientY }); }}>
                           <button type="button" className="terminal-tab-select" aria-pressed={selected} onClick={() => { setActiveTerminalId(terminal.id); setTerminalLayout({ kind: "pane", terminalId: terminal.id }); setActiveView("terminal"); }}>

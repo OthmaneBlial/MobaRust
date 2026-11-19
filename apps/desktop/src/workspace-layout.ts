@@ -102,3 +102,14 @@ export async function runBounded<T>(
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
 }
+
+const GROUP_HUES = 6;
+
+/** Stable hue token for a session group, keyed by its top-level folder. */
+export function groupHue(folder: string | null | undefined): string | undefined {
+  const top = (folder ?? "").split("/")[0].trim();
+  if (!top) return undefined;
+  let hash = 0;
+  for (const char of top) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  return `var(--g${(hash % GROUP_HUES) + 1})`;
+}
