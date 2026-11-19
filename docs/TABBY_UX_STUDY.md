@@ -26,7 +26,7 @@ interface.
 | Split panes | Nested splits, rearrange panes with a modifier | Split right/down, focus pane shortcut | Keep; nested rearranging is a later idea |
 | Focus on the terminal | Tabs on any side, fullscreen, Quake-style dropdown | Collapsible sidebar (⇧⌘B), focus mode (⌘⇧↵) | MobaRust's focus mode covers the need; no global dropdown |
 | Rename / move tabs | ⌘R rename, ⌘⇧←/→ move | **Added:** "Rename tab…" in the tab menu (the name then stays, instead of following the shell title) and Move left/right with ⌃⇧PageUp/PageDown, which works even with focus in the terminal. ⌘⇧→ was already MobaRust's split-right shortcut | Done; checked in the browser preview |
-| Copy on select, right-click paste | Optional (PuTTY style) | Copy button and normal shortcuts | **Gap**, low priority: familiar to MobaXterm users, add as an opt-in setting |
+| Copy on select, right-click paste | Optional (PuTTY style) | **Added:** opt-in "Copy on select" in terminal settings (off by default). Right-click paste not added: pasting stays explicit so the multiline paste check always applies | Done; checked in the browser preview |
 | Multiline paste warning | Yes | Yes, and required for broadcast | Same |
 | SSH connection manager | Profiles with groups, jump hosts, port forwarding tab, "reuse session for multiple tabs" | Nested folders, jump hosts, tunnels, one-click group opening with 4 connections at a time | MobaRust is stronger for groups; **session reuse is a gap** worth studying (one SSH connection, several shells) |
 | Secrets | Encrypted container for SSH secrets and config | OS keychain references; optional portable vault | Equivalent goal |
@@ -37,8 +37,7 @@ interface.
 ## Takeaways for MobaRust
 
 1. Done: tab rename and keyboard tab reordering.
-2. Consider opt-in copy-on-select with right-click paste for users coming from
-   MobaXterm and PuTTY.
+2. Done: opt-in copy on select. Right-click paste is left out on purpose.
 3. Study SSH connection reuse for extra shells on the same host. It cuts
    connection time and the number of authentication prompts.
 4. Keep what already differs on purpose: groups opened in one click,

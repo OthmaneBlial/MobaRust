@@ -127,6 +127,7 @@ type AppSettings = {
   terminal: {
     scrollbackLines: number;
     cursorBlink: boolean;
+    copyOnSelect: boolean;
   };
   keyboard: {
     newTerminal: string;
@@ -166,7 +167,7 @@ type VaultBackend = "platform" | "portable";
 const defaultSettings: AppSettings = {
   general: { theme: "dark", confirmMultilinePaste: true },
   appearance: { fontSize: 13 },
-  terminal: { scrollbackLines: 5000, cursorBlink: true },
+  terminal: { scrollbackLines: 5000, cursorBlink: true, copyOnSelect: false },
   keyboard: {
     newTerminal: "Mod+N",
     quickConnect: "Mod+K",
@@ -284,6 +285,7 @@ type TerminalViewportProps = {
   fontSize: number;
   scrollbackLines: number;
   cursorBlink: boolean;
+  copyOnSelect: boolean;
   confirmMultilinePaste: boolean;
   onStatusChange: (workspaceId: string, status: TerminalStatus) => void;
   onNativeTerminalId: (workspaceId: string, terminalId: string | null) => void;
@@ -804,12 +806,14 @@ function auditProtocol(protocol: string | null | undefined): AuditProtocol | nul
     : null;
 }
 
-function TerminalViewport({ label, colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalPaste, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
+function TerminalViewport({ label, colorTheme, workspaceId, instanceKey, remoteSessionId, remoteProtocol, localTarget, fontSize, scrollbackLines, cursorBlink, copyOnSelect, confirmMultilinePaste, onStatusChange, onNativeTerminalId, onInput, onTerminalPaste, onTerminalReady, onTerminalDisposed, onSearchResults, onTitleChange, onBell }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalIdRef = useRef<string | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const terminalOptionsRef = useRef({ fontSize, scrollbackLines, cursorBlink, colorTheme });
   const confirmMultilinePasteRef = useRef(confirmMultilinePaste);
+  const copyOnSelectRef = useRef(copyOnSelect);
+  useEffect(() => { copyOnSelectRef.current = copyOnSelect; }, [copyOnSelect]);
 
   useEffect(() => {
     terminalOptionsRef.current = { fontSize, scrollbackLines, cursorBlink, colorTheme };
@@ -864,6 +868,10 @@ function TerminalViewport({ label, colorTheme, workspaceId, instanceKey, remoteS
     terminal.open(host);
     const title = terminal.onTitleChange((value) => onTitleChange(workspaceId, value));
     const bell = terminal.onBell(() => onBell(workspaceId));
+    const selectionCopy = terminal.onSelectionChange(() => {
+      const selection = terminal.getSelection();
+      if (copyOnSelectRef.current && selection) void navigator.clipboard?.writeText(selection).catch(() => undefined);
+    });
     const searchResults = searchAddon.onDidChangeResults((event) => onSearchResults(workspaceId, event.resultIndex, event.resultCount));
     const terminalLinks = terminal.registerLinkProvider(createTerminalHttpLinkProvider(
       (bufferLineNumber) => terminal.buffer.active.getLine(bufferLineNumber),
@@ -1043,6 +1051,7 @@ function TerminalViewport({ label, colorTheme, workspaceId, instanceKey, remoteS
       input.dispose();
       title.dispose();
       bell.dispose();
+      selectionCopy.dispose();
       searchResults.dispose();
       terminalLinks.dispose();
       host.removeEventListener("paste", onPaste, true);
@@ -4247,8 +4256,8 @@ function App() {
 
   const renderTerminalPane = useCallback((terminal: WorkspaceTerminal) => {
     const isDesktop = (terminal.remoteProtocol === "rdp" || terminal.remoteProtocol === "vnc") && terminal.remoteDesktopRequest;
-    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport label={terminal.label} colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalPaste={handleTerminalPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
-  }, [colorTheme, handleTerminalPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
+    return isDesktop ? <RemoteDesktopViewport workspaceId={terminal.id} instanceKey={terminal.instanceKey} request={terminal.remoteDesktopRequest!} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} /> : <TerminalViewport label={terminal.label} colorTheme={colorTheme} workspaceId={terminal.id} instanceKey={terminal.instanceKey} remoteSessionId={terminal.remoteSessionId} remoteProtocol={terminal.remoteProtocol} localTarget={terminal.localTarget} fontSize={settings.appearance.fontSize} scrollbackLines={settings.terminal.scrollbackLines} cursorBlink={settings.terminal.cursorBlink} copyOnSelect={settings.terminal.copyOnSelect} confirmMultilinePaste={settings.general.confirmMultilinePaste} onStatusChange={handleTerminalStatus} onNativeTerminalId={handleNativeTerminalId} onInput={handleTerminalInput} onTerminalPaste={handleTerminalPaste} onTerminalReady={handleTerminalReady} onTerminalDisposed={handleTerminalDisposed} onSearchResults={handleSearchResults} onTitleChange={handleTerminalTitle} onBell={handleTerminalBell} />;
+  }, [colorTheme, handleTerminalPaste, handleNativeTerminalId, handleSearchResults, handleTerminalBell, handleTerminalDisposed, handleTerminalInput, handleTerminalReady, handleTerminalStatus, handleTerminalTitle, settings.appearance.fontSize, settings.general.confirmMultilinePaste, settings.terminal.copyOnSelect, settings.terminal.cursorBlink, settings.terminal.scrollbackLines]);
 
   if (closing) return <main className={`app-shell shutdown-state theme-${colorTheme}`}><section role="status" aria-live="polite"><LoaderCircle className="spin" size={24} aria-hidden="true" /><h1>Closing MobaRust</h1><p>Closing local terminals and finishing SSH file cleanup before exiting.</p></section></main>;
 
@@ -5708,6 +5717,7 @@ function SettingsModal({ settings, error, portableVaultStatus, onClose, onSave, 
   const [fontSize, setFontSize] = useState(String(settings.appearance.fontSize));
   const [scrollbackLines, setScrollbackLines] = useState(String(settings.terminal.scrollbackLines));
   const [cursorBlink, setCursorBlink] = useState(settings.terminal.cursorBlink);
+  const [copyOnSelect, setCopyOnSelect] = useState(settings.terminal.copyOnSelect);
   const [keyboard, setKeyboard] = useState(settings.keyboard);
   const [reconnectEnabled, setReconnectEnabled] = useState(settings.ssh.reconnectEnabled);
   const [reconnectAttempts, setReconnectAttempts] = useState(String(settings.ssh.reconnectAttempts));
@@ -5741,7 +5751,7 @@ function SettingsModal({ settings, error, portableVaultStatus, onClose, onSave, 
     onSave({
       general: { theme, confirmMultilinePaste },
       appearance: { fontSize: Number(fontSize) },
-      terminal: { scrollbackLines: Number(scrollbackLines), cursorBlink },
+      terminal: { scrollbackLines: Number(scrollbackLines), cursorBlink, copyOnSelect },
       keyboard,
       ssh: { reconnectEnabled, reconnectAttempts: Number(reconnectAttempts), connectTimeoutMs: Number(connectTimeoutMs) },
       network: { diagnosticTimeoutMs: Number(diagnosticTimeoutMs), scanConcurrency: Number(scanConcurrency) },
@@ -5787,6 +5797,7 @@ function SettingsModal({ settings, error, portableVaultStatus, onClose, onSave, 
             <label>Font size<input type="number" min="8" max="32" value={fontSize} onChange={(event) => setFontSize(event.target.value)} /><small>8–32 px; new terminal instances.</small></label>
             <label>Scrollback lines<input type="number" min="100" max="100000" value={scrollbackLines} onChange={(event) => setScrollbackLines(event.target.value)} /><small>100–100,000 lines.</small></label>
             <label className="settings-check"><input type="checkbox" checked={cursorBlink} onChange={(event) => setCursorBlink(event.target.checked)} /> Cursor blink</label>
+            <label className="settings-check"><input type="checkbox" checked={copyOnSelect} onChange={(event) => setCopyOnSelect(event.target.checked)} /> Copy on select</label>
             <label className="settings-check"><input type="checkbox" checked={confirmMultilinePaste} onChange={(event) => setConfirmMultilinePaste(event.target.checked)} /> Confirm multiline paste</label>
           </div>
         </div>

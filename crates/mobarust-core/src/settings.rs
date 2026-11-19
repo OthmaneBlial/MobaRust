@@ -52,6 +52,9 @@ pub struct TerminalSettings {
     pub scrollback_lines: u32,
     #[serde(default = "default_true")]
     pub cursor_blink: bool,
+    /// Copy selected terminal text to the clipboard as soon as it is selected.
+    #[serde(default)]
+    pub copy_on_select: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +113,7 @@ impl Default for TerminalSettings {
         Self {
             scrollback_lines: default_scrollback(),
             cursor_blink: true,
+            copy_on_select: false,
         }
     }
 }
